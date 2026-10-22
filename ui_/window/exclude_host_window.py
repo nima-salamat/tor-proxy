@@ -64,12 +64,15 @@ class ExcludeHostsWindow(QWidget):
             self.hosts_list.addItem(host)
         
     def add_to_list(self):
-        host = self.inp_host.text()
-        if host and add_to_exclude_hosts(host):
-            worker = Worker(
-                save_exclude
-            )
-            self.threadpool.start(worker)
+        host = self.inp_host.text().strip()
+        if not host:
+            return
+        try:
+            added = add_to_exclude_hosts(host)
+        except (ValueError, OSError) as exc:
+            QMessageBox.warning(self, "Invalid host rule", str(exc))
+            return
+        if added:
             self.hosts_list.addItem(host)
             self.inp_host.clear()
             self.inp_host.setFocus()

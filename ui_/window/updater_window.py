@@ -7,6 +7,7 @@ from updater import get_own_bundles, check_bundle_compatibility, delete_bundle
 from config import CONFIG
 from config import BUNDLE_DIR
 from utils import extract_tar_gz_file, resource_path
+import ast
 import json
 import os
 import logging
@@ -59,7 +60,7 @@ class UpdaterWindow(QWidget):
     
     def refresh_version(self):
         self.list_tor_versions.clear()
-        print(get_own_bundles())
+        logger.info("Verified local Tor bundles: %s", get_own_bundles())
         for i in get_own_bundles():
             if check_bundle_compatibility(i):
                 self.list_tor_versions.addItem(i)
@@ -81,15 +82,19 @@ class UpdaterWindow(QWidget):
 
             
     def delete_version(self):
-        if items:=self.list_tor_versions.selectedItems():
-            item = items[0]
-            reply = QMessageBox.question(self, 
-                                        "Download", 
-                                        f"Do you want to download?\n{item.text()}",
-                                        QMessageBox.Yes| QMessageBox.No, 
-                                        QMessageBox.No)
-            if reply == QMessageBox.No:
-                return
+        items = self.list_tor_versions.selectedItems()
+        if not items:
+            return
+        item = items[0]
+        reply = QMessageBox.question(self,
+                                     "Delete Tor bundle",
+                                     f"Delete this verified local bundle?\n{item.text()}",
+                                     QMessageBox.Yes | QMessageBox.No,
+                                     QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            return
+        if os.path.normcase(str(CONFIG["tor_path"] or "")) == os.path.normcase(item.text()):
+            CONFIG["tor_path"] = None
         delete_bundle(item.text())
         self.refresh_version()            
         
@@ -102,8 +107,10 @@ class UpdaterWindow(QWidget):
     def set_tor_versions(self, data):
         
         try:
-            data = json.loads(data.replace("'", "\""))
-        except json.JSONDecodeError:
+            data = ast.literal_eval(data)
+            if not isinstance(data, list) or not all(isinstance(item, str) for item in data):
+                data = []
+        except (ValueError, SyntaxError):
             data = []
         
         
@@ -123,15 +130,17 @@ class UpdaterWindow(QWidget):
     def set_download_links(self, data):
         
         try:
-            data = json.loads(data.replace("'", "\""))
-        except json.JSONDecodeError:
+            data = ast.literal_eval(data)
+            if not isinstance(data, list) or not all(isinstance(item, str) for item in data):
+                data = []
+        except (ValueError, SyntaxError):
             data = [] 
         
         self.updates_list.clear()
         
         downloaded_bundles = list_downloaded_bundles()
         downloaded_bundles = list(map(lambda x: os.path.basename(x), downloaded_bundles))
-        print(downloaded_bundles)
+        logger.debug("Downloaded archive names: %s", downloaded_bundles)
         for i in data:
             if i not in downloaded_bundles:
                 self.updates_list.addItem(i)
@@ -141,34 +150,42 @@ class UpdaterWindow(QWidget):
 
     
     def selected_version(self, item):
-        reply = QMessageBox.question(self, 
-                                     "Download", 
-                                     f"Do you want to download?\n{item.text()}",
-                                     QMessageBox.Yes| QMessageBox.No, 
+        reply = QMessageBox.question(self,
+                                     "Verify and install Tor bundle",
+                                     f"Download and verify the official Tor signature for?\n{item.text()}",
+                                     QMessageBox.Yes | QMessageBox.No,
                                      QMessageBox.No)
-        if reply == QMessageBox.No:
+        if reply != QMessageBox.Yes:
             return
         self.updates_list.setEnabled(False)
+        self.btn_get_versions.setEnabled(False)
         bundle = item.text()
         version = get_version_by_bundle(bundle)
-        self.worker = Worker(self.download_bundle, bundle , version)
+        self.lbl_status.setText(f"Downloading and verifying {bundle}…")
+        self.worker = Worker(self.download_bundle, bundle, version)
+        self.worker.signals.finished.connect(self._on_download_finished)
+        self.worker.signals.error.connect(self._on_download_error)
         self.thread_pool.start(self.worker)
-    
+
     def download_bundle(self, bundle, version):
-        try:
-            logger.info(f"Downloading {bundle}")
-            self.lbl_status.setText(f"Downloading {bundle}")
-            
-            download_file(bundle, version)
-            base_path = os.path.join(BUNDLE_DIR, os.path.basename(bundle).replace(".tar.gz", ""))
-            extract_tar_gz_file(resource_path(os.path.join(BUNDLE_DIR, bundle)), base_path)
-            
-        except Exception as e:
-            self.lbl_status.setText(f"Download  {bundle} ended with error")
-            delete_bundle(bundle)
-            logger.info(f"Download {bundle} ended with error and removed. error {e}")
-            
-        self.lbl_status.setText(f"Download {bundle} ended.")
+        logger.info("Downloading and verifying %s", bundle)
+        archive = download_file(bundle, version)
+        base_path = os.path.join(BUNDLE_DIR, os.path.basename(bundle).replace(".tar.gz", ""))
+        extract_tar_gz_file(archive, base_path)
+        return f"Installed verified Tor Expert Bundle {bundle}"
+
+    def _on_download_finished(self, message):
+        self.lbl_status.setText(message)
         self.updates_list.setEnabled(True)
+        self.btn_get_versions.setEnabled(True)
+        self.refresh_version()
+        self.get_available_versions()
+
+    def _on_download_error(self, error):
+        logger.error("Tor bundle download/verification failed: %s", error)
+        self.lbl_status.setText("Download or signature verification failed; the bundle was not installed.")
+        QMessageBox.warning(self, "Tor bundle verification failed", str(error))
+        self.updates_list.setEnabled(True)
+        self.btn_get_versions.setEnabled(True)
         
 

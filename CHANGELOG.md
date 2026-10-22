@@ -1,0 +1,16 @@
+# Changelog
+
+All notable changes are recorded here. Dates and release numbers are added only when a release is actually published.
+
+## Unreleased — security and architecture redesign
+
+- Added a `src/torproxy` core for validated configuration, host rules, platform paths, IP checks, Tor process management, and signed bundle installation.
+- Restricted the local HTTP proxy to loopback and unified host policy across HTTP and CONNECT.
+- Replaced request-target logging with privacy-conscious activity logging and bounded bidirectional byte accounting.
+- Routed the exit-IP checker through the configured proxy with no direct fallback.
+- Added supervised Tor lifecycle states, torrc validation, cookie authentication, bootstrap reporting, managed-process identity checks, and NEWNYM cooldown handling.
+- Disabled automatic system-proxy changes and repeating identity requests by default.
+- Added snapshot-based Windows/GNOME proxy restoration and protection against clobbering external changes.
+- Added OpenPGP-signature verification, download limits, and safe tar extraction; bundle archives are no longer required in source control.
+- Added versioned user configuration, per-user writable data paths, focused tests, CI, and security/architecture documentation.
+- Preserved compatibility adapters for the desktop UI pending a further migration of all legacy UI modules.
