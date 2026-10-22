@@ -568,7 +568,7 @@ class UpdaterWindow(QWidget):
             self.progress_bar.setValue(min(99, max(0, event.percentage)))
             self.progress_bar.setFormat("{}%".format(min(99, max(0, event.percentage))))
         else:
-            self.btn_cancel.setEnabled(event.stage in {"downloading_archive", "downloading_signature"})
+            self.btn_cancel.setEnabled(event.stage in {"downloading_archive", "downloading_signature", "downloading_signing_key"})
             self.progress_bar.setRange(0, 0)
             self.progress_bar.setFormat("Receiving bytes…" if event.stage.startswith("downloading_") else "Working…")
         size_text = "{} received".format(self._format_bytes(event.bytes_received))
@@ -632,10 +632,15 @@ class UpdaterWindow(QWidget):
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self.progress_bar.setFormat("Failed")
-        self.lbl_status.setText("Download or installation failed. The bundle was not reported as installed.")
-        self.lbl_progress_details.setText(str(error))
-        self.btn_retry.setVisible(self._last_download is not None)
         message = str(error)
+        if "cancelled" in message.lower():
+            self.lbl_status.setText("Operation cancelled. Temporary download files were removed; no bundle was installed.")
+            self.lbl_progress_details.setText(message)
+            self.btn_retry.setVisible(self._last_download is not None)
+            return
+        self.lbl_status.setText("Download or installation failed. The bundle was not reported as installed.")
+        self.lbl_progress_details.setText(message)
+        self.btn_retry.setVisible(self._last_download is not None)
         if "gnupg" in message.lower() and any(
             term in message.lower() for term in ("could not be found", "could not be started", "install gnu")
         ):
