@@ -117,11 +117,18 @@ def get_tor_versions(url: str = TOR_BUNDLE_BASE_URL) -> list[str]:
             except ValueError:
                 continue
             versions.add(path)
+        if not versions:
+            raise BundleVerificationError(
+                "The official Tor listing returned no recognizable stable or supported alpha release directories."
+            )
         return [version + "/" for version in sorted(versions, key=tor_version_sort_key, reverse=True)]
-    except (requests.RequestException, BundleVerificationError, ValueError) as exc:
+    except BundleVerificationError:
+        logger.exception("Tor release discovery rejected the listing.")
+        raise
+    except (requests.RequestException, ValueError) as exc:
         logger.exception("Could not retrieve the official Tor Expert Bundle release list.")
         raise BundleVerificationError(
-            "Could not retrieve the official Tor release list. Check the network connection and try again."
+            "Could not retrieve or parse the official Tor release list. Check the network connection and retry."
         ) from exc
 
 
@@ -148,27 +155,33 @@ def _architecture_name() -> str:
 def get_bundle_links(version: str, base_url: str = TOR_BUNDLE_BASE_URL) -> list[str]:
     """Return the exact platform artifact only when both archive and .asc are listed."""
     release = str(version).strip().strip("/")
+    parse_tor_version(release)
+    platform_name = _platform_name()
+    architecture = _architecture_name()
+    listing_url = urljoin(base_url.rstrip("/") + "/", release + "/")
     try:
-        parse_tor_version(release)
-        soup = _fetch_listing(urljoin(base_url.rstrip("/") + "/", release + "/"))
-        expected = "tor-expert-bundle-{}-{}-{}.tar.gz".format(
-            _platform_name(), _architecture_name(), release
-        )
-        names = {
-            Path(urlsplit(str(link.get("href", ""))).path).name
-            for link in soup.find_all("a", href=True)
-        }
-        if expected in names and expected + ".asc" in names:
-            return [expected]
-        return []
-    except (requests.RequestException, BundleVerificationError, ValueError) as exc:
+        soup = _fetch_listing(listing_url)
+    except BundleVerificationError:
+        raise
+    except requests.RequestException as exc:
         logger.exception("Could not list signed Tor bundles for release %s.", release)
         raise BundleVerificationError(
-            "Could not check artifact availability for Tor release {}. Check the network connection and retry.".format(
-                release
-            )
+            f"Could not check artifact availability for Tor release {release}. "
+            "Check the network connection and retry."
         ) from exc
-
+    anchors = soup.find_all("a", href=True)
+    if not anchors:
+        raise BundleVerificationError(
+            f"The Tor release listing for {release} was empty or malformed."
+        )
+    expected = f"tor-expert-bundle-{platform_name}-{architecture}-{release}.tar.gz"
+    names = {
+        Path(urlsplit(str(link.get("href", ""))).path).name
+        for link in anchors
+    }
+    if expected in names and expected + ".asc" in names:
+        return [expected]
+    return []
 
 def get_version_by_bundle(filename: str, with_slash: bool = False) -> str:
     name = Path(filename).name
