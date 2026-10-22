@@ -39,10 +39,9 @@ class Window(QMainWindow):
             self.setWindowFlag(Qt.FramelessWindowHint)
         self.main_widget = QWidget(self)
         self.setCentralWidget(self.main_widget)
-        self.stack = QStackedWidget(self)
-        self.main_layout = QVBoxLayout(self)
-        self.main_layout.setContentsMargins(0,0,0,0)
-        self.main_widget.setLayout(self.main_layout)
+        self.stack = QStackedWidget(self.main_widget)
+        self.main_layout = QVBoxLayout(self.main_widget)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
 
         self.setWindowTitle("app")
         self.resize(800, 600)
