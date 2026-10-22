@@ -2,6 +2,15 @@
 
 All notable changes are recorded here. Dates and release numbers are added only when a release is actually published.
 
+## Unreleased — UI, updater, and security redesign
+
+- Reworked the desktop shell with a consistent sidebar, page hierarchy, live Tor state summary, and coordinated light/dark styling while retaining the existing feature views.
+- Added stable-versus-alpha Tor release recognition, numeric ordering, and exact Expert Bundle plus detached-signature eligibility checks; unsupported release folders are not treated as downloadable artifacts.
+- Added typed streamed-download progress, size/speed/ETA reporting where available, cancellation during safe transfer stages, and distinct signature/extraction/install status.
+- Improved GnuPG executable discovery and remediation using PATH, common install paths, and `TORPROXY_GPG_EXECUTABLE`; mandatory pinned-fingerprint verification remains fail-closed.
+- Restricted managed-bundle auto-selection to bundles that pass the existing verification-marker, archive-digest, platform, and executable checks.
+- Corrected duplicate Qt layout ownership patterns and added regression coverage for release parsing, bundle eligibility, download progress, executable selection, and layout construction.
+
 ## Unreleased — security and architecture redesign
 
 - Added a `src/torproxy` core for validated configuration, host rules, platform paths, IP checks, Tor process management, and signed bundle installation.
