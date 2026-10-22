@@ -136,3 +136,29 @@ def test_top_menu_is_the_only_page_navigation_and_release_filter_uses_bool():
         for call in set_hidden_calls if call.args
     )
 
+
+
+def test_window_uses_native_multimonitor_frame_and_persistent_notifications():
+    repository = Path(__file__).resolve().parents[1]
+    ui_source = (repository / "ui.py").read_text(encoding="utf-8")
+    main_source = (repository / "main.py").read_text(encoding="utf-8")
+    assert "Qt.FramelessWindowHint" not in ui_source
+    assert "def moveEvent" not in ui_source
+    assert "CustomTitleBar" not in ui_source
+    assert "HighDpiScaleFactorRoundingPolicy.PassThrough" in main_source
+    assert 'QPushButton("🔔 0"' in ui_source
+    assert "def notify_user(self, title, message, level=\"info\")" in ui_source
+    assert "page_description" not in ui_source
+
+
+def test_settings_and_bundle_pages_use_available_height_without_duplicate_subtitles():
+    repository = Path(__file__).resolve().parents[1]
+    settings_source = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
+    updater_source = (repository / "ui_/window/updater_window.py").read_text(encoding="utf-8")
+    proxy_source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+    assert 'enumerate(("General", "Bridges", "Ports"))' in settings_source
+    assert "QScrollArea" in settings_source and "setWidgetResizable(True)" in settings_source
+    assert "lbl_page_number" not in settings_source
+    assert "Browse official release channels" not in updater_source
+    assert "setMinimumHeight(180)" in updater_source
+    assert "homeActionCard" in proxy_source and "connectPulseButton" in proxy_source
