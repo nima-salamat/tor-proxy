@@ -12,12 +12,8 @@ from torproxy.bundle import BundleProgress, BundleVerificationError
 
 
 def _listing(*names: str) -> BeautifulSoup:
-    return BeautifulSoup(
-        "<html><body>{}</body></html>".format(
-            "".join('<a href="{}">{}</a>'.format(name, name) for name in names)
-        ),
-        "html.parser",
-    )
+    links = "".join(f'<a href="{name}">{name}</a>' for name in names)
+    return BeautifulSoup(f"<html><body>{links}</body></html>", "html.parser")
 
 
 def test_version_parser_recognizes_stable_and_alpha():
@@ -109,7 +105,7 @@ class _FakeResponse:
 
     def raise_for_status(self):
         if self.status_code >= 400:
-            raise requests.HTTPError("HTTP {}".format(self.status_code))
+            raise requests.HTTPError(f"HTTP {self.status_code})
 
     def iter_content(self, chunk_size):
         yield from self._chunks
