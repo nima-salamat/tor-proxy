@@ -185,7 +185,7 @@ def get_bundle_links(version: str, base_url: str = TOR_BUNDLE_BASE_URL) -> list[
 
 def get_version_by_bundle(filename: str, with_slash: bool = False) -> str:
     name = Path(filename).name
-    match = re.search(r"-((?:\d+\.\d+\.\d+)|(?:\d+\.\d+(?:\.\d+)?a\d+))\.tar\.gz$", name)
+    match = re.fullmatch(r"tor-expert-bundle-(?:windows|linux)-(?:x86_64|i686)-((?:\d+\.\d+\.\d+)|(?:\d+\.\d+(?:\.\d+)?a\d+))\.tar\.gz", name)
     if not match:
         raise ValueError("Not a supported Tor Expert Bundle filename: {}".format(name))
     version = match.group(1)
