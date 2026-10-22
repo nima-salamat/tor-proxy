@@ -391,7 +391,7 @@ def download_verified_bundle(
         signature_copy = signature_destination.with_name("." + signature_destination.name + ".tmp")
         try:
             shutil.copyfile(signature_tmp, signature_copy)
-            with signature_copy.open("rb") as handle:
+            with signature_copy.open("rb+") as handle:
                 os.fsync(handle.fileno())
             os.replace(archive_tmp, destination)
             os.replace(signature_copy, signature_destination)
