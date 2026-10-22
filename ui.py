@@ -234,25 +234,13 @@ class Window(QMainWindow):
         """ % (text, border, surface, border))
 
     def _on_navigation_changed(self, row):
-        # Kept as a compatibility slot for integrations that select a page by index.
+        # Compatibility hook for integrations which select a page by index.
         self._show_page(row)
 
     def _show_page(self, index):
-        if not 0 <= index < self.stack.count():
-            return
-        self.stack.setCurrentIndex(index)
-        pages = [
-            ("Overview", "Service controls, observed traffic, exit-IP checks and explicit system-proxy actions."),
-            ("Configuration & bridges", "Manage bridge records, QR-code input, listener ports and Tor circuit settings."),
-            ("Blocked hosts", "Review or edit host rules that should be denied by the proxy."),
-            ("Bypass rules", "These rules intentionally connect directly rather than through Tor."),
-            ("Tor bundles & updates", "Find compatible releases, verify signatures, install and select a Tor runtime."),
-        ]
-        title, description = pages[index]
-        self.page_heading.setText(title)
-        self.page_description.setText(description)
-        self._update_global_state()
-
+        if 0 <= index < self.stack.count():
+            self.stack.setCurrentIndex(index)
+            self._update_global_state()
     def _update_global_state(self):
         proxy_widget = getattr(self, "proxyWidget", None)
         if proxy_widget is None:
@@ -349,37 +337,18 @@ class Window(QMainWindow):
         self.tray_icon.showMessage(title, message, QSystemTrayIcon.Information, 2000)
 
     def closeEvent(self, event):
-        if IS_WINDOWS and event.spontaneous():
-            logger.info("The window is closing by the close button.")
-            event.ignore()
-            self.hide()
-            return
-        elif IS_WINDOWS:
-            self.listener_running = False
-            self.listener_thread.join()
-        
-        self.listener_running = False 
-        self.tray_icon.hide()  
-        self.proxyWidget._stop_services()
-        logger.info("The window is closing by some other method.")
+        # The native title bar handles multi-monitor movement and close actions.
+        # Closing the window really exits instead of silently hiding in the tray.
+        self.listener_running = False
+        if IS_WINDOWS and hasattr(self, "listener_thread") and self.listener_thread.is_alive():
+            self.listener_thread.join(timeout=1.0)
+        try:
+            self.tray_icon.hide()
+        except Exception:
+            pass
+        try:
+            self.proxyWidget._stop_services()
+        except Exception:
+            logger.exception("Failed while stopping services during application shutdown.")
+        logger.info("TorProxy window closed.")
         event.accept()
-
-    def moveEvent(self, event):
-        if IS_WINDOWS:
-            btn_x, btn_y, btn_w, btn_h = self.title_bar.btn_close.geometry().getRect()
-
-            x, y, w, h = self.geometry().getRect()
-
-            screen_rect = QApplication.primaryScreen().availableGeometry()
-            screen_w, screen_h = screen_rect.width(), screen_rect.height()
-
-            if x + btn_x < 0:
-                x = -btn_x
-            if y + btn_y < 0:
-                y = -btn_y
-            if x + btn_x + btn_w > screen_w:
-                x = screen_w - (btn_x + btn_w)
-            if y + btn_y + btn_h > screen_h:
-                y = screen_h - (btn_y + btn_h)
-
-            self.move(x, y)
