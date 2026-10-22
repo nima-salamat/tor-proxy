@@ -165,11 +165,28 @@ Read [Security](docs/SECURITY.md) and [Troubleshooting](docs/TROUBLESHOOTING.md)
 
 ```bash
 python -m pip install -e ".[dev]"
-ruff check src/torproxy tests --select E,F,UP
+ruff check src/torproxy tests --select E,F,UP --ignore E501
 pytest --cov=torproxy.host_rules --cov=torproxy.ip_check --cov-report=term-missing --cov-fail-under=75
 ```
 
-The tests focus on configuration, paths, host rules, IP checking, Tor configuration, safe tar extraction, loopback-only proxy binding, local fake-SOCKS forwarding, and mocked Windows proxy restoration. They do not require connecting to the live Tor network.
+The offline suite also exercises stable/alpha release parsing, exact artifact/signature selection, transfer progress/cancellation, GnuPG failure modes, and atomic installation-marker publication. Normal CI does not download a real Tor archive.
+
+An opt-in integration test contacts the official Tor Project distribution, downloads a compatible Expert Bundle, and verifies its real detached signature. It requires GnuPG, internet access, and a supported OS/architecture. Do not enable it in an untrusted test environment because it downloads a large archive.
+
+On Linux/macOS shells with a supported runtime:
+
+```bash
+TORPROXY_ONLINE_SIGNATURE_TEST=1 pytest -m integration tests/test_updater_pipeline.py::test_live_official_expert_bundle_download_and_signature
+```
+
+In Windows PowerShell:
+
+```powershell
+$env:TORPROXY_ONLINE_SIGNATURE_TEST = "1"
+pytest -m integration tests/test_updater_pipeline.py::test_live_official_expert_bundle_download_and_signature
+```
+
+A skipped opt-in test is not evidence of a verified download. Record the actual test result and platform when reporting integration validation.
 
 See [Contributing](CONTRIBUTING.md), [Changelog](CHANGELOG.md), and the [project report](docs/PROJECT_REPORT.md).
 
