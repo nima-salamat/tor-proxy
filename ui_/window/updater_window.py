@@ -55,6 +55,9 @@ class UpdaterWindow(QWidget):
         self.cancel_event: Event | None = None
         self._busy = False
         self._available_versions: list[str] = []
+        self._verified_bundles_cache: list[str] = []
+        self._bundle_scan_in_progress = False
+        self._bundle_scan_worker = None
         self._last_download: tuple[str, str] | None = None
 
         root = QVBoxLayout(self)
@@ -248,9 +251,9 @@ class UpdaterWindow(QWidget):
     def _set_busy(self, busy: bool, cancellable: bool = False) -> None:
         self._busy = busy
         self.btn_get_versions.setEnabled(not busy)
-        self.btn_refresh_version.setEnabled(not busy)
+        self.btn_refresh_version.setEnabled(not busy and not self._bundle_scan_in_progress)
         self.updates_list.setEnabled(not busy)
-        self.list_tor_versions.setEnabled(not busy)
+        self.list_tor_versions.setEnabled(not busy and not self._bundle_scan_in_progress)
         self.search_versions.setEnabled(not busy)
         self.chk_prereleases.setEnabled(not busy)
         self.btn_cancel.setVisible(busy and cancellable)
@@ -274,7 +277,11 @@ class UpdaterWindow(QWidget):
             item.setHidden((not include_alpha and alpha) or (query and query not in version.lower()))
 
     def _update_install_state(self) -> None:
-        available = get_own_bundles()
+        if self._bundle_scan_in_progress and not self._verified_bundles_cache:
+            self.lbl_install_state.setText("CHECKING LOCAL BUNDLES")
+            self.lbl_default.setText("Checking signatures, archive digests and executable structure…")
+            return
+        available = self._verified_bundles_cache
         selected = str(CONFIG["tor_path"] or "")
         active = any(
             os.path.normcase(str(Path(path).resolve())) == os.path.normcase(str(Path(selected).resolve()))
@@ -284,6 +291,8 @@ class UpdaterWindow(QWidget):
             self.lbl_install_state.setText("VERIFIED DEFAULT")
         elif available:
             self.lbl_install_state.setText("{} verified bundle(s)".format(len(available)))
+        elif self._bundle_scan_in_progress:
+            self.lbl_install_state.setText("CHECKING LOCAL BUNDLES")
         else:
             self.lbl_install_state.setText("No verified bundle installed")
         self.lbl_default.setText(
@@ -291,17 +300,43 @@ class UpdaterWindow(QWidget):
         )
 
     def refresh_version(self) -> None:
+        if self._bundle_scan_in_progress:
+            return
+        self._bundle_scan_in_progress = True
+        self.btn_refresh_version.setEnabled(False)
+        self.list_tor_versions.setEnabled(False)
+        self.lbl_install_state.setText("CHECKING LOCAL BUNDLES")
+        self.lbl_default.setText("Verifying installed bundle metadata…")
+        self._bundle_scan_worker = Worker(get_own_bundles)
+        self._bundle_scan_worker.signals.finished.connect(self._on_bundle_scan_finished)
+        self._bundle_scan_worker.signals.error.connect(self._on_bundle_scan_failed)
+        self.thread_pool.start(self._bundle_scan_worker)
+
+    def _on_bundle_scan_finished(self, data: str) -> None:
+        bundles = self._parse_result(data, list)
+        self._verified_bundles_cache = [item for item in bundles if isinstance(item, str)]
+        self._bundle_scan_in_progress = False
+        self.btn_refresh_version.setEnabled(not self._busy)
+        self.list_tor_versions.setEnabled(not self._busy)
         self.list_tor_versions.clear()
-        verified = get_own_bundles()
         configured = str(CONFIG["tor_path"] or "")
-        for path in verified:
+        for path in self._verified_bundles_cache:
             item = QListWidgetItem(Path(path).name)
             item.setData(Qt.ItemDataRole.UserRole, path)
-            item.setToolTip(str(path))
+            item.setToolTip(path)
             if configured and os.path.normcase(str(Path(configured).resolve())) == os.path.normcase(str(Path(path).resolve())):
                 item.setText("{}  ·  DEFAULT".format(Path(path).name))
             self.list_tor_versions.addItem(item)
         self._update_install_state()
+
+    def _on_bundle_scan_failed(self, error: str) -> None:
+        logger.error("Could not inspect installed Tor bundles: %s", error)
+        self._bundle_scan_in_progress = False
+        self.btn_refresh_version.setEnabled(not self._busy)
+        self.list_tor_versions.setEnabled(not self._busy)
+        if not self._verified_bundles_cache:
+            self.lbl_install_state.setText("Bundle inspection failed")
+            self.lbl_default.setText("Could not verify local bundle metadata. Rescan or inspect the application log.")
 
     def set_default_version(self) -> None:
         item = self.list_tor_versions.currentItem()
@@ -309,8 +344,8 @@ class UpdaterWindow(QWidget):
             QMessageBox.information(self, "Select a bundle", "Select a verified installed bundle first.")
             return
         path = str(item.data(Qt.ItemDataRole.UserRole) or "")
-        if path not in get_own_bundles():
-            QMessageBox.warning(self, "Bundle is not verified", "This bundle is no longer verified. Rescan the list.")
+        if path not in self._verified_bundles_cache:
+            QMessageBox.warning(self, "Bundle is not verified", "This bundle is not in the latest verified scan. Rescan the list.")
             self.refresh_version()
             return
         reply = QMessageBox.question(
