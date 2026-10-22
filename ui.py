@@ -5,6 +5,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QStackedWidget,
     QWidget,
+    QLabel,
     QVBoxLayout,
     QHBoxLayout,
     QFrame,
@@ -72,70 +73,12 @@ class Window(QMainWindow):
         self._createMenuBar()
 
         body = QWidget(self.main_widget)
-        body_layout = QHBoxLayout(body)
-        body_layout.setContentsMargins(0, 0, 0, 0)
-        body_layout.setSpacing(0)
+        body.setObjectName("pageSurface")
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(26, 22, 26, 24)
+        body_layout.setSpacing(18)
 
-        sidebar = QFrame(body)
-        sidebar.setObjectName("sidebar")
-        sidebar.setMinimumWidth(188)
-        sidebar.setMaximumWidth(224)
-        sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(14, 20, 14, 14)
-        sidebar_layout.setSpacing(10)
-
-        brand = QLabel("◉  TorProxy", sidebar)
-        brand.setObjectName("brandLabel")
-        tagline = QLabel("Private routing workspace", sidebar)
-        tagline.setObjectName("sidebarCaption")
-        tagline.setWordWrap(True)
-        sidebar_layout.addWidget(brand)
-        sidebar_layout.addWidget(tagline)
-        sidebar_layout.addSpacing(16)
-
-        group_label = QLabel("WORKSPACE", sidebar)
-        group_label.setObjectName("sidebarGroup")
-        sidebar_layout.addWidget(group_label)
-
-        self.navigation = QListWidget(sidebar)
-        self.navigation.setObjectName("navigation")
-        self.navigation.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.navigation.setSelectionMode(QListWidget.SingleSelection)
-        navigation_items = [
-            ("⌂", "Overview"),
-            ("⚙", "Configuration & bridges"),
-            ("⊘", "Blocked hosts"),
-            ("↗", "Bypass rules"),
-            ("⇩", "Tor bundles & updates"),
-        ]
-        for glyph, title in navigation_items:
-            item = QListWidgetItem("{}   {}".format(glyph, title))
-            item.setToolTip(title)
-            self.navigation.addItem(item)
-        self.navigation.setCurrentRow(0)
-        self.navigation.currentRowChanged.connect(self._on_navigation_changed)
-        sidebar_layout.addWidget(self.navigation, 1)
-
-        divider = QFrame(sidebar)
-        divider.setFrameShape(QFrame.HLine)
-        divider.setObjectName("sidebarDivider")
-        sidebar_layout.addWidget(divider)
-        self.global_state = QLabel("● Checking Tor state…", sidebar)
-        self.global_state.setObjectName("globalState")
-        self.global_state.setWordWrap(True)
-        sidebar_layout.addWidget(self.global_state)
-        theme_hint = QLabel("Theme can be changed from the top bar.", sidebar)
-        theme_hint.setObjectName("sidebarCaption")
-        theme_hint.setWordWrap(True)
-        sidebar_layout.addWidget(theme_hint)
-
-        content = QWidget(body)
-        content.setObjectName("pageSurface")
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(26, 22, 26, 24)
-        content_layout.setSpacing(18)
-
-        page_header = QWidget(content)
+        page_header = QWidget(body)
         header_layout = QHBoxLayout(page_header)
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_copy = QVBoxLayout()
@@ -150,11 +93,16 @@ class Window(QMainWindow):
         header_copy.addWidget(self.page_heading)
         header_copy.addWidget(self.page_description)
         header_layout.addLayout(header_copy, 1)
-        content_layout.addWidget(page_header)
-        content_layout.addWidget(self.stack, 1)
 
-        body_layout.addWidget(sidebar)
-        body_layout.addWidget(content, 1)
+        self.global_state = QLabel("● Checking Tor state…", page_header)
+        self.global_state.setObjectName("globalState")
+        self.global_state.setMinimumWidth(150)
+        self.global_state.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.global_state.setWordWrap(True)
+        header_layout.addWidget(self.global_state)
+        body_layout.addWidget(page_header)
+        body_layout.addWidget(self.stack, 1)
+
         self.main_layout.addWidget(body, 1)
         self._apply_shell_styles()
 
@@ -246,33 +194,30 @@ class Window(QMainWindow):
     def _apply_shell_styles(self):
         if CONFIG["mode"] == "dark":
             accent, accent_text = "#3daee9", "#101820"
-            border, sidebar = "#414a56", "#20252b"
-            surface, text, muted = "#272c33", "#eff1f4", "#a6afb9"
+            border, surface = "#414a56", "#272c33"
+            text, muted = "#eff1f4", "#a6afb9"
         else:
             accent, accent_text = "#287db5", "#ffffff"
-            border, sidebar = "#d5dbe2", "#f4f6f8"
-            surface, text, muted = "#ffffff", "#202832", "#647080"
+            border, surface = "#d5dbe2", "#ffffff"
+            text, muted = "#202832", "#647080"
         self.setStyleSheet("""
-            QFrame#sidebar { background: %s; border-right: 1px solid %s; }
-            QLabel#brandLabel { font-size: 18px; font-weight: 750; color: %s; }
-            QLabel#sidebarCaption, QLabel#pageDescription { color: %s; font-size: 11px; }
-            QLabel#sidebarGroup { color: %s; font-size: 10px; font-weight: 700; letter-spacing: 1px; }
             QLabel#pageHeading { color: %s; font-size: 22px; font-weight: 700; }
-            QLabel#globalState { font-size: 11px; font-weight: 650; padding: 8px; border: 1px solid %s; border-radius: 7px; }
-            QFrame#sidebarDivider { color: %s; }
+            QLabel#pageDescription { color: %s; font-size: 11px; }
+            QLabel#globalState { color: %s; font-size: 11px; font-weight: 650; padding: 8px 12px; border: 1px solid %s; border-radius: 7px; }
             QWidget#pageSurface { background: %s; }
-            QListWidget#navigation { background: transparent; border: none; outline: none; color: %s; }
-            QListWidget#navigation::item { min-height: 36px; margin: 2px 0; padding: 5px 8px; border-radius: 6px; }
-            QListWidget#navigation::item:selected { background: %s; color: %s; font-weight: 650; }
             QMenuBar#topMenuBar { border: none; border-bottom: 1px solid %s; padding: 3px 8px; }
             QPushButton#themeToggle { min-height: 28px; padding: 0 10px; border-radius: 6px; }
             QStackedWidget#pageStack { background: transparent; }
-        """ % (sidebar, border, text, muted, muted, text, border, border, surface, text, accent, accent_text, border))
+        """ % (text, muted, text, border, surface, border))
 
     def _on_navigation_changed(self, row):
-        if row < 0:
+        # Kept as a compatibility slot for integrations that select a page by index.
+        self._show_page(row)
+
+    def _show_page(self, index):
+        if not 0 <= index < self.stack.count():
             return
-        self.stack.setCurrentIndex(row)
+        self.stack.setCurrentIndex(index)
         pages = [
             ("Overview", "Service controls, observed traffic, exit-IP checks and explicit system-proxy actions."),
             ("Configuration & bridges", "Manage bridge records, QR-code input, listener ports and Tor circuit settings."),
@@ -280,17 +225,10 @@ class Window(QMainWindow):
             ("Bypass rules", "These rules intentionally connect directly rather than through Tor."),
             ("Tor bundles & updates", "Find compatible releases, verify signatures, install and select a Tor runtime."),
         ]
-        title, description = pages[row]
+        title, description = pages[index]
         self.page_heading.setText(title)
         self.page_description.setText(description)
         self._update_global_state()
-
-    def _show_page(self, index):
-        self.stack.setCurrentIndex(index)
-        if self.navigation.currentRow() != index:
-            self.navigation.setCurrentRow(index)
-        else:
-            self._on_navigation_changed(index)
 
     def _update_global_state(self):
         proxy_widget = getattr(self, "proxyWidget", None)
