@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from threading import Event
 
 import pytest
@@ -193,4 +194,36 @@ def test_stream_download_rejects_mismatched_content_length(monkeypatch, tmp_path
             "https://dist.torproject.org/test", tmp_path / "bundle.tar.gz",
             {"dist.torproject.org"},
         )
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    os.environ.get("TORPROXY_ONLINE_SIGNATURE_TEST") != "1",
+    reason="set TORPROXY_ONLINE_SIGNATURE_TEST=1 to download and verify a real official bundle",
+)
+def test_live_official_expert_bundle_download_and_signature(tmp_path):
+    """Opt-in integration test: download a recent compatible release and verify its real .asc."""
+    versions = updater.get_tor_versions()
+    stable = [version.rstrip("/") for version in versions
+              if updater.tor_version_channel(version.rstrip("/")) == "Stable"][:6]
+    alpha = [version.rstrip("/") for version in versions
+             if updater.tor_version_channel(version.rstrip("/")).startswith("Alpha")][:4]
+
+    candidate = None
+    for version in stable + alpha:
+        links = updater.get_bundle_links(version)
+        if links:
+            candidate = (version, links[0])
+            break
+    if candidate is None:
+        pytest.skip("No compatible signed Expert Bundle was listed in the recent release window.")
+
+    version, filename = candidate
+    archive = bundle_module.download_verified_bundle(
+        version,
+        updater._platform_name(),
+        updater._architecture_name(),
+        tmp_path / filename,
+    )
+    assert archive.is_file() and archive.stat().st_size > 0
+    assert archive.with_name(archive.name + ".asc").is_file()
 
