@@ -244,13 +244,14 @@ class Window(QMainWindow):
         menu_bar.setCornerWidget(self.toggle_btn, Qt.TopRightCorner)
 
     def _apply_shell_styles(self):
-        palette = QApplication.palette()
-        accent = palette.color(QPalette.Highlight).name()
-        accent_text = palette.color(QPalette.HighlightedText).name()
-        border = palette.color(QPalette.Mid).name()
-        sidebar = palette.color(QPalette.AlternateBase).name()
-        text = palette.color(QPalette.WindowText).name()
-        muted = palette.color(QPalette.PlaceholderText).name()
+        if CONFIG["mode"] == "dark":
+            accent, accent_text = "#3daee9", "#101820"
+            border, sidebar = "#414a56", "#20252b"
+            surface, text, muted = "#272c33", "#eff1f4", "#a6afb9"
+        else:
+            accent, accent_text = "#287db5", "#ffffff"
+            border, sidebar = "#d5dbe2", "#f4f6f8"
+            surface, text, muted = "#ffffff", "#202832", "#647080"
         self.setStyleSheet("""
             QFrame#sidebar { background: %s; border-right: 1px solid %s; }
             QLabel#brandLabel { font-size: 18px; font-weight: 750; color: %s; }
@@ -259,13 +260,14 @@ class Window(QMainWindow):
             QLabel#pageHeading { color: %s; font-size: 22px; font-weight: 700; }
             QLabel#globalState { font-size: 11px; font-weight: 650; padding: 8px; border: 1px solid %s; border-radius: 7px; }
             QFrame#sidebarDivider { color: %s; }
-            QListWidget#navigation { background: transparent; border: none; outline: none; }
+            QWidget#pageSurface { background: %s; }
+            QListWidget#navigation { background: transparent; border: none; outline: none; color: %s; }
             QListWidget#navigation::item { min-height: 36px; margin: 2px 0; padding: 5px 8px; border-radius: 6px; }
             QListWidget#navigation::item:selected { background: %s; color: %s; font-weight: 650; }
             QMenuBar#topMenuBar { border: none; border-bottom: 1px solid %s; padding: 3px 8px; }
             QPushButton#themeToggle { min-height: 28px; padding: 0 10px; border-radius: 6px; }
             QStackedWidget#pageStack { background: transparent; }
-        """ % (sidebar, border, text, muted, muted, text, border, border, accent, accent_text, border))
+        """ % (sidebar, border, text, muted, muted, text, border, border, surface, text, accent, accent_text, border))
 
     def _on_navigation_changed(self, row):
         if row < 0:
@@ -325,6 +327,10 @@ class Window(QMainWindow):
             app.setStyleSheet(qdarkstyle.load_stylesheet(palette=LightPalette())) 
             CONFIG.mode = "light"
      
+        self._apply_shell_styles()
+        if hasattr(self, "updater_window"):
+            self.updater_window._apply_local_styles()
+
     def ask_close(self):
         reply = QMessageBox.question(
             self,
