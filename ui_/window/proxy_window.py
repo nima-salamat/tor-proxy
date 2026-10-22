@@ -55,7 +55,6 @@ class ProxyWindow(QWidget):
         self.tor.app_window = self
         self.proxy = Runner(self.proxy_port, self.tor_socks_port,self)
         self.main_layout = QVBoxLayout(self)
-        self.setLayout(self.main_layout)
         self.main_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.btn_status = QLabel(TAP_TO_CONNECT)
         self.set_btn_status_style("disconnected")
