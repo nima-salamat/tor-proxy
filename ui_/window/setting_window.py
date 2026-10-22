@@ -48,7 +48,7 @@ class SettingWindow(QWidget):
         self.settings_nav_group = QButtonGroup(self)
         self.settings_nav_group.setExclusive(True)
         self.settings_nav_buttons = []
-        for index, title in enumerate(("General", "Bridges", "Ports")):
+        for index, title in enumerate(("General", "Bridges", "Ports", "Advanced")):
             button = QPushButton(title, self)
             button.setObjectName("settingsNavButton")
             button.setCheckable(True)
@@ -65,15 +65,18 @@ class SettingWindow(QWidget):
         self.first_page, self.first_page_layout = self._create_scroll_page()
         self.bridges_page, self.bridges_page_layout = self._create_scroll_page()
         self.second_page, self.second_page_layout = self._create_scroll_page()
+        self.advanced_page, self.advanced_page_layout = self._create_scroll_page()
         self.settings_nav_buttons[0].setChecked(True)
 
         self.initialize_first_page()
         self.initialize_bridges_page()
         self.initialize_second_page()
+        self.initialize_advanced_page()
         self.setStyleSheet("""
             QPushButton#settingsNavButton { min-height: 34px; padding: 0 16px; border-radius: 7px; font-weight: 600; }
             QPushButton#settingsNavButton:checked { background: #287db5; color: #ffffff; border: 1px solid #287db5; }
             QStackedWidget#settingsPages { border: 1px solid palette(mid); border-radius: 9px; }
+            QLabel#signatureVerificationDetails { color: palette(text); padding: 8px 0; }
         """)
 
     def _create_scroll_page(self):
@@ -197,8 +200,41 @@ class SettingWindow(QWidget):
             lyt.addWidget(check_port)
 
             self.second_page_layout.addLayout(lyt)
-        
-   
+
+    def initialize_advanced_page(self):
+        title = QLabel("Optional security verification")
+        title.setStyleSheet("font-size: 15px; font-weight: 700;")
+        self.advanced_page_layout.addWidget(title)
+        self.chk_verify_tor_signatures = QCheckBox(
+            "Verify Tor bundle signatures with OpenPGP (GnuPG)", self
+        )
+        self.chk_verify_tor_signatures.setChecked(bool(CONFIG["verify_tor_signatures"]))
+        self.chk_verify_tor_signatures.stateChanged.connect(self.signature_verification_changed)
+        self.advanced_page_layout.addWidget(self.chk_verify_tor_signatures)
+
+        details = QLabel(
+            "OFF (default): TorProxy downloads the exact Expert Bundle from the official Tor HTTPS host, "
+            "checks archive structure and records its SHA-256 digest, but does not authenticate the publisher's "
+            "cryptographic signature. This is less secure if the distribution host, connection or archive is compromised.\n\n"
+            "ON: TorProxy requires the matching detached .asc signature and checks it against Tor's pinned signing "
+            "key. A working GnuPG installation is required; missing or invalid signatures stop the installation."
+        )
+        details.setWordWrap(True)
+        details.setObjectName("signatureVerificationDetails")
+        self.advanced_page_layout.addWidget(details)
+        self.advanced_page_layout.addStretch(1)
+
+    def signature_verification_changed(self, state):
+        enabled = bool(state)
+        try:
+            CONFIG["verify_tor_signatures"] = enabled
+        except (ValueError, OSError, KeyError) as exc:
+            logger.error("Could not save OpenPGP signature-verification preference: %s", exc)
+            self.chk_verify_tor_signatures.blockSignals(True)
+            self.chk_verify_tor_signatures.setChecked(not enabled)
+            self.chk_verify_tor_signatures.blockSignals(False)
+            QMessageBox.warning(self, "Settings could not be saved", str(exc))
+
     def _enabled_port_conflict(self, port: str, value: int) -> str | None:
         for other in ("tor_port", "proxy_port", "dns_port", "control_port"):
             if other == port or not CONFIG[other + "_checked"]:
