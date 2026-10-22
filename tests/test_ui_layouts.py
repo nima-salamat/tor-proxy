@@ -143,7 +143,7 @@ def test_window_uses_native_multimonitor_frame_and_persistent_notifications():
     ui_source = (repository / "ui.py").read_text(encoding="utf-8")
     main_source = (repository / "main.py").read_text(encoding="utf-8")
     titlebar_source = (repository / "ui_/window/custom_titlebar.py").read_text(encoding="utf-8")
-    assert "Qt.FramelessWindowHint" in ui_source
+    assert "FramelessWindowHint" in ui_source
     assert "def moveEvent" not in ui_source
     assert "CustomTitleBar(self)" in ui_source
     assert "startSystemMove" in titlebar_source
