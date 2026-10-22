@@ -199,32 +199,32 @@ class UpdaterWindow(QWidget):
         return "This device: {} · {} · signed Expert Bundles only".format(os_name, machine)
 
     def _apply_local_styles(self) -> None:
-        """Style reusable surfaces while deriving highlight colours from the active theme."""
-        palette = QApplication.palette() if QApplication.instance() else self.palette()
-        accent = palette.color(QPalette.Highlight).name()
-        border = palette.color(QPalette.Mid).name()
-        surface = palette.color(QPalette.Base).name()
-        text = palette.color(QPalette.WindowText).name()
-        muted = palette.color(QPalette.PlaceholderText).name()
+        """Apply the same restrained design tokens in either application theme."""
+        if CONFIG["mode"] == "dark":
+            accent, border, surface = "#3daee9", "#414a56", "#20252b"
+            text, muted = "#eff1f4", "#a6afb9"
+        else:
+            accent, border, surface = "#287db5", "#d5dbe2", "#ffffff"
+            text, muted = "#202832", "#647080"
         self.setStyleSheet("""
-            QWidget#pageTitle { font-size: 22px; font-weight: 700; }
+            QWidget#pageTitle { color: %s; font-size: 22px; font-weight: 700; }
             QLabel#pageSubtitle { color: %s; font-size: 12px; }
             QFrame#infoCard, QFrame#contentCard { border: 1px solid %s; border-radius: 10px; }
-            QLabel#sectionTitle { font-size: 14px; font-weight: 650; }
-            QLabel#metadataLabel, QLabel#stateLabel { font-size: 12px; }
+            QLabel#sectionTitle { color: %s; font-size: 14px; font-weight: 650; }
+            QLabel#metadataLabel, QLabel#stateLabel { color: %s; font-size: 12px; }
             QLabel#mutedText { color: %s; font-size: 11px; }
-            QLabel#statusMessage { font-size: 12px; }
-            QListWidget#releaseList { background: %s; border: 1px solid %s; border-radius: 7px; padding: 4px; }
+            QLabel#statusMessage { color: %s; font-size: 12px; }
+            QListWidget#releaseList { background: %s; border: 1px solid %s; border-radius: 7px; padding: 4px; color: %s; }
             QListWidget#releaseList::item { min-height: 34px; padding: 6px 8px; border-radius: 5px; }
-            QListWidget#releaseList::item:selected { background: %s; color: white; }
+            QListWidget#releaseList::item:selected { background: %s; color: #ffffff; }
             QPushButton { min-height: 30px; padding: 0 12px; border-radius: 6px; }
             QPushButton#primaryButton { font-weight: 600; }
             QPushButton#dangerButton { color: #d94c4c; }
             QPushButton#quietButton { min-height: 26px; }
-            QLineEdit { min-height: 32px; padding: 0 9px; border: 1px solid %s; border-radius: 6px; }
-            QProgressBar { min-height: 18px; border: 1px solid %s; border-radius: 5px; text-align: center; }
+            QLineEdit { min-height: 32px; padding: 0 9px; border: 1px solid %s; border-radius: 6px; color: %s; }
+            QProgressBar { min-height: 18px; border: 1px solid %s; border-radius: 5px; color: %s; text-align: center; }
             QProgressBar::chunk { background: %s; border-radius: 4px; }
-        """ % (muted, border, muted, surface, border, accent, border, border, accent))
+        """ % (text, muted, border, text, text, muted, text, surface, border, text, accent, border, text, border, accent))
 
     def _parse_result(self, data, expected_type):
         try:
