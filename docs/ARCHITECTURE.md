@@ -41,7 +41,7 @@ The current Qt shell retains the existing service-facing widgets but puts them b
 
 The bundle manager performs release-directory discovery separately from artifact eligibility. It recognizes the stable `X.Y.Z` and currently supported alpha `X.YaN`/ `X.Y.ZaN` forms, orders stable releases before prereleases, and checks for the exact platform/architecture archive plus detached signature only when a release is selected. `BundleProgress` is an immutable event model propagated through the download callback and a Qt signal; widget updates remain in a GUI-thread slot. A missing total transfer length uses indeterminate progress, and the bar does not claim installed status before signature verification and extraction finish.
 
-The verifier continues to require the independently pinned full Tor signing-key fingerprint and a detached OpenPGP signature. GnuPG discovery checks `PATH`, common install locations and `TORPROXY_GPG_EXECUTABLE`. If a supported GnuPG runtime cannot be started, the operation fails closed with recovery guidance; the current implementation does not bundle GnuPG and does not provide GnuPG-independent verification.
+The verifier continues to require the independently pinned full Tor signing-key fingerprint and a detached OpenPGP signature. GnuPG discovery checks `PATH`, common install locations and `TORPROXY_GPG_EXECUTABLE`. The downloader probes the GnuPG runtime before receiving the large archive, then checks the pinned fingerprint and the exact detached signature. If a supported GnuPG runtime cannot be started, the operation fails closed with recovery guidance; the current implementation does not bundle GnuPG and does not provide GnuPG-independent verification.
 
 ## Persistence and resources
 
@@ -49,7 +49,7 @@ The verifier continues to require the independently pinned full Tor signing-key 
 - Runtime state, logs, and downloaded bundles are stored in per-user writable paths.
 - Packaged UI assets remain read-only resources.
 - JSON settings and host-rule files use temporary files and atomic replacement.
-- A downloaded Tor bundle is considered a managed/verified installation only when its detached signature is valid and a verification marker has been written after safe extraction.
+- A downloaded Tor bundle is considered a managed/verified installation only when its detached signature is valid, archive digest is recorded, and verification marker is written in an isolated staging directory before the directory is atomically published at its final name.
 
 ## Identity workflow
 
