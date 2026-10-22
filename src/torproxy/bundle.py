@@ -23,7 +23,10 @@ ALLOWED_DISTRIBUTION_HOSTS = {"dist.torproject.org", "archive.torproject.org"}
 MAX_BUNDLE_BYTES = 300 * 1024 * 1024
 MAX_EXTRACTED_BYTES = 1024 * 1024 * 1024
 PROGRESS_MIN_INTERVAL_SECONDS = 0.12
-SUPPORTED_VERSION = re.compile(r"^(?:\d+\.\d+\.\d+|\d+\.\d+(?:\.\d+)?a\d+)$")
+SUPPORTED_VERSION = re.compile(
+    r"^(?:(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)|"
+    r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*))?a(?:0|[1-9]\d*))$"
+)
 
 
 @dataclass(frozen=True)
@@ -118,6 +121,10 @@ def _download(
                     total += len(chunk)
                     if total > max_bytes:
                         raise BundleVerificationError("The downloaded file exceeds the configured size limit.")
+                    if total_bytes is not None and total > total_bytes:
+                        raise BundleVerificationError(
+                            "The server sent more bytes than its declared Content-Length."
+                        )
                     output.write(chunk)
                     now = time.monotonic()
                     elapsed = max(now - started, 0.001)
@@ -139,6 +146,10 @@ def _download(
         raise
     if total == 0:
         raise BundleVerificationError("The server returned an empty file.")
+    if total_bytes is not None and total != total_bytes:
+        raise BundleVerificationError(
+            "The transfer ended before the declared Content-Length was received."
+        )
     elapsed = max(time.monotonic() - started, 0.001)
     _progress(progress_callback, BundleProgress(
         version, operation, stage, total, total_bytes, 100 if total_bytes and total == total_bytes else None,
