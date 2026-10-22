@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import QPushButton
+from PySide6.QtWidgets import QPushButton, QSizePolicy
 from PySide6.QtCore import Qt, QEasingCurve, QPropertyAnimation, Property, QTimer
 from PySide6.QtGui import QPainter, QColor, QBrush, QPen
 
@@ -8,7 +8,9 @@ logger = logging.getLogger(__name__)
 class PulseButton(QPushButton):
     def __init__(self, text):
         super().__init__(text)
-        self.setFixedSize(250, 250)
+        self.setMinimumSize(180, 180)
+        self.setMaximumSize(250, 250)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         self.connected = False
         self.hovered = False
 
@@ -17,7 +19,7 @@ class PulseButton(QPushButton):
         self._pulse_color = "#2ecc71"
         self.outer_anim = QPropertyAnimation(self, b"pulseRadius")
         self.outer_anim.setStartValue(0)
-        self.outer_anim.setEndValue(120)
+        self.outer_anim.setEndValue(104)
         self.outer_anim.setDuration(800)
         self.outer_anim.setLoopCount(-1)
         self.outer_anim.setEasingCurve(QEasingCurve.Type.OutQuad)
@@ -26,7 +28,7 @@ class PulseButton(QPushButton):
         self._halo_radius = 0
         self.halo_anim = QPropertyAnimation(self, b"haloRadius")
         self.halo_anim.setStartValue(0)
-        self.halo_anim.setEndValue(160)
+        self.halo_anim.setEndValue(132)
         self.halo_anim.setDuration(1500)
         self.halo_anim.setLoopCount(-1)
         self.halo_anim.setEasingCurve(QEasingCurve.Type.InOutQuad)
@@ -77,7 +79,7 @@ class PulseButton(QPushButton):
                     color: white;
                     font-size: 20px;
                     font-weight: 700;
-                    border-radius: 125px;
+                    border-radius: {min(self.width(), self.height()) // 2}px;
                     border: none;
                 }}
                 QPushButton:hover {{
@@ -114,6 +116,14 @@ class PulseButton(QPushButton):
         self.connected = not self.connected
         self.updateStyle()
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        diameter = max(1, min(self.width(), self.height()))
+        self.outer_anim.setEndValue(int(diameter * 0.43))
+        self.halo_anim.setEndValue(int(diameter * 0.54))
+        self.inner_anim.setEndValue(int(diameter * 0.13))
+        self.updateStyle()
+
     # --------------------
     # Painting
     # --------------------
@@ -126,7 +136,7 @@ class PulseButton(QPushButton):
         # inner breathe
         if self._inner_radius and not self.connected:
             color = QColor(self._pulse_color)
-            color.setAlphaF(0.55 * (1 - self._inner_radius / 30))
+            color.setAlphaF(0.55 * (1 - self._inner_radius / max(1, float(self.inner_anim.endValue()))))
             painter.setBrush(QBrush(color))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawEllipse(center, int(self._inner_radius), int(self._inner_radius))
@@ -134,7 +144,7 @@ class PulseButton(QPushButton):
         # outer pulse (connected)
         if self._pulse_radius and self.connected:
             color = QColor(self._pulse_color)
-            color.setAlphaF(0.6 * (1 - self._pulse_radius / 120))
+            color.setAlphaF(0.6 * (1 - self._pulse_radius / max(1, float(self.outer_anim.endValue()))))
             painter.setBrush(QBrush(color))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawEllipse(center, int(self._pulse_radius), int(self._pulse_radius))
@@ -142,7 +152,7 @@ class PulseButton(QPushButton):
         # halo (big outer circle)
         if self._halo_radius and self.connected:
             color = QColor(self._pulse_color)
-            color.setAlphaF(0.2 * (1 - self._halo_radius / 160))
+            color.setAlphaF(0.2 * (1 - self._halo_radius / max(1, float(self.halo_anim.endValue()))))
             painter.setBrush(QBrush(color))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawEllipse(center, int(self._halo_radius), int(self._halo_radius))
