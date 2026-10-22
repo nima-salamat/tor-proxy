@@ -165,55 +165,88 @@ class SettingWindow(QWidget):
             self.second_page_layout.addLayout(lyt)
         
    
-    def inp_port_changed(self, inp_port, lbl_status, port, text=None):
-        if text is None:
-            value = inp_port.text().strip()
-        else:
-            value = str(text).strip()
+    def _enabled_port_conflict(self, port: str, value: int) -> str | None:
+        for other in ("tor_port", "proxy_port", "dns_port", "control_port"):
+            if other == port or not CONFIG[other + "_checked"]:
+                continue
+            current = CONFIG[other]
+            try:
+                if current is not None and int(current) == value:
+                    return other
+            except (TypeError, ValueError):
+                continue
+        return None
 
-        if value and self._is_valid_port(value):
-            lbl_status.setText(CORRECT)
-            try:
-                CONFIG[port] = int(value)
-            except Exception:
-                CONFIG[port] = value
-            try:
-                proxy = getattr(self._parent, "proxyWidget", None)
-                if proxy and hasattr(proxy, "set_port"):
-                    proxy.set_port(port, int(value))
-                elif proxy:
-                    setattr(proxy, port, int(value))
-            except Exception:
-                pass
-        else:
+    def inp_port_changed(self, inp_port, lbl_status, port, text=None):
+        value = inp_port.text().strip() if text is None else str(text).strip()
+        if not value or not self._is_valid_port(value):
             lbl_status.setText(WRONG)
             try:
                 CONFIG[port] = None
-            except Exception:
-                pass
+            except (ValueError, OSError) as exc:
+                logger.warning("Could not clear invalid %s setting: %s", port, exc)
+            return
 
-
-    def check_port_changed(self, state: int, inp_port: QLineEdit = None, lbl_status: QLabel = None, port: str = ""):
-        # Qt sends state (int). Convert to boolean
-        enabled = bool(state)
-        if inp_port is not None:
-            inp_port.setEnabled(enabled)
+        port_value = int(value)
+        conflict = self._enabled_port_conflict(port, port_value) if CONFIG[port + "_checked"] else None
+        if conflict:
+            lbl_status.setText(WRONG)
+            try:
+                CONFIG[port] = None
+            except (ValueError, OSError) as exc:
+                logger.warning("Could not clear conflicting %s setting: %s", port, exc)
+            logger.warning("Port %s conflicts with enabled %s.", port_value, conflict)
+            return
 
         try:
-            CONFIG[port + "_checked"] = bool(enabled)
+            CONFIG[port] = port_value
+        except (ValueError, OSError) as exc:
+            lbl_status.setText(WRONG)
+            logger.warning("Could not save %s: %s", port, exc)
+            return
+
+        lbl_status.setText(CORRECT)
+        try:
+            proxy = getattr(self._parent, "proxyWidget", None)
+            if proxy and hasattr(proxy, "set_port"):
+                proxy.set_port(port, port_value)
+            elif proxy:
+                setattr(proxy, port, port_value)
         except Exception:
             pass
 
+    def check_port_changed(self, state: int, inp_port: QLineEdit = None, lbl_status: QLabel = None, port: str = ""):
+        enabled = bool(state)
         val_text = inp_port.text().strip() if inp_port is not None else ""
         if enabled and self._is_valid_port(val_text):
-            if lbl_status is not None:
-                lbl_status.setText(CORRECT) 
-        elif enabled:
+            conflict = self._enabled_port_conflict(port, int(val_text))
+            if conflict:
+                if lbl_status is not None:
+                    lbl_status.setText(WRONG)
+                QMessageBox.warning(
+                    self, "Port conflict",
+                    f"Port {val_text} is already assigned to enabled setting '{conflict}'."
+                )
+                checkbox = self.sender()
+                if checkbox is not None and hasattr(checkbox, "setChecked"):
+                    checkbox.setChecked(False)
+                return
+
+        if inp_port is not None:
+            inp_port.setEnabled(enabled)
+        try:
+            CONFIG[port + "_checked"] = enabled
+        except (ValueError, OSError) as exc:
+            logger.warning("Could not update %s enabled flag: %s", port, exc)
             if lbl_status is not None:
                 lbl_status.setText(WRONG)
-        else:
-            if lbl_status is not None:
-                lbl_status.setText(WRONG)
+            checkbox = self.sender()
+            if enabled and checkbox is not None and hasattr(checkbox, "setChecked"):
+                checkbox.setChecked(False)
+            return
+
+        if lbl_status is not None:
+            lbl_status.setText(CORRECT if enabled and self._is_valid_port(val_text) else WRONG)
 
     # ---------- other helpers ----------
     def go_to_before_page(self):
