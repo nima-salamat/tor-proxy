@@ -35,6 +35,14 @@ The HTTP proxy is an independent local service. It is loopback-only. HTTP absolu
 
 Avoid calling widgets directly from a worker. Status and log updates should be delivered to Qt slots through signals. Some old UI helpers remain transitional and need the same review as the rest of the UI migration.
 
+## Desktop shell and bundle workflow
+
+The current Qt shell retains the existing service-facing widgets but puts them behind a consistent sidebar, page heading, global service-state label and theme-aware surfaces. The overview remains the place for connect/disconnect, traffic counters, exit-IP checking, system-proxy opt-in and event logs; the configuration page retains ports, bridge records and QR input; host rules and the bundle manager have separate navigation entries. This is an incremental presentation migration, not a claim that every legacy view has moved into a fully separated view-model package.
+
+The bundle manager performs release-directory discovery separately from artifact eligibility. It recognizes the stable `X.Y.Z` and currently supported alpha `X.YaN`/ `X.Y.ZaN` forms, orders stable releases before prereleases, and checks for the exact platform/architecture archive plus detached signature only when a release is selected. `BundleProgress` is an immutable event model propagated through the download callback and a Qt signal; widget updates remain in a GUI-thread slot. A missing total transfer length uses indeterminate progress, and the bar does not claim installed status before signature verification and extraction finish.
+
+The verifier continues to require the independently pinned full Tor signing-key fingerprint and a detached OpenPGP signature. GnuPG discovery checks `PATH`, common install locations and `TORPROXY_GPG_EXECUTABLE`. If a supported GnuPG runtime cannot be started, the operation fails closed with recovery guidance; the current implementation does not bundle GnuPG and does not provide GnuPG-independent verification.
+
 ## Persistence and resources
 
 - App configuration is stored in per-user configuration directories.
