@@ -14,7 +14,7 @@ if SRC_ROOT.is_dir() and str(SRC_ROOT) not in sys.path:
 
 import portalocker
 import qdarkstyle
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 from qdarkstyle.dark.palette import DarkPalette
@@ -48,6 +48,10 @@ def configure_logging() -> None:
 
 
 def main() -> int:
+    # Preserve each display's actual DPI ratio when moving between monitors.
+    QApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+    )
     app = QApplication(sys.argv)
     try:
         CONFIG.load()
