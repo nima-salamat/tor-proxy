@@ -1,47 +1,97 @@
-from PySide6.QtWidgets import (
-    QLabel,
-    QWidget,
-    QHBoxLayout,
-    QPushButton,
-)
+"""Compact Windows title bar with native multi-monitor window dragging."""
 from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QLabel, QWidget, QHBoxLayout, QPushButton, QSizePolicy
+
 
 class CustomTitleBar(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(40)
         self.parent_ = parent
-        self.title = QLabel("T⭕®️🌐🅿️®️⭕❌Y")
-        self.title.setStyleSheet("margin-left: 10px;")
-        
-        self.btn_min = QPushButton("➖")
-        self.btn_close = QPushButton("✖️")
+        self.setObjectName("customTitleBar")
+        self.setFixedHeight(40)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
-        for btn in (self.btn_min, self.btn_close):
-            btn.setFixedSize(30, 30)
+        self.title = QLabel("TorProxy", self)
+        self.title.setObjectName("windowTitle")
+        self.title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
-        self.btn_min.clicked.connect(lambda: parent.showMinimized())
-        self.btn_close.clicked.connect(self.parent_.show_tray)
+        self.btn_min = QPushButton("—", self)
+        self.btn_max = QPushButton("□", self)
+        self.btn_close = QPushButton("×", self)
+        self.btn_min.setObjectName("titleBarButton")
+        self.btn_max.setObjectName("titleBarButton")
+        self.btn_close.setObjectName("titleBarCloseButton")
+        self.btn_min.setToolTip("Minimize")
+        self.btn_max.setToolTip("Maximize / restore")
+        self.btn_close.setToolTip("Exit TorProxy")
+        for button in (self.btn_min, self.btn_max, self.btn_close):
+            button.setFixedSize(36, 30)
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+        self.btn_min.clicked.connect(parent.showMinimized)
+        self.btn_max.clicked.connect(self._toggle_maximized)
+        self.btn_close.clicked.connect(parent.ask_close)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(12, 5, 7, 5)
+        layout.setSpacing(5)
         layout.addWidget(self.title)
-        layout.addStretch()
+        layout.addStretch(1)
         layout.addWidget(self.btn_min)
+        layout.addWidget(self.btn_max)
         layout.addWidget(self.btn_close)
-
         self._start_pos = None
 
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self._start_pos = event.globalPosition().toPoint()
+    def _toggle_maximized(self):
+        if self.parent_.isMaximized():
+            self.parent_.showNormal()
+        else:
+            self.parent_.showMaximized()
+        self._sync_maximize_button()
 
-    def mouseMoveEvent(self, event): 
-        if self._start_pos:
-            delta = event.globalPosition().toPoint() - self._start_pos
-            self.window().move(self.window().pos() + delta)
-            self._start_pos = event.globalPosition().toPoint()
+    def _sync_maximize_button(self):
+        maximized = self.parent_.isMaximized()
+        self.btn_max.setText("❐" if maximized else "□")
+        self.btn_max.setToolTip("Restore" if maximized else "Maximize")
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._sync_maximize_button()
+
+    def mousePressEvent(self, event):
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mousePressEvent(event)
+            return
+        handle = self.parent_.windowHandle()
+        if handle is not None:
+            try:
+                if handle.startSystemMove():
+                    event.accept()
+                    return
+            except (AttributeError, RuntimeError):
+                pass
+        # Fallback for window systems that do not implement startSystemMove.
+        # Use global coordinates and no primary-screen clamp: negative X/Y are valid
+        # on multi-monitor desktops where a secondary display is left/above primary.
+        self._start_pos = event.globalPosition().toPoint()
+        event.accept()
+
+    def mouseMoveEvent(self, event):
+        if self._start_pos is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            current = event.globalPosition().toPoint()
+            self.parent_.move(self.parent_.pos() + current - self._start_pos)
+            self._start_pos = current
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
         self._start_pos = None
-    
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._toggle_maximized()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
