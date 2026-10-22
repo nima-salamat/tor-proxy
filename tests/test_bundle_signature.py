@@ -38,7 +38,7 @@ def _configure_gpg_mocks(monkeypatch, tmp_path, *, key_fingerprint=FINGERPRINT, 
         if "--import" in command:
             return SimpleNamespace(returncode=0 if import_ok else 2, stdout="", stderr="")
         if "--list-keys" in command:
-            listing = "fpr:::::::::{}:\n".format(key_fingerprint)
+            listing = f"fpr:::::::::{key_fingerprint}:\n"
             return SimpleNamespace(returncode=0, stdout=listing, stderr="")
         if "--verify" in command:
             if timeout:
@@ -46,13 +46,11 @@ def _configure_gpg_mocks(monkeypatch, tmp_path, *, key_fingerprint=FINGERPRINT, 
             actual_archive = Path(command[-1]).read_bytes()
             valid = signature_valid and actual_archive == archive_bytes
             status = (
-                "[GNUPG:] VALIDSIG {} 2026-10-14 1791936000 0 4 0 1 10 00\n".format(
-                    signature_fingerprint
-                )
+                f"[GNUPG:] VALIDSIG {signature_fingerprint} 2026-10-14 1791936000 0 4 0 1 10 00\n"
                 if valid else "[GNUPG:] BADSIG 1234 invalid\n"
             )
             return SimpleNamespace(returncode=0 if valid else 1, stdout=status, stderr="")
-        raise AssertionError("Unexpected GnuPG call: {}".format(command))
+        raise AssertionError(f"Unexpected GnuPG call: {command}")
 
     monkeypatch.setattr(bundle_module.subprocess, "run", run)
     return archive, signature
