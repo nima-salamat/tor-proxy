@@ -48,6 +48,12 @@ Test modules cover host rules, configuration and migration, user paths, proxy-re
 
 GitHub Actions is configured for Windows/Ubuntu and Python 3.10–3.13. A green result must be confirmed from the actual workflow after the branch is pushed. CI fakes do not prove successful connection to the live Tor network or validate every GUI/platform-specific behavior.
 
+## UI/updater follow-up in progress
+
+The follow-up branch `feature/modern-ui-and-updater-repair` adds a modern sidebar shell and a substantially revised bundle-manager page. Release names and release channels are parsed explicitly; compatible artifact discovery requires both the exact archive and detached signature. Transfer events use a typed progress object, and the GUI displays download, verification, extraction, and completion stages. Common GnuPG paths and `TORPROXY_GPG_EXECUTABLE` are supported as recovery mechanisms; absence of GnuPG still prevents installation because signature verification remains mandatory.
+
+Managed bundle auto-discovery now consults the existing verified-bundle inventory instead of trusting every matching folder name. Qt layout construction was corrected in the main shell, settings, overview, blocked-host and bypass-host views. Regression tests were added for version parsing, listing/artifact filtering, progress semantics, and managed executable selection. These changes remain subject to the branch's actual CI results and manual platform checks; they are not evidence of a completed live Windows signature-verification session.
+
 ## Known limitations and remaining work
 
 - Legacy UI code remains in root/`ui_/`. Service integration is improved, but the complete desktop UI has not been migrated to a package-oriented view-model architecture.
