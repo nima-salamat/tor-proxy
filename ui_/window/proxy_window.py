@@ -131,6 +131,7 @@ class ProxyWindow(QWidget):
         self.btn_clear_proxy.clicked.connect(self.clear_proxy_clicked)
         layout_proxy.addWidget(self.btn_clear_proxy)
         actions_layout.addLayout(layout_proxy)
+        self._update_proxy_buttons()
 
         separator = QFrame(actions_card)
         separator.setFrameShape(QFrame.Shape.HLine)
