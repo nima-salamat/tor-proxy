@@ -38,6 +38,7 @@ include-package-data = false
 pythonpath = ["src"]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = ["integration: opt-in tests that contact the official Tor distribution and verify real bundle signatures"]
 
 [tool.ruff]
 target-version = "py310"
