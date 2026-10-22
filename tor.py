@@ -18,41 +18,101 @@ from utils import resource_path
 logger = logging.getLogger(__name__)
 
 
+def _bundle_root_for_path(path: Path, managed_root: Path) -> Path | None:
+    """Return the managed bundle directory containing a path, if any."""
+    try:
+        resolved = path.resolve()
+        if resolved == managed_root or managed_root not in resolved.parents:
+            return None
+        for parent in (resolved, *resolved.parents):
+            if parent.parent == managed_root and parent.name.startswith("tor-expert-bundle-"):
+                return parent
+    except OSError:
+        return None
+    return None
+
+
+def _verified_managed_bundles(managed_root: Path) -> list[Path]:
+    """List only bundles whose signature marker, archive digest, executable, and platform pass checks."""
+    try:
+        from updater import get_own_bundles, get_version_by_bundle, tor_version_sort_key
+
+        paths = [Path(item).resolve() for item in get_own_bundles()]
+        return sorted(
+            paths,
+            key=lambda item: tor_version_sort_key(get_version_by_bundle(item.name + ".tar.gz")),
+            reverse=True,
+        )
+    except (ImportError, OSError, ValueError, RuntimeError):
+        logger.exception("Could not resolve a verified managed Tor bundle.")
+        return []
+
+
 def _find_executable(candidate: str | os.PathLike[str] | None) -> tuple[Path | None, Path | None]:
+    """Resolve Tor without implicitly trusting arbitrary files inside the managed bundle directory."""
+    managed_root = Path(resource_path(BUNDLE_DIR)).resolve()
+    executable_name = "tor.exe" if IS_WINDOWS else "tor"
+
+    def _usable(path: Path) -> bool:
+        return path.is_file() and (os.name == "nt" or os.access(path, os.X_OK))
+
     if candidate:
         path = Path(candidate).expanduser()
-        if path.is_file():
-            # A manually selected executable is an explicit trust decision.
-            parent = path.resolve().parent
-            root = parent.parent if parent.name.lower() == "tor" else parent
-            return path.resolve(), root
-        if path.is_dir():
+        try:
+            resolved = path.resolve()
+        except OSError:
+            return None, path
+        managed_bundle = _bundle_root_for_path(resolved, managed_root)
+        if resolved == managed_root or (managed_root in resolved.parents):
+            # Managed content is never trusted from its filename alone: it must pass the
+            # same marker/digest/signature/executable checks as the bundle manager.
+            verified = _verified_managed_bundles(managed_root)
+            if managed_bundle is None or managed_bundle not in verified:
+                logger.error("Selected managed Tor bundle is missing or has not passed verification.")
+                return None, managed_bundle or resolved
+            if resolved.is_file():
+                expected = managed_bundle / "tor" / executable_name
+                if resolved == expected and _usable(resolved):
+                    return resolved, managed_bundle
+                logger.error("Selected executable does not match the verified bundle layout.")
+                return None, managed_bundle
+            for executable in (
+                managed_bundle / "tor" / executable_name,
+                managed_bundle / executable_name,
+            ):
+                if _usable(executable):
+                    return executable.resolve(), managed_bundle
+            return None, managed_bundle
+        if resolved.is_file():
+            # An explicit external executable is a user-selected trust decision, not an
+            # automatically discovered/downloaded bundle. Still validate that it can run.
+            if _usable(resolved):
+                parent = resolved.parent
+                root = parent.parent if parent.name.lower() == "tor" else parent
+                return resolved, root
+            return None, resolved.parent
+        if resolved.is_dir():
             candidates = [
-                path / "tor" / ("tor.exe" if IS_WINDOWS else "tor"),
-                path / ("tor.exe" if IS_WINDOWS else "tor"),
-                path / "tor" / "tor",
-                path / "tor" / "tor.exe",
+                resolved / "tor" / executable_name,
+                resolved / executable_name,
+                resolved / "tor" / "tor",
+                resolved / "tor" / "tor.exe",
             ]
             for executable in candidates:
-                if executable.is_file():
-                    root = path.resolve().parent if path.name.lower() == "tor" else path.resolve()
+                if _usable(executable):
+                    root = resolved.parent if resolved.name.lower() == "tor" else resolved
                     return executable.resolve(), root
-            return None, path.resolve()
-        return None, path
+            return None, resolved
+        return None, resolved
 
-    root = Path(resource_path(BUNDLE_DIR))
-    candidates: list[Path] = []
-    if root.is_dir():
-        for bundle in sorted(root.glob("tor-expert-bundle-*"), reverse=True):
-            if not bundle.is_dir():
-                continue
-            candidates.extend([
-                bundle / "tor" / ("tor.exe" if IS_WINDOWS else "tor"),
-                bundle / ("tor.exe" if IS_WINDOWS else "tor"),
-            ])
-    for executable in candidates:
-        if executable.is_file():
-            return executable.resolve(), executable.parent.parent.resolve()
+    # Do not auto-select merely because an old/unverified folder contains tor.exe.
+    for bundle in _verified_managed_bundles(managed_root):
+        for executable in (
+            bundle / "tor" / executable_name,
+            bundle / executable_name,
+        ):
+            if _usable(executable):
+                return executable.resolve(), bundle
     return None, None
 
 
