@@ -193,6 +193,28 @@ class Handler:
         except OSError:
             return False
 
+    def disable_windows_proxy(self):
+        """Explicitly disable the operating-system proxy when the user selects Clear."""
+        import winreg
+        try:
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, self.WINDOWS_REG_PATH, 0, winreg.KEY_SET_VALUE
+            ) as key:
+                winreg.SetValueEx(key, "ProxyEnable", 0, winreg.REG_DWORD, 0)
+            self._notify_windows()
+            snapshot = _snapshot_path()
+            if snapshot.exists():
+                try:
+                    data = json.loads(snapshot.read_text(encoding="utf-8"))
+                    if data.get("platform") == "Windows":
+                        snapshot.unlink()
+                except (OSError, json.JSONDecodeError):
+                    logger.warning("Could not remove the old proxy restoration snapshot after explicit Clear.")
+            return True
+        except Exception:
+            logger.exception("Could not disable the Windows system proxy.")
+            return False
+
     def clear_windows_proxy(self):
         path = _snapshot_path()
         if not path.exists():
@@ -283,6 +305,26 @@ class Handler:
                 logger.exception("Automatic rollback of partial GNOME proxy changes failed.")
             return False
 
+    def disable_linux_proxy(self):
+        """Explicitly select direct mode in GNOME when the user chooses Clear."""
+        path = _snapshot_path()
+        if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+            logger.error("No desktop session was detected; cannot change GNOME proxy settings.")
+            return False
+        try:
+            self._set_gsettings_value("mode", "none")
+            if path.exists():
+                try:
+                    snapshot = json.loads(path.read_text(encoding="utf-8"))
+                    if snapshot.get("platform") == "Linux":
+                        path.unlink()
+                except (OSError, json.JSONDecodeError):
+                    logger.warning("Could not remove the old proxy restoration snapshot after explicit Clear.")
+            return True
+        except Exception:
+            logger.exception("Could not disable the GNOME system proxy.")
+            return False
+
     def clear_linux_proxy(self):
         path = _snapshot_path()
         if not path.exists():
@@ -319,14 +361,22 @@ def has_proxy_snapshot() -> bool:
 
 def manage_proxy(host, port, action="set"):
     """Apply the system proxy only after explicit user action, or restore our snapshot."""
-    if action not in {"set", "clear"}:
+    if action not in {"set", "clear", "disable"}:
         logger.error("Unsupported system proxy action: %s", action)
         return False
     handler = Handler(host, port)
     operating_system = get_os_name()
     if operating_system == Os.Windows:
-        return handler.set_windows_proxy() if action == "set" else handler.clear_windows_proxy()
+        if action == "set":
+            return handler.set_windows_proxy()
+        if action == "disable":
+            return handler.disable_windows_proxy()
+        return handler.clear_windows_proxy()
     if operating_system == Os.Linux:
-        return handler.set_linux_proxy() if action == "set" else handler.clear_linux_proxy()
+        if action == "set":
+            return handler.set_linux_proxy()
+        if action == "disable":
+            return handler.disable_linux_proxy()
+        return handler.clear_linux_proxy()
     logger.error("System proxy integration is not supported on %s.", operating_system)
     return False
