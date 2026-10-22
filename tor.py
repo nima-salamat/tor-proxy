@@ -153,8 +153,12 @@ class TorRunner(QObject):
         executable, root = _find_executable(base_path)
         if executable is None:
             self.path_set = False
+            self.tor_path = None
+            self.lyrebird_path = None
+            self.geoip_path = None
+            self.geoip6_path = None
             if base_path:
-                logger.error("No Tor executable was found under the selected path.")
+                logger.error("No verified Tor executable was found under the selected path.")
             return False
         self.tor_path = str(executable)
         if root is not None:
