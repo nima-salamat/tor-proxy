@@ -8,8 +8,8 @@ logger = logging.getLogger(__name__)
 class PulseButton(QPushButton):
     def __init__(self, text):
         super().__init__(text)
-        self.setMinimumSize(180, 180)
-        self.setMaximumSize(250, 250)
+        self.setMinimumSize(220, 220)
+        self.setMaximumSize(280, 280)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         self.connected = False
         self.hovered = False

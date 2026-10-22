@@ -286,16 +286,13 @@ class ProxyWindow(QWidget):
 
         self.btn_status.setStyleSheet("""
             QLabel {
-                padding: 20px;
-                border-radius: 15px;
-                font-size: 18px;
-                font-weight: bold;
-                border: 4px solid %s;
+                padding: 7px 14px;
+                border-radius: 9px;
+                font-size: 15px;
+                font-weight: 650;
+                border: 2px solid %s;
             }
-            QLabel:hover {
-                border: 4px solid #1B5E20;
-            }
-        """%(color))
+        """ % color)
 
     def _toggle(self):
         if self.running:
