@@ -45,6 +45,7 @@ DEFAULT_DATA: dict[str, Any] = {
     "MaxCircuitDirtiness": 600,
     "newnym_interval": 0,
     "system_proxy_auto": False,
+    "system_proxy_mode": "unchanged",
     "log_level": "INFO",
     "verify_tor_signatures": False,
 }
@@ -94,6 +95,8 @@ class Config:
     def _validate(data: dict[str, Any]) -> None:
         if data.get("mode", "dark") not in {"dark", "light"}:
             raise ConfigError("mode must be 'dark' or 'light'.")
+        if data.get("system_proxy_mode", "unchanged") not in {"set", "unchanged", "clear"}:
+            raise ConfigError("system_proxy_mode must be 'set', 'unchanged', or 'clear'.")
         for name in ("bridge", "proxy_port_checked", "tor_port_checked", "control_port_checked",
                      "dns_port_checked", "system_proxy_auto", "verify_tor_signatures"):
             if name in data and type(data[name]) is not bool:
