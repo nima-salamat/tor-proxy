@@ -19,7 +19,6 @@ class BlcokHostsWindow(QWidget):
         super().__init__(parent) 
         self._parent = parent    
         main_layout = QVBoxLayout(self)
-        self.setLayout(main_layout)
         main_layout.addWidget(QLabel("Block host:"))
         
         load_blocked()
