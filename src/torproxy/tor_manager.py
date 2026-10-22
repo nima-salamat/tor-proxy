@@ -188,7 +188,10 @@ class TorManager:
                 from stem.control import Controller
             except ImportError as exc:
                 raise TorManagerError("The Stem library is required for authenticated Tor control.") from exc
-            factory = lambda: Controller.from_port(address="127.0.0.1", port=self.settings.control_port)
+            def factory():
+                return Controller.from_port(
+                    address="127.0.0.1", port=self.settings.control_port
+                )
         controller = factory()
         controller.authenticate()
         return controller

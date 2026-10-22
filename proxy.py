@@ -107,9 +107,9 @@ def add_to_blocked_hosts(host: str) -> bool:
     with _rule_lock:
         if rule in _blocked_rules.rules:
             return False
-        _blocked_rules = _blocked_rules.add(host)
-        snapshot = _blocked_rules.as_list()
-    _atomic_json(_rules_path(BLOCKED_FILE), snapshot)
+        updated = _blocked_rules.add(host)
+        _atomic_json(_rules_path(BLOCKED_FILE), updated.as_list())
+        _blocked_rules = updated
     return True
 
 
@@ -143,9 +143,9 @@ def add_to_exclude_hosts(host: str) -> bool:
     with _rule_lock:
         if rule in _excluded_rules.rules:
             return False
-        _excluded_rules = _excluded_rules.add(host)
-        snapshot = _excluded_rules.as_list()
-    _atomic_json(_rules_path(EXCLUDE_FILE), snapshot)
+        updated = _excluded_rules.add(host)
+        _atomic_json(_rules_path(EXCLUDE_FILE), updated.as_list())
+        _excluded_rules = updated
     return True
 
 
