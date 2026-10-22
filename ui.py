@@ -300,16 +300,25 @@ class Window(QMainWindow):
         tor = getattr(proxy_widget, "tor", None)
         if tor is not None and not getattr(tor, "path_set", False):
             status = "Bundle setup required"
+        elif getattr(proxy_widget, "failed", False) or getattr(tor, "state", "") == "FAILED":
+            status = "Failed · open Event Log"
+        elif getattr(tor, "state", "") == "STOPPING" or getattr(proxy_widget, "_stopping", False):
+            status = "Stopping"
+        elif getattr(tor, "state", "") == "STARTING":
+            status = "Starting"
+        elif getattr(tor, "state", "") in {"BOOTSTRAPPING", "CONNECTING"}:
+            status = "Bootstrapping"
         elif getattr(proxy_widget, "connected", False):
-            status = "Tor ready"
+            status = "Ready"
         elif getattr(proxy_widget, "running", False):
-            status = "Starting / bootstrapping"
+            status = "Bootstrapping"
         else:
             status = "Stopped"
         self.global_state.setText("●  {}".format(status))
         self.global_state.setToolTip(
-            "State is derived from the current TorRunner and proxy controller; "
-            "a running local HTTP proxy alone is not shown as Tor-ready."
+            getattr(tor, "last_error", None)
+            or "State is derived from TorRunner lifecycle and bootstrap/control-port checks. "
+            "A running local HTTP proxy alone is not shown as Tor-ready."
         )
 
     def _toggle_theme(self):
