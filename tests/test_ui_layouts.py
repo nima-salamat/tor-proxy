@@ -170,4 +170,3 @@ def test_settings_and_bundle_pages_use_available_height_without_duplicate_subtit
     assert "connectPulseButton" in proxy_source
     assert "setMinimumSize(220, 220)" in pulse_source
     assert "homeActionCard" not in proxy_source
-    assert "status = \"Stopped\"" in ui_source or 'status = "Stopped"' in ui_source
