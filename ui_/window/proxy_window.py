@@ -112,6 +112,7 @@ class ProxyWindow(QWidget):
         section_title = QLabel("Proxy controls")
         section_title.setObjectName("homeSectionTitle")
         actions_layout.addWidget(section_title)
+        self.logs_widget = LogWindow(self)
         self.tor.log_message.connect(self.logs_widget.update_log)
         self.tor.service_failed.connect(self._on_tor_failed)
 
