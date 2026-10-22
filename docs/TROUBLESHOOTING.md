@@ -22,7 +22,10 @@ The action requires TorProxy to be connected and sends HTTPS through the local H
 
 ## Bundle verification fails
 
-Ensure GnuPG is available as `gpg`, the `.asc` sidecar belongs to the exact archive, and the download came from the official Tor distribution. A missing or invalid signature is not bypassed. If the official format changes, the validator needs a reviewed update before it should accept the new format.
+Release discovery recognizes stable and supported alpha names separately. A visible release directory does not imply a compatible artifact is available; TorProxy checks for the exact platform/architecture Expert Bundle and its matching signature before enabling download. If the release is unavailable for this CPU/OS, use a release that publishes a matching Expert Bundle rather than trying a browser installer or `.mar` update archive.
+
+
+TorProxy looks for GnuPG using `PATH`, common platform installation locations, then `TORPROXY_GPG_EXECUTABLE`. On Windows, install GnuPG from its official download page (https://gnupg.org/download/) and either add its `bin` directory to `PATH` or set `TORPROXY_GPG_EXECUTABLE` to the full `gpg.exe` path before restarting TorProxy. The chosen executable is smoke-tested with `--version`; verification subprocesses have timeouts and do not use a shell. The exact archive and its detached `.asc` sidecar are required, and the signing key must match the independently pinned full fingerprint. Missing runtime, missing sidecar, wrong signer, invalid signature and timeout all stop installation. Do not remove the verification requirement or retry by accepting an unsigned checksum.
 
 ## System proxy will not restore
 
@@ -32,7 +35,7 @@ On unsupported platforms, the system-proxy action fails closed. It does not clai
 
 ## Missing Python/native dependency
 
-Install dependencies with `python -m pip install -e ".[dev]"`. On Debian/Ubuntu, QR decoding requires `libzbar0` and bundle verification requires `gnupg`. ZBar installation on other platforms differs.
+Install dependencies with `python -m pip install -e ".[dev]"`. On Debian/Ubuntu, QR decoding requires `libzbar0` and bundle verification requires `gnupg`. On Windows, install GnuPG from its official distribution and ensure it can be invoked or set `TORPROXY_GPG_EXECUTABLE`; TorProxy intentionally refuses to install an archive until the detached signature has been verified.
 
 ## Reporting an issue
 
