@@ -166,4 +166,8 @@ def test_settings_and_bundle_pages_use_available_height_without_duplicate_subtit
     assert "lbl_page_number" not in settings_source
     assert "Browse official release channels" not in updater_source
     assert "setMinimumHeight(180)" in updater_source
-    assert "homeActionCard" in proxy_source and "connectPulseButton" in proxy_source
+    pulse_source = (repository / "ui_/btn/pulse_button.py").read_text(encoding="utf-8")
+    assert "connectPulseButton" in proxy_source
+    assert "setMinimumSize(220, 220)" in pulse_source
+    assert "homeActionCard" not in proxy_source
+    assert "status = \"Stopped\"" in ui_source or 'status = "Stopped"' in ui_source

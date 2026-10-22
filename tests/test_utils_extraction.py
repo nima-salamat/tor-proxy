@@ -81,3 +81,27 @@ def test_install_does_not_overwrite_existing_destination(tmp_path, monkeypatch):
         utils.extract_tar_gz_file(archive, destination)
 
     assert (destination / "keep.txt").read_text(encoding="utf-8") == "preserve"
+
+
+def test_install_can_explicitly_skip_openpgp_and_records_that_choice(tmp_path, monkeypatch):
+    archive = _archive(tmp_path / "tor-expert-bundle-test.tar.gz")
+    archive.with_name(archive.name + ".asc").unlink()
+    destination = tmp_path / "tor-expert-bundle-test"
+    monkeypatch.setattr(
+        utils, "verify_tor_signature",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("OpenPGP should be skipped")),
+    )
+
+    events = []
+    installed = utils.extract_tar_gz_file(
+        archive, destination, progress_callback=events.append,
+        version="16.0a14", verify_signature=False,
+    )
+
+    marker = json.loads((installed / ".torproxy-verified.json").read_text(encoding="utf-8"))
+    assert marker["signature_verified"] is False
+    assert marker["verification_method"] == "https_only"
+    assert marker["signing_key_fingerprint"] is None
+    assert marker["archive_sha256"] == bundle_module.sha256_file(archive)
+    assert events[0].stage == "signature_verification_skipped"
+    assert events[-1].stage == "extracting_archive"

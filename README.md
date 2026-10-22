@@ -2,7 +2,7 @@
 
 TorProxy is a PySide6 desktop front-end for running a locally managed Tor process and exposing a loopback-only HTTP proxy to applications that support manual proxy configuration.
 
-The project is being modernized from a flat desktop utility into a testable Python core with safer Tor lifecycle management, validated host policy, verified bundle installation, and reversible system-proxy integration.
+The project is being modernized from a flat desktop utility into a testable Python core with safer Tor lifecycle management, validated host policy, configurable bundle signature verification, and reversible system-proxy integration.
 
 > **Privacy and security note:** TorProxy is not a guarantee of anonymity. It protects only traffic that is actually routed through its Tor-backed proxy. Applications can make direct connections, leak information at the application layer, or retain identifying state. Read [the security model](docs/SECURITY.md) before relying on it.
 
@@ -15,7 +15,7 @@ The project is being modernized from a flat desktop utility into a testable Pyth
 - Immutable block/bypass host-rule snapshots shared by HTTP and CONNECT.
 - An IP-check action that uses the configured local HTTP proxy and **does not retry directly**.
 - Explicit opt-in for system proxy changes, snapshot-based restoration, and protection against overwriting later external changes.
-- Tor Expert Bundle downloads restricted to official Tor distribution hosts and verified against a pinned OpenPGP signing-key fingerprint before extraction.
+- Tor Expert Bundle downloads are restricted to official Tor HTTPS hosts and safely extracted; optional OpenPGP signature verification checks the pinned Tor signing-key fingerprint when enabled in Settings → Advanced.
 - Versioned configuration, per-user writable data paths, atomic settings writes, tests, and CI.
 
 ## Architecture
@@ -53,14 +53,14 @@ The matrix describes intended CI coverage, not a claim that every platform has b
 
 ### Prerequisites
 
-Install Python 3.10 or newer. Bundle signature verification requires GnuPG (`gpg`). On Debian/Ubuntu, the optional QR-code feature needs native ZBar:
+Install Python 3.10 or newer. GnuPG (`gpg`) is needed only when optional OpenPGP signature verification is enabled in Settings → Advanced. On Debian/Ubuntu, the optional QR-code feature needs native ZBar:
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y gnupg libzbar0
 ```
 
-On Windows, install GnuPG from a trusted distribution and ensure `gpg.exe` is on `PATH`, or configure `TORPROXY_GPG_EXECUTABLE` with its full path. Some platforms require additional native setup for QR decoding; see [Troubleshooting](docs/TROUBLESHOOTING.md).
+On Windows, install GnuPG from a trusted distribution and ensure `gpg.exe` is on `PATH`, or configure `TORPROXY_GPG_EXECUTABLE` with its full path, only if you enable OpenPGP verification. Some platforms require additional native setup for QR decoding; see [Troubleshooting](docs/TROUBLESHOOTING.md).
 
 ### Development installation
 
@@ -91,20 +91,20 @@ The first launch migrates an existing root-level `config.json` into the per-user
 1. Open the application's Tor bundle/update view.
 2. Retrieve the official release list.
 3. Select a release for the current supported OS/CPU.
-4. Confirm download and wait for signature verification and safe extraction to finish.
-5. Select the verified local bundle as the default Tor executable.
+4. Confirm download and watch the status until safe extraction finishes; when OpenPGP is enabled, the pinned-key signature check must also pass.
+5. Review the bundle's `SIGNED` or `HTTPS ONLY · UNSIGNED` label, then select it as the default Tor executable.
 
-Downloads are stored in the current user's application-data directory, not inside the installed source tree. The downloader refuses unsigned or invalid artifacts, unsupported archive entries, and path traversal. GnuPG is required; verification failures stop installation.
+Downloads are stored in the current user's application-data directory, not inside the installed source tree. Unsafe archive entries and path traversal are always rejected. OpenPGP verification is optional and off by default for convenience; when enabled, invalid/missing signatures or an unavailable GnuPG runtime stop installation. With it off, publisher identity is not cryptographically authenticated, even though downloads are restricted to official HTTPS hosts.
 
 Older repository versions included large archives in `bundles/`. These are no longer required in source control. Existing local archives that lack a verifiable `.asc` signature are not automatically trusted by the updater; download a verified bundle again, or explicitly select a local Tor executable whose origin you trust.
 
 ## Release channels and bundle verification
 
-The updater recognizes numeric stable releases (for example, `15.0.26`) and the supported alpha naming convention (for example, `16.0a14`). Stable releases are prioritized; alpha releases are labelled as prereleases and can be hidden with the prerelease filter. A release directory is not considered downloadable unless the exact current-platform Expert Bundle and its matching detached `.asc` signature are both listed. Tor Browser installers, `.mar` updates, debug archives and checksum files are not substitutes for an Expert Bundle.
+The updater recognizes numeric stable releases (for example, `15.0.26`) and the supported alpha naming convention (for example, `16.0a14`). Stable releases are prioritized; alpha releases are labelled as prereleases and can be hidden with the prerelease filter. A release directory is downloadable only when the exact current-platform Expert Bundle is listed; its matching detached `.asc` signature must also be listed when OpenPGP verification is enabled. Tor Browser installers, `.mar` updates, debug archives and checksum files are not substitutes for an Expert Bundle.
 
 The bundle page displays transfer bytes and, when the server advertises a usable `Content-Length`, percentage, speed and an approximate remaining-time estimate. Unknown transfer lengths use an indeterminate progress bar. Signature verification, archive extraction and installation are shown as distinct stages; a completed transfer alone never counts as an installed bundle. Cancellation is available during archive/signature transfer and is disabled during stages that cannot be safely interrupted.
 
-Signature verification is mandatory and checks the detached signature against the independently pinned Tor signing-key fingerprint. TorProxy discovers GnuPG from `PATH`, common installation paths, or `TORPROXY_GPG_EXECUTABLE` (the full path to `gpg.exe` or `gpg`). If no verifier can be started, installation stops and reports the supported recovery path; verification is never bypassed.
+OpenPGP verification is optional and can be enabled in Settings → Advanced. When enabled, the detached signature is checked against the independently pinned Tor signing-key fingerprint and GnuPG is discovered from `PATH`, common installation paths, or `TORPROXY_GPG_EXECUTABLE`. If no verifier can be started, the signed installation stops. When OpenPGP is disabled, TorProxy labels the installation `HTTPS ONLY · UNSIGNED` and does not claim publisher authentication; choose that mode only if you accept the reduced security guarantee.
 
 ## Start Tor and configure an application
 
@@ -152,7 +152,7 @@ Traffic usage counts bytes observed in both directions for proxied HTTP requests
 - The default HTTP proxy, SOCKS, ControlPort, and DNS listeners bind to loopback.
 - The ControlPort is cookie-authenticated; the controller must identify the Tor process launched by this application.
 - The IP checker has no direct-network fallback.
-- Downloads fail closed when a signature, trusted key, or safe extraction check fails.
+- With OpenPGP verification enabled, downloads fail closed when a signature or pinned-key check fails; safe extraction checks always apply.
 - Logs avoid recording request URLs and query strings, but local logs and host-rule lists should still be treated as user data.
 - Direct exclusions intentionally bypass Tor.
 - System-proxy restoration can fail safely if another program changes settings.

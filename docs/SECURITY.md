@@ -22,9 +22,9 @@ Changing global settings is a manual user action. The app stores relevant origin
 
 ## Bundle trust and extraction
 
-The downloader uses official Tor distribution hosts over HTTPS and requires the matching detached `.asc` signature. It imports a key into a temporary GnuPG home, validates the full pinned primary fingerprint, and requires a valid signature before making the archive available for extraction. Missing GnuPG, missing signature, invalid signature, unexpected redirect, failed download, unsupported platform, or malformed version is a hard failure.
+The downloader always restricts archive transfers to approved Tor distribution hosts over HTTPS and safely extracts regular files only. OpenPGP signature verification is optional and is off by default in Settings → Advanced. When enabled, the downloader requires the matching detached `.asc`, imports the key into a temporary GnuPG home, validates the full pinned primary fingerprint, and fails closed on missing GnuPG, missing/invalid signature, unexpected redirects, failed downloads, unsupported platforms, or malformed versions. When disabled, the publisher is not cryptographically authenticated; the bundle is explicitly marked `https_only` and the UI labels it `HTTPS ONLY · UNSIGNED`. HTTPS does not provide the same integrity/authenticity guarantee as the Tor signing key.
 
-Tar extraction uses a temporary sibling directory, rejects absolute/traversal paths, links, special file types, duplicate extracted files, and expansion above a configured size limit. It refuses to overwrite an existing destination. A local verification marker is written only after signature validation and extraction succeed.
+Tar extraction uses a temporary sibling directory in both modes, rejects absolute/traversal paths, links, special file types, duplicate extracted files, and expansion above a configured size limit. It refuses to overwrite an existing destination. The local marker records the archive SHA-256 digest and whether OpenPGP verification actually succeeded; HTTPS-only installs are not represented as signed.
 
 The pinned key is Tor Browser Developers' primary signing key, fingerprint `EF6E286DDA85EA2A4BA7DE684E2C6E8793298290`. Consult the [official Tor signature guide](https://support.torproject.org/tor-browser/getting-started/verifying-tor-browser/) for current guidance on keys and subkeys.
 

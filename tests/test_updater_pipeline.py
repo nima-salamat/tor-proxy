@@ -73,6 +73,7 @@ def test_bundle_discovery_requires_exact_archive_and_sidecar(monkeypatch):
 
     monkeypatch.setattr(updater, "_fetch_listing", lambda _url: _listing(expected))
     assert updater.get_bundle_links("16.0a14") == []
+    assert updater.get_bundle_links("16.0a14", require_signature=False) == [expected]
 
 
 def test_bundle_discovery_ignores_browser_updates_and_other_archives(monkeypatch):
@@ -253,3 +254,31 @@ def test_unreachable_release_listing_is_not_treated_as_empty(monkeypatch):
     with pytest.raises(BundleVerificationError, match="Check the network connection"):
         updater.get_bundle_links("16.0a14")
 
+
+
+def test_https_only_install_marker_is_accepted_with_digest_and_safe_executable(tmp_path, monkeypatch):
+    import json
+
+    bundle_name = "tor-expert-bundle-linux-x86_64-15.0.26"
+    bundle = tmp_path / bundle_name
+    executable = bundle / "tor" / ("tor.exe" if os.name == "nt" else "tor")
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"explicitly unsigned test tor")
+    if os.name != "nt":
+        executable.chmod(0o755)
+    archive = bundle.with_name(bundle.name + ".tar.gz")
+    archive.write_bytes(b"archive downloaded over HTTPS")
+    marker = {
+        "signature_verified": False,
+        "verification_method": "https_only",
+        "signing_key_fingerprint": None,
+        "archive_sha256": bundle_module.sha256_file(archive),
+    }
+    (bundle / ".torproxy-verified.json").write_text(json.dumps(marker), encoding="utf-8")
+    monkeypatch.setattr(updater, "_platform_name", lambda: "linux")
+    monkeypatch.setattr(updater, "_architecture_name", lambda: "x86_64")
+
+    assert updater.check_bundle_compatibility(str(bundle))
+    marker["verification_method"] = "unknown"
+    (bundle / ".torproxy-verified.json").write_text(json.dumps(marker), encoding="utf-8")
+    assert not updater.check_bundle_compatibility(str(bundle))
