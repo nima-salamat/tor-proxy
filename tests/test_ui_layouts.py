@@ -35,7 +35,7 @@ def test_settings_and_main_window_construct_without_duplicate_layout_warning(qt_
         import ui
         from PySide6.QtWidgets import QWidget
     except (ImportError, OSError) as exc:
-        pytest.skip("Desktop UI native dependencies are unavailable in this environment: {}".format(exc))
+        pytest.skip(f"Desktop UI native dependencies are unavailable in this environment: {exc}")
 
     class _FakeProxyWidget(QWidget):
         def __init__(self, parent=None):
@@ -103,4 +103,4 @@ def test_layout_source_has_one_owner_per_root_and_no_widget_parented_nested_layo
                 if child.func.attr != "setLayout" or not child.args:
                     continue
                 if isinstance(child.args[0], ast.Name) and child.args[0].id in parented_layouts:
-                    pytest.fail("{} redundantly attaches parent-owned layout '{}'".format(path.name, child.args[0].id))
+                    pytest.fail(f"{path.name} redundantly attaches parent-owned layout '{child.args[0].id}'")
