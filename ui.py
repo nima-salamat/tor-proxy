@@ -156,6 +156,8 @@ class Window(QMainWindow):
         self.global_state.setWordWrap(False)
         self._notification_entries = []
         self.notifications_menu = QMenu(self)
+        empty_notification = self.notifications_menu.addAction("No notifications")
+        empty_notification.setEnabled(False)
         self.notification_btn = QPushButton("🔔 0", self)
         self.notification_btn.setObjectName("notificationButton")
         self.notification_btn.setToolTip("Notifications")
