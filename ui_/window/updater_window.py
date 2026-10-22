@@ -59,22 +59,13 @@ class UpdaterWindow(QWidget):
         self._bundle_scan_in_progress = False
         self._bundle_scan_worker = None
         self._last_download: tuple[str, str] | None = None
+        self._missing_bundle_notified = False
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 22, 24, 24)
-        root.setSpacing(16)
+        root.setContentsMargins(16, 10, 16, 12)
+        root.setSpacing(12)
 
-        heading = QVBoxLayout()
-        title = QLabel("Tor Bundles & Updates")
-        title.setObjectName("pageTitle")
-        subtitle = QLabel(
-            "Browse official release channels, verify signed Expert Bundles, and manage the active runtime."
-        )
-        subtitle.setObjectName("pageSubtitle")
-        subtitle.setWordWrap(True)
-        heading.addWidget(title)
-        heading.addWidget(subtitle)
-        root.addLayout(heading)
+        # Start with bundle state; the global shell no longer repeats page titles.
 
         platform_card = QFrame()
         platform_card.setObjectName("infoCard")
@@ -118,6 +109,7 @@ class UpdaterWindow(QWidget):
         self.updates_list = QListWidget()
         self.updates_list.setObjectName("releaseList")
         self.updates_list.setUniformItemSizes(True)
+        self.updates_list.setMinimumHeight(180)
         self.updates_list.setSelectionMode(QListWidget.SingleSelection)
         self.updates_list.itemClicked.connect(self.selected_version)
         available_layout.addWidget(self.updates_list, 1)
@@ -142,6 +134,7 @@ class UpdaterWindow(QWidget):
         installed_layout.addLayout(local_heading)
         self.list_tor_versions = QListWidget()
         self.list_tor_versions.setObjectName("releaseList")
+        self.list_tor_versions.setMinimumHeight(180)
         self.list_tor_versions.setSelectionMode(QListWidget.SingleSelection)
         self.list_tor_versions.setToolTip("Only signed, structurally validated bundles are listed here.")
         installed_layout.addWidget(self.list_tor_versions, 1)
@@ -330,6 +323,17 @@ class UpdaterWindow(QWidget):
                 item.setText("{}  ·  DEFAULT".format(Path(path).name))
             self.list_tor_versions.addItem(item)
         self._update_install_state()
+        if self._verified_bundles_cache:
+            self._missing_bundle_notified = False
+        elif not self._missing_bundle_notified:
+            self._missing_bundle_notified = True
+            notify = getattr(self.parent_, "notify_user", None)
+            if callable(notify):
+                notify(
+                    "Tor bundle required",
+                    "No signed and verified Tor Expert Bundle is installed. Open Bundles to choose a compatible release.",
+                    "warning",
+                )
 
     def _on_bundle_scan_failed(self, error: str) -> None:
         logger.error("Could not inspect installed Tor bundles: %s", error)
@@ -499,11 +503,15 @@ class UpdaterWindow(QWidget):
             self.lbl_status.setText(
                 "{} has no compatible Expert Bundle with a listed detached signature for this OS/CPU.".format(version)
             )
-            QMessageBox.information(
-                self, "No compatible bundle",
+            message = (
                 "The release directory exists, but TorProxy did not find both the expected Expert Bundle archive "
                 "and its matching .asc signature for this platform. No download was attempted."
             )
+            notify = getattr(self.parent_, "notify_user", None)
+            if callable(notify):
+                notify("No compatible bundle", message, "warning")
+            else:
+                QMessageBox.information(self, "No compatible bundle", message)
             return
         bundle = links[0]
         reply = QMessageBox.question(
