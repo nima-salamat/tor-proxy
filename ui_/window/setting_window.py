@@ -118,22 +118,10 @@ class SettingWindow(QWidget):
         self.lbl_MaxCircuitDirtiness = QLabel(CORRECT)
         max_circuit_dirtiness_layout.addWidget(self.lbl_MaxCircuitDirtiness)
 
-        newnym_layout = QHBoxLayout()
-        self.first_page_layout.addLayout(newnym_layout)
-        newnym_layout.addWidget(QLabel("SIGNAL NEWNYM sends every"))
-
-        # try to read from parent.timer if exists, else from CONFIG, else default 60000
-        try:
-            newnym_start = self._parent.proxyWidget.timer.interval()
-        except Exception:
-            newnym_start = CONFIG["newnym_interval"] or 60000
-
-        self.newnym_inp = QLineEdit(str(newnym_start))
-        newnym_layout.addWidget(self.newnym_inp)
-        self.newnym_inp.textChanged.connect(self.newnym_inp_changed)
-        newnym_layout.addWidget(QLabel("mili sec"))
-        self.newnym_lbl_stat = QLabel(f"({int(newnym_start)//1000} sec) "+ CORRECT)
-        newnym_layout.addWidget(self.newnym_lbl_stat)
+        # Automatic identity rotation is intentionally disabled by default.
+        self.first_page_layout.addWidget(QLabel(
+            "Identity changes are manual. Tor rate-limits NEWNYM; requesting it does not guarantee a new exit IP."
+        ))
         self.qrcode_widget = QrCodeFloatingWindow(self)
 
         self.threadpool = QThreadPool()

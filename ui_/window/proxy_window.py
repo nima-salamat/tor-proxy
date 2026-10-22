@@ -38,12 +38,16 @@ class ProxyWindow(QWidget):
         self.data = Data()
         self.running = False
         self.connected = False
-        self.proxy_set = False  # state: whether proxy is currently set (by manual action or auto)
+        self.proxy_set = False  # true only while this app owns an applied system-proxy change
+        self._stopping = False
+        self._identity_busy = False
         self._parent = parent
-        self.tor_socks_port = get_free_port()
-        self.proxy_port = get_free_port()
-        self.tor_control_port = get_free_port()
-        self.tor_dns_port = get_free_port()
+        chosen_ports = []
+        while len(chosen_ports) < 4:
+            candidate = get_free_port()
+            if candidate not in chosen_ports:
+                chosen_ports.append(candidate)
+        self.tor_socks_port, self.proxy_port, self.tor_control_port, self.tor_dns_port = chosen_ports
         logger.info(f'port(proxy): {self.proxy_port} - port(socks): {self.tor_socks_port} - port(control): {self.tor_control_port}, - port(dns): {self.tor_dns_port}')
         self.tor = TorRunner(self.tor_socks_port, self.tor_control_port, self.tor_dns_port)
         self.tor.bridge = CONFIG["bridge"]
@@ -64,7 +68,7 @@ class ProxyWindow(QWidget):
         self.main_layout.addLayout(lyt_info)
         self.lbl_percent = QLabel("0%")
         lyt_info.addWidget(self.lbl_percent)
-        self.lbl_data_usage = QLabel(f"Data usage: {CONFIG['data_usage']/1024**2:.2f} Mb")
+        self.lbl_data_usage = QLabel(f"Proxy traffic (both directions): {CONFIG['data_usage']/1024**2:.2f} MiB")
         lyt_info.addWidget(self.lbl_data_usage)
 
         self.data.valueChanged.connect(self.dataValueChanged)
@@ -72,6 +76,8 @@ class ProxyWindow(QWidget):
         self.main_layout.addWidget(self.btn_change_identity)
         self.btn_change_identity.clicked.connect(self.change_identity_)
         self.logs_widget = LogWindow(self)
+        self.tor.log_message.connect(self.logs_widget.update_log)
+        self.tor.service_failed.connect(self._on_tor_failed)
         self.btn_log = QPushButton(LOGS)
         self.btn_log.clicked.connect(self.show_logs)
         self.main_layout.addWidget(self.btn_log)
@@ -91,10 +97,9 @@ class ProxyWindow(QWidget):
         self.main_layout.addWidget(self.proxy_status_label)
         self._update_proxy_buttons()  # initial enable/disable
 
-        self.timer = QTimer()
-        self.timer.setInterval(30000)
-        self.timer.timeout.connect(self.change_identity_)
-        self.timer.start()
+        # Timed NEWNYM is intentionally disabled by default. Identity changes are manual.
+        self.timer = QTimer(self)
+        self.timer.setInterval(int(CONFIG["newnym_interval"] or 0))
 
         layout_ip = QVBoxLayout()
         layout_top_ip = QHBoxLayout()
@@ -113,14 +118,32 @@ class ProxyWindow(QWidget):
         self.timer_data_usage.timeout.connect(self.change_data_usage)
 
     def change_data_usage(self):
-        self.lbl_data_usage.setText(f"Data usage: {CONFIG['data_usage']/1024**2:.2f} Mb")
+        self.lbl_data_usage.setText(f"Proxy traffic (both directions): {CONFIG['data_usage']/1024**2:.2f} MiB")
 
     def whatismyip_clicked(self):
-        self.worker = Worker(lambda: what_is_my_ip())
-        self.worker.signals.finished.connect(lambda x: (self.tor_ip_label.setText("ip: " + x), self.btn_whatismyip.setEnabled(True)))
-        self.worker.signals.error.connect(lambda e: (self.tor_ip_label.setText("ip: error"), self.btn_whatismyip.setEnabled(True)))
+        if not self.running or not self.connected:
+            self.tor_ip_label.setText("Exit IP: unavailable — Tor proxy is not ready")
+            return
+        proxy_url = f"http://127.0.0.1:{self.proxy.port}"
+        self.btn_whatismyip.setEnabled(False)
+        self.tor_ip_label.setText("Exit IP: checking through Tor proxy…")
+        self.worker = Worker(lambda: what_is_my_ip(proxy=proxy_url, timeout=10))
+        self.worker.signals.finished.connect(self._on_exit_ip_checked)
+        self.worker.signals.error.connect(self._on_exit_ip_failed)
         self.thread_pool.start(self.worker)
-        self.btn_whatismyip.setDisabled(True)
+
+    def _on_exit_ip_checked(self, result):
+        if result and result != "None":
+            self.tor_ip_label.setText("Observed exit IP (proxied): " + result)
+        else:
+            self.tor_ip_label.setText("Exit IP: unverified")
+        self.btn_whatismyip.setEnabled(True)
+
+    def _on_exit_ip_failed(self, error):
+        logger.warning("Proxied exit-IP check failed: %s", error)
+        self.tor_ip_label.setText("Exit IP check failed — no direct fallback used")
+        self.logs_widget.update_log(f"Exit-IP verification failed: {error}")
+        self.btn_whatismyip.setEnabled(True)
 
     def show_logs(self):
         if self.logs_widget.isHidden():
@@ -131,18 +154,43 @@ class ProxyWindow(QWidget):
             self.logs_widget.hide()
 
     def change_identity_(self):
+        if self._identity_busy or not self.connected:
+            return
+        self._identity_busy = True
+        self.btn_change_identity.setEnabled(False)
         worker = Worker(self.change_identity)
+        worker.signals.finished.connect(self._on_identity_finished)
+        worker.signals.error.connect(self._on_identity_error)
         self.thread_pool.start(worker)
+
+    def _on_identity_finished(self, result):
+        self._identity_busy = False
+        self.btn_change_identity.setEnabled(True)
+        if str(result).strip().lower() != "true":
+            self.logs_widget.update_log("Identity request was not accepted; Tor may be rate-limiting NEWNYM.")
+            logger.info("Identity request was not accepted (not ready or rate-limited).")
+        else:
+            self.logs_widget.update_log("Tor accepted NEWNYM. Existing connections may retain their circuits; a different IP is not guaranteed.")
+
+    def _on_identity_error(self, error):
+        self._identity_busy = False
+        self.btn_change_identity.setEnabled(True)
+        self.logs_widget.update_log(f"Identity request failed: {error}")
+        logger.warning("Identity request failed: %s", error)
 
     def change_identity(self):
         if not self.connected:
-            logger.warning("change_tor_identity called but not connected to Tor.")
+            logger.warning("Identity change requested while Tor is not connected.")
             return False
 
         try:
-            self.controller.authenticate()
+            wait = float(self.controller.get_newnym_wait())
+            if wait > 0:
+                message = f"Tor rate-limits identity requests; try again in about {wait:.0f} seconds."
+                logger.info(message)
+                return False
             self.controller.signal(TorSignal.NEWNYM)
-            logger.info("Tor identity changed successfully (NEWNYM sent).")
+            logger.info("Tor accepted the NEWNYM request; a different exit IP is not guaranteed.")
             return True
 
         except SocketClosed:
@@ -165,26 +213,33 @@ class ProxyWindow(QWidget):
     def dataValueChanged(self, v):
         if v == "100%":
             if self._parent.isHidden():
-                self._parent._notify("T⭕®️🌐🅿️®️⭕❌Y","🌐Connected 💯%")
-            self.connected = True
-            # update controller object
-            self.controller = Controller.from_port(address="127.0.0.1", port=self.tor_control_port)
-            # automatically set proxy on full connection (existing behavior)
+                self._parent._notify("TorProxy", "Tor bootstrap completed")
             try:
-                manage_proxy("127.0.0.1", self.proxy.port, "set")
-                self.proxy_set = True
-                self.proxy_status_label.setText(f"Proxy: set -> 127.0.0.1:{self.proxy.port}")
+                self.controller = Controller.from_port(address="127.0.0.1", port=self.tor_control_port)
+                self.controller.authenticate()
             except Exception as e:
-                logger.exception("Auto-manage_proxy set failed: %s", e)
-                self.logs_widget.update_log(f"Auto set proxy failed: {e}")
-                self.proxy_set = False
-                self.proxy_status_label.setText("Proxy: error")
+                logger.exception("Could not authenticate to the managed Tor ControlPort: %s", e)
+                self.logs_widget.update_log(f"Tor bootstrap completed but ControlPort authentication failed: {e}")
+                self.connected = False
+                self.btn_status.setText("control authentication failed")
+                self.set_btn_status_style("disconnected")
+                self._update_proxy_buttons()
+                return
+            self.connected = True
+            # Starting Tor never mutates system proxy settings. The user must opt in.
+            self.proxy_status_label.setText(f"System proxy: unchanged (local endpoint 127.0.0.1:{self.proxy.port})")
             self._update_proxy_buttons()
             self.btn_status.setText("connected")
             self.set_btn_status_style("connected")
             self.timer_data_usage.start()
 
         self.lbl_percent.setText(str(v)+"")
+
+    def _on_tor_failed(self, message):
+        self.logs_widget.update_log(f"Tor supervisor reported a failure: {message}")
+        logger.error("Tor supervisor failed: %s", message)
+        if self.running:
+            self._stop_services()
 
     def set_btn_status_style(self, stmt):
         if stmt == "disconnected":
@@ -253,11 +308,15 @@ class ProxyWindow(QWidget):
             if "proxy_port" in ports:
                 self.proxy.port = ports["proxy_port"]
             if "tor_port" in ports:
+                self.tor_socks_port = ports["tor_port"]
                 self.tor.socks_port = ports["tor_port"]
                 self.proxy.tor_socks_port = ports["tor_port"]
             if "control_port" in ports:
+                self.tor_control_port = ports["control_port"]
+                self.tor.contorl_port = ports["control_port"]
                 self.tor.control_port = ports["control_port"]
             if "dns_port" in ports:
+                self.tor_dns_port = ports["dns_port"]
                 self.tor.dns_port = ports["dns_port"]
 
             # start services (wrap try/except)
@@ -383,29 +442,50 @@ class ProxyWindow(QWidget):
         return json.dumps([ok, ports, messages])
 
     def _stop_services(self):
-        # ensure proxy cleared on stop
-        try:
-            manage_proxy("127.0.0.1", self.proxy.port, "clear")
-        except Exception as e:
-            logger.exception("Error clearing proxy during stop: %s", e)
-
+        if self._stopping:
+            return
+        self._stopping = True
         self.btn_status.setText("disconnecting . . .")
         self.set_btn_status_style("disconnecting")
+
+        # Restore OS settings before taking the local proxy listener down.
+        if self.proxy_set:
+            try:
+                restored = manage_proxy("127.0.0.1", self.proxy.port, "clear")
+                if restored:
+                    self.proxy_set = False
+                    self.proxy_status_label.setText("System proxy: original settings restored")
+                else:
+                    self.proxy_status_label.setText("System proxy changed externally or could not be restored; inspect settings manually")
+                    self.logs_widget.update_log("System proxy was not overwritten during shutdown because safe restoration could not be confirmed.")
+            except Exception as e:
+                logger.exception("Error restoring system proxy during stop: %s", e)
+                self.logs_widget.update_log(f"System proxy restoration failed: {e}")
 
         try:
             if self.proxy:
                 self.proxy.stop()
                 self.logs_widget.update_log("Proxy stopped.")
+        except Exception as e:
+            logger.exception("Error stopping the HTTP proxy: %s", e)
+            self.logs_widget.update_log(f"Error while stopping the HTTP proxy: {e}")
+        try:
+            controller = getattr(self, "controller", None)
+            if controller is not None:
+                controller.close()
+                self.controller = None
+        except Exception as e:
+            logger.warning("Closing the GUI Tor ControlPort connection failed: %s", e)
+        try:
             if self.tor:
                 self.tor.stop()
                 self.logs_widget.update_log("Tor stopped.")
         except Exception as e:
-            logger.exception("Error stopping services: %s", e)
-            self.logs_widget.update_log(f"Error while stopping services: {e}")
+            logger.exception("Error stopping Tor: %s", e)
+            self.logs_widget.update_log(f"Error while stopping Tor: {e}")
 
         self.running = False
         self.connected = False
-        self.proxy_set = False
         self.lbl_percent.setText("0%")
         self.btn_status.setText("disconnected")
         self.set_btn_status_style("disconnected")
@@ -414,10 +494,14 @@ class ProxyWindow(QWidget):
         self.connect_btn.setEnabled(True)
         self.timer_data_usage.stop()
         self._update_proxy_buttons()
+        self._stopping = False
 
     # ----- proxy manual control handlers (new) -----
     def set_proxy_clicked(self):
-        # set proxy without restarting tor/proxy services
+        # Explicit user action; never invoked automatically by bootstrap.
+        if not self.running or not self.connected:
+            QMessageBox.information(self, "TorProxy", "Start Tor and wait for successful bootstrap before enabling the system proxy.")
+            return
         self.btn_set_proxy.setEnabled(False)
         self.btn_clear_proxy.setEnabled(False)
         worker = Worker(lambda: manage_proxy("127.0.0.1", self.proxy.port, "set"))
@@ -426,10 +510,12 @@ class ProxyWindow(QWidget):
         self.thread_pool.start(worker)
 
     def _on_set_proxy_finished(self, result):
-        # result could be True/None/whatever manage_proxy returns; we interpret no exception as success
+        if str(result).strip().lower() != "true":
+            self._on_set_proxy_error("The operating system did not apply the proxy settings.")
+            return
         self.proxy_set = True
-        self.proxy_status_label.setText(f"Proxy: set -> 127.0.0.1:{self.proxy.port}")
-        self.logs_widget.update_log(f"Proxy set to 127.0.0.1:{self.proxy.port}")
+        self.proxy_status_label.setText(f"System proxy: using 127.0.0.1:{self.proxy.port}")
+        self.logs_widget.update_log(f"System proxy explicitly enabled at 127.0.0.1:{self.proxy.port}")
         self._update_proxy_buttons()
 
     def _on_set_proxy_error(self, err):
@@ -439,6 +525,8 @@ class ProxyWindow(QWidget):
         self._update_proxy_buttons()
 
     def clear_proxy_clicked(self):
+        if not self.proxy_set:
+            return
         self.btn_set_proxy.setEnabled(False)
         self.btn_clear_proxy.setEnabled(False)
         worker = Worker(lambda: manage_proxy("127.0.0.1", self.proxy.port, "clear"))
@@ -447,9 +535,12 @@ class ProxyWindow(QWidget):
         self.thread_pool.start(worker)
 
     def _on_clear_proxy_finished(self, result):
+        if str(result).strip().lower() != "true":
+            self._on_clear_proxy_error("Original proxy settings could not be safely restored; existing external changes were left untouched.")
+            return
         self.proxy_set = False
-        self.proxy_status_label.setText("Proxy: cleared")
-        self.logs_widget.update_log("Proxy cleared")
+        self.proxy_status_label.setText("System proxy: original settings restored")
+        self.logs_widget.update_log("The original system proxy settings were restored.")
         self._update_proxy_buttons()
 
     def _on_clear_proxy_error(self, err):
@@ -459,11 +550,6 @@ class ProxyWindow(QWidget):
         self._update_proxy_buttons()
 
     def _update_proxy_buttons(self):
-        # enable/disable set/clear based on current state and whether services started
-        # If proxy_set True -> allow clear, disable set. Else allow set, disable clear.
-        if self.proxy_set:
-            self.btn_set_proxy.setEnabled(False)
-            self.btn_clear_proxy.setEnabled(True)
-        else:
-            self.btn_set_proxy.setEnabled(True)
-            self.btn_clear_proxy.setEnabled(False)
+        # Setting the OS proxy is opt-in and only useful while the local proxy is ready.
+        self.btn_set_proxy.setEnabled(bool(self.running and self.connected and not self.proxy_set))
+        self.btn_clear_proxy.setEnabled(bool(self.proxy_set))

@@ -1,223 +1,477 @@
-import os
+"""Loopback-only threaded HTTP proxy with consistent host policy and bounded accounting."""
+from __future__ import annotations
+
+import ipaddress
 import json
-import socks
+import os
+import logging
+import queue
 import select
 import socket
-from urllib.parse import urlsplit
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from socketserver import ThreadingMixIn
-import queue
-import logging
+import threading
 import time
+import tempfile
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+from socketserver import ThreadingMixIn
+from urllib.parse import urlsplit
+
+import socks
+
+from config import CONFIG
+from torproxy.host_rules import HostRuleError, HostRules, normalize_hostname
+from torproxy.paths import user_directories
+from utils import resource_path
+
+SRC_ROOT = Path(__file__).resolve().parent / "src"
+if SRC_ROOT.is_dir() and str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
 logger = logging.getLogger(__name__)
-# ====== Config & Globals ======
-BLOCKED_FILE = 'blocked_hosts.json'
-EXCLUDE_FILE = 'exclude_hosts.json'
+BLOCKED_FILE = "blocked_hosts.json"
+EXCLUDE_FILE = "exclude_hosts.json"
+MAX_REQUEST_BODY_BYTES = 32 * 1024 * 1024
+SOCKET_TIMEOUT_SECONDS = 30.0
+RELAY_IDLE_TIMEOUT_SECONDS = 120.0
 
-blocked_hosts = []
-exclude_hosts = []
+_rule_lock = threading.RLock()
+_blocked_rules = HostRules()
+_excluded_rules = HostRules()
+queue_bytes: queue.Queue[int] = queue.Queue(maxsize=8192)
 
 
-queue_bytes = queue.Queue()
-import threading
-running = True
-from config import CONFIG
-def worker_data_usage_tracker(stop_event):
-    while not stop_event.is_set():
-        if not queue_bytes.empty():
-            byte = queue_bytes.get()
-            data_usage = CONFIG["data_usage"]
-            data_usage = 0 if data_usage is None else data_usage+byte
-            CONFIG["data_usage"] = data_usage
-            continue
-        time.sleep(0.05)
+def _rules_path(filename: str) -> Path:
+    return user_directories().config / filename
 
-def get_free_port():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('', 0))
-        return s.getsockname()[1]
+
+def _atomic_json(path: Path, value: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix="." + path.name + "-", suffix=".tmp", dir=path.parent)
+    temp = Path(temporary)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump(value, handle, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        if temp.stat().st_size > 1024 * 1024:
+            raise ValueError("Host rule file is too large.")
+        if os.name != "nt":
+            temp.chmod(0o600)
+        os.replace(temp, path)
+    finally:
+        try:
+            temp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _load_rules(filename: str) -> HostRules:
+    path = _rules_path(filename)
+    if not path.exists():
+        # Import the old working-directory file once, but never write runtime data
+        # back into the installation directory.
+        legacy = Path(resource_path(filename))
+        if legacy.is_file():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                raw = json.loads(legacy.read_text(encoding="utf-8"))
+                if isinstance(raw, list) and all(isinstance(item, str) for item in raw):
+                    rules = HostRules.from_values(raw)
+                    _atomic_json(path, rules.as_list())
+                    return rules
+            except (OSError, ValueError, json.JSONDecodeError):
+                logger.warning("Could not migrate legacy host rules from %s.", legacy)
+        return HostRules()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+            raise ValueError("expected a JSON list of strings")
+        return HostRules.from_values(raw)
+    except (OSError, ValueError, json.JSONDecodeError, HostRuleError):
+        logger.exception("Could not load host rules from %s; using an empty rule set.", path)
+        return HostRules()
+
+
+def load_blocked() -> None:
+    global _blocked_rules
+    rules = _load_rules(BLOCKED_FILE)
+    with _rule_lock:
+        _blocked_rules = rules
+
+
+def add_to_blocked_hosts(host: str) -> bool:
+    global _blocked_rules
+    rule = HostRules.from_values([host]).rules[0]
+    with _rule_lock:
+        if rule in _blocked_rules.rules:
+            return False
+        _blocked_rules = _blocked_rules.add(host)
+        snapshot = _blocked_rules.as_list()
+    _atomic_json(_rules_path(BLOCKED_FILE), snapshot)
+    return True
+
+
+def get_blocked() -> list[str]:
+    with _rule_lock:
+        return _blocked_rules.as_list()
+
+
+def remove_blocked(host: str) -> None:
+    global _blocked_rules
+    with _rule_lock:
+        _blocked_rules = _blocked_rules.remove(host)
+        snapshot = _blocked_rules.as_list()
+    _atomic_json(_rules_path(BLOCKED_FILE), snapshot)
+
+
+def save_blocked() -> None:
+    _atomic_json(_rules_path(BLOCKED_FILE), get_blocked())
+
+
+def load_exclude() -> None:
+    global _excluded_rules
+    rules = _load_rules(EXCLUDE_FILE)
+    with _rule_lock:
+        _excluded_rules = rules
+
+
+def add_to_exclude_hosts(host: str) -> bool:
+    global _excluded_rules
+    rule = HostRules.from_values([host]).rules[0]
+    with _rule_lock:
+        if rule in _excluded_rules.rules:
+            return False
+        _excluded_rules = _excluded_rules.add(host)
+        snapshot = _excluded_rules.as_list()
+    _atomic_json(_rules_path(EXCLUDE_FILE), snapshot)
+    return True
+
+
+def get_exclude() -> list[str]:
+    with _rule_lock:
+        return _excluded_rules.as_list()
+
+
+def remove_exclude(host: str) -> None:
+    global _excluded_rules
+    with _rule_lock:
+        _excluded_rules = _excluded_rules.remove(host)
+        snapshot = _excluded_rules.as_list()
+    _atomic_json(_rules_path(EXCLUDE_FILE), snapshot)
+
+
+def save_exclude() -> None:
+    _atomic_json(_rules_path(EXCLUDE_FILE), get_exclude())
+
+
+def save_all() -> None:
+    save_exclude()
+    save_blocked()
+
+
+def _record_bytes(amount: int) -> None:
+    if amount <= 0:
+        return
+    try:
+        queue_bytes.put_nowait(amount)
+    except queue.Full:
+        # Preserve proxy responsiveness in an extreme burst. The limitation is
+        # observable in logs instead of blocking request threads indefinitely.
+        logger.warning("Traffic accounting queue is full; a byte counter update was dropped.")
+
+
+def worker_data_usage_tracker(stop_event: threading.Event) -> None:
+    """Aggregate both byte directions and persist at most once per second."""
+    pending = 0
+    last_flush = time.monotonic()
+    while not stop_event.is_set() or not queue_bytes.empty():
+        try:
+            pending += queue_bytes.get(timeout=0.1)
+        except queue.Empty:
+            pass
+        now = time.monotonic()
+        if pending and now - last_flush >= 1.0:
+            try:
+                CONFIG["data_usage"] = max(0, int(CONFIG["data_usage"] or 0)) + pending
+            except (OSError, ValueError, TypeError):
+                logger.exception("Could not persist the proxy traffic counter.")
+            pending = 0
+            last_flush = now
+    if pending:
+        try:
+            CONFIG["data_usage"] = max(0, int(CONFIG["data_usage"] or 0)) + pending
+        except (OSError, ValueError, TypeError):
+            logger.exception("Could not persist the final proxy traffic counter.")
+
+
+def get_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
 
 def is_port_free(host: str, port: int, timeout: float = 0.15) -> bool:
+    del timeout  # Binding is the correct test; connect_ex can misclassify closed ports.
     try:
-        for res in socket.getaddrinfo(host, port, socket.AF_UNSPEC, socket.SOCK_STREAM):
-            af, socktype, proto, canonname, sa = res
-            s = socket.socket(af, socktype, proto)
-            try:
-                s.settimeout(timeout)
-                rc = s.connect_ex(sa)
-                s.close()
-                if rc == 0:
-                    return False
-            except Exception:
-                try:
-                    s.close()
-                except Exception:
-                    pass
-                continue
+        address = ipaddress.ip_address(host)
+        if not address.is_loopback:
+            return False
+        family = socket.AF_INET6 if address.version == 6 else socket.AF_INET
+        with socket.socket(family, socket.SOCK_STREAM) as sock:
+            sock.bind((str(address), port))
         return True
-    except Exception:
-        return True
-    
-    
-# --- blocked hosts ---
-def load_blocked():
-    global blocked_hosts
-    if os.path.exists(BLOCKED_FILE):
-        try:
-            with open(BLOCKED_FILE, 'r') as f:              
-                blocked_hosts = json.load(f)
-        except:
-            logger.error('error in loading blocked hosts')
-            blocked_hosts = []
-    else:
-        blocked_hosts = []
-
-def add_to_blocked_hosts(host):
-    if host not in blocked_hosts:
-            blocked_hosts.append(host)
-            return True
-    return False
+    except (OSError, ValueError):
+        return False
 
 
-def get_blocked():
-    return blocked_hosts
+def _route_for_host(host: str) -> str:
+    normalized = normalize_hostname(host)
+    with _rule_lock:
+        blocked = _blocked_rules
+        excluded = _excluded_rules
+    if blocked.matches(normalized):
+        return "blocked"
+    if excluded.matches(normalized):
+        return "direct"
+    return "tor"
 
-def remove_blocked(host):
-    blocked_hosts.remove(host)
-    
-def save_blocked():
-    with open(BLOCKED_FILE, 'w') as f:
-        json.dump(blocked_hosts, f, indent=2)
 
-# --- exclude hosts ---
-def load_exclude():
-    global exclude_hosts
-    if os.path.exists(EXCLUDE_FILE):
-        try:
-            with open(EXCLUDE_FILE, 'r') as f:              
-                exclude_hosts = json.load(f)
-        except:
-            logger.error('error in loading exclude hosts')
-            exclude_hosts = []
-    else:
-        exclude_hosts = []
+def _parse_authority(authority: str, default_port: int | None = None) -> tuple[str, int]:
+    if not authority or any(char in authority for char in ("/", "?", "#", "@", "\r", "\n")):
+        raise ValueError("Malformed request authority.")
+    parsed = urlsplit("//" + authority)
+    if parsed.username or parsed.password or not parsed.hostname:
+        raise ValueError("Malformed request authority.")
+    try:
+        port = parsed.port if parsed.port is not None else default_port
+    except ValueError as exc:
+        raise ValueError("Invalid destination port.") from exc
+    if port is None or not 1 <= port <= 65535:
+        raise ValueError("Invalid destination port.")
+    return normalize_hostname(parsed.hostname), port
 
-def add_to_exclude_hosts(host):
-    if host not in exclude_hosts:
-            exclude_hosts.append(host)
-            return True
-    return False
-      
-def get_exclude():
-    return exclude_hosts
 
-def remove_exclude(host):
-    exclude_hosts.remove(host)
+def _connect_upstream(host: str, port: int, route: str, tor_socks_port: int) -> socket.socket:
+    if route == "direct":
+        # This is a deliberate bypass: DNS and traffic may leave the local
+        # machine outside Tor. It is never selected by default.
+        return socket.create_connection((host, port), timeout=SOCKET_TIMEOUT_SECONDS)
+    remote = socks.socksocket()
+    remote.set_proxy(socks.SOCKS5, "127.0.0.1", tor_socks_port, rdns=True)
+    remote.settimeout(SOCKET_TIMEOUT_SECONDS)
+    remote.connect((host, port))
+    return remote
 
-def save_exclude():
-    with open(EXCLUDE_FILE, 'w') as f:
-        json.dump(exclude_hosts, f, indent=2)
 
-# --- save all ---
-def save_all():
-    
-    with open(EXCLUDE_FILE, 'w') as f:
-        json.dump(exclude_hosts, f, indent=2)
-    
-    with open(BLOCKED_FILE, 'w') as f:
-        json.dump(blocked_hosts, f, indent=2)
-
-# ====== Proxy Handler ======
 class ProxyHandler(BaseHTTPRequestHandler):
-    app_window = None
-    def do_CONNECT(self):
-        host, port = self.path.split(":")
-        port = int(port)
-                
-        for i in blocked_hosts:
-            if i.startswith("*"):
-                if host.endswith(i[1:]):
-                    self.send_error(403, "Forbidden: Blocked")
-                    logger.debug(f"BLOCKED {host}:{port}")
-                    return
-    
-        if host in blocked_hosts or any([host.endswith("."+i) for i in blocked_hosts]):
-            self.send_error(403, "Forbidden: Blocked")
-            logger.debug(f"BLOCKED {host}:{port}")
-            return
+    protocol_version = "HTTP/1.1"
 
-        proxy = True
-        
-        for i in exclude_hosts:
-              if i.startswith("*"):
-                if host.endswith(i[1:]):
-                   proxy = False
-        if host in exclude_hosts or any([host.endswith("."+i) for i in exclude_hosts]):
-            logger.debug(f"exclude {host}:{port}")
-            
-            proxy = False
+    def log_message(self, format_string: str, *args) -> None:
+        # BaseHTTPRequestHandler passes request lines here; do not persist URLs,
+        # query strings, credentials, or destination content in routine logs.
+        del format_string, args
+        logger.info("HTTP proxy activity from client=%s", self.client_address[0])
 
+    def do_CONNECT(self) -> None:
+        remote = None
         try:
-            
-            remote = socks.socksocket()
-            if proxy:
-                remote.set_proxy(socks.SOCKS5, "127.0.0.1", self.server.tor_socks_port, rdns=True)
-            
-            remote.connect((host, port))
+            host, port = _parse_authority(self.path)
+            route = _route_for_host(host)
+            if route == "blocked":
+                self.send_error(403, "Destination blocked by host policy")
+                return
+            remote = _connect_upstream(host, port, route, self.server.tor_socks_port)
+            self.connection.settimeout(RELAY_IDLE_TIMEOUT_SECONDS)
+            remote.settimeout(RELAY_IDLE_TIMEOUT_SECONDS)
             self.send_response(200, "Connection Established")
             self.end_headers()
-            self._tunnel(self.connection, remote)
-            # log_request(self.command, self.path, app_window=self.app_window)
-        except Exception as e:
-            self.send_error(502, f"CONNECT error: {e}")
-            logger.error(f"CONNECT error: {e}")
-
-    def do_GET(self): self._handle_http()
-    def do_POST(self): self._handle_http()
-
-    def _handle_http(self):
-        parsed = urlsplit(self.path)
-        host = parsed.hostname
-        port = parsed.port or 80
-                         
-        try:
-            remote = socks.socksocket()
-            remote.set_proxy(socks.SOCKS5, "127.0.0.1", self.server.tor_socks_port, rdns=True)
-            remote.connect((host, port))
-            self.headers["Connection"] = "close"
-            req_line = f"{self.command} {parsed.path or '/'}{'?' + parsed.query if parsed.query else ''} HTTP/1.1\r\n"
-            hdrs = ''.join(f"{k}: {v}\r\n" for k, v in self.headers.items())
-            full = req_line + hdrs + "\r\n"
-            body = b''
-            if self.command == 'POST' and 'Content-Length' in self.headers:
-                body = self.rfile.read(int(self.headers['Content-Length']))
-            remote.sendall(full.encode() + body)
-            self._tunnel(remote, self.connection)
-            logger.debug(f"Sent {len(full.encode() + body)} bytes to {host}:{port}")
-
-        except Exception as e:
-            self.send_error(502, f"HTTP error: {e}")
-            logger.error(f"HTTP error: {e}")
-
-    def _tunnel(self, src, dst):
-        socks_list = [src, dst]
-        try:
-            while True:
-                r, _, _ = select.select(socks_list, [], [])
-                for s in r:
-                    data = s.recv(4096)
-                    queue_bytes.put(len(data))
-                    if not data:
-                        return
-                    (dst if s is src else src).sendall(data)
-        except:
-            pass
+            self.wfile.flush()
+            self._relay(self.connection, remote)
+        except (ValueError, HostRuleError):
+            self.send_error(400, "Malformed CONNECT authority")
+        except (OSError, socks.ProxyError, socks.GeneralProxyError):
+            logger.warning("CONNECT upstream failed for host=%s", locals().get("host", "<invalid>"))
+            if not self.wfile.closed:
+                self.send_error(502, "Upstream connection failed")
         finally:
-            src.close(); dst.close()
+            if remote is not None:
+                try:
+                    remote.close()
+                except OSError:
+                    pass
+
+    def do_GET(self) -> None:
+        self._handle_http()
+
+    def do_HEAD(self) -> None:
+        self._handle_http()
+
+    def do_POST(self) -> None:
+        self._handle_http()
+
+    def do_PUT(self) -> None:
+        self._handle_http()
+
+    def do_DELETE(self) -> None:
+        self._handle_http()
+
+    def do_OPTIONS(self) -> None:
+        self._handle_http()
+
+    def do_PATCH(self) -> None:
+        self._handle_http()
+
+    def do_TRACE(self) -> None:
+        self.send_error(405, "TRACE is not supported by this proxy")
+
+    def _handle_http(self) -> None:
+        remote = None
+        try:
+            parsed = urlsplit(self.path)
+            if parsed.scheme.lower() != "http" or not parsed.hostname:
+                self.send_error(400, "An absolute-form HTTP request target is required")
+                return
+            if parsed.username or parsed.password:
+                self.send_error(400, "Credentials are not allowed in the request target")
+                return
+            try:
+                port = parsed.port or 80
+            except ValueError:
+                self.send_error(400, "Invalid destination port")
+                return
+            if not 1 <= port <= 65535:
+                self.send_error(400, "Invalid destination port")
+                return
+            host = normalize_hostname(parsed.hostname)
+            route = _route_for_host(host)
+            if route == "blocked":
+                self.send_error(403, "Destination blocked by host policy")
+                return
+            if self.headers.get("Expect"):
+                self.send_error(417, "Expect headers are not supported")
+                return
+            transfer_encoding = self.headers.get("Transfer-Encoding", "")
+            if transfer_encoding and transfer_encoding.lower() != "identity":
+                self.send_error(501, "Transfer-encoded request bodies are not supported")
+                return
+            length_text = self.headers.get("Content-Length", "0")
+            if not length_text.isdecimal():
+                self.send_error(400, "Invalid Content-Length")
+                return
+            body_length = int(length_text)
+            if body_length < 0 or body_length > MAX_REQUEST_BODY_BYTES:
+                self.send_error(413, "Request body exceeds the proxy limit")
+                return
+
+            remote = _connect_upstream(host, port, route, self.server.tor_socks_port)
+            remote.settimeout(RELAY_IDLE_TIMEOUT_SECONDS)
+            request_path = parsed.path or "/"
+            if parsed.query:
+                request_path += "?" + parsed.query
+            default_port = 80
+            host_literal = f"[{host}]" if ":" in host else host
+            host_header = host_literal if port == default_port else f"{host_literal}:{port}"
+            headers = []
+            connection_tokens = {
+                token.strip().lower()
+                for token in self.headers.get("Connection", "").split(",")
+                if token.strip()
+            }
+            hop_by_hop = {"connection", "proxy-connection", "proxy-authorization",
+                          "proxy-authenticate", "keep-alive", "te", "trailer", "upgrade"}
+            for key, value in self.headers.items():
+                lowered = key.lower()
+                if lowered in hop_by_hop or lowered in connection_tokens or lowered in {"host", "content-length", "transfer-encoding"}:
+                    continue
+                headers.append(f"{key}: {value}\r\n")
+            request_line = f"{self.command} {request_path} HTTP/1.1\r\n"
+            wire_headers = request_line + f"Host: {host_header}\r\n" + "".join(headers)
+            wire_headers += "Connection: close\r\n"
+            if body_length:
+                wire_headers += f"Content-Length: {body_length}\r\n"
+            wire_headers += "\r\n"
+            remote.sendall(wire_headers.encode("iso-8859-1", errors="strict"))
+            _record_bytes(len(wire_headers.encode("iso-8859-1", errors="strict")))
+            remaining = body_length
+            while remaining:
+                chunk = self.rfile.read(min(65536, remaining))
+                if not chunk:
+                    raise OSError("Client disconnected during request body.")
+                remote.sendall(chunk)
+                _record_bytes(len(chunk))
+                remaining -= len(chunk)
+            self.connection.settimeout(RELAY_IDLE_TIMEOUT_SECONDS)
+            self._relay(remote, self.connection)
+        except (ValueError, HostRuleError):
+            if not self.wfile.closed:
+                self.send_error(400, "Malformed HTTP proxy request")
+        except (OSError, socks.ProxyError, socks.GeneralProxyError):
+            logger.warning("HTTP upstream failed for host=%s", locals().get("host", "<invalid>"))
+            if not self.wfile.closed:
+                self.send_error(502, "Upstream connection failed")
+        finally:
+            if remote is not None:
+                try:
+                    remote.close()
+                except OSError:
+                    pass
+
+    @staticmethod
+    def _relay(left: socket.socket, right: socket.socket) -> None:
+        active = {left, right}
+        peers = {left: right, right: left}
+        try:
+            while active:
+                try:
+                    readable, _, _ = select.select(list(active), [], [], RELAY_IDLE_TIMEOUT_SECONDS)
+                except (OSError, ValueError):
+                    break
+                if not readable:
+                    logger.debug("Proxy relay ended after idle timeout.")
+                    break
+                for source in readable:
+                    try:
+                        data = source.recv(65536)
+                    except (OSError, TimeoutError):
+                        active.discard(source)
+                        try:
+                            peers[source].shutdown(socket.SHUT_WR)
+                        except OSError:
+                            pass
+                        continue
+                    destination = peers[source]
+                    if not data:
+                        active.discard(source)
+                        try:
+                            destination.shutdown(socket.SHUT_WR)
+                        except OSError:
+                            pass
+                        continue
+                    _record_bytes(len(data))
+                    try:
+                        destination.sendall(data)
+                    except (OSError, TimeoutError):
+                        active.discard(source)
+                        active.discard(destination)
+                        break
+        finally:
+            # The caller owns the sockets and closes the upstream endpoint.
+            pass
+
 
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
+    allow_reuse_address = False
+
     def __init__(self, addr, handler, tor_socks_port):
+        host = addr[0]
+        try:
+            is_loopback = ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            is_loopback = host.lower() == "localhost"
+        if not is_loopback:
+            raise ValueError("The HTTP proxy can only bind to loopback; remote access is disabled.")
+        self.tor_socks_port = int(tor_socks_port)
         super().__init__(addr, handler)
-        self.tor_socks_port = tor_socks_port
