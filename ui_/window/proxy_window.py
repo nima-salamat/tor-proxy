@@ -3,6 +3,7 @@ from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
+    QFrame,
     QPushButton,
     QMessageBox,
 )
@@ -55,51 +56,103 @@ class ProxyWindow(QWidget):
         self.tor.bridges = CONFIG["bridges"]
         self.tor.app_window = self
         self.proxy = Runner(self.proxy_port, self.tor_socks_port,self)
-        self.main_layout = QVBoxLayout(self)
-        self.main_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.btn_status = QLabel(TAP_TO_CONNECT)
-        self.set_btn_status_style("disconnected")
-        self.main_layout.addWidget(self.btn_status)
-        self.connect_btn = PulseButton("Connect")
-        self.connect_btn.clicked.connect(self._toggle)
-        self.main_layout.addWidget(self.connect_btn)
+        # Responsive two-column home: primary connection action on the left,
+        # useful proxy operations grouped in a compact card on the right.
+        self.main_layout = QHBoxLayout(self)
+        self.main_layout.setContentsMargins(8, 8, 8, 8)
+        self.main_layout.setSpacing(18)
 
-        lyt_info = QHBoxLayout()
-        self.main_layout.addLayout(lyt_info)
+        hero = QWidget(self)
+        hero.setObjectName("homeHero")
+        hero_layout = QVBoxLayout(hero)
+        hero_layout.setContentsMargins(8, 10, 8, 10)
+        hero_layout.setSpacing(14)
+        hero_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.btn_status = QLabel(TAP_TO_CONNECT)
+        self.btn_status.setObjectName("connectionStatus")
+        self.btn_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.set_btn_status_style("disconnected")
+        hero_layout.addWidget(self.btn_status)
+        self.connect_btn = PulseButton("Connect")
+        self.connect_btn.setObjectName("connectPulseButton")
+        self.connect_btn.clicked.connect(self._toggle)
+        hero_layout.addWidget(self.connect_btn, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        metric_card = QFrame(hero)
+        metric_card.setObjectName("homeMetricCard")
+        lyt_info = QHBoxLayout(metric_card)
+        lyt_info.setContentsMargins(14, 10, 14, 10)
+        lyt_info.setSpacing(14)
         self.lbl_percent = QLabel("0%")
+        self.lbl_percent.setObjectName("bootstrapPercent")
         lyt_info.addWidget(self.lbl_percent)
         self.lbl_data_usage = QLabel(f"Proxy traffic (both directions): {CONFIG['data_usage']/1024**2:.2f} MiB")
-        lyt_info.addWidget(self.lbl_data_usage)
-
+        self.lbl_data_usage.setWordWrap(True)
+        lyt_info.addWidget(self.lbl_data_usage, 1)
+        hero_layout.addWidget(metric_card)
         self.data.valueChanged.connect(self.dataValueChanged)
+
+        utility_row = QHBoxLayout()
         self.btn_change_identity = QPushButton(CHANGE_IDENTITY)
-        self.main_layout.addWidget(self.btn_change_identity)
         self.btn_change_identity.clicked.connect(self.change_identity_)
-        self.logs_widget = LogWindow(self)
-        self.tor.log_message.connect(self.logs_widget.update_log)
-        self.tor.service_failed.connect(self._on_tor_failed)
+        utility_row.addWidget(self.btn_change_identity)
         self.btn_log = QPushButton(LOGS)
         self.btn_log.clicked.connect(self.show_logs)
-        self.main_layout.addWidget(self.btn_log)
+        utility_row.addWidget(self.btn_log)
+        hero_layout.addLayout(utility_row)
+        hero_layout.addStretch(1)
+        self.main_layout.addWidget(hero, 3)
 
-        # --- proxy control buttons (new) ---
+        actions_card = QFrame(self)
+        actions_card.setObjectName("homeActionCard")
+        actions_layout = QVBoxLayout(actions_card)
+        actions_layout.setContentsMargins(18, 18, 18, 18)
+        actions_layout.setSpacing(12)
+        section_title = QLabel("Proxy controls")
+        section_title.setObjectName("homeSectionTitle")
+        actions_layout.addWidget(section_title)
+        self.tor.log_message.connect(self.logs_widget.update_log)
+        self.tor.service_failed.connect(self._on_tor_failed)
+
+        self.proxy_status_label = QLabel(
+            "System proxy: prior-session restoration available" if self.proxy_set else "System proxy: unchanged"
+        )
+        self.proxy_status_label.setObjectName("proxyStatusLabel")
+        self.proxy_status_label.setWordWrap(True)
+        actions_layout.addWidget(self.proxy_status_label)
         layout_proxy = QHBoxLayout()
-        self.main_layout.addLayout(layout_proxy)
+        layout_proxy.setSpacing(8)
         self.btn_set_proxy = QPushButton("Set Proxy")
         self.btn_set_proxy.clicked.connect(self.set_proxy_clicked)
         layout_proxy.addWidget(self.btn_set_proxy)
-
         self.btn_clear_proxy = QPushButton("Clear Proxy")
         self.btn_clear_proxy.clicked.connect(self.clear_proxy_clicked)
         layout_proxy.addWidget(self.btn_clear_proxy)
+        actions_layout.addLayout(layout_proxy)
 
-        initial_proxy_status = ("System proxy: prior-session restoration available"
-                                if self.proxy_set else "System proxy: unchanged")
-        self.proxy_status_label = QLabel(initial_proxy_status)
-        self.main_layout.addWidget(self.proxy_status_label)
-        self._update_proxy_buttons()  # initial enable/disable
-
-        # Timed NEWNYM is intentionally disabled by default. Identity changes are manual.
+        separator = QFrame(actions_card)
+        separator.setFrameShape(QFrame.Shape.HLine)
+        separator.setFrameShadow(QFrame.Shadow.Plain)
+        actions_layout.addWidget(separator)
+        ip_title = QLabel("Exit IP")
+        ip_title.setObjectName("homeSectionTitle")
+        actions_layout.addWidget(ip_title)
+        self.tor_ip_label = QLabel("Exit IP: not checked")
+        self.tor_ip_label.setWordWrap(True)
+        actions_layout.addWidget(self.tor_ip_label)
+        self.btn_whatismyip = QPushButton(WHAT_IS_MY_IP)
+        self.btn_whatismyip.clicked.connect(self.whatismyip_clicked)
+        actions_layout.addWidget(self.btn_whatismyip)
+        actions_layout.addStretch(1)
+        self.main_layout.addWidget(actions_card, 2)
+        self.setStyleSheet("""
+            QFrame#homeActionCard, QFrame#homeMetricCard { border: 1px solid palette(mid); border-radius: 12px; background: palette(base); }
+            QLabel#homeSectionTitle { font-size: 14px; font-weight: 700; }
+            QLabel#bootstrapPercent { font-size: 16px; font-weight: 700; }
+            QPushButton { min-height: 34px; padding: 0 12px; border-radius: 7px; }
+        """)
+        self.thread_pool = QThreadPool(self)
         self.timer = QTimer(self)
         self.timer.setInterval(int(CONFIG["newnym_interval"] or 0))
 
