@@ -216,6 +216,10 @@ def verify_tor_signature(
     signature: str | Path,
     public_key_url: str = TOR_PUBLIC_KEY_URL,
     expected_fingerprint: str = TOR_SIGNING_FINGERPRINT,
+    *,
+    progress_callback=None,
+    cancel_event: Event | None = None,
+    version: str = "",
 ) -> None:
     """Verify a detached OpenPGP signature against the independently pinned Tor key."""
     artifact = Path(artifact)
@@ -235,8 +239,9 @@ def verify_tor_signature(
             _download(
                 public_key_url, key_file,
                 {"keys.openpgp.org", "openpgpkey.torproject.org"},
-                max_bytes=2 * 1024 * 1024, operation="verify",
-                stage="downloading_signing_key",
+                max_bytes=2 * 1024 * 1024, version=version, operation="verify",
+                stage="downloading_signing_key", progress_callback=progress_callback,
+                cancel_event=cancel_event,
             )
             env = os.environ.copy()
             env["GNUPGHOME"] = str(home_path)
@@ -392,7 +397,10 @@ def download_verified_bundle(
         _progress(progress_callback, BundleProgress(
             version, "verify", "verifying_signature", message="Checking the detached OpenPGP signature."
         ))
-        verify_tor_signature(archive_tmp, signature_tmp)
+        verify_tor_signature(
+            archive_tmp, signature_tmp, progress_callback=progress_callback,
+            cancel_event=cancel_event, version=version,
+        )
         _check_cancelled(cancel_event)
         _progress(progress_callback, BundleProgress(
             version, "verify", "signature_verified", message="The archive signature matches the pinned Tor key."
