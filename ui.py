@@ -149,29 +149,89 @@ class Window(QMainWindow):
         exit_action.triggered.connect(self.ask_close)
         menu_bar.addAction(exit_action)
 
+        self.global_state = QLabel("● Checking Tor state…", self)
+        self.global_state.setObjectName("globalState")
+        self.global_state.setMinimumWidth(112)
+        self.global_state.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.global_state.setWordWrap(False)
+        self._notification_entries = []
+        self.notifications_menu = QMenu(self)
+        self.notification_btn = QPushButton("🔔 0", self)
+        self.notification_btn.setObjectName("notificationButton")
+        self.notification_btn.setToolTip("Notifications")
+        self.notification_btn.clicked.connect(self._show_notifications)
+
         self.toggle_btn = QPushButton(LIGHT if CONFIG["mode"] == "light" else DARK, self)
         self.toggle_btn.setObjectName("themeToggle")
         self.toggle_btn.setToolTip("Toggle light/dark appearance")
         self.toggle_btn.setCheckable(True)
         self.toggle_btn.clicked.connect(self._toggle_theme)
-        menu_bar.setCornerWidget(self.toggle_btn, Qt.TopRightCorner)
+
+        corner = QWidget(menu_bar)
+        corner_layout = QHBoxLayout(corner)
+        corner_layout.setContentsMargins(0, 0, 0, 0)
+        corner_layout.setSpacing(6)
+        corner_layout.addWidget(self.global_state)
+        corner_layout.addWidget(self.notification_btn)
+        corner_layout.addWidget(self.toggle_btn)
+        menu_bar.setCornerWidget(corner, Qt.TopRightCorner)
+
+    def _show_notifications(self):
+        self.notifications_menu.exec(
+            self.notification_btn.mapToGlobal(self.notification_btn.rect().bottomLeft())
+        )
+
+    def notify_user(self, title, message, level="info"):
+        """Add a persistent, user-openable notification to the top-bar bell."""
+        self._notification_entries.append({
+            "title": str(title),
+            "message": str(message),
+            "level": "warning" if level == "warning" else "info",
+        })
+        self._notification_entries = self._notification_entries[-30:]
+        count = len(self._notification_entries)
+        self.notification_btn.setText("🔔 {}".format(count if count < 100 else "99+"))
+        self.notification_btn.setToolTip("{}: {}".format(title, message))
+        self.notifications_menu.clear()
+        clear_action = self.notifications_menu.addAction("Clear notifications")
+        clear_action.triggered.connect(self._clear_notifications)
+        self.notifications_menu.addSeparator()
+        for notice in reversed(self._notification_entries):
+            action = self.notifications_menu.addAction(
+                "{} · {}".format("⚠" if notice["level"] == "warning" else "●", notice["title"])
+            )
+            action.setToolTip(notice["message"])
+            action.triggered.connect(
+                lambda _checked=False, t=notice["title"], m=notice["message"], lv=notice["level"]: self._show_notice(t, m, lv)
+            )
+
+    def _show_notice(self, title, message, level):
+        if level == "warning":
+            QMessageBox.warning(self, title, message)
+        else:
+            QMessageBox.information(self, title, message)
+
+    def _clear_notifications(self):
+        self._notification_entries.clear()
+        self.notification_btn.setText("🔔 0")
+        self.notification_btn.setToolTip("No new notifications")
+        self.notifications_menu.clear()
+        empty = self.notifications_menu.addAction("No notifications")
+        empty.setEnabled(False)
 
     def _apply_shell_styles(self):
         if CONFIG["mode"] == "dark":
-            border, surface = "#414a56", "#272c33"
-            text, muted = "#eff1f4", "#a6afb9"
+            border, surface, text = "#414a56", "#272c33", "#eff1f4"
         else:
-            border, surface = "#d5dbe2", "#ffffff"
-            text, muted = "#202832", "#647080"
+            border, surface, text = "#d5dbe2", "#ffffff", "#202832"
         self.setStyleSheet("""
-            QLabel#pageHeading { color: %s; font-size: 22px; font-weight: 700; }
-            QLabel#pageDescription { color: %s; font-size: 11px; }
-            QLabel#globalState { color: %s; font-size: 11px; font-weight: 650; padding: 8px 12px; border: 1px solid %s; border-radius: 7px; }
+            QLabel#globalState { color: %s; font-size: 10px; font-weight: 650; padding: 5px 7px; border: 1px solid %s; border-radius: 7px; }
             QWidget#pageSurface { background: %s; }
             QMenuBar#topMenuBar { border: none; border-bottom: 1px solid %s; padding: 3px 8px; }
-            QPushButton#themeToggle { min-height: 28px; padding: 0 10px; border-radius: 6px; }
+            QPushButton#themeToggle, QPushButton#notificationButton { min-height: 28px; padding: 0 9px; border-radius: 6px; }
+            QPushButton#notificationButton { font-weight: 650; }
             QStackedWidget#pageStack { background: transparent; }
-        """ % (text, muted, text, border, surface, border))
+        """ % (text, border, surface, border))
 
     def _on_navigation_changed(self, row):
         # Kept as a compatibility slot for integrations that select a page by index.
