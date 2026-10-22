@@ -26,7 +26,7 @@ The downloader always restricts archive transfers to approved Tor distribution h
 
 Tar extraction uses a temporary sibling directory in both modes, rejects absolute/traversal paths, links, special file types, duplicate extracted files, and expansion above a configured size limit. It refuses to overwrite an existing destination. The local marker records the archive SHA-256 digest and whether OpenPGP verification actually succeeded; HTTPS-only installs are not represented as signed.
 
-The pinned key is Tor Browser Developers' primary signing key, fingerprint `EF6E286DDA85EA2A4BA7DE684E2C6E8793298290`. Consult the [official Tor signature guide](https://support.torproject.org/tor-browser/getting-started/verifying-tor-browser/) for current guidance on keys and subkeys.
+When OpenPGP verification is enabled, the pinned key is Tor Browser Developers' primary signing key, fingerprint `EF6E286DDA85EA2A4BA7DE684E2C6E8793298290`. Consult the [official Tor signature guide](https://support.torproject.org/tor-browser/getting-started/verifying-tor-browser/) for current guidance on keys and subkeys.
 
 ## Configuration, files, and logs
 

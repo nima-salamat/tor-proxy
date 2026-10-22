@@ -7,13 +7,13 @@ All notable changes are recorded here. Dates and release numbers are added only 
 - Reworked the desktop shell with the existing top navigation, clearer page hierarchy, a live Tor state summary in the page header, and coordinated light/dark styling while retaining the existing feature views.
 - Added stable-versus-alpha Tor release recognition, numeric ordering, and exact Expert Bundle plus detached-signature eligibility checks; unsupported release folders are not treated as downloadable artifacts.
 - Added typed streamed-download progress, size/speed/ETA reporting where available, cancellation during safe transfer stages, and distinct signature/extraction/install status.
-- Improved GnuPG executable discovery and remediation using PATH, common install paths, and `TORPROXY_GPG_EXECUTABLE`; mandatory pinned-fingerprint verification remains fail-closed.
+- Improved GnuPG executable discovery and remediation using PATH, common install paths, and `TORPROXY_GPG_EXECUTABLE`; pinned-fingerprint verification remains fail-closed when enabled in Settings → Advanced.
 - Restricted managed-bundle auto-selection to bundles that pass the existing verification-marker, archive-digest, platform, and executable checks.
 - Corrected duplicate Qt layout ownership patterns and added regression coverage for release parsing, bundle eligibility, download progress, executable selection, and layout construction.
 
 ## Unreleased — security and architecture redesign
 
-- Added a `src/torproxy` core for validated configuration, host rules, platform paths, IP checks, Tor process management, and signed bundle installation.
+- Added a `src/torproxy` core for validated configuration, host rules, platform paths, IP checks, Tor process management, and configurable bundle signature verification.
 - Restricted the local HTTP proxy to loopback and unified host policy across HTTP and CONNECT.
 - Replaced request-target logging with privacy-conscious activity logging and bounded bidirectional byte accounting.
 - Routed the exit-IP checker through the configured proxy with no direct fallback.

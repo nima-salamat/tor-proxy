@@ -102,7 +102,7 @@ Older repository versions included large archives in `bundles/`. These are no lo
 
 The updater recognizes numeric stable releases (for example, `15.0.26`) and the supported alpha naming convention (for example, `16.0a14`). Stable releases are prioritized; alpha releases are labelled as prereleases and can be hidden with the prerelease filter. A release directory is downloadable only when the exact current-platform Expert Bundle is listed; its matching detached `.asc` signature must also be listed when OpenPGP verification is enabled. Tor Browser installers, `.mar` updates, debug archives and checksum files are not substitutes for an Expert Bundle.
 
-The bundle page displays transfer bytes and, when the server advertises a usable `Content-Length`, percentage, speed and an approximate remaining-time estimate. Unknown transfer lengths use an indeterminate progress bar. Signature verification, archive extraction and installation are shown as distinct stages; a completed transfer alone never counts as an installed bundle. Cancellation is available during archive/signature transfer and is disabled during stages that cannot be safely interrupted.
+The bundle page displays transfer bytes and, when the server advertises a usable `Content-Length`, percentage, speed and an approximate remaining-time estimate. Unknown transfer lengths use an indeterminate progress bar. When enabled, signature verification appears as a distinct stage; safe archive extraction and installation are always shown separately. A completed transfer alone never counts as an installed bundle. Cancellation is available during network transfer and is disabled during stages that cannot be safely interrupted.
 
 OpenPGP verification is optional and can be enabled in Settings → Advanced. When enabled, the detached signature is checked against the independently pinned Tor signing-key fingerprint and GnuPG is discovered from `PATH`, common installation paths, or `TORPROXY_GPG_EXECUTABLE`. If no verifier can be started, the signed installation stops. When OpenPGP is disabled, TorProxy labels the installation `HTTPS ONLY · UNSIGNED` and does not claim publisher authentication; choose that mode only if you accept the reduced security guarantee.
 
@@ -169,7 +169,7 @@ ruff check src/torproxy tests --select E,F,UP --ignore E501
 pytest --cov=torproxy.host_rules --cov=torproxy.ip_check --cov-report=term-missing --cov-fail-under=75
 ```
 
-The offline suite also exercises stable/alpha release parsing, exact artifact/signature selection, transfer progress/cancellation, GnuPG failure modes, and atomic installation-marker publication. Normal CI does not download a real Tor archive.
+The offline suite also exercises stable/alpha release parsing, exact artifact/signature selection, transfer progress/cancellation, GnuPG failure modes, optional HTTPS-only installation, trust-method markers, and atomic installation publication. Normal CI does not download a real Tor archive.
 
 An opt-in integration test contacts the official Tor Project distribution, downloads a compatible Expert Bundle, and verifies its real detached signature. It requires GnuPG, internet access, and a supported OS/architecture. Do not enable it in an untrusted test environment because it downloads a large archive.
 
