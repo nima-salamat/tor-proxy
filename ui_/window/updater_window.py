@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 import logging
+import json
 import os
 from pathlib import Path
 from threading import Event
@@ -58,7 +59,7 @@ class UpdaterWindow(QWidget):
         self._verified_bundles_cache: list[str] = []
         self._bundle_scan_in_progress = False
         self._bundle_scan_worker = None
-        self._last_download: tuple[str, str] | None = None
+        self._last_download: tuple[str, str, bool] | None = None
         self._missing_bundle_notified = False
 
         root = QVBoxLayout(self)
@@ -272,28 +273,52 @@ class UpdaterWindow(QWidget):
             alpha = tor_version_channel(version).startswith("Alpha")
             item.setHidden(bool((not include_alpha and alpha) or (query and query not in version.lower())))
 
+    @staticmethod
+    def _bundle_signature_verified(path: str | Path) -> bool:
+        try:
+            metadata = json.loads((Path(path) / ".torproxy-verified.json").read_text(encoding="utf-8"))
+            return (
+                metadata.get("signature_verified") is True
+                and metadata.get("verification_method", "openpgp") == "openpgp"
+            )
+        except (OSError, ValueError, AttributeError):
+            return False
+
     def _update_install_state(self) -> None:
         if self._bundle_scan_in_progress and not self._verified_bundles_cache:
             self.lbl_install_state.setText("CHECKING LOCAL BUNDLES")
-            self.lbl_default.setText("Checking signatures, archive digests and executable structure…")
+            self.lbl_default.setText(
+                "Checking bundle metadata and archive digests; OpenPGP is "
+                + ("enabled." if CONFIG["verify_tor_signatures"] else "disabled in Settings.")
+            )
             return
         available = self._verified_bundles_cache
         selected = str(CONFIG["tor_path"] or "")
-        active = any(
-            os.path.normcase(str(Path(path).resolve())) == os.path.normcase(str(Path(selected).resolve()))
-            for path in available
-        ) if selected else False
-        if active:
-            self.lbl_install_state.setText("VERIFIED DEFAULT")
+        active_path = None
+        if selected:
+            target = os.path.normcase(str(Path(selected).resolve()))
+            active_path = next((
+                path for path in available
+                if os.path.normcase(str(Path(path).resolve())) == target
+            ), None)
+        if active_path:
+            self.lbl_install_state.setText(
+                "SIGNED DEFAULT" if self._bundle_signature_verified(active_path) else "HTTPS-ONLY DEFAULT"
+            )
         elif available:
-            self.lbl_install_state.setText("{} verified bundle(s)".format(len(available)))
+            self.lbl_install_state.setText("{} installed bundle(s)".format(len(available)))
         elif self._bundle_scan_in_progress:
             self.lbl_install_state.setText("CHECKING LOCAL BUNDLES")
         else:
-            self.lbl_install_state.setText("No verified bundle installed")
-        self.lbl_default.setText(
-            "Default: {}".format(Path(selected).name if selected else "not configured")
-        )
+            self.lbl_install_state.setText("No compatible bundle installed")
+        if selected:
+            trust = (
+                "OpenPGP signature checked" if self._bundle_signature_verified(selected)
+                else "signature not checked / external path"
+            )
+            self.lbl_default.setText("Default: {} · {}".format(Path(selected).name, trust))
+        else:
+            self.lbl_default.setText("Default: not configured")
 
     def refresh_version(self) -> None:
         if self._bundle_scan_in_progress:
@@ -303,7 +328,7 @@ class UpdaterWindow(QWidget):
         self.list_tor_versions.setEnabled(False)
         self.updates_list.setEnabled(False)
         self.lbl_install_state.setText("CHECKING LOCAL BUNDLES")
-        self.lbl_default.setText("Verifying installed bundle metadata…")
+        self.lbl_default.setText("Checking installed bundle metadata and archive digests…")
         self._bundle_scan_worker = Worker(get_own_bundles)
         self._bundle_scan_worker.signals.finished.connect(self._on_bundle_scan_finished)
         self._bundle_scan_worker.signals.error.connect(self._on_bundle_scan_failed)
@@ -319,11 +344,17 @@ class UpdaterWindow(QWidget):
         self.list_tor_versions.clear()
         configured = str(CONFIG["tor_path"] or "")
         for path in self._verified_bundles_cache:
-            item = QListWidgetItem(Path(path).name)
+            signed = self._bundle_signature_verified(path)
+            trust_label = "SIGNED" if signed else "HTTPS ONLY · UNSIGNED"
+            item = QListWidgetItem("{}  ·  {}".format(Path(path).name, trust_label))
             item.setData(Qt.ItemDataRole.UserRole, path)
-            item.setToolTip(path)
+            item.setToolTip(
+                path + ("\nDetached OpenPGP signature matched the pinned Tor key."
+                        if signed else
+                        "\nDownloaded over HTTPS; the publisher's OpenPGP signature was not checked.")
+            )
             if configured and os.path.normcase(str(Path(configured).resolve())) == os.path.normcase(str(Path(path).resolve())):
-                item.setText("{}  ·  DEFAULT".format(Path(path).name))
+                item.setText("{}  ·  {}  ·  DEFAULT".format(Path(path).name, trust_label))
             self.list_tor_versions.addItem(item)
         self._update_install_state()
         if self._verified_bundles_cache:
@@ -334,7 +365,8 @@ class UpdaterWindow(QWidget):
             if callable(notify):
                 notify(
                     "Tor bundle required",
-                    "No signed and verified Tor Expert Bundle is installed. Open Bundles to choose a compatible release.",
+                    "No compatible Tor Expert Bundle is installed. Open Bundles to download one. OpenPGP publisher-signature verification is "
+                    + ("enabled." if CONFIG["verify_tor_signatures"] else "disabled in Settings → Advanced."),
                     "warning",
                 )
 
@@ -351,16 +383,26 @@ class UpdaterWindow(QWidget):
     def set_default_version(self) -> None:
         item = self.list_tor_versions.currentItem()
         if item is None:
-            QMessageBox.information(self, "Select a bundle", "Select a verified installed bundle first.")
+            QMessageBox.information(self, "Select a bundle", "Select an installed bundle first.")
             return
         path = str(item.data(Qt.ItemDataRole.UserRole) or "")
         if path not in self._verified_bundles_cache:
-            QMessageBox.warning(self, "Bundle is not verified", "This bundle is not in the latest verified scan. Rescan the list.")
+            QMessageBox.warning(self, "Bundle unavailable", "This bundle is not in the latest compatible scan. Rescan the list.")
             self.refresh_version()
             return
+        signed = self._bundle_signature_verified(path)
+        if signed:
+            title = "Set default Tor bundle"
+            prompt = "Use this OpenPGP-verified bundle for future Tor starts?\n\n{}".format(Path(path).name)
+        else:
+            title = "Use HTTPS-only bundle?"
+            prompt = (
+                "This bundle was downloaded via HTTPS, but Tor's OpenPGP publisher signature was NOT checked. "
+                "A compromised distribution or connection could deliver malicious code. Use it only if you accept "
+                "this reduced security guarantee.\n\n{}"
+            ).format(Path(path).name)
         reply = QMessageBox.question(
-            self, "Set default Tor bundle",
-            "Use this verified bundle for future Tor starts?\n\n{}".format(Path(path).name),
+            self, title, prompt,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -369,7 +411,7 @@ class UpdaterWindow(QWidget):
         try:
             tor_runner = getattr(getattr(self.parent_, "proxyWidget", None), "tor", None)
             if tor_runner is not None and not tor_runner.update_path(path):
-                raise ValueError("The selected bundle failed a fresh executable/verification check.")
+                raise ValueError("The selected bundle failed a fresh executable and integrity check.")
             CONFIG["tor_path"] = path
             self.lbl_status.setText("Default bundle saved. Restart Tor if a process is already running.")
             self.refresh_version()
