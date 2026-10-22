@@ -282,3 +282,37 @@ def test_https_only_install_marker_is_accepted_with_digest_and_safe_executable(t
     marker["verification_method"] = "unknown"
     (bundle / ".torproxy-verified.json").write_text(json.dumps(marker), encoding="utf-8")
     assert not updater.check_bundle_compatibility(str(bundle))
+
+
+def test_download_verified_bundle_https_only_skips_gpg_and_signature_request(monkeypatch, tmp_path):
+    requests_made = []
+    events = []
+
+    def fake_get(url, **_kwargs):
+        requests_made.append(url)
+        payload = b"test archive bytes"
+        return _FakeResponse([payload], length=len(payload))
+
+    def unexpected_gpg():
+        raise AssertionError("GnuPG must not be queried when signature verification is disabled")
+
+    monkeypatch.setattr(bundle_module.requests, "get", fake_get)
+    monkeypatch.setattr(bundle_module, "_find_gpg_executable", unexpected_gpg)
+    destination = tmp_path / "tor-expert-bundle-linux-x86_64-15.0.26.tar.gz"
+
+    result = bundle_module.download_verified_bundle(
+        "15.0.26",
+        "linux",
+        "x86_64",
+        destination,
+        progress_callback=events.append,
+        verify_signature=False,
+    )
+
+    assert result == destination
+    assert destination.read_bytes() == b"test archive bytes"
+    assert len(requests_made) == 1
+    assert requests_made[0].endswith("/15.0.26/" + destination.name)
+    assert not destination.with_name(destination.name + ".asc").exists()
+    assert events[0].stage == "signature_verification_skipped"
+    assert any(event.stage == "archive_downloaded_https_only" for event in events)

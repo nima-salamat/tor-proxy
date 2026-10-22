@@ -332,7 +332,10 @@ def check_bundle_compatibility(filename: str) -> bool:
         return False
     try:
         metadata = json.loads(_verification_marker(path).read_text(encoding="utf-8"))
-        signature_verified = metadata.get("signature_verified") is True
+        signature_verified = (
+            metadata.get("signature_verified") is True
+            and metadata.get("verification_method", "openpgp") == "openpgp"
+        )
         https_only = (
             metadata.get("signature_verified") is False
             and metadata.get("verification_method") == "https_only"
