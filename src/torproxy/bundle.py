@@ -375,6 +375,13 @@ def download_verified_bundle(
             or parsed.path.rstrip("/") not in {"/torbrowser", "/tor-package-archive/torbrowser"}):
         raise BundleVerificationError("The bundle base URL is not an approved Tor distribution endpoint.")
     filename = f"tor-expert-bundle-{platform_name}-{architecture}-{version}.tar.gz"
+    _progress(progress_callback, BundleProgress(
+        version, "verify", "checking_verification_runtime",
+        message="Checking that the required OpenPGP verification runtime is available before downloading.",
+    ))
+    # Fail early on a clean machine without GnuPG so users do not download a large archive first.
+    _find_gpg_executable()
+    _check_cancelled(cancel_event)
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="torproxy-download-", dir=destination.parent) as work:
