@@ -158,18 +158,6 @@ class ProxyWindow(QWidget):
         self.timer = QTimer(self)
         self.timer.setInterval(int(CONFIG["newnym_interval"] or 0))
 
-        layout_ip = QVBoxLayout()
-        layout_top_ip = QHBoxLayout()
-        layout_ip.addLayout(layout_top_ip)
-        self.tor_ip_label = QLabel()
-        layout_top_ip.addWidget(self.tor_ip_label)
-
-        self.btn_whatismyip = QPushButton(WHAT_IS_MY_IP)
-        layout_ip.addWidget(self.btn_whatismyip)
-        self.btn_whatismyip.clicked.connect(self.whatismyip_clicked)
-        self.main_layout.addLayout(layout_ip)
-        self.thread_pool = QThreadPool()
-
         self.timer_data_usage = QTimer()
         self.timer_data_usage.setInterval(1000)
         self.timer_data_usage.timeout.connect(self.change_data_usage)
