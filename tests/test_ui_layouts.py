@@ -13,7 +13,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 @pytest.fixture(scope="module")
 def qt_app():
     pytest.importorskip("PySide6")
-    from PySide6.QtWidgets import QApplication
+    try:
+        from PySide6.QtWidgets import QApplication
+    except (ImportError, OSError) as exc:
+        pytest.skip(f"Qt native libraries are unavailable in this environment: {exc}")
 
     return QApplication.instance() or QApplication([])
 
