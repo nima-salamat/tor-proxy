@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QSystemTrayIcon
 )
-from PySide6.QtGui import QIcon, QAction
+from PySide6.QtGui import QIcon, QAction, QActionGroup
 import qdarkstyle
 from qdarkstyle.dark.palette import DarkPalette
 from qdarkstyle.light.palette import LightPalette
@@ -25,6 +25,7 @@ import logging
 from config import CONFIG, IS_WINDOWS
 from ui_.worker.worker import Worker
 from ui_.window.proxy_window import ProxyWindow
+from ui_.window.custom_titlebar import CustomTitleBar
 from ui_.window.setting_window import SettingWindow
 from ui_.window.block_host_window import BlcokHostsWindow
 from ui_.window.exclude_host_window import ExcludeHostsWindow
@@ -36,6 +37,8 @@ class Window(QMainWindow):
     toggle_visibility_signal = Signal()
     def __init__(self):
         super().__init__()
+        if IS_WINDOWS:
+            self.setWindowFlag(Qt.WindowType.FramelessWindowHint)
         self.main_widget = QWidget(self)
         self.setCentralWidget(self.main_widget)
         self.main_layout = QVBoxLayout(self.main_widget)
@@ -59,7 +62,11 @@ class Window(QMainWindow):
         self.updater_window = UpdaterWindow(self)
         self.stack.addWidget(self.updater_window)
 
+        if IS_WINDOWS:
+            self.title_bar = CustomTitleBar(self)
+            self.main_layout.addWidget(self.title_bar)
         self._createMenuBar()
+        self._show_page(0)
 
         # Each page owns its own content; avoid wasting vertical space on a duplicate global header.
         page_area = QWidget(self.main_widget)
@@ -121,6 +128,7 @@ class Window(QMainWindow):
     def _createMenuBar(self):
         menu_bar = QMenuBar(self)
         menu_bar.setObjectName("topMenuBar")
+        self.menu_bar = menu_bar
         self.main_layout.addWidget(menu_bar)
 
         actions = [
@@ -130,8 +138,14 @@ class Window(QMainWindow):
             (EXCLUDE_HOST, "Bypass rules", "Ctrl+E", self._show_exclude_host),
             ("Bundles", "Tor Bundles & Updates", "Ctrl+U", self._show_updater),
         ]
+        self.page_action_group = QActionGroup(self)
+        self.page_action_group.setExclusive(True)
+        self.page_actions = []
         for label, tooltip, shortcut, callback in actions:
             action = QAction(label, self)
+            action.setCheckable(True)
+            self.page_action_group.addAction(action)
+            self.page_actions.append(action)
             action.setShortcut(shortcut)
             action.setToolTip("{} ({})".format(tooltip, shortcut))
             action.triggered.connect(callback)
@@ -227,13 +241,21 @@ class Window(QMainWindow):
         else:
             border, surface, text = "#d5dbe2", "#ffffff", "#202832"
         self.setStyleSheet("""
-            QLabel#globalState { color: %s; font-size: 10px; font-weight: 650; padding: 5px 7px; border: 1px solid %s; border-radius: 7px; }
+            QLabel#globalState { color: %s; font-size: 10px; font-weight: 650; padding: 0 5px; background: transparent; border: none; }
             QWidget#pageSurface { background: %s; }
             QMenuBar#topMenuBar { border: none; border-bottom: 1px solid %s; padding: 3px 8px; }
+            QMenuBar#topMenuBar::item { padding: 7px 10px; margin: 0 2px; border-radius: 6px; }
+            QMenuBar#topMenuBar::item:selected { background: rgba(65, 137, 196, 0.22); }
+            QMenuBar#topMenuBar::item:checked { background: #287db5; color: #ffffff; }
+            QWidget#customTitleBar { background: %s; border-bottom: 1px solid %s; }
+            QLabel#windowTitle { color: %s; font-size: 13px; font-weight: 700; }
+            QPushButton#titleBarButton, QPushButton#titleBarCloseButton { background: transparent; border: none; border-radius: 5px; color: %s; font-size: 16px; }
+            QPushButton#titleBarButton:hover { background: rgba(120, 140, 160, 0.22); }
+            QPushButton#titleBarCloseButton:hover { background: #c42b1c; color: white; }
             QPushButton#themeToggle, QPushButton#notificationButton { min-height: 28px; padding: 0 9px; border-radius: 6px; }
             QPushButton#notificationButton { font-weight: 650; }
             QStackedWidget#pageStack { background: transparent; }
-        """ % (text, border, surface, border))
+        """ % (text, surface, border, surface, border, text, text))
 
     def _on_navigation_changed(self, row):
         # Compatibility hook for integrations which select a page by index.
@@ -242,6 +264,8 @@ class Window(QMainWindow):
     def _show_page(self, index):
         if 0 <= index < self.stack.count():
             self.stack.setCurrentIndex(index)
+            if hasattr(self, "page_actions") and index < len(self.page_actions):
+                self.page_actions[index].setChecked(True)
             self._update_global_state()
     def _update_global_state(self):
         proxy_widget = getattr(self, "proxyWidget", None)
@@ -250,7 +274,9 @@ class Window(QMainWindow):
             return
         tor = getattr(proxy_widget, "tor", None)
         if tor is not None and not getattr(tor, "path_set", False):
-            status = "Bundle setup required"
+            # The notification bell carries actionable setup warnings; keep the
+            # persistent top-bar status short and visually unobtrusive.
+            status = "Stopped"
         elif getattr(proxy_widget, "failed", False) or getattr(tor, "state", "") == "FAILED":
             status = "Failed · open Event Log"
         elif getattr(tor, "state", "") == "STOPPING" or getattr(proxy_widget, "_stopping", False):
@@ -268,7 +294,9 @@ class Window(QMainWindow):
         self.global_state.setText("●  {}".format(status))
         self.global_state.setToolTip(
             getattr(tor, "last_error", None)
-            or "State is derived from TorRunner lifecycle and bootstrap/control-port checks. "
+            or ("No Tor bundle is configured. Open Bundles or review the notification bell. "
+                if tor is not None and not getattr(tor, "path_set", False) else "")
+            + "State is derived from TorRunner lifecycle and bootstrap/control-port checks. "
             "A running local HTTP proxy alone is not shown as Tor-ready."
         )
 
@@ -339,8 +367,7 @@ class Window(QMainWindow):
         self.tray_icon.showMessage(title, message, QSystemTrayIcon.Information, 2000)
 
     def closeEvent(self, event):
-        # The native title bar handles multi-monitor movement and close actions.
-        # Closing the window really exits instead of silently hiding in the tray.
+        # The custom title bar's Exit action confirms, then closes and stops services.
         self.listener_running = False
         if IS_WINDOWS and hasattr(self, "listener_thread") and self.listener_thread.is_alive():
             self.listener_thread.join(timeout=1.0)
