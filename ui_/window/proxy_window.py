@@ -38,6 +38,7 @@ class ProxyWindow(QWidget):
         self.data = Data()
         self.running = False
         self.connected = False
+        self.failed = False
         self.proxy_set = has_proxy_snapshot()  # also recover safely after an unclean previous exit
         self._stopping = False
         self._identity_busy = False
@@ -237,6 +238,7 @@ class ProxyWindow(QWidget):
         self.lbl_percent.setText(str(v)+"")
 
     def _on_tor_failed(self, message):
+        self.failed = True
         self.logs_widget.update_log(f"Tor supervisor reported a failure: {message}")
         logger.error("Tor supervisor failed: %s", message)
         if self.running:
@@ -266,6 +268,7 @@ class ProxyWindow(QWidget):
             self._stop_services()
             return
 
+        self.failed = False
         self.connect_btn.setEnabled(False)
         self.btn_status.setText("checking ports ...")
         self.set_btn_status_style("connecting")
@@ -296,7 +299,8 @@ class ProxyWindow(QWidget):
                 logger.info("log: %s", m)
 
         if not ok:
-            # failed -> re-enable button and set disconnected style
+            # Failed preflight must be visible and leave the controls recoverable.
+            self.failed = True
             self.set_btn_status_style("disconnected")
             self.btn_status.setText("port check failed")
             self.connect_btn.setEnabled(True)
@@ -344,12 +348,14 @@ class ProxyWindow(QWidget):
                 raise
 
             self.running = True
+            self.failed = False
             # Don't mark connected True until your Data signals 100% (existing logic)
             self.logs_widget.update_log("Started proxy and tor successfully.")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Start failed: {e}")
             self.running = False
             self.connected = False
+            self.failed = True
             self.btn_status.setText("disconnected")
             self.set_btn_status_style("disconnected")
         finally:
