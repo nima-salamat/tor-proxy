@@ -6,15 +6,19 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QWidget,
     QVBoxLayout,
+    QHBoxLayout,
+    QFrame,
+    QListWidget,
+    QListWidgetItem,
     QPushButton,
     QMessageBox,
     QSystemTrayIcon
 )
-from PySide6.QtGui import QIcon, QAction
+from PySide6.QtGui import QIcon, QAction, QPalette
 import qdarkstyle
 from qdarkstyle.dark.palette import DarkPalette
 from qdarkstyle.light.palette import LightPalette
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 from utils import resource_path
 import keyboard
 import threading
@@ -37,54 +41,146 @@ class Window(QMainWindow):
         super().__init__()
         if IS_WINDOWS:
             self.setWindowFlag(Qt.FramelessWindowHint)
+
         self.main_widget = QWidget(self)
         self.setCentralWidget(self.main_widget)
-        self.stack = QStackedWidget(self.main_widget)
         self.main_layout = QVBoxLayout(self.main_widget)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.setSpacing(0)
+        self.setWindowTitle("TorProxy")
+        self.resize(1080, 720)
+        self.setMinimumSize(780, 560)
 
-        self.setWindowTitle("app")
-        self.resize(800, 600)
-        
-        
+        # Existing feature pages remain the authoritative widgets and controllers.
+        self.stack = QStackedWidget()
+        self.stack.setObjectName("pageStack")
         self.proxyWidget = ProxyWindow(self)
         self.stack.addWidget(self.proxyWidget)
-        
         self.settingWidget = SettingWindow(self)
         self.stack.addWidget(self.settingWidget)
-        
         self.block_host_window = BlcokHostsWindow(self)
         self.stack.addWidget(self.block_host_window)
-        
         self.exclude_host_window = ExcludeHostsWindow(self)
         self.stack.addWidget(self.exclude_host_window)
-        
         self.updater_window = UpdaterWindow(self)
         self.stack.addWidget(self.updater_window)
-        
+
         if IS_WINDOWS:
             self.title_bar = CustomTitleBar(self)
             self.main_layout.addWidget(self.title_bar)
+
         self._createMenuBar()
-        self.main_layout.addWidget(self.stack)
-        
+
+        body = QWidget(self.main_widget)
+        body_layout = QHBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(0)
+
+        sidebar = QFrame(body)
+        sidebar.setObjectName("sidebar")
+        sidebar.setMinimumWidth(188)
+        sidebar.setMaximumWidth(224)
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(14, 20, 14, 14)
+        sidebar_layout.setSpacing(10)
+
+        brand = QLabel("◉  TorProxy", sidebar)
+        brand.setObjectName("brandLabel")
+        tagline = QLabel("Private routing workspace", sidebar)
+        tagline.setObjectName("sidebarCaption")
+        tagline.setWordWrap(True)
+        sidebar_layout.addWidget(brand)
+        sidebar_layout.addWidget(tagline)
+        sidebar_layout.addSpacing(16)
+
+        group_label = QLabel("WORKSPACE", sidebar)
+        group_label.setObjectName("sidebarGroup")
+        sidebar_layout.addWidget(group_label)
+
+        self.navigation = QListWidget(sidebar)
+        self.navigation.setObjectName("navigation")
+        self.navigation.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.navigation.setSelectionMode(QListWidget.SingleSelection)
+        navigation_items = [
+            ("⌂", "Overview"),
+            ("⚙", "Configuration & bridges"),
+            ("⊘", "Blocked hosts"),
+            ("↗", "Bypass rules"),
+            ("⇩", "Tor bundles & updates"),
+        ]
+        for glyph, title in navigation_items:
+            item = QListWidgetItem("{}   {}".format(glyph, title))
+            item.setToolTip(title)
+            self.navigation.addItem(item)
+        self.navigation.setCurrentRow(0)
+        self.navigation.currentRowChanged.connect(self._on_navigation_changed)
+        sidebar_layout.addWidget(self.navigation, 1)
+
+        divider = QFrame(sidebar)
+        divider.setFrameShape(QFrame.HLine)
+        divider.setObjectName("sidebarDivider")
+        sidebar_layout.addWidget(divider)
+        self.global_state = QLabel("● Checking Tor state…", sidebar)
+        self.global_state.setObjectName("globalState")
+        self.global_state.setWordWrap(True)
+        sidebar_layout.addWidget(self.global_state)
+        theme_hint = QLabel("Theme can be changed from the top bar.", sidebar)
+        theme_hint.setObjectName("sidebarCaption")
+        theme_hint.setWordWrap(True)
+        sidebar_layout.addWidget(theme_hint)
+
+        content = QWidget(body)
+        content.setObjectName("pageSurface")
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(26, 22, 26, 24)
+        content_layout.setSpacing(18)
+
+        page_header = QWidget(content)
+        header_layout = QHBoxLayout(page_header)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_copy = QVBoxLayout()
+        header_copy.setSpacing(4)
+        self.page_heading = QLabel("Overview")
+        self.page_heading.setObjectName("pageHeading")
+        self.page_description = QLabel(
+            "Service controls, observed traffic, exit-IP checks and explicit system-proxy actions."
+        )
+        self.page_description.setObjectName("pageDescription")
+        self.page_description.setWordWrap(True)
+        header_copy.addWidget(self.page_heading)
+        header_copy.addWidget(self.page_description)
+        header_layout.addLayout(header_copy, 1)
+        content_layout.addWidget(page_header)
+        content_layout.addWidget(self.stack, 1)
+
+        body_layout.addWidget(sidebar)
+        body_layout.addWidget(content, 1)
+        self.main_layout.addWidget(body, 1)
+        self._apply_shell_styles()
+
+        self._state_timer = QTimer(self)
+        self._state_timer.setInterval(1000)
+        self._state_timer.timeout.connect(self._update_global_state)
+        self._state_timer.start()
+        self._update_global_state()
+
         self.tray_icon = QSystemTrayIcon(self)
         self.tray_icon.setIcon(QIcon(resource_path("assets/icon.png")))
-        
         tray_menu = QMenu()
+        show_action = QAction("Show TorProxy", self)
+        show_action.triggered.connect(self.show)
+        tray_menu.addAction(show_action)
         quit_action = QAction("Quit", self)
         quit_action.triggered.connect(lambda: (self.show(), self.close()))
         tray_menu.addAction(quit_action)
-
         self.tray_icon.setContextMenu(tray_menu)
         self.tray_icon.activated.connect(self.show_window)
         self.tray_icon.show()
-        
+
         self.listener_running = True
         self.listener_thread = threading.Thread(target=self._start_key_listener, daemon=True)
         if IS_WINDOWS:
             self.listener_thread.start()
-        
         self.toggle_visibility_signal.connect(self._toggle_visibility)
 
     def _toggle_visibility(self):
@@ -110,64 +206,110 @@ class Window(QMainWindow):
                 self.hide()
    
     def _createMenuBar(self):
-        menuBar = QMenuBar(self)
-        self.main_layout.addWidget(menuBar)
+        menu_bar = QMenuBar(self)
+        menu_bar.setObjectName("topMenuBar")
+        self.main_layout.addWidget(menu_bar)
 
-        # --- Home ---
-        home_action = QAction(HOME, self)
-        home_action.setShortcut("Ctrl+H")
-        home_action.setToolTip("Ctrl+H")
-        home_action.triggered.connect(self._show_home)
-        menuBar.addAction(home_action)
+        actions = [
+            (HOME, "Overview", "Ctrl+H", self._show_home),
+            (SETTING, "Settings", "Ctrl+S", self._show_setting),
+            (BLOCK_HOST, "Blocked hosts", "Ctrl+B", self._show_block_host),
+            (EXCLUDE_HOST, "Bypass rules", "Ctrl+E", self._show_exclude_host),
+            ("Bundles", "Tor Bundles & Updates", "Ctrl+U", self._show_updater),
+        ]
+        for label, tooltip, shortcut, callback in actions:
+            action = QAction(label, self)
+            action.setShortcut(shortcut)
+            action.setToolTip("{} ({})".format(tooltip, shortcut))
+            action.triggered.connect(callback)
+            menu_bar.addAction(action)
 
-        # --- Setting ---
-        setting_action = QAction(SETTING, self)
-        setting_action.setShortcut("Ctrl+S")
-        setting_action.setToolTip("Ctrl+S")
-        setting_action.triggered.connect(self._show_setting)
-        menuBar.addAction(setting_action)
-
-        # --- Block Host ---
-        block_action = QAction(BLOCK_HOST, self)
-        block_action.setShortcut("Ctrl+B")
-        block_action.setToolTip("Ctrl+B")
-        block_action.triggered.connect(self._show_block_host)
-        menuBar.addAction(block_action)
-        
-        # --- Exclude Host ---
-        exclude_action = QAction(EXCLUDE_HOST, self)
-        exclude_action.setShortcut("Ctrl+E")
-        exclude_action.setToolTip("Ctrl+E")
-        exclude_action.triggered.connect(self._show_exclude_host)
-        menuBar.addAction(exclude_action)
-        
-        # --- Updater ---
-        updater_action = QAction("Updater", self)
-        updater_action.setShortcut("Ctrl+U")
-        updater_action.setToolTip("Ctrl+U")
-        updater_action.triggered.connect(self._show_updater)
-        menuBar.addAction(updater_action)
-
-        # --- Help ---
         help_action = QAction(HELP, self)
         help_action.setShortcut("F1")
-        help_action.setToolTip("Show shortcuts")
+        help_action.setToolTip("Keyboard shortcuts")
         help_action.triggered.connect(self._show_help)
-        menuBar.addAction(help_action)
-        
-        # --- Quit ---
+        menu_bar.addAction(help_action)
+
         exit_action = QAction(QUIT, self)
         exit_action.setShortcut("Ctrl+Q")
-        exit_action.setToolTip("Ctrl+Q")
+        exit_action.setToolTip("Quit TorProxy")
         exit_action.triggered.connect(self.ask_close)
-        menuBar.addAction(exit_action)
-        
+        menu_bar.addAction(exit_action)
+
         self.toggle_btn = QPushButton(LIGHT if CONFIG["mode"] == "light" else DARK, self)
-        self.toggle_btn.setToolTip("Toggle Light/Dark Mode")
+        self.toggle_btn.setObjectName("themeToggle")
+        self.toggle_btn.setToolTip("Toggle light/dark appearance")
         self.toggle_btn.setCheckable(True)
         self.toggle_btn.clicked.connect(self._toggle_theme)
-        menuBar.setCornerWidget(self.toggle_btn, Qt.TopRightCorner)
-    
+        menu_bar.setCornerWidget(self.toggle_btn, Qt.TopRightCorner)
+
+    def _apply_shell_styles(self):
+        palette = QApplication.palette()
+        accent = palette.color(QPalette.Highlight).name()
+        accent_text = palette.color(QPalette.HighlightedText).name()
+        border = palette.color(QPalette.Mid).name()
+        sidebar = palette.color(QPalette.AlternateBase).name()
+        text = palette.color(QPalette.WindowText).name()
+        muted = palette.color(QPalette.PlaceholderText).name()
+        self.setStyleSheet("""
+            QFrame#sidebar { background: %s; border-right: 1px solid %s; }
+            QLabel#brandLabel { font-size: 18px; font-weight: 750; color: %s; }
+            QLabel#sidebarCaption, QLabel#pageDescription { color: %s; font-size: 11px; }
+            QLabel#sidebarGroup { color: %s; font-size: 10px; font-weight: 700; letter-spacing: 1px; }
+            QLabel#pageHeading { color: %s; font-size: 22px; font-weight: 700; }
+            QLabel#globalState { font-size: 11px; font-weight: 650; padding: 8px; border: 1px solid %s; border-radius: 7px; }
+            QFrame#sidebarDivider { color: %s; }
+            QListWidget#navigation { background: transparent; border: none; outline: none; }
+            QListWidget#navigation::item { min-height: 36px; margin: 2px 0; padding: 5px 8px; border-radius: 6px; }
+            QListWidget#navigation::item:selected { background: %s; color: %s; font-weight: 650; }
+            QMenuBar#topMenuBar { border: none; border-bottom: 1px solid %s; padding: 3px 8px; }
+            QPushButton#themeToggle { min-height: 28px; padding: 0 10px; border-radius: 6px; }
+            QStackedWidget#pageStack { background: transparent; }
+        """ % (sidebar, border, text, muted, muted, text, border, border, accent, accent_text, border))
+
+    def _on_navigation_changed(self, row):
+        if row < 0:
+            return
+        self.stack.setCurrentIndex(row)
+        pages = [
+            ("Overview", "Service controls, observed traffic, exit-IP checks and explicit system-proxy actions."),
+            ("Configuration & bridges", "Manage bridge records, QR-code input, listener ports and Tor circuit settings."),
+            ("Blocked hosts", "Review or edit host rules that should be denied by the proxy."),
+            ("Bypass rules", "These rules intentionally connect directly rather than through Tor."),
+            ("Tor bundles & updates", "Find compatible releases, verify signatures, install and select a Tor runtime."),
+        ]
+        title, description = pages[row]
+        self.page_heading.setText(title)
+        self.page_description.setText(description)
+        self._update_global_state()
+
+    def _show_page(self, index):
+        self.stack.setCurrentIndex(index)
+        if self.navigation.currentRow() != index:
+            self.navigation.setCurrentRow(index)
+        else:
+            self._on_navigation_changed(index)
+
+    def _update_global_state(self):
+        proxy_widget = getattr(self, "proxyWidget", None)
+        if proxy_widget is None:
+            self.global_state.setText("● Initializing")
+            return
+        tor = getattr(proxy_widget, "tor", None)
+        if tor is not None and not getattr(tor, "path_set", False):
+            status = "Bundle setup required"
+        elif getattr(proxy_widget, "connected", False):
+            status = "Tor ready"
+        elif getattr(proxy_widget, "running", False):
+            status = "Starting / bootstrapping"
+        else:
+            status = "Stopped"
+        self.global_state.setText("●  {}".format(status))
+        self.global_state.setToolTip(
+            "State is derived from the current TorRunner and proxy controller; "
+            "a running local HTTP proxy alone is not shown as Tor-ready."
+        )
+
     def _toggle_theme(self):
         app = QApplication.instance()
         if self.toggle_btn.text() == (LIGHT):
@@ -206,26 +348,27 @@ class Window(QMainWindow):
                 "Ctrl + H → Home<br>"
                 "Ctrl + S → Setting<br>"
                 "Ctrl + B → Block Host<br>"
-                "Ctrl + E → Exlude Host<br>"
+                "Ctrl + E → Bypass rules<br>"
+                "Ctrl + U → Tor bundles and updates<br>"
                 "Ctrl + Q → Quit"
             )
         )
     
     def _show_home(self):
-        self.stack.setCurrentIndex(0)
+        self._show_page(0)
 
     def _show_setting(self):
-        self.stack.setCurrentIndex(1)
-    
+        self._show_page(1)
+
     def _show_block_host(self):
-        self.stack.setCurrentIndex(2)
-    
+        self._show_page(2)
+
     def _show_exclude_host(self):
-        self.stack.setCurrentIndex(3)
-        
+        self._show_page(3)
+
     def _show_updater(self):
-        self.stack.setCurrentIndex(4)
-        
+        self._show_page(4)
+
     def _notify(self, title, message):
         self.tray_icon.showMessage(title, message, QSystemTrayIcon.Information, 2000)
 
