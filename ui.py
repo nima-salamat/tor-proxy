@@ -25,7 +25,6 @@ import logging
 from config import CONFIG, IS_WINDOWS
 from ui_.worker.worker import Worker
 from ui_.window.proxy_window import ProxyWindow
-from ui_.window.custom_titlebar import CustomTitleBar
 from ui_.window.setting_window import SettingWindow
 from ui_.window.block_host_window import BlcokHostsWindow
 from ui_.window.exclude_host_window import ExcludeHostsWindow
@@ -37,9 +36,6 @@ class Window(QMainWindow):
     toggle_visibility_signal = Signal()
     def __init__(self):
         super().__init__()
-        if IS_WINDOWS:
-            self.setWindowFlag(Qt.FramelessWindowHint)
-
         self.main_widget = QWidget(self)
         self.setCentralWidget(self.main_widget)
         self.main_layout = QVBoxLayout(self.main_widget)
@@ -63,44 +59,16 @@ class Window(QMainWindow):
         self.updater_window = UpdaterWindow(self)
         self.stack.addWidget(self.updater_window)
 
-        if IS_WINDOWS:
-            self.title_bar = CustomTitleBar(self)
-            self.main_layout.addWidget(self.title_bar)
-
         self._createMenuBar()
 
-        body = QWidget(self.main_widget)
-        body.setObjectName("pageSurface")
-        body_layout = QVBoxLayout(body)
-        body_layout.setContentsMargins(26, 22, 26, 24)
-        body_layout.setSpacing(18)
-
-        page_header = QWidget(body)
-        header_layout = QHBoxLayout(page_header)
-        header_layout.setContentsMargins(0, 0, 0, 0)
-        header_copy = QVBoxLayout()
-        header_copy.setSpacing(4)
-        self.page_heading = QLabel("Overview")
-        self.page_heading.setObjectName("pageHeading")
-        self.page_description = QLabel(
-            "Service controls, observed traffic, exit-IP checks and explicit system-proxy actions."
-        )
-        self.page_description.setObjectName("pageDescription")
-        self.page_description.setWordWrap(True)
-        header_copy.addWidget(self.page_heading)
-        header_copy.addWidget(self.page_description)
-        header_layout.addLayout(header_copy, 1)
-
-        self.global_state = QLabel("● Checking Tor state…", page_header)
-        self.global_state.setObjectName("globalState")
-        self.global_state.setMinimumWidth(150)
-        self.global_state.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.global_state.setWordWrap(True)
-        header_layout.addWidget(self.global_state)
-        body_layout.addWidget(page_header)
-        body_layout.addWidget(self.stack, 1)
-
-        self.main_layout.addWidget(body, 1)
+        # Each page owns its own content; avoid wasting vertical space on a duplicate global header.
+        page_area = QWidget(self.main_widget)
+        page_area.setObjectName("pageSurface")
+        page_layout = QVBoxLayout(page_area)
+        page_layout.setContentsMargins(16, 12, 16, 14)
+        page_layout.setSpacing(0)
+        page_layout.addWidget(self.stack, 1)
+        self.main_layout.addWidget(page_area, 1)
         self._apply_shell_styles()
 
         self._state_timer = QTimer(self)
