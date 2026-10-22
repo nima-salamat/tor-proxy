@@ -186,3 +186,15 @@ def test_cancelled_or_unsigned_archive_is_not_reported_as_installed():
     # A missing detached signature must fail before invoking GnuPG.
     with pytest.raises(BundleVerificationError, match="missing"):
         bundle_module.verify_tor_signature("/no/such/archive.tar.gz", "/no/such/archive.tar.gz.asc")
+
+def test_stream_download_rejects_mismatched_content_length(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        bundle_module.requests, "get",
+        lambda *_args, **_kwargs: _FakeResponse([b"short"], length=99),
+    )
+    with pytest.raises(BundleVerificationError, match="declared Content-Length"):
+        bundle_module._download(
+            "https://dist.torproject.org/test", tmp_path / "bundle.tar.gz",
+            {"dist.torproject.org"},
+        )
+
