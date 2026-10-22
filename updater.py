@@ -152,8 +152,13 @@ def _architecture_name() -> str:
     raise BundleVerificationError("Unsupported CPU architecture for an Expert Bundle: {}.".format(machine))
 
 
-def get_bundle_links(version: str, base_url: str = TOR_BUNDLE_BASE_URL) -> list[str]:
-    """Return the exact platform artifact only when both archive and .asc are listed."""
+def get_bundle_links(
+    version: str,
+    base_url: str = TOR_BUNDLE_BASE_URL,
+    *,
+    require_signature: bool = True,
+) -> list[str]:
+    """Return the exact platform artifact, requiring .asc only when signature checks are enabled."""
     release = str(version).strip().strip("/")
     parse_tor_version(release)
     platform_name = _platform_name()
@@ -179,7 +184,7 @@ def get_bundle_links(version: str, base_url: str = TOR_BUNDLE_BASE_URL) -> list[
         Path(urlsplit(str(link.get("href", ""))).path).name
         for link in anchors
     }
-    if expected in names and expected + ".asc" in names:
+    if expected in names and (not require_signature or expected + ".asc" in names):
         return [expected]
     return []
 
@@ -199,8 +204,9 @@ def download_file(
     base_url: str = TOR_BUNDLE_BASE_URL,
     progress_callback=None,
     cancel_event=None,
+    verify_signature: bool = True,
 ) -> Path:
-    """Download only a matching OS/CPU bundle and require its detached signature."""
+    """Download the exact current-platform Expert Bundle, optionally checking its OpenPGP signature."""
     release = str(version).strip().strip("/")
     try:
         parse_tor_version(release)
@@ -214,7 +220,7 @@ def download_file(
     create_bundle_dir()
     archive = bundle_path(expected)
     signature = archive.with_name(archive.name + ".asc")
-    if archive.is_file() and signature.is_file():
+    if verify_signature and archive.is_file() and signature.is_file():
         if progress_callback:
             progress_callback(BundleProgress(
                 version=release, operation="verify", stage="verifying_signature",
@@ -230,7 +236,6 @@ def download_file(
             if cancel_event is not None and cancel_event.is_set():
                 raise
             if any(term in message for term in ("gnupg", "timed out", "download failed", "could not be retrieved")):
-                # A runtime or network failure must not trigger a needless full re-download.
                 raise
             logger.warning("Cached Tor archive failed signature verification; re-downloading it.")
         else:
@@ -240,12 +245,19 @@ def download_file(
                     message="Existing archive signature verified; safe extraction is still required.",
                 ))
             return archive
+    elif not verify_signature and archive.is_file():
+        logger.warning("Reusing cached Tor Expert Bundle %s without OpenPGP signature verification (disabled in Settings).", expected)
+        return archive
     archive.parent.mkdir(parents=True, exist_ok=True)
     result = download_verified_bundle(
         release, _platform_name(), _architecture_name(), archive, base_url,
         progress_callback=progress_callback, cancel_event=cancel_event,
+        verify_signature=verify_signature,
     )
-    logger.info("Downloaded and signature-verified Tor Expert Bundle %s.", expected)
+    if verify_signature:
+        logger.info("Downloaded and signature-verified Tor Expert Bundle %s.", expected)
+    else:
+        logger.warning("Downloaded Tor Expert Bundle %s via HTTPS without authenticating its OpenPGP signature.", expected)
     return result
 
 
@@ -313,14 +325,19 @@ def _verification_marker(bundle_dir: Path) -> Path:
 
 
 def check_bundle_compatibility(filename: str) -> bool:
-    """Only verified extracted bundles qualify as managed/default bundles."""
+    """Accept intact managed installs only when explicitly signed or marked HTTPS-only."""
     path = Path(filename).resolve()
     name = path.name
     if not path.is_dir() or not name.startswith("tor-expert-bundle-"):
         return False
     try:
         metadata = json.loads(_verification_marker(path).read_text(encoding="utf-8"))
-        if metadata.get("signature_verified") is not True:
+        signature_verified = metadata.get("signature_verified") is True
+        https_only = (
+            metadata.get("signature_verified") is False
+            and metadata.get("verification_method") == "https_only"
+        )
+        if not (signature_verified or https_only):
             return False
         expected_digest = metadata.get("archive_sha256", "")
         if not re.fullmatch(r"[a-f0-9]{64}", expected_digest):
@@ -328,7 +345,7 @@ def check_bundle_compatibility(filename: str) -> bool:
         archive = path.with_name(path.name + ".tar.gz")
         if not archive.is_file() or sha256_file(archive) != expected_digest:
             return False
-        if not archive.with_name(archive.name + ".asc").is_file():
+        if signature_verified and not archive.with_name(archive.name + ".asc").is_file():
             return False
     except (OSError, ValueError, AttributeError):
         return False

@@ -361,6 +361,102 @@ def download_verified_bundle(
     *,
     progress_callback=None,
     cancel_event: Event | None = None,
+    verify_signature: bool = True,
+) -> Path:
+    """Download an exact Tor Expert Bundle over HTTPS and optionally authenticate its OpenPGP signature."""
+    if not SUPPORTED_VERSION.fullmatch(version):
+        raise BundleVerificationError("Unsupported Tor release version.")
+    if platform_name not in {"windows", "linux"} or architecture not in {"x86_64", "i686"}:
+        raise BundleVerificationError(
+            "This application currently supports only Windows/Linux x86 Expert Bundles."
+        )
+    parsed = urlsplit(base_url)
+    if (parsed.scheme != "https" or parsed.hostname not in ALLOWED_DISTRIBUTION_HOSTS
+            or parsed.username or parsed.password
+            or parsed.path.rstrip("/") not in {"/torbrowser", "/tor-package-archive/torbrowser"}):
+        raise BundleVerificationError("The bundle base URL is not an approved Tor distribution endpoint.")
+    filename = f"tor-expert-bundle-{platform_name}-{architecture}-{version}.tar.gz"
+    if verify_signature:
+        _progress(progress_callback, BundleProgress(
+            version, "verify", "checking_verification_runtime",
+            message="Checking GnuPG before downloading the archive.",
+        ))
+        _find_gpg_executable()
+    else:
+        _progress(progress_callback, BundleProgress(
+            version, "verify", "signature_verification_skipped",
+            message="OpenPGP verification is disabled in Settings. The bundle will be fetched over HTTPS, but its publisher signature will not be authenticated.",
+        ))
+    _check_cancelled(cancel_event)
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="torproxy-download-", dir=destination.parent) as work:
+        work_path = Path(work)
+        archive_tmp = work_path / filename
+        signature_tmp = work_path / (filename + ".asc")
+        base = base_url.rstrip("/") + "/" + version + "/"
+        _download(
+            base + filename, archive_tmp, ALLOWED_DISTRIBUTION_HOSTS,
+            version=version, operation="download", stage="downloading_archive",
+            progress_callback=progress_callback, cancel_event=cancel_event,
+        )
+        _check_cancelled(cancel_event)
+        if verify_signature:
+            _download(
+                base + filename + ".asc", signature_tmp, ALLOWED_DISTRIBUTION_HOSTS,
+                max_bytes=1024 * 1024, version=version, operation="download",
+                stage="downloading_signature", progress_callback=progress_callback,
+                cancel_event=cancel_event,
+            )
+            _check_cancelled(cancel_event)
+            _progress(progress_callback, BundleProgress(
+                version, "verify", "verifying_signature",
+                message="Checking the detached OpenPGP signature against the pinned Tor signing key.",
+            ))
+            verify_tor_signature(
+                archive_tmp, signature_tmp, progress_callback=progress_callback,
+                cancel_event=cancel_event, version=version,
+            )
+            _check_cancelled(cancel_event)
+            _progress(progress_callback, BundleProgress(
+                version, "verify", "signature_verified",
+                message="The archive signature matches the pinned Tor key.",
+            ))
+            signature_destination = destination.with_name(destination.name + ".asc")
+            signature_copy = signature_destination.with_name("." + signature_destination.name + ".tmp")
+            try:
+                shutil.copyfile(signature_tmp, signature_copy)
+                with signature_copy.open("rb+") as handle:
+                    os.fsync(handle.fileno())
+                os.replace(archive_tmp, destination)
+                os.replace(signature_copy, signature_destination)
+            finally:
+                try:
+                    signature_copy.unlink()
+                except FileNotFoundError:
+                    pass
+            stage = "archive_validated"
+            message = "Signed archive saved; installation is still pending."
+        else:
+            os.replace(archive_tmp, destination)
+            stale_signature = destination.with_name(destination.name + ".asc")
+            try:
+                stale_signature.unlink()
+            except FileNotFoundError:
+                pass
+            stage = "archive_downloaded_https_only"
+            message = "Archive saved over HTTPS only; publisher signature was not checked."
+        _progress(progress_callback, BundleProgress(version, "download", stage, message=message))
+    return destination
+def download_verified_bundle(
+    version: str,
+    platform_name: str,
+    architecture: str,
+    destination: str | Path,
+    base_url: str = "https://dist.torproject.org/torbrowser/",
+    *,
+    progress_callback=None,
+    cancel_event: Event | None = None,
 ) -> Path:
     """Download archive + signature, verify them, then publish the complete archive atomically."""
     if not SUPPORTED_VERSION.fullmatch(version):

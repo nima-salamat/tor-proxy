@@ -46,6 +46,7 @@ DEFAULT_DATA: dict[str, Any] = {
     "newnym_interval": 0,
     "system_proxy_auto": False,
     "log_level": "INFO",
+    "verify_tor_signatures": False,
 }
 LEGACY_KEYS = set(DEFAULT_DATA) | {"data_usage_bytes", "exclude_hosts", "blocked_hosts"}
 
@@ -94,7 +95,7 @@ class Config:
         if data.get("mode", "dark") not in {"dark", "light"}:
             raise ConfigError("mode must be 'dark' or 'light'.")
         for name in ("bridge", "proxy_port_checked", "tor_port_checked", "control_port_checked",
-                     "dns_port_checked", "system_proxy_auto"):
+                     "dns_port_checked", "system_proxy_auto", "verify_tor_signatures"):
             if name in data and type(data[name]) is not bool:
                 raise ConfigError(f"{name} must be true or false.")
         ports = []

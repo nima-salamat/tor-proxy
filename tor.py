@@ -33,7 +33,7 @@ def _bundle_root_for_path(path: Path, managed_root: Path) -> Path | None:
 
 
 def _verified_managed_bundles(managed_root: Path) -> list[Path]:
-    """List only bundles whose signature marker, archive digest, executable, and platform pass checks."""
+    """List managed bundles whose marker, archive digest, executable and platform pass checks."""
     try:
         from updater import get_own_bundles, get_version_by_bundle, tor_version_sort_key
 
@@ -68,7 +68,7 @@ def _find_executable(candidate: str | os.PathLike[str] | None) -> tuple[Path | N
             # same marker/digest/signature/executable checks as the bundle manager.
             verified = _verified_managed_bundles(managed_root)
             if managed_bundle is None or managed_bundle not in verified:
-                logger.error("Selected managed Tor bundle is missing or has not passed verification.")
+                logger.error("Selected managed Tor bundle is missing or has not passed integrity/structure checks.")
                 return None, managed_bundle or resolved
             if resolved.is_file():
                 expected = managed_bundle / "tor" / executable_name
@@ -160,7 +160,7 @@ class TorRunner(QObject):
             self.geoip_path = None
             self.geoip6_path = None
             if base_path:
-                logger.error("No verified Tor executable was found under the selected path.")
+                logger.error("No compatible, structurally validated Tor executable was found under the selected path.")
             return False
         self.tor_path = str(executable)
         if root is not None:
