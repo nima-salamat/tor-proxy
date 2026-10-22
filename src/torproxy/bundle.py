@@ -82,14 +82,14 @@ def verify_tor_signature(artifact: str | Path, signature: str | Path,
             env["GNUPGHOME"] = str(home_path)
             imported = subprocess.run(
                 ["gpg", "--batch", "--no-tty", "--import", str(key_file)],
-                env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                env=env, stdin=subprocess.DEVNULL, capture_output=True,
                 text=True, timeout=20, check=False,
             )
             if imported.returncode != 0:
                 raise BundleVerificationError("Could not import the Tor signing key.")
             listing = subprocess.run(
                 ["gpg", "--batch", "--with-colons", "--fingerprint", "--list-keys"],
-                env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                env=env, stdin=subprocess.DEVNULL, capture_output=True,
                 text=True, timeout=20, check=False,
             )
             fingerprints = {line.split(":")[9].upper() for line in listing.stdout.splitlines()
@@ -98,7 +98,7 @@ def verify_tor_signature(artifact: str | Path, signature: str | Path,
                 raise BundleVerificationError("The downloaded OpenPGP key does not match the pinned fingerprint.")
             verified = subprocess.run(
                 ["gpg", "--batch", "--no-tty", "--status-fd", "1", "--verify", str(signature), str(artifact)],
-                env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                env=env, stdin=subprocess.DEVNULL, capture_output=True,
                 text=True, timeout=30, check=False,
             )
             valid_lines = [line.split() for line in verified.stdout.splitlines()

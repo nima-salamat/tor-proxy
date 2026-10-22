@@ -78,7 +78,7 @@ class FakeSocksServer:
         while not self.stopping.is_set():
             try:
                 client, _ = self.listener.accept()
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except OSError:
                 break

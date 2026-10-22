@@ -66,7 +66,7 @@ class HostRule:
     mode: MatchMode = MatchMode.DOMAIN_AND_SUBDOMAINS
 
     @classmethod
-    def parse(cls, value: str) -> "HostRule":
+    def parse(cls, value: str) -> HostRule:
         if not isinstance(value, str):
             raise HostRuleError("Rule must be a string.")
         raw = value.strip()
@@ -107,7 +107,7 @@ class HostRules:
     rules: tuple[HostRule, ...] = ()
 
     @classmethod
-    def from_values(cls, values: list[str] | tuple[str, ...]) -> "HostRules":
+    def from_values(cls, values: list[str] | tuple[str, ...]) -> HostRules:
         parsed: list[HostRule] = []
         seen: set[tuple[str, MatchMode]] = set()
         for value in values:
@@ -121,13 +121,13 @@ class HostRules:
     def matches(self, hostname: str) -> bool:
         return any(rule.matches(hostname) for rule in self.rules)
 
-    def add(self, value: str) -> "HostRules":
+    def add(self, value: str) -> HostRules:
         rule = HostRule.parse(value)
         if rule in self.rules:
             return self
         return HostRules(self.rules + (rule,))
 
-    def remove(self, value: str) -> "HostRules":
+    def remove(self, value: str) -> HostRules:
         rule = HostRule.parse(value)
         return HostRules(tuple(existing for existing in self.rules if existing != rule))
 

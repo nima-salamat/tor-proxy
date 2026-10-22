@@ -15,7 +15,7 @@ class AppDirectories:
     state: Path
     logs: Path
 
-    def ensure(self) -> "AppDirectories":
+    def ensure(self) -> AppDirectories:
         for path in (self.config, self.data, self.cache, self.state, self.logs):
             path.mkdir(parents=True, exist_ok=True)
             if os.name != "nt":
