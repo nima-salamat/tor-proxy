@@ -38,9 +38,8 @@ class SettingWindow(QWidget):
         super().__init__(parent)
         self._parent = parent
         main_layout = QVBoxLayout(self)
-        self.setLayout(main_layout)
-
-        top_layout = QHBoxLayout(self)
+ 
+        top_layout = QHBoxLayout()
         btn_before_page = QPushButton("⬅️")
         btn_before_page.clicked.connect(self.go_to_before_page)
 
@@ -67,7 +66,7 @@ class SettingWindow(QWidget):
         self.initialize_second_page()
 
     def initialize_first_page(self):
-        mode_layout = QHBoxLayout(self)
+        mode_layout = QHBoxLayout()
         self.first_page_layout.addLayout(mode_layout)
 
         btn_group_mode = QButtonGroup(self)
