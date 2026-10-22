@@ -90,3 +90,14 @@ def test_windows_proxy_does_not_overwrite_external_changes(monkeypatch, tmp_path
 def test_unsupported_system_proxy_platform_fails_closed(monkeypatch):
     monkeypatch.setattr(set_proxy.platform, "system", lambda: "Darwin")
     assert set_proxy.manage_proxy("127.0.0.1", 8888, "set") is False
+
+
+def test_windows_restore_preserves_unrelated_external_setting_changes(monkeypatch, tmp_path):
+    values = _fake_windows(monkeypatch, tmp_path)
+    handler = Handler("127.0.0.1", 8888)
+    assert handler.set_windows_proxy() is True
+    values["ProxyOverride"] = ("externally-added.example", FakeWinReg.REG_SZ)
+    assert handler.clear_windows_proxy() is True
+    assert values["ProxyOverride"] == ("externally-added.example", FakeWinReg.REG_SZ)
+    assert values["ProxyEnable"] == (0, FakeWinReg.REG_DWORD)
+    assert values["ProxyServer"] == ("previous.example:3128", FakeWinReg.REG_SZ)

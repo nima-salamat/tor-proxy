@@ -15,7 +15,7 @@ from stem import SocketClosed, OperationFailed
 from stem.connection import AuthenticationFailure
 
 from proxy import get_free_port, is_port_free
-from set_proxy import manage_proxy
+from set_proxy import has_proxy_snapshot, manage_proxy
 from tor import TorRunner, Runner
 
 from whatismyip import what_is_my_ip
@@ -38,7 +38,7 @@ class ProxyWindow(QWidget):
         self.data = Data()
         self.running = False
         self.connected = False
-        self.proxy_set = False  # true only while this app owns an applied system-proxy change
+        self.proxy_set = has_proxy_snapshot()  # also recover safely after an unclean previous exit
         self._stopping = False
         self._identity_busy = False
         self._parent = parent
@@ -93,7 +93,9 @@ class ProxyWindow(QWidget):
         self.btn_clear_proxy.clicked.connect(self.clear_proxy_clicked)
         layout_proxy.addWidget(self.btn_clear_proxy)
 
-        self.proxy_status_label = QLabel("Proxy: cleared")
+        initial_proxy_status = ("System proxy: prior-session restoration available"
+                                if self.proxy_set else "System proxy: unchanged")
+        self.proxy_status_label = QLabel(initial_proxy_status)
         self.main_layout.addWidget(self.proxy_status_label)
         self._update_proxy_buttons()  # initial enable/disable
 

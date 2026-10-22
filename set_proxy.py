@@ -164,8 +164,9 @@ class Handler:
             try:
                 if path.exists():
                     failed_snapshot = json.loads(path.read_text(encoding="utf-8"))
-                    for name, entry in failed_snapshot.get("original", {}).items():
-                        self._set_windows_value(name, entry)
+                    original = failed_snapshot.get("original", {})
+                    for name in ("ProxyEnable", "ProxyServer"):
+                        self._set_windows_value(name, original.get(name, {"exists": False}))
                     path.unlink(missing_ok=True)
                     self._notify_windows()
             except Exception:
@@ -205,8 +206,9 @@ class Handler:
             if not self._windows_is_applied(snapshot["applied"]):
                 logger.warning("System proxy was changed externally; leaving those changes untouched.")
                 return False
-            for name, entry in snapshot["original"].items():
-                self._set_windows_value(name, entry)
+            original = snapshot.get("original", {})
+            for name in ("ProxyEnable", "ProxyServer"):
+                self._set_windows_value(name, original.get(name, {"exists": False}))
             self._notify_windows()
             path.unlink()
             return True
@@ -272,8 +274,10 @@ class Handler:
             try:
                 if path.exists():
                     failed_snapshot = json.loads(path.read_text(encoding="utf-8"))
-                    for key, raw in failed_snapshot.get("original", {}).items():
-                        self._set_gsettings_value(key, self._gsettings_value_arg(raw))
+                    original = failed_snapshot.get("original", {})
+                    for key in failed_snapshot.get("applied", {}):
+                        if key in original:
+                            self._set_gsettings_value(key, self._gsettings_value_arg(original[key]))
                     path.unlink(missing_ok=True)
             except Exception:
                 logger.exception("Automatic rollback of partial GNOME proxy changes failed.")
@@ -297,14 +301,21 @@ class Handler:
             if externally_changed:
                 logger.warning("GNOME proxy settings changed externally; leaving them untouched.")
                 return False
-            for key, raw in snapshot["original"].items():
-                self._set_gsettings_value(key, self._gsettings_value_arg(raw))
+            original = snapshot.get("original", {})
+            for key in applied:
+                if key in original:
+                    self._set_gsettings_value(key, self._gsettings_value_arg(original[key]))
             path.unlink()
             return True
         except Exception:
             logger.exception("Could not restore original GNOME proxy settings.")
             return False
 
+
+
+def has_proxy_snapshot() -> bool:
+    """Return whether a prior process left a system-proxy restoration snapshot."""
+    return _snapshot_path().is_file()
 
 def manage_proxy(host, port, action="set"):
     """Apply the system proxy only after explicit user action, or restore our snapshot."""
