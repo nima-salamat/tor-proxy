@@ -107,3 +107,32 @@ def test_layout_source_has_one_owner_per_root_and_no_widget_parented_nested_layo
                     continue
                 if isinstance(child.args[0], ast.Name) and child.args[0].id in parented_layouts:
                     pytest.fail(f"{path.name} redundantly attaches parent-owned layout '{child.args[0].id}'")
+
+def test_top_menu_is_the_only_page_navigation_and_release_filter_uses_bool():
+    repository = Path(__file__).resolve().parents[1]
+    ui_source = (repository / "ui.py").read_text(encoding="utf-8")
+    assert "self.navigation" not in ui_source
+    assert "sidebar = QFrame" not in ui_source
+    assert "self._createMenuBar()" in ui_source
+
+    updater_tree = ast.parse(
+        (repository / "ui_/window/updater_window.py").read_text(encoding="utf-8")
+    )
+    filter_method = next(
+        node for node in ast.walk(updater_tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_filter_versions"
+    )
+    set_hidden_calls = [
+        node for node in ast.walk(filter_method)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "setHidden"
+    ]
+    assert set_hidden_calls
+    assert all(
+        isinstance(call.args[0], ast.Call)
+        and isinstance(call.args[0].func, ast.Name)
+        and call.args[0].func.id == "bool"
+        for call in set_hidden_calls if call.args
+    )
+
