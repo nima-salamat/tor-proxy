@@ -65,7 +65,10 @@ class UpdaterWindow(QWidget):
         root.setContentsMargins(16, 10, 16, 12)
         root.setSpacing(12)
 
-        # Start with bundle state; the global shell no longer repeats page titles.
+        # Keep a single page title but drop the redundant two-line subtitle.
+        title = QLabel("Tor Bundles & Updates")
+        title.setObjectName("pageTitle")
+        root.addWidget(title)
 
         platform_card = QFrame()
         platform_card.setObjectName("infoCard")
