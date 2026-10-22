@@ -118,9 +118,11 @@ def get_tor_versions(url: str = TOR_BUNDLE_BASE_URL) -> list[str]:
                 continue
             versions.add(path)
         return [version + "/" for version in sorted(versions, key=tor_version_sort_key, reverse=True)]
-    except (requests.RequestException, BundleVerificationError, ValueError):
+    except (requests.RequestException, BundleVerificationError, ValueError) as exc:
         logger.exception("Could not retrieve the official Tor Expert Bundle release list.")
-        return []
+        raise BundleVerificationError(
+            "Could not retrieve the official Tor release list. Check the network connection and try again."
+        ) from exc
 
 
 def _platform_name() -> str:
@@ -159,9 +161,13 @@ def get_bundle_links(version: str, base_url: str = TOR_BUNDLE_BASE_URL) -> list[
         if expected in names and expected + ".asc" in names:
             return [expected]
         return []
-    except (requests.RequestException, BundleVerificationError, ValueError):
+    except (requests.RequestException, BundleVerificationError, ValueError) as exc:
         logger.exception("Could not list signed Tor bundles for release %s.", release)
-        return []
+        raise BundleVerificationError(
+            "Could not check artifact availability for Tor release {}. Check the network connection and retry.".format(
+                release
+            )
+        ) from exc
 
 
 def get_version_by_bundle(filename: str, with_slash: bool = False) -> str:
