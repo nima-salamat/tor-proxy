@@ -134,13 +134,13 @@ def _download(
                     if now - last_report >= PROGRESS_MIN_INTERVAL_SECONDS:
                         _progress(progress_callback, BundleProgress(
                             version, operation, stage, total, total_bytes, percentage, speed, eta,
-                            "Received {} bytes".format(total),
+                            f"Received {total} bytes",
                         ))
                         last_report = now
                 output.flush()
                 os.fsync(output.fileno())
     except requests.RequestException as exc:
-        raise BundleVerificationError("Download failed: {}".format(exc)) from exc
+        raise BundleVerificationError(f"Download failed: {exc}") from exc
     except OSError:
         # The caller owns the temporary destination and removes it on all failure paths.
         raise
@@ -297,7 +297,7 @@ def safe_extract_tar_gz(archive_path: str | Path, destination: str | Path) -> Pa
     destination = Path(destination)
     destination_parent = destination.parent.resolve()
     destination_parent.mkdir(parents=True, exist_ok=True)
-    temp_dir = Path(tempfile.mkdtemp(prefix=".{}.extract-".format(destination.name), dir=destination_parent))
+    temp_dir = Path(tempfile.mkdtemp(prefix=f".{destination.name}.extract-", dir=destination_parent))
     try:
         root = temp_dir.resolve()
         with tarfile.open(archive_path, "r:gz") as archive:
@@ -306,13 +306,13 @@ def safe_extract_tar_gz(archive_path: str | Path, destination: str | Path) -> Pa
             for member in members:
                 name = PurePosixPath(member.name)
                 if name.is_absolute() or ".." in name.parts:
-                    raise BundleVerificationError("Unsafe path in archive: {!r}".format(member.name))
+                    raise BundleVerificationError(f"Unsafe path in archive: {member.name!r}")
                 target = (root / Path(*name.parts)).resolve()
                 if target != root and root not in target.parents:
-                    raise BundleVerificationError("Archive path escapes extraction directory: {!r}".format(member.name))
+                    raise BundleVerificationError(f"Archive path escapes extraction directory: {member.name!r}")
                 if not (member.isdir() or member.isfile()):
                     raise BundleVerificationError(
-                        "Unsupported link or special archive entry: {!r}".format(member.name)
+                        f"Unsupported link or special archive entry: {member.name!r}"
                     )
                 if member.isfile():
                     total_size += member.size
@@ -329,19 +329,19 @@ def safe_extract_tar_gz(archive_path: str | Path, destination: str | Path) -> Pa
                 target.parent.mkdir(parents=True, exist_ok=True)
                 source = archive.extractfile(member)
                 if source is None:
-                    raise BundleVerificationError("Could not read archive member: {!r}".format(member.name))
+                    raise BundleVerificationError(f"Could not read archive member: {member.name!r}")
                 with source, target.open("xb") as output:
                     shutil.copyfileobj(source, output, length=1024 * 1024)
                 if os.name != "nt":
                     os.chmod(target, member.mode & 0o755)
         if destination.exists():
-            raise BundleVerificationError("Destination already exists; refusing to overwrite: {}".format(destination))
+            raise BundleVerificationError(f"Destination already exists; refusing to overwrite: {destination}")
         os.replace(temp_dir, destination)
         return destination
     except BundleVerificationError:
         raise
     except (tarfile.TarError, OSError) as exc:
-        raise BundleVerificationError("Tor archive extraction failed: {}".format(exc)) from exc
+        raise BundleVerificationError(f"Tor archive extraction failed: {exc}") from exc
     finally:
         if temp_dir.exists():
             shutil.rmtree(temp_dir, ignore_errors=True)
@@ -369,7 +369,7 @@ def download_verified_bundle(
             or parsed.username or parsed.password
             or parsed.path.rstrip("/") not in {"/torbrowser", "/tor-package-archive/torbrowser"}):
         raise BundleVerificationError("The bundle base URL is not an approved Tor distribution endpoint.")
-    filename = "tor-expert-bundle-{}-{}-{}.tar.gz".format(platform_name, architecture, version)
+    filename = f"tor-expert-bundle-{platform_name}-{architecture}-{version}.tar.gz"
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="torproxy-download-", dir=destination.parent) as work:
