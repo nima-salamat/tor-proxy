@@ -274,7 +274,7 @@ class UpdaterWindow(QWidget):
             item = self.updates_list.item(index)
             version = str(item.data(Qt.ItemDataRole.UserRole) or "")
             alpha = tor_version_channel(version).startswith("Alpha")
-            item.setHidden((not include_alpha and alpha) or (query and query not in version.lower()))
+            item.setHidden(bool((not include_alpha and alpha) or (query and query not in version.lower())))
 
     def _update_install_state(self) -> None:
         if self._bundle_scan_in_progress and not self._verified_bundles_cache:
