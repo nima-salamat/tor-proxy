@@ -56,7 +56,7 @@ def parse_tor_version(version: str) -> tuple[int, int, int, str, int]:
 def tor_version_sort_key(version: str) -> tuple[int, int, int, int, int]:
     """Natural numeric sort key with stable releases ranked before all alphas."""
     major, minor, patch, channel, prerelease = parse_tor_version(version)
-    return (0 if channel == "stable" else 1, major, minor, patch, prerelease)
+    return (1 if channel == "stable" else 0, major, minor, patch, prerelease)
 
 
 def tor_version_channel(version: str) -> str:
