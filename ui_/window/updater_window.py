@@ -21,12 +21,11 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
-    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
-from config import BUNDLE_DIR, CONFIG, IS_WINDOWS
+from config import BUNDLE_DIR, CONFIG
 from torproxy.bundle import BundleProgress
 from updater import (
     delete_bundle,
@@ -38,6 +37,7 @@ from updater import (
     tor_version_channel,
 )
 from utils import extract_tar_gz_file
+from ui_.worker.worker import Worker
 
 logger = logging.getLogger(__name__)
 
@@ -482,9 +482,6 @@ class UpdaterWindow(QWidget):
         base_path = os.path.join(BUNDLE_DIR, os.path.basename(bundle).replace(".tar.gz", ""))
         # The extraction helper repeats signature verification and writes its verification marker.
         extract_tar_gz_file(archive, base_path)
-        if cancel_event.is_set():
-            # Extraction itself is atomic; do not report success if cancellation arrived at the end.
-            raise RuntimeError("Tor bundle installation was cancelled after extraction.")
         progress_callback(BundleProgress(
             version, "install", "installation_complete", percentage=100,
             message="Signature verified, archive validated, and bundle installation completed.",
@@ -509,14 +506,17 @@ class UpdaterWindow(QWidget):
         self.lbl_status.setText(labels.get(event.stage, event.message or event.stage.replace("_", " ").title()))
         self.lbl_status.setToolTip(event.message)
         if event.stage in {"verifying_signature", "downloading_signing_key", "extracting_archive"}:
+            self.btn_cancel.setEnabled(False)
             self.progress_bar.setRange(0, 0)
             self.progress_bar.setFormat(labels.get(event.stage, "Working…"))
         elif event.total_bytes and event.percentage is not None:
+            self.btn_cancel.setEnabled(event.stage in {"downloading_archive", "downloading_signature"})
             self.progress_bar.setRange(0, 100)
             # A transfer reaching 100% is not installation success; the stage label remains explicit.
             self.progress_bar.setValue(min(99, max(0, event.percentage)))
             self.progress_bar.setFormat("{}%".format(min(99, max(0, event.percentage))))
         else:
+            self.btn_cancel.setEnabled(event.stage in {"downloading_archive", "downloading_signature"})
             self.progress_bar.setRange(0, 0)
             self.progress_bar.setFormat("Receiving bytes…" if event.stage.startswith("downloading_") else "Working…")
         size_text = "{} received".format(self._format_bytes(event.bytes_received))
