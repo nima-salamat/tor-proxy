@@ -528,13 +528,12 @@ class UpdaterWindow(QWidget):
         )
         if cancel_event.is_set():
             raise RuntimeError("Tor bundle installation was cancelled.")
-        progress_callback(BundleProgress(
-            version, "install", "extracting_archive",
-            message="Signature verified. Safely extracting the archive to a temporary directory.",
-        ))
         base_path = os.path.join(BUNDLE_DIR, os.path.basename(bundle).replace(".tar.gz", ""))
-        # The extraction helper repeats signature verification and writes its verification marker.
-        extract_tar_gz_file(archive, base_path)
+        # The extraction helper repeats signature verification, reports each stage, and writes its marker.
+        extract_tar_gz_file(
+            archive, base_path, progress_callback=progress_callback,
+            cancel_event=cancel_event, version=version,
+        )
         progress_callback(BundleProgress(
             version, "install", "installation_complete", percentage=100,
             message="Signature verified, archive validated, and bundle installation completed.",
@@ -558,12 +557,12 @@ class UpdaterWindow(QWidget):
         }
         self.lbl_status.setText(labels.get(event.stage, event.message or event.stage.replace("_", " ").title()))
         self.lbl_status.setToolTip(event.message)
-        if event.stage in {"verifying_signature", "downloading_signing_key", "extracting_archive"}:
+        if event.stage in {"verifying_signature", "extracting_archive"}:
             self.btn_cancel.setEnabled(False)
             self.progress_bar.setRange(0, 0)
             self.progress_bar.setFormat(labels.get(event.stage, "Working…"))
         elif event.total_bytes and event.percentage is not None:
-            self.btn_cancel.setEnabled(event.stage in {"downloading_archive", "downloading_signature"})
+            self.btn_cancel.setEnabled(event.stage in {"downloading_archive", "downloading_signature", "downloading_signing_key"})
             self.progress_bar.setRange(0, 100)
             # A transfer reaching 100% is not installation success; the stage label remains explicit.
             self.progress_bar.setValue(min(99, max(0, event.percentage)))
