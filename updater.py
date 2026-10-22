@@ -200,13 +200,33 @@ def download_file(
         raise BundleVerificationError("Bundle name does not match the selected platform/version: {}".format(expected))
     create_bundle_dir()
     archive = bundle_path(expected)
-    if archive.exists() and check_hash(archive):
+    signature = archive.with_name(archive.name + ".asc")
+    if archive.is_file() and signature.is_file():
         if progress_callback:
             progress_callback(BundleProgress(
-                version=release, operation="install", stage="already_verified",
-                message="Existing archive signature verified.",
+                version=release, operation="verify", stage="verifying_signature",
+                message="Checking the cached archive signature before reuse.",
             ))
-        return archive
+        try:
+            verify_tor_signature(
+                archive, signature, progress_callback=progress_callback,
+                cancel_event=cancel_event, version=release,
+            )
+        except BundleVerificationError as exc:
+            message = str(exc).lower()
+            if cancel_event is not None and cancel_event.is_set():
+                raise
+            if any(term in message for term in ("gnupg", "timed out", "download failed", "could not be retrieved")):
+                # A runtime or network failure must not trigger a needless full re-download.
+                raise
+            logger.warning("Cached Tor archive failed signature verification; re-downloading it.")
+        else:
+            if progress_callback:
+                progress_callback(BundleProgress(
+                    version=release, operation="install", stage="already_verified",
+                    message="Existing archive signature verified; safe extraction is still required.",
+                ))
+            return archive
     archive.parent.mkdir(parents=True, exist_ok=True)
     result = download_verified_bundle(
         release, _platform_name(), _architecture_name(), archive, base_url,
