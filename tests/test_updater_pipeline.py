@@ -227,3 +227,29 @@ def test_live_official_expert_bundle_download_and_signature(tmp_path):
     assert archive.is_file() and archive.stat().st_size > 0
     assert archive.with_name(archive.name + ".asc").is_file()
 
+def test_empty_release_listing_is_not_reported_as_no_versions(monkeypatch):
+    monkeypatch.setattr(updater, "_fetch_listing", lambda _url: _listing())
+    with pytest.raises(BundleVerificationError, match="no recognizable"):
+        updater.get_tor_versions()
+
+
+def test_unsupported_platform_is_reported_before_artifact_query(monkeypatch):
+    monkeypatch.setattr(updater, "_platform_name", lambda: (_ for _ in ()).throw(
+        BundleVerificationError("Tor bundle downloads are not configured for macOS.")
+    ))
+    monkeypatch.setattr(
+        updater, "_fetch_listing",
+        lambda _url: (_ for _ in ()).throw(AssertionError("unsupported platforms must not query artifacts")),
+    )
+    with pytest.raises(BundleVerificationError, match="not configured for macOS"):
+        updater.get_bundle_links("16.0a14")
+
+
+def test_unreachable_release_listing_is_not_treated_as_empty(monkeypatch):
+    monkeypatch.setattr(
+        updater, "_fetch_listing",
+        lambda _url: (_ for _ in ()).throw(requests.Timeout("network timeout")),
+    )
+    with pytest.raises(BundleVerificationError, match="Check the network connection"):
+        updater.get_bundle_links("16.0a14")
+
