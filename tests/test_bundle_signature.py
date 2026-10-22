@@ -132,3 +132,24 @@ def test_unsupported_signature_packets_fail_without_validsig(tmp_path, monkeypat
     archive, signature = _configure_gpg_mocks(monkeypatch, tmp_path, signature_valid=False)
     with pytest.raises(BundleVerificationError, match="missing or invalid"):
         bundle_module.verify_tor_signature(archive, signature)
+
+def test_missing_gpg_is_detected_before_downloading_bundle(monkeypatch, tmp_path):
+    def missing_runtime():
+        raise BundleVerificationError("GnuPG could not be found")
+
+    def unexpected_request(*_args, **_kwargs):
+        raise AssertionError("the large Tor archive must not be downloaded without a verifier")
+
+    monkeypatch.setattr(bundle_module, "_find_gpg_executable", missing_runtime)
+    monkeypatch.setattr(bundle_module.requests, "get", unexpected_request)
+    events = []
+
+    with pytest.raises(BundleVerificationError, match="GnuPG could not be found"):
+        bundle_module.download_verified_bundle(
+            "16.0a14", "windows", "x86_64", tmp_path / "tor-expert-bundle-windows-x86_64-16.0a14.tar.gz",
+            progress_callback=events.append,
+        )
+
+    assert events[0].stage == "checking_verification_runtime"
+    assert not list(tmp_path.glob("*.tar.gz"))
+
