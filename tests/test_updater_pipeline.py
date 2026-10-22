@@ -105,7 +105,7 @@ class _FakeResponse:
 
     def raise_for_status(self):
         if self.status_code >= 400:
-            raise requests.HTTPError(f"HTTP {self.status_code})
+            raise requests.HTTPError(f"HTTP {self.status_code}")
 
     def iter_content(self, chunk_size):
         yield from self._chunks
