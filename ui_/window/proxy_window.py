@@ -66,6 +66,7 @@ class ProxyWindow(QWidget):
         self.logs_widget = LogWindow(self)
         self.logs_open = False
         self._logs_animation = None
+        self._system_proxy_action_busy = False
         self.logs_widget.setMinimumWidth(0)
         self.logs_widget.setMaximumWidth(0)
         self.logs_widget.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
@@ -286,14 +287,18 @@ class ProxyWindow(QWidget):
         self.proxy_status_label.setText(status)
 
     def _clear_system_proxy_mode(self):
-        self.btn_log.setEnabled(False)
+        if getattr(self, "_system_proxy_action_busy", False):
+            return
+        self._system_proxy_action_busy = True
+        self.system_proxy_mode.setEnabled(False)
         worker = Worker(lambda: manage_proxy("127.0.0.1", self.proxy.port, "disable"))
         worker.signals.finished.connect(self._on_system_proxy_cleared)
         worker.signals.error.connect(self._on_system_proxy_clear_failed)
         self.thread_pool.start(worker)
 
     def _on_system_proxy_cleared(self, result):
-        self.btn_log.setEnabled(True)
+        self._system_proxy_action_busy = False
+        self.system_proxy_mode.setEnabled(True)
         if str(result).strip().lower() != "true":
             self._on_system_proxy_clear_failed("The operating system did not clear the system proxy.")
             return
@@ -303,7 +308,8 @@ class ProxyWindow(QWidget):
         self._update_proxy_buttons()
 
     def _on_system_proxy_clear_failed(self, error):
-        self.btn_log.setEnabled(True)
+        self._system_proxy_action_busy = False
+        self.system_proxy_mode.setEnabled(True)
         self.logs_widget.update_log("Could not clear system proxy: {}".format(error))
         QMessageBox.warning(self, "System proxy", "Could not clear the system proxy. Check the event log.")
         logger.warning("Explicit system proxy clear failed: %s", error)
