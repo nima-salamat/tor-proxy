@@ -98,7 +98,7 @@ class PulseButton(QPushButton):
                     color: white;
                     font-size: 20px;
                     font-weight: 700;
-                    border-radius: 125px;
+                    border-radius: {min(self.width(), self.height()) // 2}px;
                     border: none;
                 }}
                 QPushButton:hover {{
