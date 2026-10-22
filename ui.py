@@ -8,14 +8,11 @@ from PySide6.QtWidgets import (
     QLabel,
     QVBoxLayout,
     QHBoxLayout,
-    QFrame,
-    QListWidget,
-    QListWidgetItem,
     QPushButton,
     QMessageBox,
     QSystemTrayIcon
 )
-from PySide6.QtGui import QIcon, QAction, QPalette
+from PySide6.QtGui import QIcon, QAction
 import qdarkstyle
 from qdarkstyle.dark.palette import DarkPalette
 from qdarkstyle.light.palette import LightPalette
@@ -193,11 +190,9 @@ class Window(QMainWindow):
 
     def _apply_shell_styles(self):
         if CONFIG["mode"] == "dark":
-            accent, accent_text = "#3daee9", "#101820"
             border, surface = "#414a56", "#272c33"
             text, muted = "#eff1f4", "#a6afb9"
         else:
-            accent, accent_text = "#287db5", "#ffffff"
             border, surface = "#d5dbe2", "#ffffff"
             text, muted = "#202832", "#647080"
         self.setStyleSheet("""
