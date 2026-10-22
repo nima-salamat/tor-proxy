@@ -1,6 +1,7 @@
 """Compact Windows title bar with native multi-monitor window dragging."""
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLabel, QWidget, QHBoxLayout, QPushButton, QSizePolicy
+import qtawesome as qta
 
 
 class CustomTitleBar(QWidget):
@@ -15,9 +16,13 @@ class CustomTitleBar(QWidget):
         self.title.setObjectName("windowTitle")
         self.title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
-        self.btn_min = QPushButton("—", self)
-        self.btn_max = QPushButton("□", self)
-        self.btn_close = QPushButton("×", self)
+        self.btn_min = QPushButton(self)
+        self.btn_max = QPushButton(self)
+        self.btn_close = QPushButton(self)
+        self._icon_color = "#eff1f4"
+        self.btn_min.setIcon(qta.icon("fa6s.window-minimize", color=self._icon_color))
+        self.btn_max.setIcon(qta.icon("fa6s.window-maximize", color=self._icon_color))
+        self.btn_close.setIcon(qta.icon("fa6s.xmark", color=self._icon_color))
         self.btn_min.setObjectName("titleBarButton")
         self.btn_max.setObjectName("titleBarButton")
         self.btn_close.setObjectName("titleBarCloseButton")
@@ -31,6 +36,9 @@ class CustomTitleBar(QWidget):
         self.btn_min.clicked.connect(parent.showMinimized)
         self.btn_max.clicked.connect(self._toggle_maximized)
         self.btn_close.clicked.connect(parent.ask_close)
+        self.btn_close.setAccessibleName("Exit TorProxy")
+        self.btn_min.setAccessibleName("Minimize window")
+        self.btn_max.setAccessibleName("Maximize or restore window")
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 5, 7, 5)
@@ -49,9 +57,16 @@ class CustomTitleBar(QWidget):
             self.parent_.showMaximized()
         self._sync_maximize_button()
 
+    def update_theme(self, color):
+        self._icon_color = color
+        self.btn_min.setIcon(qta.icon("fa6s.window-minimize", color=color))
+        self.btn_close.setIcon(qta.icon("fa6s.xmark", color=color))
+        self._sync_maximize_button()
+
     def _sync_maximize_button(self):
         maximized = self.parent_.isMaximized()
-        self.btn_max.setText("❐" if maximized else "□")
+        icon_name = "fa6s.window-restore" if maximized else "fa6s.window-maximize"
+        self.btn_max.setIcon(qta.icon(icon_name, color=self._icon_color))
         self.btn_max.setToolTip("Restore" if maximized else "Maximize")
 
     def showEvent(self, event):

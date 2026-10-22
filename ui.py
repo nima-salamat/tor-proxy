@@ -17,6 +17,7 @@ import qdarkstyle
 from qdarkstyle.dark.palette import DarkPalette
 from qdarkstyle.light.palette import LightPalette
 from PySide6.QtCore import Qt, Signal, QTimer
+import qtawesome as qta
 from utils import resource_path
 import keyboard
 import threading
@@ -30,7 +31,7 @@ from ui_.window.setting_window import SettingWindow
 from ui_.window.block_host_window import BlcokHostsWindow
 from ui_.window.exclude_host_window import ExcludeHostsWindow
 from ui_.window.updater_window import UpdaterWindow
-from ui_.emojis import DARK, LIGHT, QUIT, HOME, EXCLUDE_HOST, BLOCK_HOST, SETTING, HELP
+from ui_.emojis import QUIT, HOME, EXCLUDE_HOST, BLOCK_HOST, SETTING, HELP
 logger = logging.getLogger(__name__)
 
 class Window(QMainWindow):
@@ -83,6 +84,7 @@ class Window(QMainWindow):
         self._state_timer.timeout.connect(self._update_global_state)
         self._state_timer.start()
         self._update_global_state()
+        self._set_theme(CONFIG["mode"])
 
         self.tray_icon = QSystemTrayIcon(self)
         self.tray_icon.setIcon(QIcon(resource_path("assets/icon.png")))
@@ -172,18 +174,21 @@ class Window(QMainWindow):
         self.notifications_menu = QMenu(self)
         empty_notification = self.notifications_menu.addAction("No notifications")
         empty_notification.setEnabled(False)
-        self.notification_btn = QPushButton("🔔 0", self)
+        self.notification_btn = QPushButton(self)
         self.notification_btn.setObjectName("notificationButton")
         self.notification_btn.setToolTip("Notifications")
+        self.notification_btn.setFixedSize(42, 30)
         self.notification_btn.clicked.connect(self._show_notifications)
 
-        self.toggle_btn = QPushButton(LIGHT if CONFIG["mode"] == "light" else DARK, self)
+        self.toggle_btn = QPushButton(self)
         self.toggle_btn.setObjectName("themeToggle")
         self.toggle_btn.setToolTip("Toggle light/dark appearance")
-        self.toggle_btn.setCheckable(True)
+        self.toggle_btn.setFixedSize(34, 30)
+        self.toggle_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.toggle_btn.clicked.connect(self._toggle_theme)
 
         corner = QWidget(menu_bar)
+        corner.setObjectName("menuBarCorner")
         corner_layout = QHBoxLayout(corner)
         corner_layout.setContentsMargins(0, 0, 0, 0)
         corner_layout.setSpacing(6)
@@ -206,7 +211,7 @@ class Window(QMainWindow):
         })
         self._notification_entries = self._notification_entries[-30:]
         count = len(self._notification_entries)
-        self.notification_btn.setText("🔔 {}".format(count if count < 100 else "99+"))
+        self.notification_btn.setText(str(count if count < 100 else "99+"))
         self.notification_btn.setToolTip("{}: {}".format(title, message))
         self.notifications_menu.clear()
         clear_action = self.notifications_menu.addAction("Clear notifications")
@@ -229,33 +234,52 @@ class Window(QMainWindow):
 
     def _clear_notifications(self):
         self._notification_entries.clear()
-        self.notification_btn.setText("🔔 0")
+        self.notification_btn.setText("0")
         self.notification_btn.setToolTip("No new notifications")
         self.notifications_menu.clear()
         empty = self.notifications_menu.addAction("No notifications")
         empty.setEnabled(False)
 
     def _apply_shell_styles(self):
-        if CONFIG["mode"] == "dark":
-            border, surface, text = "#414a56", "#272c33", "#eff1f4"
-        else:
-            border, surface, text = "#d5dbe2", "#ffffff", "#202832"
-        self.setStyleSheet("""
-            QLabel#globalState { color: %s; font-size: 10px; font-weight: 650; padding: 0 5px; background: transparent; border: none; }
-            QWidget#pageSurface { background: %s; }
-            QMenuBar#topMenuBar { border: none; border-bottom: 1px solid %s; padding: 3px 8px; }
-            QMenuBar#topMenuBar::item { padding: 7px 10px; margin: 0 2px; border-radius: 6px; }
-            QMenuBar#topMenuBar::item:selected { background: rgba(65, 137, 196, 0.22); }
-            QMenuBar#topMenuBar::item:checked { background: #287db5; color: #ffffff; }
-            QWidget#customTitleBar { background: %s; border-bottom: 1px solid %s; }
-            QLabel#windowTitle { color: %s; font-size: 13px; font-weight: 700; }
-            QPushButton#titleBarButton, QPushButton#titleBarCloseButton { background: transparent; border: none; border-radius: 5px; color: %s; font-size: 16px; }
-            QPushButton#titleBarButton:hover { background: rgba(120, 140, 160, 0.22); }
-            QPushButton#titleBarCloseButton:hover { background: #c42b1c; color: white; }
-            QPushButton#themeToggle, QPushButton#notificationButton { min-height: 28px; padding: 0 9px; border-radius: 6px; }
-            QPushButton#notificationButton { font-weight: 650; }
-            QStackedWidget#pageStack { background: transparent; }
-        """ % (text, surface, border, surface, border, text, text))
+        dark = CONFIG["mode"] == "dark"
+        border = "#3b4552" if dark else "#d7dee7"
+        surface = "#272c33" if dark else "#ffffff"
+        menu_surface = "#202630" if dark else "#edf1f6"
+        text = "#eff1f4" if dark else "#202832"
+        accent = "#287db5"
+        hover = "rgba(71, 163, 242, 0.15)" if dark else "rgba(24, 118, 191, 0.11)"
+        self.setStyleSheet(f"""
+            QWidget#pageSurface {{ background: {surface}; }}
+            QMenuBar#topMenuBar, QWidget#menuBarCorner {{ background-color: {menu_surface}; }}
+            QMenuBar#topMenuBar {{ border: none; border-bottom: 1px solid {border}; padding: 3px 8px; }}
+            QMenuBar#topMenuBar::item {{ padding: 7px 10px; margin: 0 2px; border-radius: 7px; color: {text}; background: transparent; }}
+            QMenuBar#topMenuBar::item:selected {{ background: {hover}; }}
+            QMenuBar#topMenuBar::item:checked {{ background: {accent}; color: #ffffff; }}
+            QWidget#menuBarCorner {{ border-bottom: 1px solid {border}; }}
+            QWidget#menuBarCorner QLabel {{ background: transparent; color: {text}; border: none; }}
+            QWidget#menuBarCorner QPushButton {{ background: transparent; color: {text}; border: none; border-radius: 7px; }}
+            QWidget#menuBarCorner QPushButton:hover {{ background: {hover}; }}
+            QWidget#customTitleBar {{ background: {menu_surface}; border-bottom: 1px solid {border}; }}
+            QLabel#windowTitle {{ color: {text}; font-size: 13px; font-weight: 700; }}
+            QPushButton#titleBarButton, QPushButton#titleBarCloseButton {{ background: transparent; border: none; border-radius: 5px; }}
+            QPushButton#titleBarButton:hover {{ background: {hover}; }}
+            QPushButton#titleBarCloseButton:hover {{ background: #c42b1c; }}
+            QPushButton#themeToggle, QPushButton#notificationButton {{ background: transparent; min-height: 28px; border: none; border-radius: 7px; padding: 0 7px; }}
+            QPushButton#themeToggle:hover, QPushButton#notificationButton:hover {{ background: {hover}; }}
+            QPushButton#notificationButton {{ font-weight: 700; }}
+            QStackedWidget#pageStack {{ background: transparent; }}
+        """)
+        icon_color = text
+        self.toggle_btn.setIcon(qta.icon("fa6s.sun" if dark else "fa6s.moon", color=icon_color))
+        self.notification_btn.setIcon(qta.icon("fa6s.bell", color=icon_color))
+        self.notification_btn.setText(
+            str(len(self._notification_entries) if len(self._notification_entries) < 100 else "99+")
+        )
+        self.notification_btn.setFixedSize(42, 30)
+        if IS_WINDOWS and hasattr(self, "title_bar"):
+            self.title_bar.update_theme(icon_color)
+        if hasattr(self, "proxyWidget") and hasattr(self.proxyWidget, "_apply_home_theme"):
+            self.proxyWidget._apply_home_theme()
 
     def _on_navigation_changed(self, row):
         # Compatibility hook for integrations which select a page by index.
@@ -300,24 +324,27 @@ class Window(QMainWindow):
             "A running local HTTP proxy alone is not shown as Tor-ready."
         )
 
-    def _toggle_theme(self):
+    def _set_theme(self, mode):
+        if mode not in {"dark", "light"}:
+            return
+        CONFIG["mode"] = mode
         app = QApplication.instance()
-        if self.toggle_btn.text() == (LIGHT):
-            self.toggle_btn.setText(DARK)
-            self.settingWidget.btn_dark.setChecked(True)
-            app.setStyleSheet(qdarkstyle.load_stylesheet(palette=DarkPalette()))  
-            
-            CONFIG.mode= "dark"
-                
-        else:
-            self.toggle_btn.setText(LIGHT)
-            self.settingWidget.btn_light.setChecked(True)
-            app.setStyleSheet(qdarkstyle.load_stylesheet(palette=LightPalette())) 
-            CONFIG.mode = "light"
-     
-        self._apply_shell_styles()
+        palette = DarkPalette() if mode == "dark" else LightPalette()
+        app.setStyleSheet(qdarkstyle.load_stylesheet(palette=palette))
+        if hasattr(self, "settingWidget"):
+            for button, selected in (
+                (self.settingWidget.btn_dark, mode == "dark"),
+                (self.settingWidget.btn_light, mode == "light"),
+            ):
+                button.blockSignals(True)
+                button.setChecked(selected)
+                button.blockSignals(False)
         if hasattr(self, "updater_window"):
             self.updater_window._apply_local_styles()
+        self._apply_shell_styles()
+
+    def _toggle_theme(self):
+        self._set_theme("light" if CONFIG["mode"] == "dark" else "dark")
 
     def ask_close(self):
         reply = QMessageBox.question(
@@ -368,6 +395,7 @@ class Window(QMainWindow):
 
     def closeEvent(self, event):
         # The custom title bar's Exit action confirms, then closes and stops services.
+        self._closing = True
         self.listener_running = False
         if IS_WINDOWS and hasattr(self, "listener_thread") and self.listener_thread.is_alive():
             self.listener_thread.join(timeout=1.0)

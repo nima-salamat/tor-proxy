@@ -117,6 +117,12 @@ class SettingWindow(QWidget):
         self.btn_light.setChecked(CONFIG["mode"] == "light")
         mode_layout.addWidget(self.btn_light)
         btn_group_mode.addButton(self.btn_light)
+        self.btn_dark.toggled.connect(
+            lambda checked: self.change_mode(self.btn_dark) if checked else None
+        )
+        self.btn_light.toggled.connect(
+            lambda checked: self.change_mode(self.btn_light) if checked else None
+        )
 
         max_circuit_dirtiness_layout = QHBoxLayout()
         max_circuit_dirtiness_layout.addWidget(QLabel("MaxCircuitDirtiness  "))
@@ -387,21 +393,16 @@ class SettingWindow(QWidget):
         CONFIG["bridge"] = bool(checked)
 
     def change_mode(self, radiobtn):
+        mode = "light" if radiobtn.text().lower() == "light" else "dark"
+        if self._parent is not None and hasattr(self._parent, "_set_theme"):
+            self._parent._set_theme(mode)
+            return
         app = QApplication.instance()
-        if radiobtn.text() == "light":
+        if mode == "light":
             app.setStyleSheet(qdarkstyle.load_stylesheet(palette=LightPalette()))
-            CONFIG["mode"] = "light"
-            try:
-                self._parent.toggle_btn.setText(LIGHT)
-            except Exception:
-                pass
         else:
             app.setStyleSheet(qdarkstyle.load_stylesheet(palette=DarkPalette()))
-            CONFIG["mode"] = "dark"
-            try:
-                self._parent.toggle_btn.setText(DARK)
-            except Exception:
-                pass
+        CONFIG["mode"] = mode
 
     # small utility
     @staticmethod
