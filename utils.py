@@ -4,7 +4,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import sys
+import uuid
 from threading import Event
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,11 +44,17 @@ def extract_tar_gz_file(
     cancel_event: Event | None = None,
     version: str = "",
 ):
-    """Verify the exact archive again, report each stage, then safely extract and mark it."""
+    """Verify, extract and publish one complete bundle atomically with its trust marker."""
     archive = Path(filename).expanduser().resolve()
     destination = Path(dst).expanduser().resolve()
     signature = archive.with_name(archive.name + ".asc")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    staging = destination.with_name(".{}.verified-{}".format(destination.name, uuid.uuid4().hex))
     try:
+        if destination.exists():
+            raise BundleVerificationError(
+                "Destination already exists; refusing to overwrite: {}".format(destination)
+            )
         if not archive.is_file() or not signature.is_file():
             raise BundleVerificationError("A Tor archive and its detached .asc signature are both required.")
         if progress_callback:
@@ -68,19 +76,34 @@ def extract_tar_gz_file(
         if progress_callback:
             progress_callback(BundleProgress(
                 version, "install", "extracting_archive",
-                message="Signature verified. Safely extracting into an atomic temporary directory.",
+                message="Signature verified. Safely extracting into an isolated staging directory.",
             ))
-        extracted = safe_extract_tar_gz(archive, destination)
+        extracted = safe_extract_tar_gz(archive, staging)
         marker = extracted / ".torproxy-verified.json"
-        marker.write_text(json.dumps({
+        marker_tmp = extracted / ".torproxy-verified.json.tmp"
+        metadata = {
             "signature_verified": True,
             "signing_key_fingerprint": TOR_SIGNING_FINGERPRINT,
             "archive_sha256": sha256_file(archive),
             "verified_at_utc": datetime.now(timezone.utc).isoformat(),
-        }, indent=2) + "\n", encoding="utf-8")
+        }
+        with marker_tmp.open("x", encoding="utf-8") as handle:
+            json.dump(metadata, handle, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
         if os.name != "nt":
-            marker.chmod(0o600)
-        return extracted
+            marker_tmp.chmod(0o600)
+        os.replace(marker_tmp, marker)
+        # The final name becomes visible only after extraction and verification metadata exist.
+        if destination.exists():
+            raise BundleVerificationError(
+                "Destination appeared during installation; refusing to overwrite: {}".format(destination)
+            )
+        os.replace(extracted, destination)
+        return destination
     except Exception as exc:
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
         logger.error("Verified Tor extraction failed: %s", exc)
         raise
