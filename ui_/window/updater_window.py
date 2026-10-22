@@ -357,10 +357,10 @@ class UpdaterWindow(QWidget):
         if reply != QMessageBox.StandardButton.Yes:
             return
         try:
-            CONFIG["tor_path"] = path
             tor_runner = getattr(getattr(self.parent_, "proxyWidget", None), "tor", None)
-            if tor_runner is not None:
-                tor_runner.update_path(path)
+            if tor_runner is not None and not tor_runner.update_path(path):
+                raise ValueError("The selected bundle failed a fresh executable/verification check.")
+            CONFIG["tor_path"] = path
             self.lbl_status.setText("Default bundle saved. Restart Tor if a process is already running.")
             self.refresh_version()
         except (OSError, ValueError, KeyError) as exc:
