@@ -401,6 +401,10 @@ class ProxyWindow(QWidget):
             self.failed = True
             self.btn_status.setText("disconnected")
             self.set_btn_status_style("disconnected")
+            # The pulse button toggles visually before this slot runs; restore
+            # its truthful disconnected state when startup fails.
+            self.connect_btn.connected = False
+            self.connect_btn.updateStyle()
         finally:
             # always re-enable the button
             self.connect_btn.setEnabled(True)
