@@ -60,7 +60,7 @@ sudo apt-get update
 sudo apt-get install -y gnupg libzbar0
 ```
 
-On Windows, install GnuPG from a trusted distribution and ensure `gpg.exe` is on `PATH`. Some platforms require additional native setup for QR decoding; see [Troubleshooting](docs/TROUBLESHOOTING.md).
+On Windows, install GnuPG from a trusted distribution and ensure `gpg.exe` is on `PATH`, or configure `TORPROXY_GPG_EXECUTABLE` with its full path. Some platforms require additional native setup for QR decoding; see [Troubleshooting](docs/TROUBLESHOOTING.md).
 
 ### Development installation
 
@@ -97,6 +97,14 @@ The first launch migrates an existing root-level `config.json` into the per-user
 Downloads are stored in the current user's application-data directory, not inside the installed source tree. The downloader refuses unsigned or invalid artifacts, unsupported archive entries, and path traversal. GnuPG is required; verification failures stop installation.
 
 Older repository versions included large archives in `bundles/`. These are no longer required in source control. Existing local archives that lack a verifiable `.asc` signature are not automatically trusted by the updater; download a verified bundle again, or explicitly select a local Tor executable whose origin you trust.
+
+## Release channels and bundle verification
+
+The updater recognizes numeric stable releases (for example, `15.0.26`) and the supported alpha naming convention (for example, `16.0a14`). Stable releases are prioritized; alpha releases are labelled as prereleases and can be hidden with the prerelease filter. A release directory is not considered downloadable unless the exact current-platform Expert Bundle and its matching detached `.asc` signature are both listed. Tor Browser installers, `.mar` updates, debug archives and checksum files are not substitutes for an Expert Bundle.
+
+The bundle page displays transfer bytes and, when the server advertises a usable `Content-Length`, percentage, speed and an approximate remaining-time estimate. Unknown transfer lengths use an indeterminate progress bar. Signature verification, archive extraction and installation are shown as distinct stages; a completed transfer alone never counts as an installed bundle. Cancellation is available during archive/signature transfer and is disabled during stages that cannot be safely interrupted.
+
+Signature verification is mandatory and checks the detached signature against the independently pinned Tor signing-key fingerprint. TorProxy discovers GnuPG from `PATH`, common installation paths, or `TORPROXY_GPG_EXECUTABLE` (the full path to `gpg.exe` or `gpg`). If no verifier can be started, installation stops and reports the supported recovery path; verification is never bypassed.
 
 ## Start Tor and configure an application
 
