@@ -478,7 +478,7 @@ class UpdaterWindow(QWidget):
             label = "{}  ·  {}".format(version, channel.upper())
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, version)
-            item.setToolTip("Release directory found. Select to check for a compatible signed Expert Bundle.")
+            item.setToolTip("Release directory found. Select to check a compatible Expert Bundle using the current Advanced signature-verification setting.")
             self.updates_list.addItem(item)
         self.lbl_discovery.setText(
             "{} recognized release directories found. Stable releases appear before alpha prereleases.".format(
@@ -490,7 +490,7 @@ class UpdaterWindow(QWidget):
         self.progress_bar.setValue(0)
         self.progress_bar.setFormat("Idle")
         self._set_busy(False)
-        self.lbl_status.setText("Choose a release to check compatible artifact and signature availability.")
+        self.lbl_status.setText("Choose a release to check compatible artifact availability and the selected trust method.")
 
     def _on_discovery_error(self, error: str) -> None:
         logger.error("Tor release discovery failed: %s", error)
@@ -508,23 +508,28 @@ class UpdaterWindow(QWidget):
         version = str(item.data(Qt.ItemDataRole.UserRole) or "").strip()
         if not version:
             return
+        verify_signature = bool(CONFIG["verify_tor_signatures"])
         self._set_busy(True)
-        self.lbl_status.setText("Checking for the exact compatible Expert Bundle and its detached signature…")
-        self.lbl_progress_details.setText("A release directory alone does not mean a bundle is available.")
+        self.lbl_status.setText(
+            "Checking for a compatible Expert Bundle"
+            + (" and detached signature…" if verify_signature else "…")
+        )
+        self.lbl_progress_details.setText("A release directory alone does not mean a compatible archive is available.")
         self.progress_bar.setRange(0, 0)
         self.progress_bar.setFormat("Checking artifact…")
-        self.worker = Worker(self._check_selected_release, version)
+        self.worker = Worker(self._check_selected_release, version, verify_signature)
         self.worker.signals.finished.connect(self._on_links_checked)
         self.worker.signals.error.connect(self._on_discovery_error)
         self.thread_pool.start(self.worker)
 
-    def _check_selected_release(self, version: str):
-        return version, get_bundle_links(version)
+    def _check_selected_release(self, version: str, verify_signature: bool = True):
+        return version, get_bundle_links(version, require_signature=verify_signature), bool(verify_signature)
 
     def _on_links_checked(self, data: str) -> None:
         result = self._parse_result(data, tuple)
         version = str(result[0]) if len(result) >= 1 else ""
         links = result[1] if len(result) >= 2 and isinstance(result[1], list) else []
+        verify_signature = bool(result[2]) if len(result) >= 3 else bool(CONFIG["verify_tor_signatures"])
         already_installed = any(
             Path(path).name.endswith("-" + version) for path in self._verified_bundles_cache
         )
@@ -534,7 +539,7 @@ class UpdaterWindow(QWidget):
             self.progress_bar.setValue(100)
             self.progress_bar.setFormat("Already installed")
             self.lbl_status.setText(
-                "Tor Expert Bundle {} is already installed and verified on this device.".format(version)
+                "Tor Expert Bundle {} is already installed on this device.".format(version)
             )
             self.lbl_progress_details.setText(
                 "No download was started. Select the installed bundle on the right to make it the default."
@@ -546,11 +551,14 @@ class UpdaterWindow(QWidget):
             self.progress_bar.setValue(0)
             self.progress_bar.setFormat("Unavailable")
             self.lbl_status.setText(
-                "{} has no compatible Expert Bundle with a listed detached signature for this OS/CPU.".format(version)
+                "{} has no compatible Expert Bundle{} for this OS/CPU.".format(
+                    version, " with a listed detached signature" if verify_signature else ""
+                )
             )
             message = (
-                "The release directory exists, but TorProxy did not find both the expected Expert Bundle archive "
-                "and its matching .asc signature for this platform. No download was attempted."
+                "The release directory exists, but TorProxy did not find the expected Expert Bundle archive "
+                + ("and its matching .asc signature for this platform." if verify_signature else " for this platform.")
+                + " No download was attempted."
             )
             notify = getattr(self.parent_, "notify_user", None)
             if callable(notify):
@@ -559,10 +567,23 @@ class UpdaterWindow(QWidget):
                 QMessageBox.information(self, "No compatible bundle", message)
             return
         bundle = links[0]
+        if verify_signature:
+            title = "Download and verify Tor bundle"
+            trust_note = (
+                "OpenPGP verification is enabled. The detached signature must match Tor's pinned signing key; "
+                "installation stops if the check fails."
+            )
+        else:
+            title = "Download Tor bundle (OpenPGP off)"
+            trust_note = (
+                "OpenPGP verification is disabled in Settings. TorProxy will use the official HTTPS host and "
+                "safe archive checks, but will NOT authenticate the publisher's signature. This is less secure."
+            )
         reply = QMessageBox.question(
-            self, "Download and verify Tor bundle",
-            "Download the {} release for this device?\n\n{}\n\nThe pinned OpenPGP signature is mandatory; "
-            "installation stops if verification fails.".format(tor_version_channel(version), bundle),
+            self, title,
+            "Download the {} release for this device?\n\n{}\n\n{}".format(
+                tor_version_channel(version), bundle, trust_note
+            ),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -573,20 +594,26 @@ class UpdaterWindow(QWidget):
         if reply != QMessageBox.StandardButton.Yes:
             self.lbl_status.setText("Download cancelled before starting.")
             return
-        self._start_download(bundle, version)
+        self._start_download(bundle, version, verify_signature)
 
-    def _start_download(self, bundle: str, version: str) -> None:
+    def _start_download(self, bundle: str, version: str, verify_signature: bool | None = None) -> None:
         if self._busy:
             return
+        verify_signature = bool(CONFIG["verify_tor_signatures"]) if verify_signature is None else bool(verify_signature)
         self.cancel_event = Event()
-        self._last_download = (bundle, version)
+        self._last_download = (bundle, version, verify_signature)
         self._set_busy(True, cancellable=True)
-        self.lbl_status.setText("Preparing secure download…")
-        self.lbl_progress_details.setText("No bundle is considered installed until signature and archive checks finish.")
+        self.lbl_status.setText("Preparing Tor bundle download…")
+        self.lbl_progress_details.setText(
+            "Publisher signature will be checked before extraction."
+            if verify_signature else
+            "OpenPGP is off: HTTPS transport and safe extraction are used, but publisher identity is not authenticated."
+        )
         self.progress_bar.setRange(0, 0)
         self.progress_bar.setFormat("Preparing…")
         self.worker = Worker(
-            self.download_bundle, bundle, version, self.cancel_event, self.progress_event.emit
+            self.download_bundle, bundle, version, self.cancel_event,
+            self.progress_event.emit, verify_signature
         )
         self.worker.signals.finished.connect(self._on_download_finished)
         self.worker.signals.error.connect(self._on_download_error)
