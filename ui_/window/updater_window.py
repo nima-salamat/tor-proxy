@@ -224,7 +224,7 @@ class UpdaterWindow(QWidget):
             QLineEdit { min-height: 32px; padding: 0 9px; border: 1px solid %s; border-radius: 6px; color: %s; }
             QProgressBar { min-height: 18px; border: 1px solid %s; border-radius: 5px; color: %s; text-align: center; }
             QProgressBar::chunk { background: %s; border-radius: 4px; }
-        """ % (text, muted, border, text, text, muted, text, surface, border, text, accent, border, text, border, accent))
+        """ % (text, muted, border, text, text, muted, text, surface, border, text, accent, border, text, border, text, accent))
 
     def _parse_result(self, data, expected_type):
         try:
