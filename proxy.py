@@ -241,6 +241,33 @@ def _route_for_host(host: str) -> str:
 def _parse_authority(authority: str, default_port: int | None = None) -> tuple[str, int]:
     if not authority or any(char in authority for char in ("/", "?", "#", "@", "\r", "\n")):
         raise ValueError("Malformed request authority.")
+
+    # Some Python versions accept non-IP text inside square brackets as a
+    # hostname. Brackets are reserved for IPv6 literals in an authority, so
+    # validate the literal explicitly before urlsplit can normalize it.
+    if authority.startswith("["):
+        closing = authority.find("]")
+        if closing < 0:
+            raise ValueError("Malformed bracketed IPv6 authority.")
+        literal = authority[1:closing]
+        try:
+            host = ipaddress.IPv6Address(literal).compressed.lower()
+        except ValueError as exc:
+            raise ValueError("Bracketed hosts must be valid IPv6 literals.") from exc
+        suffix = authority[closing + 1:]
+        if not suffix:
+            port = default_port
+        elif suffix.startswith(":") and suffix[1:].isdecimal():
+            try:
+                port = int(suffix[1:])
+            except ValueError as exc:
+                raise ValueError("Invalid destination port.") from exc
+        else:
+            raise ValueError("Malformed bracketed IPv6 authority.")
+        if port is None or not 1 <= port <= 65535:
+            raise ValueError("Invalid destination port.")
+        return host, port
+
     parsed = urlsplit("//" + authority)
     if parsed.username or parsed.password or not parsed.hostname:
         raise ValueError("Malformed request authority.")
