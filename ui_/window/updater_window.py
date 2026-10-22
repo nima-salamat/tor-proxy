@@ -252,7 +252,7 @@ class UpdaterWindow(QWidget):
         self._busy = busy
         self.btn_get_versions.setEnabled(not busy)
         self.btn_refresh_version.setEnabled(not busy and not self._bundle_scan_in_progress)
-        self.updates_list.setEnabled(not busy)
+        self.updates_list.setEnabled(not busy and not self._bundle_scan_in_progress)
         self.list_tor_versions.setEnabled(not busy and not self._bundle_scan_in_progress)
         self.search_versions.setEnabled(not busy)
         self.chk_prereleases.setEnabled(not busy)
@@ -305,6 +305,7 @@ class UpdaterWindow(QWidget):
         self._bundle_scan_in_progress = True
         self.btn_refresh_version.setEnabled(False)
         self.list_tor_versions.setEnabled(False)
+        self.updates_list.setEnabled(False)
         self.lbl_install_state.setText("CHECKING LOCAL BUNDLES")
         self.lbl_default.setText("Verifying installed bundle metadata…")
         self._bundle_scan_worker = Worker(get_own_bundles)
@@ -318,6 +319,7 @@ class UpdaterWindow(QWidget):
         self._bundle_scan_in_progress = False
         self.btn_refresh_version.setEnabled(not self._busy)
         self.list_tor_versions.setEnabled(not self._busy)
+        self.updates_list.setEnabled(not self._busy)
         self.list_tor_versions.clear()
         configured = str(CONFIG["tor_path"] or "")
         for path in self._verified_bundles_cache:
@@ -334,6 +336,7 @@ class UpdaterWindow(QWidget):
         self._bundle_scan_in_progress = False
         self.btn_refresh_version.setEnabled(not self._busy)
         self.list_tor_versions.setEnabled(not self._busy)
+        self.updates_list.setEnabled(not self._busy)
         if not self._verified_bundles_cache:
             self.lbl_install_state.setText("Bundle inspection failed")
             self.lbl_default.setText("Could not verify local bundle metadata. Rescan or inspect the application log.")
@@ -473,6 +476,21 @@ class UpdaterWindow(QWidget):
         result = self._parse_result(data, tuple)
         version = str(result[0]) if len(result) >= 1 else ""
         links = result[1] if len(result) >= 2 and isinstance(result[1], list) else []
+        already_installed = any(
+            Path(path).name.endswith("-" + version) for path in self._verified_bundles_cache
+        )
+        if already_installed:
+            self._set_busy(False)
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(100)
+            self.progress_bar.setFormat("Already installed")
+            self.lbl_status.setText(
+                "Tor Expert Bundle {} is already installed and verified on this device.".format(version)
+            )
+            self.lbl_progress_details.setText(
+                "No download was started. Select the installed bundle on the right to make it the default."
+            )
+            return
         if not links:
             self._set_busy(False)
             self.progress_bar.setRange(0, 100)
@@ -545,6 +563,7 @@ class UpdaterWindow(QWidget):
             logger.warning("Ignoring malformed Tor bundle progress event.")
             return
         labels = {
+            "checking_verification_runtime": "Checking signature-verification runtime",
             "downloading_archive": "Downloading Tor archive",
             "downloading_signature": "Downloading detached signature",
             "downloading_signing_key": "Retrieving pinned-key material",
@@ -557,7 +576,7 @@ class UpdaterWindow(QWidget):
         }
         self.lbl_status.setText(labels.get(event.stage, event.message or event.stage.replace("_", " ").title()))
         self.lbl_status.setToolTip(event.message)
-        if event.stage in {"verifying_signature", "extracting_archive"}:
+        if event.stage in {"checking_verification_runtime", "verifying_signature", "extracting_archive"}:
             self.btn_cancel.setEnabled(False)
             self.progress_bar.setRange(0, 0)
             self.progress_bar.setFormat(labels.get(event.stage, "Working…"))
