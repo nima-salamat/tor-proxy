@@ -7,8 +7,8 @@ import os
 from pathlib import Path
 from threading import Event
 
-from PySide6.QtCore import Qt, QThreadPool, Signal
-from PySide6.QtGui import QPalette
+from PySide6.QtCore import Qt, QThreadPool, Signal, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -55,6 +55,7 @@ class UpdaterWindow(QWidget):
         self.cancel_event: Event | None = None
         self._busy = False
         self._available_versions: list[str] = []
+        self._last_download: tuple[str, str] | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 22, 24, 24)
@@ -172,6 +173,17 @@ class UpdaterWindow(QWidget):
         self.btn_cancel.clicked.connect(self.cancel_operation)
         self.btn_cancel.hide()
         status_row.addWidget(self.btn_cancel)
+        self.btn_retry = QPushButton("Retry")
+        self.btn_retry.setObjectName("primaryButton")
+        self.btn_retry.clicked.connect(self._retry_last_download)
+        self.btn_retry.hide()
+        status_row.addWidget(self.btn_retry)
+        self.btn_gpg_help = QPushButton("Get GnuPG")
+        self.btn_gpg_help.setObjectName("quietButton")
+        self.btn_gpg_help.setToolTip("Open the official GnuPG download page.")
+        self.btn_gpg_help.clicked.connect(self._open_gpg_setup)
+        self.btn_gpg_help.hide()
+        status_row.addWidget(self.btn_gpg_help)
         progress_layout.addLayout(status_row)
         self.progress_bar = QProgressBar()
         self.progress_bar.setObjectName("bundleProgress")
@@ -243,6 +255,11 @@ class UpdaterWindow(QWidget):
         self.chk_prereleases.setEnabled(not busy)
         self.btn_cancel.setVisible(busy and cancellable)
         self.btn_cancel.setEnabled(busy and cancellable)
+        self.btn_retry.setEnabled(not busy)
+        self.btn_gpg_help.setEnabled(not busy)
+        if busy:
+            self.btn_retry.hide()
+            self.btn_gpg_help.hide()
         if not busy and not self.progress_bar.isHidden():
             self.progress_bar.setRange(0, 100)
         self._update_install_state()
@@ -456,6 +473,7 @@ class UpdaterWindow(QWidget):
         if self._busy:
             return
         self.cancel_event = Event()
+        self._last_download = (bundle, version)
         self._set_busy(True, cancellable=True)
         self.lbl_status.setText("Preparing secure download…")
         self.lbl_progress_details.setText("No bundle is considered installed until signature and archive checks finish.")
@@ -561,6 +579,8 @@ class UpdaterWindow(QWidget):
     def _on_download_finished(self, message: str) -> None:
         self._set_busy(False)
         self.cancel_event = None
+        self.btn_retry.hide()
+        self.btn_gpg_help.hide()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(100)
         self.progress_bar.setFormat("Complete")
@@ -580,5 +600,21 @@ class UpdaterWindow(QWidget):
         self.progress_bar.setFormat("Failed")
         self.lbl_status.setText("Download or installation failed. The bundle was not reported as installed.")
         self.lbl_progress_details.setText(str(error))
-        QMessageBox.warning(self, "Tor bundle operation failed", str(error))
+        self.btn_retry.setVisible(self._last_download is not None)
+        message = str(error)
+        if "gnupg" in message.lower() and any(
+            term in message.lower() for term in ("could not be found", "could not be started", "install gnu")
+        ):
+            self.btn_gpg_help.show()
+        QMessageBox.warning(self, "Tor bundle operation failed", message)
+
+    def _retry_last_download(self) -> None:
+        if self._busy or self._last_download is None:
+            return
+        bundle, version = self._last_download
+        self._start_download(bundle, version)
+
+    def _open_gpg_setup(self) -> None:
+        # Only opens the official project page after an explicit user click.
+        QDesktopServices.openUrl(QUrl("https://gnupg.org/download/"))
 
