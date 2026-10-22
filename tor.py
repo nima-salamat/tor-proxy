@@ -147,6 +147,8 @@ class TorRunner(QObject):
         self.app_window = None
         self._stopping = threading.Event()
         self._last_report: tuple[str, int | None] | None = None
+        self.state = "STOPPED"
+        self.last_error: str | None = None
         self.update_path(CONFIG["tor_path"])
 
     def update_path(self, base_path=None):
@@ -199,13 +201,26 @@ class TorRunner(QObject):
             return
         self._stopping.clear()
         self._last_report = None
-        self.manager = self._make_manager()
+        self.last_error = None
+        try:
+            self.manager = self._make_manager()
+        except Exception as exc:
+            self.state = "FAILED"
+            self.last_error = str(exc)
+            raise
+        self.state = "STARTING"
         self.thread = threading.Thread(target=self._run, name="torproxy-tor-supervisor", daemon=True)
         self.thread.start()
         logger.info("Managed Tor supervisor started.")
 
     def _on_status(self, state, progress, message):
         state_text = getattr(state, "value", str(state))
+        normalized_state = str(state_text).upper().split(".")[-1]
+        self.state = normalized_state
+        if normalized_state != "FAILED":
+            self.last_error = None
+        elif message:
+            self.last_error = str(message)
         report = (state_text, progress)
         if report != self._last_report:
             self._last_report = report
@@ -223,12 +238,16 @@ class TorRunner(QObject):
                     if not self._stopping.is_set():
                         self.proc = None
                         message = "The managed Tor process exited unexpectedly. Check the Tor log for details."
+                        self.state = "FAILED"
+                        self.last_error = message
                         self.log_message.emit(message)
                         self.service_failed.emit(message)
                     return
         except Exception as exc:
             if not self._stopping.is_set():
                 message = str(exc)
+                self.state = "FAILED"
+                self.last_error = message
                 logger.exception("Failed to start or supervise Tor.")
                 self.log_message.emit(f"Tor failed: {message}")
                 self.service_failed.emit(message)
@@ -237,6 +256,7 @@ class TorRunner(QObject):
                 self.proc = None
 
     def stop(self):
+        self.state = "STOPPING"
         self._stopping.set()
         manager = self.manager
         if manager is not None:
@@ -246,6 +266,7 @@ class TorRunner(QObject):
             thread.join(timeout=10)
         self.proc = None
         self.thread = None
+        self.state = "STOPPED"
         logger.info("Managed Tor supervisor stopped.")
 
 
