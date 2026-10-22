@@ -619,24 +619,39 @@ class UpdaterWindow(QWidget):
         self.worker.signals.error.connect(self._on_download_error)
         self.thread_pool.start(self.worker)
 
-    def download_bundle(self, bundle: str, version: str, cancel_event: Event, progress_callback):
-        logger.info("Downloading and verifying Tor Expert Bundle %s", bundle)
+    def download_bundle(
+        self,
+        bundle: str,
+        version: str,
+        cancel_event: Event,
+        progress_callback,
+        verify_signature: bool = True,
+    ):
+        logger.info("Downloading Tor Expert Bundle %s (OpenPGP verification=%s)", bundle, verify_signature)
         archive = download_file(
-            bundle, version, progress_callback=progress_callback, cancel_event=cancel_event
+            bundle, version, progress_callback=progress_callback, cancel_event=cancel_event,
+            verify_signature=verify_signature,
         )
         if cancel_event.is_set():
             raise RuntimeError("Tor bundle installation was cancelled.")
         base_path = os.path.join(BUNDLE_DIR, os.path.basename(bundle).replace(".tar.gz", ""))
-        # The extraction helper repeats signature verification, reports each stage, and writes its marker.
         extract_tar_gz_file(
             archive, base_path, progress_callback=progress_callback,
-            cancel_event=cancel_event, version=version,
+            cancel_event=cancel_event, version=version, verify_signature=verify_signature,
+        )
+        message = (
+            "OpenPGP signature verified and bundle installed."
+            if verify_signature else
+            "Bundle installed over HTTPS only; OpenPGP signature was NOT checked."
         )
         progress_callback(BundleProgress(
-            version, "install", "installation_complete", percentage=100,
-            message="Signature verified, archive validated, and bundle installation completed.",
+            version, "install", "installation_complete", percentage=100, message=message,
         ))
-        return "Installed and verified Tor Expert Bundle {}".format(bundle)
+        return (
+            "Installed and OpenPGP-verified Tor Expert Bundle {}".format(bundle)
+            if verify_signature else
+            "Installed Tor Expert Bundle {} via HTTPS only; OpenPGP signature was NOT checked.".format(bundle)
+        )
 
     def _on_progress(self, event: BundleProgress) -> None:
         if not isinstance(event, BundleProgress):
@@ -644,6 +659,8 @@ class UpdaterWindow(QWidget):
             return
         labels = {
             "checking_verification_runtime": "Checking signature-verification runtime",
+            "signature_verification_skipped": "OpenPGP signature check skipped (Settings)",
+            "archive_downloaded_https_only": "Archive downloaded over HTTPS; signature not checked",
             "downloading_archive": "Downloading Tor archive",
             "downloading_signature": "Downloading detached signature",
             "downloading_signing_key": "Retrieving pinned-key material",
@@ -719,7 +736,9 @@ class UpdaterWindow(QWidget):
         self.progress_bar.setFormat("Complete")
         self.lbl_status.setText(message)
         self.lbl_progress_details.setText(
-            "The installed bundle passed detached-signature verification and structural checks."
+            "Detached OpenPGP signature checked against Tor's pinned key."
+            if "OpenPGP-verified" in message else
+            "Downloaded from the official HTTPS host and safely extracted; publisher signature was not checked."
         )
         self.refresh_version()
         self._update_install_state()
@@ -749,8 +768,8 @@ class UpdaterWindow(QWidget):
     def _retry_last_download(self) -> None:
         if self._busy or self._last_download is None:
             return
-        bundle, version = self._last_download
-        self._start_download(bundle, version)
+        bundle, version, verify_signature = self._last_download
+        self._start_download(bundle, version, verify_signature)
 
     def _open_gpg_setup(self) -> None:
         # Only opens the official project page after an explicit user click.
