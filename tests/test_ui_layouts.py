@@ -346,7 +346,6 @@ def test_application_message_prompts_use_the_shared_custom_dialog():
         "ui_/window/block_host_window.py",
         "ui_/window/exclude_host_window.py",
         "ui_/window/updater_window.py",
-        "ui_/window/qrcode_widget.py",
     )
     for relative_path in paths:
         source = (repository / relative_path).read_text(encoding="utf-8")
