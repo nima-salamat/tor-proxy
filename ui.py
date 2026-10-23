@@ -1,7 +1,6 @@
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
-    QMenuBar,
     QMenu,
     QStackedWidget,
     QWidget,
@@ -10,7 +9,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QPushButton,
     QToolButton,
-    QWidgetAction,
     QFrame,
     QSystemTrayIcon
 )
@@ -200,9 +198,11 @@ class Window(QMainWindow):
                 self.hide()
    
     def _createMenuBar(self):
-        menu_bar = QMenuBar(self)
+        menu_bar = QWidget(self.main_widget)
         menu_bar.setObjectName("topMenuBar")
-        menu_bar.setNativeMenuBar(False)
+        menu_layout = QHBoxLayout(menu_bar)
+        menu_layout.setContentsMargins(6, 3, 6, 3)
+        menu_layout.setSpacing(2)
         self.menu_bar = menu_bar
         self.main_layout.addWidget(menu_bar)
 
@@ -219,7 +219,6 @@ class Window(QMainWindow):
         self.page_actions = []
         self.page_icon_names = []
         self.page_nav_buttons = []
-        self._nav_widget_actions = []
         icon_color = "#eff1f4" if CONFIG["mode"] == "dark" else "#202832"
 
         def add_nav_button(action):
@@ -232,12 +231,9 @@ class Window(QMainWindow):
             button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             button.setIconSize(QSize(16, 16))
             button.setDefaultAction(action)
-            widget_action = QWidgetAction(menu_bar)
-            widget_action.setDefaultWidget(button)
-            menu_bar.addAction(widget_action)
+            menu_layout.addWidget(button)
             self.addAction(action)  # keep shortcuts active for widget-based menu items
             self.page_nav_buttons.append(button)
-            self._nav_widget_actions.append(widget_action)
             return button
 
         for label, tooltip, shortcut, icon_name, callback in actions:
@@ -295,7 +291,8 @@ class Window(QMainWindow):
         corner_layout.addWidget(self.global_state)
         corner_layout.addWidget(self.notification_btn)
         corner_layout.addWidget(self.toggle_btn)
-        menu_bar.setCornerWidget(corner, Qt.TopRightCorner)
+        menu_layout.addStretch(1)
+        menu_layout.addWidget(corner)
 
     def _show_notifications(self):
         self.notifications_menu.exec(
@@ -349,8 +346,8 @@ class Window(QMainWindow):
         accent = "#287db5"
         hover = "rgba(71, 163, 242, 0.15)" if dark else "rgba(24, 118, 191, 0.11)"
         self.setStyleSheet(f"""
-            QMenuBar#topMenuBar, QWidget#menuBarCorner {{ background-color: {menu_surface}; }}
-            QMenuBar#topMenuBar {{ border: none; border-bottom: 1px solid {border}; padding: 3px 6px; spacing: 0; }}
+            QWidget#topMenuBar, QWidget#menuBarCorner {{ background-color: {menu_surface}; }}
+            QWidget#topMenuBar {{ border: none; border-bottom: 1px solid {border}; }}
             QToolButton#topNavButton {{
                 padding: 7px 8px; margin: 0 1px; border: 1px solid transparent;
                 border-bottom: 2px solid transparent; border-radius: 7px;
