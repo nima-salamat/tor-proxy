@@ -768,7 +768,7 @@ class SettingWindow(QWidget):
             self._refresh_bridge_cards(self._saved_bridge_records, removable=False)
             return
 
-        normalized = "\\n".join(parsed.records)
+        normalized = "\n".join(parsed.records)
         try:
             if str(CONFIG["bridges"] or "") != normalized:
                 CONFIG["bridges"] = normalized
