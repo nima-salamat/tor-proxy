@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import qtawesome as qta
-from PySide6.QtCore import Qt, Signal, QRectF, QVariantAnimation, QEasingCurve
+from PySide6.QtCore import Qt, Signal, QRect, QRectF, QVariantAnimation, QEasingCurve
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QWidget
 
@@ -101,7 +101,16 @@ class ThemeSwitch(QWidget):
         painter.drawEllipse(QRectF(x, y, diameter, diameter))
 
         icon_name = "fa6s.moon" if dark else "fa6s.sun"
-        pixmap = qta.icon(icon_name, color=icon_color).pixmap(16, 16)
-        painter.drawPixmap(int(x + (diameter - pixmap.width()) / 2),
-                           int(y + (diameter - pixmap.height()) / 2), pixmap)
+        icon = qta.icon(icon_name, color=icon_color)
+        # Paint the QIcon into a fixed logical-pixel square. Drawing a raw
+        # pixmap can look off-center on high-DPI displays because its physical
+        # pixel size/device-pixel-ratio differs from the intended logical size.
+        icon_size = 18
+        icon_rect = QRect(
+            round(x + (diameter - icon_size) / 2),
+            round(y + (diameter - icon_size) / 2),
+            icon_size,
+            icon_size,
+        )
+        icon.paint(painter, icon_rect, Qt.AlignmentFlag.AlignCenter)
         painter.end()
