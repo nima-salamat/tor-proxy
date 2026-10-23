@@ -172,7 +172,8 @@ class ProxyWindow(QWidget):
         self._update_proxy_buttons()
         self._update_proxy_mode_status()
         if CONFIG["system_proxy_mode"] == "clear":
-            self._clear_system_proxy_mode()
+            # Defer the operating-system change until the complete UI has been built.
+            QTimer.singleShot(0, self._clear_system_proxy_mode)
         self.timer = QTimer(self)
         self.timer.setInterval(int(CONFIG["newnym_interval"] or 0))
 
