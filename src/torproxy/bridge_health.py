@@ -194,40 +194,45 @@ def _probe_single_bridge(
                     line for line in re.split(r"\s+\|\s+|\r?\n", diagnostic)
                     if "error dialing:" in line
                 ]
-                # These are strong endpoint-specific failures: a closed port,
-                # a refused TCP connection, a missing host, or a peer that
-                # repeatedly resets/closes the connection.
+                # These indicate a specific endpoint failure strongly enough
+                # to act on after one attempt: a refused TCP port or a hostname
+                # that cannot be resolved at all.
                 hard_dial_failures = (
                     "connection refused",
                     "actively refused",
                     "no connection could be made",
-                    "connection reset by peer",
-                    "forcibly closed by the remote host",
-                    "forcibly closed by remote host",
                     "no such host",
                     "name or service not known",
-                    "unexpected eof",
-                    "eof",
                 )
                 if any(any(marker in line for marker in hard_dial_failures) for line in dial_lines):
                     return False
 
-                # One timeout may be a transient network delay. Only classify
-                # timeouts as bridge-specific after multiple independent dial
-                # attempts to this isolated bridge fail during the probe.
-                transient_dial_failures = (
+                # A timeout, reset, EOF, or remote close can be transient (or
+                # caused by a front-end/SNI mismatch). Require at least two
+                # separate failed dial log lines for this isolated bridge
+                # before marking it unusable.
+                repeated_dial_failures = (
                     "timed out",
                     "timeout",
                     "i/o timeout",
                     "failed to respond",
                     "period of time",
                     "wsarecv",
+                    "connection reset by peer",
+                    "connection reset",
+                    "connection aborted",
+                    "forcibly closed by the remote host",
+                    "forcibly closed by remote host",
+                    "unexpected eof",
+                    "eof",
+                    "peer closed",
+                    "remote error: tls",
                 )
-                transient_failures = sum(
-                    any(marker in line for marker in transient_dial_failures)
+                repeated_failures = sum(
+                    any(marker in line for marker in repeated_dial_failures)
                     for line in dial_lines
                 )
-                if transient_failures >= 2:
+                if repeated_failures >= 2:
                     return False
                 if any(marker in diagnostic for marker in (
                     "bridge connection failed",
