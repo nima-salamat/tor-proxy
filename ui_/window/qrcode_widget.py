@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import sys
 from typing import Iterable
@@ -411,7 +410,7 @@ class QrCodeFloatingWindow(_FramelessDialog):
             "invalid": ("#f4b860", "NOT A BRIDGE"),
         }
         color, badge = palette.get(level, palette["working"])
-        self.status_dot.setStyleSheet(f"background: {color;}".replace(";", "") + "border-radius: 4px;")
+        self.status_dot.setStyleSheet(f"background: {color}; border-radius: 4px;")
         self.live_badge.setText(badge)
         self.live_badge.setStyleSheet(
             f"color: {color}; background: {color}18; border: 1px solid {color}66; "
