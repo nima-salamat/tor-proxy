@@ -397,6 +397,103 @@ class TorRunner(QObject):
         )
         return self._make_manager()
 
+    def _should_recheck_bridges_after_start_failure(self, manager: TorManager, error: Exception) -> bool:
+        """Decide whether a failed real bootstrap warrants one fresh bridge check."""
+        if (
+            self._stopping.is_set()
+            or not self.bridge
+            or not bool(CONFIG.get("auto_prune_bridges", False))
+        ):
+            return False
+
+        error_text = str(error).lower()
+        try:
+            diagnostic = manager._recent_tor_log_detail(max_lines=30).lower()
+        except Exception:
+            diagnostic = ""
+        combined = error_text + "\\n" + diagnostic
+
+        dial_failure_markers = (
+            "connection refused",
+            "actively refused",
+            "timed out",
+            "timeout",
+            "i/o timeout",
+            "no connection could be made",
+            "failed to respond",
+            "period of time",
+            "wsarecv",
+            "connection reset by peer",
+            "forcibly closed by the remote host",
+            "forcibly closed by remote host",
+            "no such host",
+            "server misbehaving",
+            "name or service not known",
+            "unexpected eof",
+            "eof",
+        )
+        has_explicit_dial_failure = (
+            "error dialing:" in combined
+            and any(marker in combined for marker in dial_failure_markers)
+        )
+        if has_explicit_dial_failure:
+            return True
+
+        # A transport executable/registration/TLS-runtime problem is global.
+        # Do not spend another full probe wave unless the same log also names
+        # a separately identifiable dial failure.
+        global_setup_errors = (
+            "createprocessa() failed",
+            "failed to start process",
+            "failed at launch",
+            "no configured transport called",
+            "curvepreferences includes unsupported curve",
+            "unknown pluggable transport",
+            "clienttransportplugin",
+        )
+        if any(marker in combined for marker in global_setup_errors):
+            return False
+
+        # Tor may have tried every configured bridge yet failed to complete
+        # bootstrap. A fresh isolated check can find a working alternative.
+        return (
+            "did not become ready within" in error_text
+            or "startup timed out" in error_text
+        )
+
+    def _start_with_bridge_recovery(self, manager: TorManager) -> TorManager:
+        """Start Tor, then make one conservative cleanup/retry after a real bootstrap failure."""
+        self.manager = manager
+        try:
+            manager.start(on_status=self._on_status)
+            return manager
+        except Exception as startup_error:
+            if not self._should_recheck_bridges_after_start_failure(manager, startup_error):
+                raise
+            if self._stopping.is_set():
+                raise
+
+            self.log_message.emit(
+                "Tor did not complete bootstrap. Rechecking configured bridges independently before deciding "
+                "whether any record can safely be removed; the original list is preserved unless an alternative "
+                "completes bootstrap."
+            )
+            replacement = self._auto_prune_bridges_before_start(manager)
+            if replacement is manager:
+                # Preserve the original startup failure when no alternative
+                # passed verification and no reduced configuration was made.
+                raise
+            if self._stopping.is_set():
+                raise TorManagerError("Tor startup was cancelled while checking bridge alternatives.")
+
+            self.manager = replacement
+            self.log_message.emit(
+                "A working bridge alternative was verified and failed records were removed. Retrying Tor startup "
+                "once with the reduced bridge list."
+            )
+            replacement.start(on_status=self._on_status)
+            return replacement
+
     def _run(self):
         try:
             manager = self.manager or self._make_manager()
@@ -404,8 +501,9 @@ class TorRunner(QObject):
             if self._stopping.is_set():
                 return
             self.manager = manager
-            self.manager.start(on_status=self._on_status)
-            self.proc = self.manager.process
+            manager = self._start_with_bridge_recovery(manager)
+            self.manager = manager
+            self.proc = manager.process
             self._publish_bridge_usage(self.manager)
             while not self._stopping.wait(1.0):
                 self._publish_bridge_usage(self.manager)
