@@ -405,7 +405,12 @@ class SettingWindow(QWidget):
             "Lyrebird bundle supports SNI imitation; if it fails, return to the default option."
         )
         sni_layout.addWidget(sni_note)
-        self.webtunnel_sni_status = QLabel("Default: no SNI override.", sni_row)
+        initial_sni_status = (
+            f"Saved SNI override: {saved_sni}. Applies on the next Tor start."
+            if saved_sni else
+            "Default: no SNI override; Lyrebird uses each WebTunnel bridge's url= hostname."
+        )
+        self.webtunnel_sni_status = QLabel(initial_sni_status, sni_row)
         self.webtunnel_sni_status.setObjectName("bridgeInputStatus")
         self.webtunnel_sni_status.setWordWrap(True)
         sni_layout.addWidget(self.webtunnel_sni_status)
