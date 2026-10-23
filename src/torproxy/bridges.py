@@ -153,6 +153,12 @@ def normalize_bridge_record(value: str) -> str:
 
     clean_remainder: list[str] = []
     for token in remainder_fields:
+        if token.casefold().startswith("fingerprint="):
+            supplied_fingerprint = token.split("=", 1)[1]
+            if not re.fullmatch(r"[0-9a-fA-F]{40}", supplied_fingerprint):
+                raise ValueError(
+                    "The fingerprint= bridge option must contain exactly 40 hexadecimal characters."
+                )
         extra_authority = _canonical_authority(token)
         if extra_authority is not None:
             # A duplicate endpoint is common when bridge text has been copied
