@@ -12,11 +12,11 @@ from PySide6.QtWidgets import (
     QFrame,
     QSystemTrayIcon
 )
-from PySide6.QtGui import QIcon, QAction, QActionGroup, QGuiApplication
+from PySide6.QtGui import QIcon, QAction, QActionGroup, QGuiApplication, QCursor
 import qdarkstyle
 from qdarkstyle.dark.palette import DarkPalette
 from qdarkstyle.light.palette import LightPalette
-from PySide6.QtCore import QEvent, QTimer, Qt, Signal, QSize
+from PySide6.QtCore import QEvent, QTimer, Qt, Signal, QSize, QPoint
 import qtawesome as qta
 from utils import resource_path
 import keyboard
@@ -101,8 +101,9 @@ class Window(QMainWindow):
         self.tray_exit_action.setIcon(qta.icon("fa6s.right-from-bracket", color="#d9534f"))
         self.tray_exit_action.triggered.connect(self.ask_close)
         self.tray_menu.addAction(self.tray_exit_action)
-        self.tray_icon.setContextMenu(self.tray_menu)
-        self.tray_icon.activated.connect(self.show_window)
+        # Do not give the menu to the shell: Windows chooses its own anchor and
+        # may open it downward over the tray icon. Position our menu explicitly.
+        self.tray_icon.activated.connect(self._on_tray_activated)
         self.tray_icon.show()
 
         self.listener_running = True
@@ -207,12 +208,44 @@ class Window(QMainWindow):
         # self.tray_icon.show()
         
     
-    def show_window(self, reason):
-        if reason in (
+    def _on_tray_activated(self, reason):
+        if reason == QSystemTrayIcon.ActivationReason.Context:
+            self._show_tray_context_menu()
+        elif reason in (
             QSystemTrayIcon.ActivationReason.Trigger,
             QSystemTrayIcon.ActivationReason.DoubleClick,
         ):
             self._toggle_visibility()
+
+    def show_window(self, reason):
+        # Retain the old signal-handler name for integrations and tests.
+        self._on_tray_activated(reason)
+
+    def _show_tray_context_menu(self):
+        """Open the app menu just above its tray icon, inside the work area."""
+        if not hasattr(self, "tray_menu"):
+            return
+        self.tray_toggle_action.setText(
+            "Show TorProxy" if self.isHidden() or self.isMinimized() else "Hide TorProxy"
+        )
+        self.tray_menu.ensurePolished()
+        size = self.tray_menu.sizeHint()
+        anchor = QCursor.pos()
+        screen = QGuiApplication.screenAt(anchor) or QGuiApplication.primaryScreen()
+        if screen is None:
+            self.tray_menu.exec(anchor)
+            return
+
+        area = screen.availableGeometry()
+        x = anchor.x() - size.width() // 2
+        y = anchor.y() - size.height() - 12
+        # Prefer opening above the icon. Use below only if the work area really
+        # has insufficient vertical room, and clamp both positions to the screen.
+        if y < area.top():
+            y = anchor.y() + 12
+        x = min(max(x, area.left()), area.right() - size.width() + 1)
+        y = min(max(y, area.top()), area.bottom() - size.height() + 1)
+        self.tray_menu.exec(QPoint(x, y))
    
     def _createMenuBar(self):
         # Use regular buttons: their icons and labels render consistently on every
