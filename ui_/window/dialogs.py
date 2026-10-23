@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from config import CONFIG
+from torproxy.hotkeys import parse_hotkey
 
 
 class StandardButton(IntFlag):
@@ -281,6 +282,30 @@ class _FramelessDialog(QDialog):
             QCheckBox#dontAskAgain {{ color: {self._colors["text"]}; background: transparent; spacing: 8px; font-size: 8.25pt; }}
             QCheckBox#dontAskAgain::indicator {{ width: 16px; height: 16px; border: 1px solid {self._colors["border"]}; border-radius: 4px; background: {self._colors["panel"]}; }}
             QCheckBox#dontAskAgain::indicator:checked {{ background: {self._accent}; border-color: {self._accent}; }}
+            QFrame#shortcutCapturePanel {{
+                background: {self._colors["panel"]};
+                border: 1px solid {self._colors["border"]};
+                border-radius: 12px;
+            }}
+            QLabel#shortcutCaptureBadge {{
+                color: {self._accent};
+                background: transparent;
+                font-size: 8.5pt;
+                font-weight: 850;
+                letter-spacing: 1px;
+            }}
+            QLabel#shortcutCaptureValue {{
+                color: {self._colors["text"]};
+                background: transparent;
+                font-size: 17pt;
+                font-weight: 800;
+                padding: 8px;
+            }}
+            QLabel#shortcutCaptureHint {{
+                color: {self._colors["muted"]};
+                background: transparent;
+                font-size: 8.5pt;
+            }}
         """)
 
     def add_footer_spacer(self):
@@ -522,3 +547,187 @@ class ExitConfirmDialog(MessageDialog):
         self.body_layout.addWidget(self.dont_ask_checkbox)
         self.adjustSize()
         self._remember_preferred_size()
+
+
+
+class ShortcutCaptureDialog(_FramelessDialog):
+    """Game-style capture flow for rebinding a global shortcut."""
+
+    _MODIFIER_KEYS = {
+        Qt.Key.Key_Control,
+        Qt.Key.Key_Shift,
+        Qt.Key.Key_Alt,
+        Qt.Key.Key_Meta,
+        Qt.Key.Key_AltGr,
+    }
+
+    def __init__(self, parent=None, current_shortcut="Ctrl+Alt+P"):
+        super().__init__(
+            parent,
+            "Change global shortcut",
+            "fa6s.keyboard",
+            "#287db5",
+            width=520,
+        )
+        self.shortcut: str | None = None
+        self._captured_shortcut: str | None = None
+        self._listening = True
+
+        intro = QLabel(
+            "Press the key combination you want to use. Release the keys, then press Enter to save.",
+            self.body_host,
+        )
+        intro.setObjectName("dialogMessage")
+        intro.setWordWrap(True)
+        self.body_layout.addWidget(intro)
+
+        current = QLabel(f"CURRENT  ·  {current_shortcut}", self.body_host)
+        current.setObjectName("shortcutCaptureHint")
+        self.body_layout.addWidget(current)
+
+        panel = QFrame(self.body_host)
+        panel.setObjectName("shortcutCapturePanel")
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(16, 15, 16, 15)
+        panel_layout.setSpacing(7)
+
+        self.badge = QLabel("●  LISTENING FOR INPUT", panel)
+        self.badge.setObjectName("shortcutCaptureBadge")
+        self.badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        panel_layout.addWidget(self.badge)
+
+        self.capture_value = QLabel("Press a modifier and a key…", panel)
+        self.capture_value.setObjectName("shortcutCaptureValue")
+        self.capture_value.setWordWrap(True)
+        self.capture_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        panel_layout.addWidget(self.capture_value)
+
+        self.capture_hint = QLabel(
+            "Enter  Apply     ·     Backspace  Listen again     ·     Esc  Cancel",
+            panel,
+        )
+        self.capture_hint.setObjectName("shortcutCaptureHint")
+        self.capture_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.capture_hint.setWordWrap(True)
+        panel_layout.addWidget(self.capture_hint)
+        self.body_layout.addWidget(panel)
+
+        self._listening_note = QLabel(
+            "Global shortcuts need at least one modifier, such as Ctrl, Alt, Shift, or Win.",
+            self.body_host,
+        )
+        self._listening_note.setObjectName("dialogHint")
+        self._listening_note.setWordWrap(True)
+        self.body_layout.addWidget(self._listening_note)
+
+        self.retry_button = self.add_button(
+            "Listen again", primary=False, callback=self._begin_listening
+        )
+        self.retry_button.setIcon(qta.icon("fa6s.rotate", color=self._colors["text"]))
+        self.add_footer_spacer()
+        self.cancel_button = self.add_button("Cancel", primary=False, callback=self.reject)
+        self.apply_button = self.add_button(
+            "Apply shortcut", primary=True, callback=self._apply_captured
+        )
+        self.apply_button.setEnabled(False)
+        self.resize(540, 370)
+        self._remember_preferred_size()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self._begin_listening)
+
+    def _begin_listening(self):
+        self._captured_shortcut = None
+        self._listening = True
+        self.capture_value.setText("Press a modifier and a key…")
+        self.badge.setText("●  LISTENING FOR INPUT")
+        self._listening_note.setText(
+            "Waiting for a new combination. Modifier keys alone are not saved."
+        )
+        self.apply_button.setEnabled(False)
+        if self.isVisible():
+            self.activateWindow()
+            self.raise_()
+            self.grabKeyboard()
+
+    @staticmethod
+    def _modifier_value(modifiers):
+        value = getattr(modifiers, "value", None)
+        return int(value if value is not None else modifiers)
+
+    def keyPressEvent(self, event):
+        key = event.key()
+        if key == Qt.Key.Key_Escape:
+            self.reject()
+            event.accept()
+            return
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if self._captured_shortcut:
+                self._apply_captured()
+            else:
+                self._listening_note.setText(
+                    "Nothing captured yet. Press a modifier plus a key first."
+                )
+            event.accept()
+            return
+        if key == Qt.Key.Key_Backspace:
+            self._begin_listening()
+            event.accept()
+            return
+        if event.isAutoRepeat():
+            event.accept()
+            return
+        if key in self._MODIFIER_KEYS:
+            self._listening_note.setText(
+                "Modifier detected. Keep it held and press the main key."
+            )
+            event.accept()
+            return
+        if key == Qt.Key.Key_unknown:
+            self._listening_note.setText(
+                "That key cannot be represented. Try a letter, number, function key, or navigation key."
+            )
+            event.accept()
+            return
+
+        try:
+            combined = self._modifier_value(event.modifiers()) | int(key)
+            sequence = QKeySequence(combined).toString(
+                QKeySequence.SequenceFormat.PortableText
+            )
+            normalized = parse_hotkey(sequence).text
+        except (TypeError, ValueError, RuntimeError) as exc:
+            self._captured_shortcut = None
+            self.capture_value.setText("Unsupported combination")
+            self.badge.setText("●  TRY ANOTHER KEY")
+            self._listening_note.setText(str(exc))
+            self.apply_button.setEnabled(False)
+            event.accept()
+            return
+
+        self._captured_shortcut = normalized
+        self._listening = False
+        self.capture_value.setText(normalized)
+        self.badge.setText("✓  COMBINATION CAPTURED")
+        self._listening_note.setText(
+            "Press Enter or Apply shortcut to save. Use Listen again or Backspace to record another combination."
+        )
+        self.apply_button.setEnabled(True)
+        self.releaseKeyboard()
+        event.accept()
+
+    def _apply_captured(self):
+        if not self._captured_shortcut:
+            self._begin_listening()
+            return
+        self.shortcut = self._captured_shortcut
+        if self.keyboardGrabber() is self:
+            self.releaseKeyboard()
+        self.accept()
+
+    def reject(self):
+        if self.keyboardGrabber() is self:
+            self.releaseKeyboard()
+        self._listening = False
+        super().reject()
