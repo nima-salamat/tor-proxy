@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 import re
 
 import qtawesome as qta
-from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor
+from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor, QTextFormat
 
 
 class LogWindow(QWidget):
@@ -166,6 +166,7 @@ class LogWindow(QWidget):
         color = self._log_palette().get(category, self._log_palette()["info"])
         fmt = QTextCharFormat()
         fmt.setForeground(QColor(color))
+        fmt.setProperty(QTextFormat.Property.UserProperty, category)
         if category in {"error", "critical", "warning", "success"}:
             fmt.setFontWeight(700 if category != "warning" else 600)
         return fmt
@@ -176,9 +177,16 @@ class LogWindow(QWidget):
         while block.isValid():
             text = block.text()
             if text:
+                probe = QTextCursor(block)
+                probe.movePosition(QTextCursor.MoveOperation.NextCharacter)
+                stored_level = probe.charFormat().property(QTextFormat.Property.UserProperty)
+                if not isinstance(stored_level, str) or stored_level not in {
+                    "debug", "info", "success", "warning", "error", "critical"
+                }:
+                    stored_level = self._message_level(text)
                 cursor = QTextCursor(block)
                 cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
-                cursor.mergeCharFormat(self._format_for_category(self._message_level(text)))
+                cursor.mergeCharFormat(self._format_for_category(stored_level))
             block = block.next()
 
     def _log_palette(self):
