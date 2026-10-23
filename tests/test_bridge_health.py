@@ -162,6 +162,38 @@ def test_explicit_webtunnel_dial_timeout_is_classified_as_bridge_specific(monkey
     assert outcome is False
 
 
+def test_windows_refused_connection_is_bridge_specific_even_with_lyrebird_path(monkeypatch, tmp_path):
+    outcome = _probe_with_fake_tor_log(
+        monkeypatch,
+        tmp_path,
+        'Managed proxy "C:\\\\TorProxy\\\\lyrebird.exe": Error dialing: error dialing '
+        'my.benches.date:443: dial tcp 10.10.34.34:443: connectex: '
+        'No connection could be made because the target machine actively refused it.',
+    )
+    assert outcome is False
+
+
+def test_dns_hostname_not_found_is_bridge_specific(monkeypatch, tmp_path):
+    outcome = _probe_with_fake_tor_log(
+        monkeypatch,
+        tmp_path,
+        'Managed proxy "C:\\\\TorProxy\\\\lyrebird.exe": Error dialing: '
+        'lookup bridge.invalid on 127.0.0.1:53: no such host',
+    )
+    assert outcome is False
+
+
+def test_generic_socks_failure_and_dns_leak_warning_are_not_bridge_health_proof(monkeypatch, tmp_path):
+    outcome = _probe_with_fake_tor_log(
+        monkeypatch,
+        tmp_path,
+        "Proxy Client: unable to connect OR connection (handshaking (proxy)) "
+        'with [2001:db8::12]:443 ("general SOCKS server failure"). '
+        "Your application (using socks5 to port 443) is giving Tor only an IP address.",
+    )
+    assert outcome is None
+
+
 def test_missing_guard_descriptor_is_inconclusive_not_a_dead_bridge(monkeypatch, tmp_path):
     outcome = _probe_with_fake_tor_log(
         monkeypatch,
