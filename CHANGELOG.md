@@ -4,6 +4,9 @@ All notable changes are recorded here. Dates and release numbers are added only 
 
 ## Unreleased — UI, updater, and security redesign
 
+- Fixed Windows pluggable-transport launch configuration: Lyrebird's native executable path is now passed as a literal path token instead of the Torrc-escaped, quoted path that caused `CreateProcessA()` to fail. Transport launch errors are now distinguished from unreachable bridges, so the auto-check never prunes bridge records for a local executable/configuration failure.
+- Stabilized the live log viewer by appending streamed rows in place, capping the visible document without redrawing it on every poll, preserving the user's vertical/horizontal scroll position, and keeping the horizontal scrollbar on a left-to-right layout.
+
 - Added a live on-disk Tor log viewer launched from Event Log, with colored severities, configurable visible-line limits, paginated older history, live tailing, and confirmation before clearing the active log.
 - Fixed the bootstrap display path to parse Tor's own `Bootstrapped N%` notices when ControlPort status is delayed; `100%` from a log alone no longer marks Tor connected before ControlPort and SOCKS verification.
 
