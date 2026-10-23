@@ -761,12 +761,14 @@ class SettingWindow(QWidget):
         if text.strip() and parsed.invalid_records:
             self._bridge_normalize_timer.stop()
             invalid_count = len(parsed.invalid_records)
+            details = " ".join(parsed.errors[:3])
+            if len(parsed.errors) > 3:
+                details += f" Plus {len(parsed.errors) - 3} more item(s)."
             self.bridge_status_label.setText(
-                f"Could not recognize {invalid_count} item(s). Each bridge must contain one address:port. "
-                "Do not add a second endpoint as a parameter. Supported transport labels are obfs4, snowflake, "
-                "webtunnel and meek_lite; a direct bridge without a transport label is also accepted. "
-                "IPv6 endpoints are normalized to [address]:port with no quotes. "
-                "The last valid saved bridge list remains active until this text is fixed."
+                f"Could not use {invalid_count} bridge item(s). {details} "
+                "Copy the complete bridge line from Tor's bridge source. Fingerprints, when present, must be 40 hex characters. "
+                "A direct bridge without a transport label is accepted, and IPv6 endpoints are normalized automatically. "
+                "The last valid saved bridge list remains active until the input is fixed."
             )
             if not self._bridge_input_invalid:
                 self._refresh_bridge_cards(self._saved_bridge_records, removable=False)
