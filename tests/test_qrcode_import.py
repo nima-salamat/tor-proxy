@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from ui_.window.qrcode_widget import (
+from torproxy.bridge_qr import (
     bridge_import_actions,
     merge_bridge_lines,
     parse_bridge_payload,
