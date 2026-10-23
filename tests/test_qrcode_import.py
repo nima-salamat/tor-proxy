@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from torproxy.bridges import parse_bridge_text
 from torproxy.bridge_qr import (
     bridge_import_actions,
     merge_bridge_lines,
@@ -13,7 +14,7 @@ from torproxy.bridge_qr import (
 def test_bridge_qr_accepts_json_array_and_deduplicates_lines():
     bridges = [
         "obfs4 192.0.2.10:443 AABBCCDDEEFF cert=abc iat-mode=0",
-        "webtunnel bridges.example.org:443 url=https://bridges.example.org/",
+        "webtunnel 198.51.100.11:443 url=https://bridges.example.org/",
     ]
     payload = json.dumps(bridges + [bridges[0]])
 
@@ -23,12 +24,12 @@ def test_bridge_qr_accepts_json_array_and_deduplicates_lines():
 def test_bridge_qr_accepts_torrc_prefix_and_multiline_text():
     payload = """Bridge obfs4 192.0.2.12:443 AABB cert=abc iat-mode=0
 # comment
-snowflake snowflake.example.org:443 fingerprint=abc
+snowflake 198.51.100.12:443 fingerprint=abc
 not a bridge
 """
     assert parse_bridge_payload(payload) == [
         "obfs4 192.0.2.12:443 AABB cert=abc iat-mode=0",
-        "snowflake snowflake.example.org:443 fingerprint=abc",
+        "snowflake 198.51.100.12:443 fingerprint=abc",
     ]
 
 
@@ -47,11 +48,11 @@ def test_bridge_qr_rejects_unrelated_or_invalid_payloads():
 def test_bridge_qr_ignores_malformed_lines_but_keeps_valid_bridges():
     payload = """obfs4 203.0.113.2:443 fingerprint cert=x
 obfs4 not-a-host fingerprint
-meek_lite bridge.example.net:8443 front=cdn.example.org
+webtunnel [2001:db8::12]:8443 url=https://bridge.example.net/ front=cdn.example.org
 """
     assert parse_bridge_payload(payload) == [
         "obfs4 203.0.113.2:443 fingerprint cert=x",
-        "meek_lite bridge.example.net:8443 front=cdn.example.org",
+        "webtunnel [2001:db8::12]:8443 url=https://bridge.example.net/ front=cdn.example.org",
     ]
 
 
@@ -63,17 +64,53 @@ def test_bridge_action_choices_depend_on_existing_settings_text():
 
 
 def test_add_bridge_lines_preserves_existing_entries_and_avoids_duplicates():
-    existing = "obfs4 192.0.2.4:443 fingerprint\nwebtunnel bridge.example.org:443 url=x"
+    existing = "obfs4 192.0.2.4:443 fingerprint\nwebtunnel 198.51.100.12:443 url=x"
     incoming = [
         "OBFS4 192.0.2.4:443 FINGERPRINT",
         "snowflake 198.51.100.4:443 fingerprint",
     ]
     assert merge_bridge_lines(existing, incoming) == [
         "obfs4 192.0.2.4:443 fingerprint",
-        "webtunnel bridge.example.org:443 url=x",
+        "webtunnel 198.51.100.12:443 url=x",
         "snowflake 198.51.100.4:443 fingerprint",
     ]
 
+
+
+
+def test_pasted_single_line_bridge_list_is_split_and_canonicalized():
+    pasted = (
+        "Bridge OBFS4 192.0.2.10:443 ABCDEF cert=abc   "
+        "snowflake 198.51.100.12:443 fingerprint=def "
+        "WEBTUNNEL [2001:db8::12]:8443 url=https://bridge.example.net/"
+    )
+    parsed = parse_bridge_text(pasted)
+    assert parsed.invalid_records == ()
+    assert parsed.records == (
+        "obfs4 192.0.2.10:443 ABCDEF cert=abc",
+        "snowflake 198.51.100.12:443 fingerprint=def",
+        "webtunnel [2001:db8::12]:8443 url=https://bridge.example.net/",
+    )
+
+
+def test_bridge_parser_deduplicates_and_reports_unrecognized_chunks():
+    pasted = (
+        "obfs4 192.0.2.10:443 fingerprint "
+        "obfs4 192.0.2.10:443 fingerprint "
+        "invalid-content"
+    )
+    parsed = parse_bridge_text(pasted)
+    assert parsed.records == ("obfs4 192.0.2.10:443 fingerprint",)
+    assert parsed.invalid_records == ("invalid-content",)
+
+
+def test_qr_payload_uses_same_supported_transports_as_tor_runtime():
+    payload = """
+obfs4 192.0.2.10:443 fingerprint
+meek_lite 198.51.100.10:8443 front=cdn.example.org
+webtunnel bridge.example.org:443 url=https://bridge.example.org/
+"""
+    assert parse_bridge_payload(payload) == ["obfs4 192.0.2.10:443 fingerprint"]
 
 
 def test_qr_scanner_button_callbacks_exist_for_application_startup():
