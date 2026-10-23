@@ -508,7 +508,7 @@ def test_global_hotkey_is_configurable_and_uses_native_session_recovery():
     assert "global_shortcut" not in settings_source
     assert "def _global_shortcut_changed" not in settings_source
     assert "class ShortcutCaptureDialog" in dialogs_source
-    assert "Press Enter to save" in dialogs_source
+    assert "press Enter to save" in dialogs_source
     assert "def change_global_shortcut(self)" in shortcuts_source
     assert 'self.change_shortcut_button.clicked.connect(self.change_global_shortcut)' in shortcuts_source
     assert "QKeySequenceEdit" not in shortcuts_source
