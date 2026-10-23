@@ -9,7 +9,6 @@ from enum import IntFlag
 
 import qtawesome as qta
 from PySide6.QtCore import QPoint, Qt
-from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -334,7 +333,20 @@ class MessageDialog(_FramelessDialog):
         message_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         message_label.setMinimumWidth(390)
         message_label.setMaximumWidth(620)
-        self.body_layout.addWidget(message_label)
+        if len(str(message)) > 420:
+            scroll = QScrollArea(self.body_host)
+            scroll.setObjectName("dialogScroll")
+            scroll.setWidgetResizable(True)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            scroll.setMaximumHeight(260)
+            content = QWidget(scroll)
+            content_layout = QVBoxLayout(content)
+            content_layout.setContentsMargins(0, 0, 0, 0)
+            content_layout.addWidget(message_label)
+            scroll.setWidget(content)
+            self.body_layout.addWidget(scroll)
+        else:
+            self.body_layout.addWidget(message_label)
 
         if question:
             self.add_footer_spacer()
@@ -354,8 +366,6 @@ class MessageDialog(_FramelessDialog):
             self.add_button("Got it", primary=True, callback=self.accept)
             self.setMinimumHeight(150)
 
-        if len(str(message)) > 420:
-            message_label.setMaximumHeight(260)
         self.adjustSize()
 
     def _choose_yes(self):
@@ -410,7 +420,6 @@ class ShortcutsDialog(_FramelessDialog):
 
         self.add_footer_spacer()
         done = self.add_button("Done", primary=True, callback=self.accept)
-        done.setShortcut("Esc")
         done.setToolTip("Close this screen (Esc)")
         self.resize(620, 570)
         self.setMinimumHeight(500)
