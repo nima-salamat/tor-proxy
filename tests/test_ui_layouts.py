@@ -168,7 +168,8 @@ def test_settings_and_bundle_pages_use_available_height_without_duplicate_subtit
     assert "QScrollArea" in settings_source and "setWidgetResizable(True)" in settings_source
     assert "lbl_page_number" not in settings_source
     assert "Browse official release channels" not in updater_source
-    assert "setMinimumHeight(180)" in updater_source
+    assert "self.updates_list.setMinimumHeight(250)" in updater_source
+    assert "self.list_tor_versions.setMinimumHeight(250)" in updater_source
     pulse_source = (repository / "ui_/btn/pulse_button.py").read_text(encoding="utf-8")
     assert "connectPulseButton" in proxy_source
     assert "setFixedSize(264, 264)" in pulse_source
