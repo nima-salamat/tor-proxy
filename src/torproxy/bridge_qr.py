@@ -1,27 +1,10 @@
-"""Pure helpers for validating/importing bridge lines decoded from QR payloads."""
+"""Compatibility helpers for importing Tor bridge records from QR payloads."""
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Iterable
 
-
-_BRIDGE_METHODS = (
-    "obfs4",
-    "obfs3",
-    "obfs2",
-    "scramblesuit",
-    "meek_lite",
-    "snowflake",
-    "webtunnel",
-    "fte",
-    "vanilla",
-)
-_BRIDGE_LINE_RE = re.compile(
-    r"^(?:(?:" + "|".join(_BRIDGE_METHODS) + r")\s+)?"
-    r"(?P<host>\[[0-9a-fA-F:.]+\]|[A-Za-z0-9.-]+):(?P<port>\d{1,5})(?:\s+.*)?$",
-    re.IGNORECASE,
-)
+from .bridges import parse_bridge_text
 
 
 def bridge_import_actions(existing_text: str) -> tuple[bool, bool, bool]:
@@ -31,19 +14,27 @@ def bridge_import_actions(existing_text: str) -> tuple[bool, bool, bool]:
 
 
 def merge_bridge_lines(existing_text: str, imported_lines: Iterable[str]) -> list[str]:
-    """Append new bridge lines without deleting or duplicating existing entries."""
-    merged = [line.strip() for line in str(existing_text or "").splitlines() if line.strip()]
+    """Append canonical bridge records without deleting or duplicating entries."""
+    existing = parse_bridge_text(str(existing_text or ""))
+    if existing.invalid_records:
+        # Never silently discard content already typed by the user. Leave it as
+        # entered, then append normalized QR records not already present.
+        merged = [line.strip() for line in str(existing_text or "").splitlines() if line.strip()]
+    else:
+        merged = list(existing.records)
+
     seen = {line.casefold() for line in merged}
-    for line in imported_lines:
-        candidate = str(line).strip()
-        if candidate and candidate.casefold() not in seen:
+    incoming = parse_bridge_text("\n".join(str(item) for item in imported_lines))
+    for candidate in incoming.records:
+        key = candidate.casefold()
+        if key not in seen:
             merged.append(candidate)
-            seen.add(candidate.casefold())
+            seen.add(key)
     return merged
 
 
 def parse_bridge_payload(payload: str) -> list[str]:
-    """Decode common Tor QR payload shapes and reject unrelated QR codes."""
+    """Decode common Tor QR payload shapes into the exact bridge format TorProxy accepts."""
     raw = str(payload or "").strip()
     if not raw:
         return []
@@ -61,32 +52,12 @@ def parse_bridge_payload(payload: str) -> list[str]:
                 break
 
     if isinstance(value, str):
-        candidates: Iterable[object] = value.splitlines()
+        text = value
     elif isinstance(value, (tuple, list)):
-        candidates = value
+        text = "\n".join(item for item in value if isinstance(item, str))
     else:
         return []
 
-    lines: list[str] = []
-    seen: set[str] = set()
-    for candidate in candidates:
-        if not isinstance(candidate, str):
-            continue
-        for part in candidate.splitlines():
-            line = part.strip()
-            if not line or line.startswith("#"):
-                continue
-            line = re.sub(r"^Bridge\s+", "", line, flags=re.IGNORECASE).strip()
-            match = _BRIDGE_LINE_RE.fullmatch(line)
-            if match is None:
-                continue
-            try:
-                port = int(match.group("port"))
-            except ValueError:
-                continue
-            if not 1 <= port <= 65535:
-                continue
-            if line not in seen:
-                seen.add(line)
-                lines.append(line)
-    return lines
+    # Ignore unrelated QR payload fragments, but always return normalized
+    # complete records; Settings and Tor's torrc generator share this parser.
+    return list(parse_bridge_text(text).records)
