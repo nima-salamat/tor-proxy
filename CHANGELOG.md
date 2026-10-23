@@ -4,6 +4,9 @@ All notable changes are recorded here. Dates and release numbers are added only 
 
 ## Unreleased — UI, updater, and security redesign
 
+- Added an opt-in bridge health check that tests multiple bridge records independently in parallel and removes confirmed failures only when at least one alternative completes Tor bootstrap; inconclusive checks and all-failed lists are preserved.
+- Updated shortcut capture to show the live modifier/key combination while keys are held and finalize the binding on key release.
+
 - Reworked the desktop shell with the existing top navigation, clearer page hierarchy, a live Tor state summary in the page header, and coordinated light/dark styling while retaining the existing feature views.
 - Added stable-versus-alpha Tor release recognition, numeric ordering, and exact Expert Bundle plus detached-signature eligibility checks; unsupported release folders are not treated as downloadable artifacts.
 - Added typed streamed-download progress, size/speed/ETA reporting where available, cancellation during safe transfer stages, and distinct signature/extraction/install status.
