@@ -43,7 +43,7 @@ def enable_crash_reporting() -> None:
         _CRASH_LOG_HANDLE = handle
     except Exception:
         # Crash reporting must never prevent TorProxy from starting.
-        sys.stderr.write("TorProxy: could not enable native crash diagnostics.\\n")
+        sys.stderr.write("TorProxy: could not enable native crash diagnostics.\n")
 
 
 def _log_uncaught_exception(exc_type, exc_value, exc_traceback) -> None:
