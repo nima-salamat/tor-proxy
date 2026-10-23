@@ -168,6 +168,11 @@ def _probe_single_bridge(
                         None,
                         f"missing_transport:{name}",
                     )
+                if "tls: curvepreferences includes unsupported curve" in diagnostic:
+                    return BridgeProbeOutcome(
+                        None,
+                        "transport_runtime_incompatible",
+                    )
                 if any(marker in diagnostic for marker in (
                     "unknown pluggable transport",
                     "could not launch transport",
@@ -178,10 +183,29 @@ def _probe_single_bridge(
                         None,
                         "transport_setup_unavailable",
                     )
+
+                # Relay/guard directory state is not bridge liveness. Tor can
+                # temporarily lack a node descriptor even when the bridge
+                # transport itself is reachable, so do not prune on this notice.
+                if "failed to find node for hop #1" in diagnostic:
+                    return None
+
                 error_text = str(exc).lower()
                 if "did not become ready within" in error_text or "timed out" in error_text or "timeout" in error_text:
                     return None
-                if any(marker in diagnostic for marker in (
+                explicit_dial_failure = (
+                    "error dialing:" in diagnostic
+                    and any(marker in diagnostic for marker in (
+                        "connection refused",
+                        "actively refused",
+                        "timed out",
+                        "timeout",
+                        "no connection could be made",
+                        "network is unreachable",
+                        "host is down",
+                    ))
+                )
+                if explicit_dial_failure or any(marker in diagnostic for marker in (
                     "bridge connection failed",
                     "failed to connect to bridge",
                     "bridge is unreachable",
