@@ -538,6 +538,20 @@ class TorManager:
                 raise TorManagerError("Tor configuration validation timed out.") from exc
             if check.returncode != 0:
                 details = self._summarize_process_output(check.stdout)
+                lowered_details = details.lower()
+                if settings.bridges_enabled and (
+                    "bridge line did not parse" in lowered_details
+                    or "is not a k=v value" in lowered_details
+                    or "is not a k=v item" in lowered_details
+                ):
+                    raise TorManagerError(
+                        "Tor rejected one of the configured Bridge records. IPv6 endpoints must be written as "
+                        "[address]:port without quotes, followed by the bridge fingerprint and transport parameters "
+                        "(for example url=… and ver=0.0.1 for WebTunnel). TorProxy now removes quotes around IPv6 "
+                        "endpoints automatically; if this error persists, check that the complete bridge line was "
+                        "pasted and contains its fingerprint/required parameters. Tor diagnostics: "
+                        + (details or "no further details")
+                    )
                 raise TorManagerError(
                     "Tor rejected its configuration: "
                     + (details or "unknown validation error")
