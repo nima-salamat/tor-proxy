@@ -209,7 +209,7 @@ def test_theme_sync_and_titlebar_use_fontawesome_icons_and_consistent_corner_bac
     ui_source = (repository / "ui.py").read_text(encoding="utf-8")
     settings_source = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
     titlebar_source = (repository / "ui_/window/custom_titlebar.py").read_text(encoding="utf-8")
-    assert "QMenuBar#topMenuBar, QWidget#menuBarCorner" in ui_source
+    assert "QWidget#topMenuBar, QWidget#menuBarCorner" in ui_source
     assert "QToolButton#topNavButton:checked" in ui_source
     assert "def _set_theme(self, mode)" in ui_source
     assert "self._parent._set_theme(mode)" in settings_source
