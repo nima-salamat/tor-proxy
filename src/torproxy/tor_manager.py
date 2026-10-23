@@ -719,12 +719,27 @@ class TorManager:
                             "has not been shown to be offline. Live Tor log details: " + diagnostic
                         )
                     if "tls: curvepreferences includes unsupported curve" in lowered_diagnostic:
-                        raise TorManagerError(
-                            "The bundled Lyrebird transport cannot negotiate TLS with this Go/TLS runtime "
-                            "('CurvePreferences includes unsupported curve'). This is a transport-bundle "
-                            "compatibility issue, not proof that the configured bridges are dead. Automatic "
-                            "cleanup will not remove bridge records for this error. Update or select a compatible "
-                            "Tor Expert Bundle and retry. Live Tor log details: " + diagnostic
+                        try:
+                            configured_bridges = self._parse_bridges(self.settings.bridges)
+                        except TorManagerError:
+                            configured_bridges = []
+                        # This error is global to Lyrebird, not a proof that the
+                        # remote bridge is dead. If the list includes a direct
+                        # bridge (no PT transport), give that alternative a
+                        # chance to build a circuit before declaring startup failed.
+                        has_direct_alternative = any(not transport for transport, _record in configured_bridges)
+                        if not has_direct_alternative:
+                            raise TorManagerError(
+                                "The bundled Lyrebird transport cannot negotiate TLS with this Go/TLS runtime "
+                                "('CurvePreferences includes unsupported curve'). This is a transport-bundle "
+                                "compatibility issue, not proof that the configured bridges are dead. Automatic "
+                                "cleanup will not remove bridge records for this error. The installed bundle appears "
+                                "to be an alpha/prerelease; try a verified stable Tor Expert Bundle in the updater. "
+                                "Live Tor log details: " + diagnostic
+                            )
+                        LOGGER.warning(
+                            "Lyrebird reported an unsupported TLS curve, but a direct-bridge alternative exists; "
+                            "continuing bootstrap rather than aborting on one transport error."
                         )
                     if "no configured transport called" in lowered_diagnostic:
                         transport_match = re.search(
