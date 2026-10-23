@@ -166,7 +166,7 @@ def test_repeated_webtunnel_dial_timeouts_are_classified_as_bridge_specific(monk
     outcome = _probe_with_fake_tor_log(
         monkeypatch,
         tmp_path,
-        "Managed proxy: Error dialing: read tcp local:5512->198.51.100.8:443: i/o timeout\\n"
+        "Managed proxy: Error dialing: read tcp local:5512->198.51.100.8:443: i/o timeout\n"
         "Managed proxy: Error dialing: read tcp local:5513->198.51.100.8:443: wsarecv timeout",
     )
     assert outcome is False
