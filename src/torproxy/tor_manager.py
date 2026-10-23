@@ -213,6 +213,27 @@ class TorManager:
             except Exception:
                 LOGGER.exception("Tor status callback failed.")
 
+    def _recent_tor_log_detail(self, *, max_lines: int = 5) -> str:
+        """Return bounded recent Tor diagnostics for early process-exit errors."""
+        try:
+            lines = [
+                line.strip()
+                for line in self.log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+                if line.strip()
+            ]
+        except OSError as exc:
+            return f"Tor log unavailable at {self.log_path}: {exc}"
+        if not lines:
+            return f"Tor log is empty ({self.log_path})."
+        # Keep the user-facing error actionable without flooding the notification UI.
+        recent = " | ".join(line[-220:] for line in lines[-max_lines:])
+        return f"Recent Tor log ({self.log_path}): {recent}"
+
+    @staticmethod
+    def _summarize_process_output(output: str | None, *, max_lines: int = 5) -> str:
+        lines = [line.strip() for line in (output or "").splitlines() if line.strip()]
+        return " | ".join(line[-220:] for line in lines[-max_lines:])
+
     def start(self, on_status: BootstrapCallback | None = None) -> None:
         if not self._start_lock.acquire(blocking=False):
             raise TorManagerError("A Tor start operation is already in progress.")
@@ -259,8 +280,11 @@ class TorManager:
             except subprocess.TimeoutExpired as exc:
                 raise TorManagerError("Tor configuration validation timed out.") from exc
             if check.returncode != 0:
-                details = (check.stdout or "").strip().splitlines()
-                raise TorManagerError("Tor rejected its configuration: " + (details[-1][:300] if details else "unknown validation error"))
+                details = self._summarize_process_output(check.stdout)
+                raise TorManagerError(
+                    "Tor rejected its configuration: "
+                    + (details or "unknown validation error")
+                )
 
             self._log_handle = self.log_path.open("ab", buffering=0)
             kwargs = {
@@ -283,7 +307,10 @@ class TorManager:
                 proc = self.process
                 if proc is None or proc.poll() is not None:
                     code = None if proc is None else proc.returncode
-                    raise TorManagerError(f"Tor exited unexpectedly during startup (exit code {code}).")
+                    detail = self._recent_tor_log_detail()
+                    raise TorManagerError(
+                        f"Tor exited unexpectedly during startup (exit code {code}). {detail}"
+                    )
                 try:
                     if self._controller is None:
                         if not self._port_ready(self.settings.control_port):
