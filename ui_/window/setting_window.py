@@ -399,23 +399,24 @@ class SettingWindow(QWidget):
         self.bridges_page_layout.addWidget(self.btn_qrcode)
 
         self.chk_auto_prune_bridges = QCheckBox(
-            "Automatically remove bridges that fail an isolated Tor check", self
+            "Automatically remove confirmed-unreachable bridges", self
         )
         self.chk_auto_prune_bridges.setObjectName("autoPruneBridgesPreference")
         self.chk_auto_prune_bridges.setToolTip(
-            "Before connecting, test each bridge separately. Only remove a bridge after an explicit endpoint failure and "
-            "only when another bridge completes bootstrap. Timeouts, missing directory descriptors, and Lyrebird/TLS "
-            "runtime errors are inconclusive and never trigger removal."
+            "Check bridges independently before connecting and recheck once if real Tor bootstrap times out. "
+            "Remove only bridge-specific dial failures when another bridge completes bootstrap. Generic SOCKS warnings, "
+            "DNS-leak notices, missing-hop messages, and global Lyrebird/TLS errors do not prove a bridge is dead."
         )
         self.chk_auto_prune_bridges.setChecked(bool(CONFIG["auto_prune_bridges"]))
         self.chk_auto_prune_bridges.setEnabled(bool(CONFIG["bridge"]))
         self.chk_auto_prune_bridges.toggled.connect(self.auto_prune_bridges_changed)
         self.bridges_page_layout.addWidget(self.chk_auto_prune_bridges)
         self.bridges_page_layout.addWidget(self._description(
-            "OFF by default. When enabled, TorProxy checks multiple bridges independently before connecting. Startup can take longer. "
-            "Only explicit per-bridge dial failures are eligible for removal, and only if at least one other bridge completes "
-            "Tor bootstrap. Unsupported Lyrebird/TLS options, generic SOCKS errors, missing relay descriptors, and inconclusive "
-            "timeouts preserve the list. If every check fails or is uncertain, nothing is deleted."
+            "OFF by default. When enabled, TorProxy checks multiple bridges independently before connecting, and may run one fresh "
+            "check if the real Tor bootstrap times out. Startup can take longer. Only explicit per-bridge dial failures are eligible "
+            "for removal, and only if at least one other bridge completes Tor bootstrap. Unsupported Lyrebird/TLS options, generic "
+            "SOCKS errors, DNS-leak warnings, missing relay descriptors, and inconclusive results preserve the list. If every check "
+            "fails or is uncertain, nothing is deleted and the list remains intact."
         ))
         self._refresh_bridge_cards(self._saved_bridge_records, removable=True)
         self.bridges_page_layout.addStretch(1)
