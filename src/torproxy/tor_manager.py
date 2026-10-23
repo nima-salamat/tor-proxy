@@ -88,6 +88,9 @@ class TorManager:
         self._controller = None
         self._log_handle = None
         self._log_start_offset = 0
+        self._bootstrap_log_offset = 0
+        self._bootstrap_log_pending = b""
+        self._last_log_bootstrap_report: tuple[int, str] | None = None
         self.state = TorState.STOPPED
         self.bootstrap_progress: int | None = None
         self.last_error: str | None = None
@@ -348,6 +351,87 @@ class TorManager:
         return f"Recent Tor log ({self.log_path}): {recent}"
 
     @staticmethod
+    def _parse_bootstrap_log_line(line: str) -> tuple[int, str] | None:
+        """Parse bootstrap progress emitted to Tor's configured notice log."""
+        match = re.search(r"\\bPROGRESS=(\\d{1,3})\\b", line, re.IGNORECASE)
+        if match:
+            progress = int(match.group(1))
+            if not 0 <= progress <= 100:
+                return None
+            summary = re.search(r"\\bSUMMARY=(?:\"([^\"]*)\"|(.*?))(?:\\s+\\w+=|$)", line, re.IGNORECASE)
+            tag = re.search(r"\\bTAG=([A-Za-z0-9_-]+)", line, re.IGNORECASE)
+            detail = (summary.group(1) or summary.group(2) or "").strip() if summary else ""
+            if not detail:
+                detail = tag.group(1).replace("_", " ") if tag else "Tor bootstrap in progress"
+            return progress, detail
+
+        match = re.search(
+            r"\\bBootstrapped\\s+(\\d{1,3})%\\s*(?:\\(([^)]*)\\))?\\s*:?[ \\t]*(.*)$",
+            line,
+            re.IGNORECASE,
+        )
+        if match:
+            progress = int(match.group(1))
+            if not 0 <= progress <= 100:
+                return None
+            stage = (match.group(2) or "").replace("_", " ").strip()
+            summary = match.group(3).strip()
+            detail = summary or stage or "Tor bootstrap in progress"
+            return progress, detail
+        return None
+
+    def _read_bootstrap_log_updates(self) -> list[tuple[int, str]]:
+        """Read newly appended Tor log lines and extract real bootstrap progress."""
+        try:
+            with self.log_path.open("rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                size = handle.tell()
+                if size < self._bootstrap_log_offset:
+                    # A user cleared/rotated the log while Tor was running.
+                    self._bootstrap_log_offset = size
+                    self._bootstrap_log_pending = b""
+                    return []
+                handle.seek(self._bootstrap_log_offset)
+                chunk = handle.read()
+                self._bootstrap_log_offset = handle.tell()
+        except OSError:
+            return []
+        if not chunk:
+            return []
+
+        payload = self._bootstrap_log_pending + chunk
+        lines = payload.split(b"\\n")
+        self._bootstrap_log_pending = lines.pop() if lines else b""
+        updates: list[tuple[int, str]] = []
+        for raw_line in lines:
+            parsed = self._parse_bootstrap_log_line(raw_line.decode("utf-8", errors="replace").strip())
+            if parsed is None or parsed == self._last_log_bootstrap_report:
+                continue
+            self._last_log_bootstrap_report = parsed
+            updates.append(parsed)
+        return updates
+
+    def clear_log_file(self) -> None:
+        """Clear the current Tor log while retaining the active stdout handle."""
+        with self._lock:
+            self.log_path.parent.mkdir(parents=True, exist_ok=True)
+            handle = self._log_handle
+            try:
+                if handle is not None and not handle.closed:
+                    handle.flush()
+                    os.ftruncate(handle.fileno(), 0)
+                    handle.seek(0, os.SEEK_END)
+                else:
+                    with self.log_path.open("wb"):
+                        pass
+            except OSError as exc:
+                raise TorManagerError(f"Could not clear Tor log file {self.log_path}: {exc}") from exc
+            self._log_start_offset = 0
+            self._bootstrap_log_offset = 0
+            self._bootstrap_log_pending = b""
+            self._last_log_bootstrap_report = None
+
+    @staticmethod
     def _summarize_process_output(output: str | None, *, max_lines: int = 5) -> str:
         lines = [line.strip() for line in (output or "").splitlines() if line.strip()]
         return " | ".join(line[-220:] for line in lines[-max_lines:])
@@ -409,6 +493,9 @@ class TorManager:
             self._log_handle = self.log_path.open("ab", buffering=0)
             self._log_handle.seek(0, os.SEEK_END)
             self._log_start_offset = self._log_handle.tell()
+            self._bootstrap_log_offset = self._log_start_offset
+            self._bootstrap_log_pending = b""
+            self._last_log_bootstrap_report = None
             kwargs = {
                 "stdin": subprocess.DEVNULL,
                 "stdout": self._log_handle,
@@ -439,6 +526,9 @@ class TorManager:
                     raise TorManagerError(
                         f"Tor exited unexpectedly during startup (exit code {code}). {detail}"
                     )
+                for log_progress, log_detail in self._read_bootstrap_log_updates():
+                    last_detail = log_detail
+                    self._emit(on_status, TorState.BOOTSTRAPPING, log_progress, log_detail)
                 try:
                     if self._controller is None:
                         if not self._port_ready(self.settings.control_port):
