@@ -12,10 +12,11 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QListWidget,
     QFrame,
-    QScrollArea
+    QScrollArea,
+    QKeySequenceEdit
 )
-from PySide6.QtCore import Qt, QThreadPool
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtCore import Qt, QThreadPool, QSignalBlocker
+from PySide6.QtGui import QColor, QPalette, QKeySequence
 import qtawesome as qta
 
 import qdarkstyle
@@ -28,6 +29,7 @@ from functools import partial
 logger = logging.getLogger(__name__)
 
 from config import CONFIG
+from torproxy.hotkeys import parse_hotkey
 from ui_.window.dialogs import QMessageBox
 from ui_.worker.worker import Worker
 from ui_.window.qrcode_widget import QrCodeFloatingWindow
@@ -127,6 +129,9 @@ class SettingWindow(QWidget):
             QLabel#settingsDescription {{ color: {muted}; font-size: 11px; padding: 0; }}
             QLabel#settingsFieldLabel {{ color: {text}; font-weight: 650; }}
             QLabel#signatureVerificationDetails {{ color: {muted}; background: transparent; padding: 3px 0; }}
+            QKeySequenceEdit#globalShortcutEdit {{ color: {text}; background: {field}; border: 1px solid {border}; border-radius: 7px; padding: 5px 9px; min-height: 30px; min-width: 190px; }}
+            QKeySequenceEdit#globalShortcutEdit:focus {{ border-color: {accent}; }}
+            QLabel#globalShortcutStatus {{ background: transparent; font-size: 10px; }}
             QLabel#themeModeValue {{ color: {accent}; background: transparent; font-size: 11px; font-weight: 800; min-width: 44px; }}
             QWidget#themeSwitch {{ background: transparent; border: none; }}
             QCheckBox#confirmExitPreference {{ color: {text}; background: transparent; spacing: 8px; font-weight: 650; }}
@@ -235,6 +240,40 @@ class SettingWindow(QWidget):
         self.chk_confirm_exit.toggled.connect(self._set_confirm_exit_preference)
         exit_layout.addWidget(self.chk_confirm_exit, 0, Qt.AlignmentFlag.AlignVCenter)
         self.first_page_layout.addWidget(exit_row)
+
+        shortcut_row = QFrame(self)
+        shortcut_row.setObjectName("settingsRowCard")
+        shortcut_layout = QHBoxLayout(shortcut_row)
+        shortcut_layout.setContentsMargins(14, 10, 14, 10)
+        shortcut_layout.setSpacing(14)
+        shortcut_copy = QVBoxLayout()
+        shortcut_copy.setSpacing(3)
+        shortcut_title = QLabel("Global show / hide shortcut")
+        shortcut_title.setObjectName("settingsFieldLabel")
+        shortcut_description = self._description(
+            "Choose a system-wide key combination. Windows uses native hotkey registration and refreshes it after unlock."
+        )
+        shortcut_copy.addWidget(shortcut_title)
+        shortcut_copy.addWidget(shortcut_description)
+        self.global_shortcut_status = QLabel(self)
+        self.global_shortcut_status.setObjectName("globalShortcutStatus")
+        shortcut_copy.addWidget(self.global_shortcut_status)
+        shortcut_layout.addLayout(shortcut_copy, 1)
+
+        self._saved_global_shortcut = str(CONFIG["global_shortcut"])
+        self.global_shortcut_edit = QKeySequenceEdit(QKeySequence(self._saved_global_shortcut), self)
+        self.global_shortcut_edit.setObjectName("globalShortcutEdit")
+        self.global_shortcut_edit.setMaximumSequenceLength(1)
+        self.global_shortcut_edit.setToolTip(
+            "Click here and press one chord, such as Ctrl+Alt+P. A modifier key is required."
+        )
+        self.global_shortcut_edit.keySequenceChanged.connect(self._global_shortcut_changed)
+        shortcut_layout.addWidget(self.global_shortcut_edit, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.first_page_layout.addWidget(shortcut_row)
+        self._set_global_shortcut_status(
+            f"Current shortcut: {self._saved_global_shortcut}", "success"
+        )
+
         self.first_page_layout.addWidget(self._section_title("Circuit behavior"))
         self.first_page_layout.addWidget(
             self._description("These values are used when Tor starts. Changing them while connected applies them on the next connection.")
@@ -595,6 +634,64 @@ class SettingWindow(QWidget):
             app.setStyleSheet(qdarkstyle.load_stylesheet(palette=palette))
         CONFIG["mode"] = mode
         self.set_theme_mode(mode)
+
+    def _set_global_shortcut_status(self, message, kind):
+        dark = CONFIG["mode"] == "dark"
+        colors = {
+            "success": "#5bd49a" if dark else "#16824b",
+            "warning": "#ffc857" if dark else "#a56600",
+            "error": "#ff7b82" if dark else "#c62833",
+        }
+        self.global_shortcut_status.setText(message)
+        self.global_shortcut_status.setStyleSheet(
+            f"color: {colors.get(kind, colors['success'])}; background: transparent; font-size: 10px;"
+        )
+
+    def _global_shortcut_changed(self, sequence):
+        shortcut_text = sequence.toString(QKeySequence.SequenceFormat.PortableText)
+        try:
+            parsed = parse_hotkey(shortcut_text)
+        except (TypeError, ValueError):
+            self._set_global_shortcut_status(
+                "Use one chord containing a modifier, for example Ctrl+Alt+P.", "warning"
+            )
+            return
+
+        normalized = parsed.text
+        previous = self._saved_global_shortcut
+        if normalized == previous:
+            self._set_global_shortcut_status(f"Current shortcut: {previous}", "success")
+            return
+
+        try:
+            CONFIG["global_shortcut"] = normalized
+        except (ValueError, OSError, KeyError) as exc:
+            logger.exception("Could not save global shortcut.")
+            blocker = QSignalBlocker(self.global_shortcut_edit)
+            self.global_shortcut_edit.setKeySequence(QKeySequence(previous))
+            del blocker
+            self._set_global_shortcut_status("Could not save shortcut. The previous one is still active.", "error")
+            QMessageBox.warning(self, "Shortcut could not be saved", str(exc))
+            return
+
+        try:
+            if self._parent is not None and hasattr(self._parent, "_set_global_shortcut"):
+                self._parent._set_global_shortcut(normalized)
+            self._saved_global_shortcut = normalized
+            self._set_global_shortcut_status(
+                f"Saved: {normalized}. If another app owns it, check Event Log.", "success"
+            )
+        except Exception as exc:
+            logger.exception("Could not apply the new global shortcut.")
+            try:
+                CONFIG["global_shortcut"] = previous
+            except (ValueError, OSError, KeyError):
+                logger.exception("Could not restore the previous global shortcut setting.")
+            blocker = QSignalBlocker(self.global_shortcut_edit)
+            self.global_shortcut_edit.setKeySequence(QKeySequence(previous))
+            del blocker
+            self._set_global_shortcut_status("Could not activate shortcut; restored the previous one.", "error")
+            QMessageBox.warning(self, "Shortcut could not be activated", str(exc))
 
     def _set_confirm_exit_preference(self, enabled):
         enabled = bool(enabled)
