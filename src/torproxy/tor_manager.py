@@ -9,6 +9,8 @@ import socket
 import subprocess
 import tempfile
 import threading
+
+import psutil
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -140,6 +142,70 @@ class TorManager:
             with _ACTIVE_DATA_DIRECTORIES_LOCK:
                 _ACTIVE_DATA_DIRECTORIES.discard(canonical)
             raise
+
+    def _stop_stale_managed_tor_processes(self) -> None:
+        """Reap Tor children left behind by an exited TorProxy UI, but only for our exact torrc."""
+        target_torrc = os.path.normcase(str(self.torrc_path.resolve()))
+        matching = []
+        for process in psutil.process_iter(["pid", "name", "cmdline"]):
+            try:
+                info = process.info
+                if int(info.get("pid") or 0) == os.getpid():
+                    continue
+                name = str(info.get("name") or "").casefold()
+                command = info.get("cmdline") or []
+                executable_name = Path(str(command[0])).name.casefold() if command else ""
+                if name not in {"tor", "tor.exe"} and executable_name not in {"tor", "tor.exe"}:
+                    continue
+                uses_managed_torrc = any(
+                    argument
+                    and os.path.normcase(str(Path(str(argument).strip('"')).resolve())) == target_torrc
+                    for argument in command[1:]
+                )
+                if uses_managed_torrc:
+                    matching.append(process)
+            except (psutil.NoSuchProcess, psutil.ZombieProcess):
+                continue
+            except (OSError, ValueError, TypeError):
+                logger.debug("Could not inspect a running process while checking TorProxy's torrc.", exc_info=True)
+
+        if not matching:
+            return
+        process_ids = [process.pid for process in matching]
+        logger.warning(
+            "Found stale Tor process(es) %s still referencing TorProxy's dedicated torrc; stopping them "
+            "before reusing the data directory.",
+            process_ids,
+        )
+        for process in matching:
+            try:
+                process.terminate()
+            except psutil.NoSuchProcess:
+                continue
+            except psutil.AccessDenied as exc:
+                raise TorManagerError(
+                    f"Could not stop stale Tor process {process.pid} using TorProxy's data directory. "
+                    "Close that process manually, then retry."
+                ) from exc
+        _, alive = psutil.wait_procs(matching, timeout=3)
+        if alive:
+            for process in alive:
+                try:
+                    process.kill()
+                except psutil.NoSuchProcess:
+                    pass
+                except psutil.AccessDenied as exc:
+                    raise TorManagerError(
+                        f"Stale Tor process {process.pid} could not be stopped. Close it manually, then retry."
+                    ) from exc
+            _, alive = psutil.wait_procs(alive, timeout=2)
+        if alive:
+            raise TorManagerError(
+                "A stale Tor process is still using TorProxy's data directory (PID(s): {}). "
+                "Close that process manually before retrying.".format(
+                    ", ".join(str(process.pid) for process in alive)
+                )
+            )
 
     def _release_data_directory_lock(self) -> None:
         handle, self._data_directory_lock_handle = self._data_directory_lock_handle, None
@@ -330,6 +396,7 @@ class TorManager:
 
             self.data_directory.mkdir(parents=True, exist_ok=True)
             self._acquire_data_directory_lock()
+            self._stop_stale_managed_tor_processes()
             self.log_path.parent.mkdir(parents=True, exist_ok=True)
             if os.name != "nt":
                 self.data_directory.chmod(0o700)
