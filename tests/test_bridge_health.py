@@ -200,13 +200,26 @@ def test_tls_handshake_and_local_route_errors_are_not_pruned(monkeypatch, tmp_pa
         tmp_path,
         "Managed proxy: Error dialing: remote error: tls: handshake failure",
     )
+    repeated_handshake = _probe_with_fake_tor_log(
+        monkeypatch,
+        tmp_path,
+        "Managed proxy: Error dialing: remote error: tls: handshake failure\\n"
+        "Managed proxy: Error dialing: remote error: tls: handshake failure",
+    )
     unreachable = _probe_with_fake_tor_log(
         monkeypatch,
         tmp_path,
         "Managed proxy: Error dialing: dial tcp 198.51.100.8:443: network is unreachable",
     )
+    temporary_dns_failure = _probe_with_fake_tor_log(
+        monkeypatch,
+        tmp_path,
+        "Managed proxy: Error dialing: lookup bridge.example: temporary failure in name resolution",
+    )
     assert handshake is None
+    assert repeated_handshake is None
     assert unreachable is None
+    assert temporary_dns_failure is None
 
 
 def test_windows_refused_connection_is_bridge_specific_even_with_lyrebird_path(monkeypatch, tmp_path):
