@@ -493,6 +493,25 @@ def test_event_log_classifies_levels_and_inserts_plain_text_in_color(qt_app):
     qt_app.processEvents()
 
 
+def test_bridge_text_editor_canonicalizes_multi_record_clipboard_paste(qt_app):
+    from PySide6.QtCore import QMimeData
+    from ui_.window.setting_window import _BridgeTextEdit
+
+    editor = _BridgeTextEdit()
+    clipboard = QMimeData()
+    clipboard.setText(
+        "Bridge OBFS4 192.0.2.10:443 ABCDEF cert=abc "
+        "snowflake 198.51.100.12:443 fingerprint=def"
+    )
+    editor.insertFromMimeData(clipboard)
+    assert editor.toPlainText() == (
+        "obfs4 192.0.2.10:443 ABCDEF cert=abc\\n"
+        "snowflake 198.51.100.12:443 fingerprint=def"
+    )
+    editor.deleteLater()
+    qt_app.processEvents()
+
+
 def test_bridge_settings_normalize_paste_and_render_individual_cards():
     repository = Path(__file__).resolve().parents[1]
     settings_source = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
