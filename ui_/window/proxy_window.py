@@ -445,6 +445,12 @@ class ProxyWindow(QWidget):
         self.connect_btn.set_connected(False)
         self.btn_status.setText("TOR STARTUP FAILED · SEE EVENT LOG")
         self.set_btn_status_style("disconnected")
+        # Keep the error close to the failed action: return to Home and open
+        # the Event Log drawer so the Tor-side diagnostic is immediately visible.
+        if self._parent is not None and hasattr(self._parent, "_show_home"):
+            self._parent._show_home()
+        if not self.logs_open:
+            self.show_logs()
 
     def set_btn_status_style(self, stmt):
         self.btn_status.setProperty("connectionState", stmt)
