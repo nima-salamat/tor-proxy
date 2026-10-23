@@ -43,3 +43,31 @@ def test_named_registry_rejects_unknown_action_changes():
     manager = HotkeyManager()
     with pytest.raises(KeyError, match="Unknown hotkey action"):
         manager.update_shortcut("missing", "Ctrl+Alt+P")
+
+
+def test_failed_shortcut_update_rolls_back_registry_and_backend():
+    class FakeBackend:
+        def __init__(self):
+            self.bindings = {}
+
+        def set_bindings(self, bindings):
+            if any(shortcut == "Ctrl+Shift+K" for shortcut, _callback in bindings.values()):
+                raise RuntimeError("shortcut already in use")
+            self.bindings = dict(bindings)
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+    manager = HotkeyManager()
+    backend = FakeBackend()
+    manager._backend = backend
+    manager.register("window_visibility", "Ctrl+Alt+P", lambda: None)
+
+    with pytest.raises(RuntimeError, match="already in use"):
+        manager.update_shortcut("window_visibility", "Ctrl+Shift+K")
+
+    assert manager.get_shortcut("window_visibility") == "Ctrl+Alt+P"
+    assert backend.bindings["window_visibility"][0] == "Ctrl+Alt+P"
