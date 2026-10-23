@@ -4,6 +4,8 @@ All notable changes are recorded here. Dates and release numbers are added only 
 
 ## Unreleased — UI, updater, and security redesign
 
+- Bridge parsing now validates both bare 40-hex identity fingerprints and `fingerprint=` parameters before writing `torrc`; grouped hex chunks are normalized, and invalid items show indexed reasons instead of reaching Tor's config parser. If Tor still rejects a digest, diagnostics summarize token lengths/options without exposing bridge addresses, identity fingerprints, or WebTunnel secret URLs.
+
 - Fixed Windows pluggable-transport launch configuration: Lyrebird's native executable path is now passed as a literal path token instead of the Torrc-escaped, quoted path that caused `CreateProcessA()` to fail. Transport launch errors are now distinguished from unreachable bridges, so the auto-check never prunes bridge records for a local executable/configuration failure.
 - Stabilized the live log viewer by appending streamed rows in place, capping the visible document without redrawing it on every poll, preserving the user's vertical/horizontal scroll position, and keeping the horizontal scrollbar on a left-to-right layout.
 
