@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from torproxy.tor_manager import TorManager, TorSettings
-from ui_.window.tor_log_dialog import read_log_page_before, read_log_tail
+from torproxy.log_reader import read_log_page_before, read_log_tail
 
 
 def test_bootstrap_log_parser_understands_control_port_and_notice_formats():
