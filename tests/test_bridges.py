@@ -54,6 +54,23 @@ def test_bare_ipv6_bridge_without_transport_remains_supported():
     assert normalize_bridge_record(f'"{IPV6}"') == IPV6
 
 
+def test_webtunnel_transport_is_inferred_when_url_and_ver_are_present():
+    fingerprint = "A1B2C3D4E5F60718293A4B5C6D7E8F9012345678"
+    raw = f'{IPV6} {fingerprint} url=https://bridge.example/secret ver=0.0.1'
+
+    assert normalize_bridge_record(raw) == (
+        f"webtunnel {IPV6} {fingerprint} url=https://bridge.example/secret ver=0.0.1"
+    )
+
+
+def test_missing_transport_with_other_options_is_rejected():
+    fingerprint = "A1B2C3D4E5F60718293A4B5C6D7E8F9012345678"
+    raw = f'{IPV6} {fingerprint} url=https://bridge.example/secret'
+
+    with pytest.raises(ValueError, match="transport options but no transport label"):
+        normalize_bridge_record(raw)
+
+
 def test_short_identity_fingerprint_is_rejected_with_clear_error():
     with pytest.raises(ValueError, match="exactly 40 hexadecimal characters"):
         normalize_bridge_record(f"webtunnel {IPV6} ABCDEF url=https://bridge.example/ ver=0.0.1")
