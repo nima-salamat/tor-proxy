@@ -227,7 +227,9 @@ class TorRunner(QObject):
         """Publish only bridge identities verified from Tor's live built circuits."""
         manager = manager or self.manager
         enabled = bool(self.bridge)
-        ready = self.state == "READY" and manager is not None and manager.state.value == "ready"
+        manager_state = getattr(manager, "state", None) if manager is not None else None
+        manager_state = getattr(manager_state, "value", manager_state)
+        ready = self.state == "READY" and manager is not None and str(manager_state).lower() == "ready"
         active: tuple[str, ...] = ()
         if enabled and ready and manager is not None:
             try:
