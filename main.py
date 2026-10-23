@@ -16,10 +16,11 @@ import portalocker
 import qdarkstyle
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication
 from qdarkstyle.dark.palette import DarkPalette
 from qdarkstyle.light.palette import LightPalette
 
+from ui_.window.dialogs import QMessageBox
 from config import CONFIG
 from torproxy.paths import user_directories
 from ui import Window
