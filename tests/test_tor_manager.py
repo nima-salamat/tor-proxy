@@ -65,9 +65,16 @@ def test_bridge_torrc_registers_lyrebird_transports_in_one_directive(tmp_path):
     plugin_lines = [line for line in torrc.splitlines() if line.startswith("ClientTransportPlugin ")]
     assert plugin_lines == [
         "ClientTransportPlugin meek_lite,obfs4,snowflake,webtunnel exec "
-        + TorManager._torrc_quote(transport_dir / "lyrebird.exe")
+        + str(transport_dir / "lyrebird.exe")
     ]
     assert 'Bridge webtunnel 192.0.2.10:443 ABCDEF url=https://bridge.example/ ver=0.0.1' in torrc
+
+
+def test_client_transport_plugin_path_is_not_torrc_quoted(tmp_path):
+    path = tmp_path / "lyrebird.exe"
+    assert TorManager._transport_exec_path(path) == str(path)
+    assert not TorManager._transport_exec_path(path).startswith('"')
+    assert not TorManager._transport_exec_path(path).endswith('"')
 
 
 def test_bootstrap_progress_parser_reads_tor_log_notice_formats():
