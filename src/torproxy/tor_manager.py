@@ -1,7 +1,6 @@
 """Supervised Tor subprocess lifecycle with explicit loopback ControlPort authentication."""
 from __future__ import annotations
 
-import ipaddress
 import logging
 import os
 import re
@@ -18,6 +17,7 @@ from pathlib import Path
 import psutil
 
 from .paths import user_directories
+from .bridges import parse_bridge_text
 
 
 _ACTIVE_DATA_DIRECTORIES: set[str] = set()
@@ -239,42 +239,17 @@ class TorManager:
 
     @staticmethod
     def _parse_bridges(text: str) -> list[tuple[str, str]]:
-        allowed = {"obfs4", "snowflake", "webtunnel"}
-        parsed: list[tuple[str, str]] = []
-        for raw_line in text.splitlines():
-            line = raw_line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if line.lower().startswith("bridge "):
-                line = line[7:].strip()
-            fields = line.split()
-            if len(fields) < 2 or fields[0].lower() not in allowed:
-                raise TorManagerError(
-                    "Each bridge must be a supported bridge record beginning with obfs4, snowflake, webtunnel, or meek_lite."
-                )
-            address = fields[1]
-            if address.startswith("["):
-                match = re.fullmatch(r"\[([^\]]+)\]:([0-9]{1,5})", address)
-                if not match:
-                    raise TorManagerError("A bridge address has an invalid IPv6 authority.")
-                try:
-                    ipaddress.IPv6Address(match.group(1))
-                except ValueError as exc:
-                    raise TorManagerError("A bridge address contains an invalid IPv6 literal.") from exc
-                port = int(match.group(2))
-            else:
-                match = re.fullmatch(r"([^:\s]+):([0-9]{1,5})", address)
-                if not match:
-                    raise TorManagerError("A bridge address must be an IP literal followed by a port.")
-                try:
-                    ipaddress.IPv4Address(match.group(1))
-                except ValueError as exc:
-                    raise TorManagerError("Bridge addresses must use IPv4 or bracketed IPv6 literals.") from exc
-                port = int(match.group(2))
-            if not 1 <= port <= 65535:
-                raise TorManagerError("A bridge port must be between 1 and 65535.")
-            parsed.append((fields[0].lower(), line))
-        return parsed
+        """Use the same strict bridge parser as Settings and QR imports."""
+        from .bridges import parse_bridge_text
+
+        result = parse_bridge_text(text)
+        if result.invalid_records:
+            raise TorManagerError(
+                "Each bridge must be a complete obfs4, snowflake, or webtunnel record "
+                "with an IPv4:port or bracketed IPv6:port authority. Separate bridges "
+                "with newlines, or paste them together and TorProxy will split them."
+            )
+        return [(record.split(maxsplit=1)[0], record) for record in result.records]
 
     def render_torrc(self) -> str:
         settings = self.settings
