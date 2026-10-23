@@ -666,3 +666,32 @@ def test_custom_notification_dialog_keeps_copy_action_available(qt_app):
     assert dialog.copy_button.text() == "Copied"
     dialog.deleteLater()
     qt_app.processEvents()
+
+
+
+def test_qr_scan_overlay_sweeps_full_preview_and_freezes_detection_marker(qt_app):
+    from ui_.window.qrcode_widget import _ScanOverlay
+
+    overlay = _ScanOverlay()
+    overlay.resize(800, 450)
+    overlay.set_source_size((1280, 720))
+    image_rect = overlay._image_rect()
+    assert image_rect.width() == pytest.approx(800)
+    assert image_rect.height() == pytest.approx(450)
+
+    overlay.start_animation()
+    assert overlay._timer.isActive()
+    overlay.set_detected(
+        [(100, 100), (500, 100), (500, 400), (100, 400)],
+        (1280, 720),
+    )
+    assert not overlay._timer.isActive()
+    polygon = overlay._mapped_polygon()
+    assert len(polygon) == 4
+    # The live preview is mirrored, so the marker mirrors the detected X axis too.
+    assert polygon.boundingRect().center().x() == pytest.approx(800 - (300 / 1280) * 800, abs=1)
+
+    overlay.clear_detection()
+    assert len(overlay._detected_corners) == 0
+    overlay.deleteLater()
+    qt_app.processEvents()
