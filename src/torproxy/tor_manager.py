@@ -547,7 +547,10 @@ class TorManager:
             if check.returncode != 0:
                 details = self._summarize_process_output(check.stdout)
                 lowered_details = details.lower()
-                if self.settings.bridges_enabled and (
+                # Read the preference from this manager instance; no local
+                # variable named "settings" exists in start().
+                bridges_enabled = bool(self.settings.bridges_enabled)
+                if bridges_enabled and (
                     "bridge line did not parse" in lowered_details
                     or "is not a k=v value" in lowered_details
                     or "is not a k=v item" in lowered_details
