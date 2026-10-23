@@ -505,7 +505,7 @@ def test_bridge_text_editor_canonicalizes_multi_record_clipboard_paste(qt_app):
     )
     editor.insertFromMimeData(clipboard)
     assert editor.toPlainText() == (
-        "obfs4 192.0.2.10:443 ABCDEF cert=abc\\n"
+        "obfs4 192.0.2.10:443 ABCDEF cert=abc\n"
         "snowflake 198.51.100.12:443 fingerprint=def"
     )
     editor.deleteLater()
