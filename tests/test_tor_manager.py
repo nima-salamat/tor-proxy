@@ -243,6 +243,35 @@ def test_bridge_config_validation_error_uses_manager_settings_not_undefined_name
         manager.start()
 
 
+def test_bridge_digest_length_error_has_specific_actionable_message(tmp_path):
+    from types import SimpleNamespace
+
+    executable = tmp_path / "tor.exe"
+    executable.write_text("fake tor", encoding="utf-8")
+    settings = TorSettings(
+        executable=executable,
+        bridges_enabled=True,
+        bridges=(
+            "webtunnel 192.0.2.10:443 A1B2C3D4E5F60718293A4B5C6D7E8F9012345678 "
+            "url=https://bridge.example/ ver=0.0.1"
+        ),
+        data_directory=tmp_path / "state",
+        socks_port=19760,
+        control_port=19761,
+    )
+
+    def fake_run(_command, **_kwargs):
+        return SimpleNamespace(
+            returncode=1,
+            stdout="[warn] Key digest for Bridge is wrong length.\\n"
+                   "[err] Bridge line did not parse.\\n",
+        )
+
+    manager = TorManager(settings, run_factory=fake_run)
+    with pytest.raises(TorManagerError, match="identity fingerprint because its digest has the wrong length"):
+        manager.start()
+
+
 def test_tor_config_validation_errors_keep_multiple_output_lines(tmp_path):
     output = "[warn] Reading config file\n[err] Invalid value for ControlPort\n"
     detail = TorManager._summarize_process_output(output, max_lines=2)
