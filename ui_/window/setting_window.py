@@ -44,7 +44,7 @@ class _BridgeTextEdit(QTextEdit):
         if parsed.records and not parsed.invalid_records:
             # A bridge is stored as one canonical record per line regardless of
             # whether the clipboard had newlines or joined records with spaces.
-            self.insertPlainText("\\n".join(parsed.records))
+            self.insertPlainText("\n".join(parsed.records))
             return
         super().insertFromMimeData(source)
 
@@ -106,6 +106,7 @@ class SettingWindow(QWidget):
         self.initialize_second_page()
         self.initialize_advanced_page()
         self.apply_theme(CONFIG["mode"])
+        self.set_bridges()
 
     def _create_scroll_page(self):
         content = QWidget()
@@ -150,6 +151,18 @@ class SettingWindow(QWidget):
             QLabel#settingsFieldLabel {{ color: {text}; font-weight: 650; }}
             QLabel#signatureVerificationDetails {{ color: {muted}; background: transparent; padding: 3px 0; }}
             QLabel#globalShortcutStatus {{ background: transparent; font-size: 10px; }}
+            QLabel#bridgeInputStatus {{ color: {muted}; background: transparent; font-size: 10px; padding: 2px 1px; }}
+            QLabel#bridgeCountLabel {{ color: {accent}; background: transparent; font-size: 10px; font-weight: 750; }}
+            QLabel#bridgeEmptyState {{ color: {muted}; background: {panel}; border: 1px dashed {border}; border-radius: 8px; padding: 13px; font-size: 10px; }}
+            QFrame#bridgeCard {{ background: {panel}; border: 1px solid {border}; border-radius: 9px; }}
+            QFrame#bridgeCard:hover {{ border-color: {accent}; }}
+            QLabel#bridgeTransportBadge {{ color: {accent}; background: {hover}; border: 1px solid {border}; border-radius: 5px; padding: 3px 7px; font-size: 8px; font-weight: 800; }}
+            QLabel#bridgeEndpoint {{ color: {text}; background: transparent; font-family: Consolas, monospace; font-size: 10pt; font-weight: 700; }}
+            QLabel#bridgeRecordOptions {{ color: {muted}; background: transparent; font-family: Consolas, monospace; font-size: 8pt; }}
+            QPushButton#bridgeCardAction, QPushButton#bridgeCardRemove {{ min-height: 30px; min-width: 32px; padding: 0; border: 1px solid {border}; border-radius: 7px; background: transparent; }}
+            QPushButton#bridgeCardAction:hover {{ background: {hover}; border-color: {accent}; }}
+            QPushButton#bridgeCardRemove:hover {{ background: rgba(227, 107, 117, 0.13); border-color: #e36b75; }}
+            QPushButton#bridgeCardAction:disabled, QPushButton#bridgeCardRemove:disabled {{ color: {disabled}; background: transparent; }}
             QLabel#themeModeValue {{ color: {accent}; background: transparent; font-size: 11px; font-weight: 800; min-width: 44px; }}
             QWidget#themeSwitch {{ background: transparent; border: none; }}
             QCheckBox#confirmExitPreference {{ color: {text}; background: transparent; spacing: 8px; font-weight: 650; }}
@@ -324,7 +337,7 @@ class SettingWindow(QWidget):
         self.bridges_page_layout.addWidget(self.btn_bridge)
 
         self.inp_bridges = _BridgeTextEdit(self, placeholderText=(
-            "Paste bridge lines here…\\nExample: obfs4 192.0.2.10:443 FINGERPRINT cert=… iat-mode=0"
+            "Paste bridge lines here…\nExample: obfs4 192.0.2.10:443 FINGERPRINT cert=… iat-mode=0"
         ))
         self.inp_bridges.setObjectName("bridgeRecordsInput")
         self.inp_bridges.setMinimumHeight(104)
@@ -487,7 +500,7 @@ class SettingWindow(QWidget):
             remaining.remove(record)
         except ValueError:
             return
-        self.inp_bridges.setPlainText("\\n".join(remaining))
+        self.inp_bridges.setPlainText("\n".join(remaining))
         self.bridge_status_label.setText(
             f"Removed one bridge. {len(remaining)} bridge{'s' if len(remaining) != 1 else ''} remain."
         )
@@ -497,7 +510,7 @@ class SettingWindow(QWidget):
         parsed = parse_bridge_text(text)
         if parsed.invalid_records:
             return
-        normalized = "\\n".join(parsed.records)
+        normalized = "\n".join(parsed.records)
         if normalized != text:
             self._bridge_normalizing = True
             try:
@@ -741,12 +754,50 @@ class SettingWindow(QWidget):
         self.lbl_NewCircuitPeriod.setText(CORRECT)
 
     def set_bridges(self):
-        txt = self.inp_bridges.toPlainText()
+        """Validate, canonicalize, save and render the bridge records as one transaction."""
+        text = self.inp_bridges.toPlainText()
+        parsed = parse_bridge_text(text)
+        if text.strip() and parsed.invalid_records:
+            self._bridge_normalize_timer.stop()
+            invalid_count = len(parsed.invalid_records)
+            self.bridge_status_label.setText(
+                f"Could not recognize {invalid_count} item(s). Use complete obfs4, snowflake or "
+                "webtunnel records with an IPv4:port or bracketed IPv6:port. "
+                "The last valid saved bridge list remains active until this text is fixed."
+            )
+            self._refresh_bridge_cards(self._saved_bridge_records, removable=False)
+            return
+
+        normalized = "\\n".join(parsed.records)
         try:
-            self._parent.proxyWidget.tor.bridges = txt
+            if str(CONFIG["bridges"] or "") != normalized:
+                CONFIG["bridges"] = normalized
+        except (ValueError, OSError, KeyError) as exc:
+            logger.warning("Could not save bridge records: %s", exc)
+            self.bridge_status_label.setText("Bridge records could not be saved. Your previous settings were preserved.")
+            self._refresh_bridge_cards(self._saved_bridge_records, removable=False)
+            return
+
+        self._saved_bridge_records = parsed.records
+        try:
+            proxy = getattr(self._parent, "proxyWidget", None)
+            if proxy is not None and hasattr(proxy, "tor"):
+                proxy.tor.bridges = normalized
         except Exception:
-            pass
-        CONFIG["bridges"] = txt
+            logger.debug("Could not update the live Tor adapter's bridge list.", exc_info=True)
+
+        self._refresh_bridge_cards(self._saved_bridge_records, removable=True)
+        if normalized != text and not self._bridge_normalizing:
+            self._bridge_normalize_timer.start()
+            self.bridge_status_label.setText(
+                f"Detected {len(parsed.records)} bridge(s). Standardizing spacing and separating each record…"
+            )
+        elif not parsed.records:
+            self.bridge_status_label.setText("No bridge addresses saved.")
+        else:
+            self.bridge_status_label.setText(
+                f"{len(parsed.records)} bridge(s) saved in TorProxy format — one complete record per line."
+            )
 
     def bridge_state_changed(self, state):
         checked = bool(state)
