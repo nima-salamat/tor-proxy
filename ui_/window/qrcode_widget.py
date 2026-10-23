@@ -9,8 +9,8 @@ from typing import Iterable
 
 import cv2
 import qtawesome as qta
-from PySide6.QtCore import QThread, QTimer, Qt, Signal, QRectF
-from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
+from PySide6.QtCore import QThread, QTimer, Qt, Signal, QRectF, QPointF
+from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -229,27 +229,83 @@ class _QrScannerThread(QThread):
 
 
 class _ScanOverlay(QWidget):
-    """Animated finder corners and scan beam drawn over the camera preview."""
+    """Full-preview scan beam and a persistent polygon around a detected QR."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self._phase = 0
+        self._phase = 0.0
+        self._direction = 1.0
+        self._detected_corners: list[tuple[float, float]] = []
+        self._source_size = (1, 1)
         self._timer = QTimer(self)
-        self._timer.setInterval(35)
+        self._timer.setInterval(28)
         self._timer.timeout.connect(self._advance)
 
     def start_animation(self):
+        self._detected_corners = []
+        self._phase = 0.0
+        self._direction = 1.0
         if not self._timer.isActive():
             self._timer.start()
+        self.update()
 
     def stop_animation(self):
         self._timer.stop()
 
-    def _advance(self):
-        self._phase = (self._phase + 3) % 100
+    def set_detected(self, corners, source_size):
+        self._timer.stop()
+        self._detected_corners = list(corners or [])
+        self._source_size = tuple(source_size) if source_size else (1, 1)
         self.update()
+
+    def clear_detection(self):
+        self._detected_corners = []
+        self.update()
+
+    def _advance(self):
+        self._phase += self._direction * 1.7
+        if self._phase >= 100:
+            self._phase = 100
+            self._direction = -1.0
+        elif self._phase <= 0:
+            self._phase = 0
+            self._direction = 1.0
+        self.update()
+
+    def _image_rect(self) -> QRectF:
+        source_width, source_height = self._source_size
+        if source_width <= 1 or source_height <= 1:
+            return QRectF(0, 0, self.width(), self.height())
+        scale = min(self.width() / source_width, self.height() / source_height)
+        width = source_width * scale
+        height = source_height * scale
+        return QRectF(
+            (self.width() - width) / 2,
+            (self.height() - height) / 2,
+            width,
+            height,
+        )
+
+    def _mapped_polygon(self) -> QPolygonF:
+        source_width, source_height = self._source_size
+        image_rect = self._image_rect()
+        if source_width <= 1 or source_height <= 1:
+            return QPolygonF()
+        scale_x = image_rect.width() / source_width
+        scale_y = image_rect.height() / source_height
+        # The preview is mirrored like a selfie camera, so flip the detection X
+        # coordinates as well to keep the marker exactly over the frozen QR.
+        return QPolygonF(
+            [
+                QPointF(
+                    image_rect.left() + (source_width - x) * scale_x,
+                    image_rect.top() + y * scale_y,
+                )
+                for x, y in self._detected_corners
+            ]
+        )
 
     def paintEvent(self, event):
         del event
@@ -257,37 +313,60 @@ class _ScanOverlay(QWidget):
             return
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        image_rect = self._image_rect()
 
-        side = min(270, int(self.width() * 0.62), int(self.height() * 0.82))
-        side = max(120, side)
-        side = min(side, self.width() - 24, self.height() - 24)
-        x = (self.width() - side) // 2
-        y = (self.height() - side) // 2
-        finder = QRectF(x, y, side, side)
+        if self._detected_corners:
+            polygon = self._mapped_polygon()
+            if len(polygon) >= 3:
+                # Soft halo first, then a crisp contour, matching the scanner accent.
+                halo = QPen(QColor(83, 217, 197, 75), 9, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+                painter.setPen(halo)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawPolygon(polygon)
 
-        shade = QColor(4, 10, 18, 92)
-        painter.fillRect(0, 0, self.width(), max(0, y), shade)
-        painter.fillRect(0, y, max(0, x), side, shade)
-        painter.fillRect(x + side, y, max(0, self.width() - x - side), side, shade)
-        painter.fillRect(0, y + side, self.width(), max(0, self.height() - y - side), shade)
+                painter.setPen(QPen(QColor("#53d9c5"), 3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+                painter.setBrush(QColor(83, 217, 197, 24))
+                painter.drawPolygon(polygon)
 
-        length = max(22, side // 5)
-        pen = QPen(QColor("#53d9c5"), 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
-        painter.setPen(pen)
-        for corner_x, corner_y, dx, dy in (
-            (finder.left(), finder.top(), 1, 1),
-            (finder.right(), finder.top(), -1, 1),
-            (finder.left(), finder.bottom(), 1, -1),
-            (finder.right(), finder.bottom(), -1, -1),
-        ):
-            painter.drawLine(int(corner_x), int(corner_y), int(corner_x + dx * length), int(corner_y))
-            painter.drawLine(int(corner_x), int(corner_y), int(corner_x), int(corner_y + dy * length))
+                bounds = polygon.boundingRect()
+                tag_width = 98
+                tag_height = 27
+                tag_x = min(max(bounds.left(), image_rect.left() + 6), image_rect.right() - tag_width - 6)
+                tag_y = bounds.top() - tag_height - 7
+                if tag_y < image_rect.top() + 4:
+                    tag_y = min(bounds.bottom() + 7, image_rect.bottom() - tag_height - 4)
+                tag_rect = QRectF(tag_x, tag_y, tag_width, tag_height)
+                painter.setPen(QPen(QColor("#53d9c5"), 1))
+                painter.setBrush(QColor(7, 24, 29, 230))
+                painter.drawRoundedRect(tag_rect, 8, 8)
+                painter.setPen(QColor("#baf8ee"))
+                painter.drawText(tag_rect, Qt.AlignmentFlag.AlignCenter, "✓  QR FOUND")
+            painter.end()
+            return
 
-        beam_y = int(finder.top() + 8 + (finder.height() - 16) * self._phase / 100)
-        painter.setPen(QPen(QColor(83, 217, 197, 200), 2))
-        painter.drawLine(int(finder.left() + 9), beam_y, int(finder.right() - 9), beam_y)
+        # A gentle veil makes the moving beam visible without drawing a finder
+        # square; the scan now traverses the complete camera viewport.
+        painter.fillRect(image_rect, QColor(4, 10, 18, 17))
+        band_height = max(20, int(image_rect.height() * 0.055))
+        beam_y = image_rect.top() + (image_rect.height() - band_height) * self._phase / 100
+        painter.fillRect(
+            QRectF(image_rect.left(), beam_y, image_rect.width(), band_height),
+            QColor(83, 217, 197, 24),
+        )
+        painter.fillRect(
+            QRectF(image_rect.left(), beam_y + band_height * 0.48, image_rect.width(), 2),
+            QColor(83, 217, 197, 175),
+        )
+        painter.setPen(QPen(QColor(83, 217, 197, 95), 1))
+        painter.drawLine(
+            QPointF(image_rect.left(), image_rect.top() + 1),
+            QPointF(image_rect.right(), image_rect.top() + 1),
+        )
+        painter.drawLine(
+            QPointF(image_rect.left(), image_rect.bottom() - 1),
+            QPointF(image_rect.right(), image_rect.bottom() - 1),
+        )
         painter.end()
-
 
 class QrCodeFloatingWindow(_FramelessDialog):
     """Focused, modal camera scanner that imports validated Tor bridge lines."""
