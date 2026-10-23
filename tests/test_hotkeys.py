@@ -71,3 +71,39 @@ def test_failed_shortcut_update_rolls_back_registry_and_backend():
 
     assert manager.get_shortcut("window_visibility") == "Ctrl+Alt+P"
     assert backend.bindings["window_visibility"][0] == "Ctrl+Alt+P"
+
+
+
+def test_named_hotkeys_can_be_suspended_and_updated_during_capture():
+    class FakeBackend:
+        def __init__(self):
+            self.bindings = {}
+
+        def set_bindings(self, bindings):
+            self.bindings = dict(bindings)
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+    manager = HotkeyManager()
+    backend = FakeBackend()
+    manager._backend = backend
+    callback = lambda: None
+    manager.register("window_visibility", "Ctrl+Alt+P", callback)
+    assert backend.bindings["window_visibility"][0] == "Ctrl+Alt+P"
+
+    manager.suspend()
+    manager.suspend()
+    assert backend.bindings == {}
+
+    manager.update_shortcut("window_visibility", "Ctrl+Shift+K")
+    assert manager.get_shortcut("window_visibility") == "Ctrl+Shift+K"
+    assert backend.bindings == {}
+
+    manager.resume()
+    assert backend.bindings == {}
+    manager.resume()
+    assert backend.bindings["window_visibility"] == ("Ctrl+Shift+K", callback)
