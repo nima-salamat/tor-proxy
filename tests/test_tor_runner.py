@@ -49,6 +49,75 @@ def _manager(tmp_path, bridge_text):
     )
 
 
+
+def test_startup_timeout_rechecks_bridges_and_retries_once_if_cleanup_succeeds(monkeypatch, tmp_path):
+    from torproxy.tor_manager import TorManagerError
+
+    bridge_text = "\n".join(BRIDGES)
+    runner, _config = _runner(monkeypatch, tmp_path, bridge_text)
+    logs = []
+    runner.log_message.connect(logs.append)
+    attempts = []
+
+    class FakeManager:
+        def __init__(self, should_fail):
+            self.should_fail = should_fail
+            self.process = SimpleNamespace()
+            self.settings = SimpleNamespace(bridges=bridge_text)
+
+        def start(self, on_status=None):
+            attempts.append(self)
+            if self.should_fail:
+                raise TorManagerError("Tor did not become ready within 120s.")
+
+        def _recent_tor_log_detail(self, max_lines=30):
+            return (
+                "Managed proxy \"C:\\\\TorProxy\\\\lyrebird.exe\": Error dialing: "
+                "dial tcp 192.0.2.10:443: connectex: connection refused"
+            )
+
+    failed_manager = FakeManager(should_fail=True)
+    replacement_manager = FakeManager(should_fail=False)
+    monkeypatch.setattr(
+        runner,
+        "_auto_prune_bridges_before_start",
+        lambda manager: replacement_manager if manager is failed_manager else manager,
+    )
+
+    result = runner._start_with_bridge_recovery(failed_manager)
+
+    assert result is replacement_manager
+    assert attempts == [failed_manager, replacement_manager]
+    assert runner.manager is replacement_manager
+    assert any("Rechecking configured bridges" in message for message in logs)
+    assert any("Retrying Tor startup once" in message for message in logs)
+
+
+def test_global_tls_runtime_error_does_not_trigger_bridge_cleanup_retry(monkeypatch, tmp_path):
+    from torproxy.tor_manager import TorManagerError
+
+    bridge_text = "\n".join(BRIDGES)
+    runner, _config = _runner(monkeypatch, tmp_path, bridge_text)
+
+    class FakeManager:
+        settings = SimpleNamespace(bridges=bridge_text)
+
+        def start(self, on_status=None):
+            raise TorManagerError(
+                "Lyrebird TLS runtime error: CurvePreferences includes unsupported curve"
+            )
+
+        def _recent_tor_log_detail(self, max_lines=30):
+            return "tls: CurvePreferences includes unsupported curve"
+
+    runner._auto_prune_bridges_before_start = lambda _manager: (_ for _ in ()).throw(
+        AssertionError("global transport errors must not trigger bridge pruning")
+    )
+
+    with pytest.raises(TorManagerError, match="CurvePreferences includes unsupported curve"):
+        runner._start_with_bridge_recovery(FakeManager())
+
+
 def test_global_lyrebird_issue_skips_pruning_but_does_not_abort_normal_startup(monkeypatch, tmp_path):
     bridge_text = "\n".join(BRIDGES)
     runner, config = _runner(monkeypatch, tmp_path, bridge_text)
