@@ -55,6 +55,7 @@ class TorSettings:
     new_circuit_period_seconds: int = 60
     startup_timeout_seconds: float = 180.0
     shutdown_timeout_seconds: float = 5.0
+    log_path: Path | None = None
 
     def __post_init__(self) -> None:
         ports = [self.socks_port, self.control_port]
@@ -97,7 +98,7 @@ class TorManager:
         dirs = user_directories()
         self.data_directory = Path(settings.data_directory or (dirs.data / "tor"))
         self.torrc_path = self.data_directory / "torrc"
-        self.log_path = dirs.logs / "tor.log"
+        self.log_path = Path(settings.log_path) if settings.log_path is not None else dirs.logs / "tor.log"
         self._data_directory_lock_path = self.data_directory / ".torproxy-data-directory.lock"
         self._data_directory_lock_handle = None
         self._locked_data_directory: str | None = None
@@ -291,8 +292,14 @@ class TorManager:
             if transport is None:
                 raise TorManagerError("Bridge transport executable (lyrebird) was not found beside the selected Tor bundle.")
             lines.append("UseBridges 1")
-            for kind in sorted({item[0] for item in bridge_records}):
-                lines.append(f"ClientTransportPlugin {kind} exec {self._torrc_quote(transport)}")
+            # A single plugin declaration is important for Lyrebird: it registers
+            # all supported PT names from the same managed executable, as in the
+            # Tor Expert Bundle documentation. Individual repeated declarations
+            # can leave a transport name unregistered with some bundle versions.
+            lines.append(
+                "ClientTransportPlugin meek_lite,obfs4,snowflake,webtunnel exec "
+                + self._torrc_quote(transport)
+            )
             lines.extend("Bridge " + record for _, record in bridge_records)
         elif settings.bridges.strip():
             LOGGER.warning("Bridge records are configured but bridge mode is disabled.")
