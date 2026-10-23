@@ -8,8 +8,8 @@ from __future__ import annotations
 from enum import IntFlag
 
 import qtawesome as qta
-from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, QTimer
+from PySide6.QtGui import QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -181,6 +181,7 @@ class _FramelessDialog(QDialog):
         self._preferred_size: QSize | None = None
         self._screen_change_connected = False
         self._active_screen = None
+        self._screen_dpi_connected = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(1, 1, 1, 1)
@@ -371,18 +372,43 @@ class _FramelessDialog(QDialog):
         y = min(max(position.y(), area.top()), area.bottom() - height + 1)
         return QPoint(x, y)
 
+    def _connect_screen_dpi_signal(self, screen) -> None:
+        if screen is self._screen_dpi_connected:
+            return
+        previous = self._screen_dpi_connected
+        if previous is not None:
+            try:
+                previous.logicalDotsPerInchChanged.disconnect(self._on_screen_dpi_changed)
+            except (RuntimeError, TypeError):
+                pass
+        self._screen_dpi_connected = screen
+        if screen is not None:
+            try:
+                screen.logicalDotsPerInchChanged.connect(self._on_screen_dpi_changed)
+            except (AttributeError, RuntimeError):
+                self._screen_dpi_connected = None
+
     def _connect_screen_change_signal(self) -> None:
         handle = self.windowHandle()
-        if handle is None or self._screen_change_connected:
+        if handle is None:
             return
-        handle.screenChanged.connect(self._on_screen_changed)
-        self._screen_change_connected = True
+        if not self._screen_change_connected:
+            handle.screenChanged.connect(self._on_screen_changed)
+            self._screen_change_connected = True
         self._active_screen = handle.screen()
+        self._connect_screen_dpi_signal(self._active_screen)
 
     def _on_screen_changed(self, screen) -> None:
         self._active_screen = screen
-        # Qt completes the native window/DPI transition after this signal.
-        QTimer.singleShot(0, self._refresh_for_screen_change)
+        self._connect_screen_dpi_signal(screen)
+        # Windows completes its per-monitor DPI transition shortly after
+        # QWindow.screenChanged. Refresh after the native geometry has settled.
+        QTimer.singleShot(120, self._refresh_for_screen_change)
+        QTimer.singleShot(320, self._refresh_for_screen_change)
+
+    def _on_screen_dpi_changed(self, _dpi) -> None:
+        QTimer.singleShot(120, self._refresh_for_screen_change)
+        QTimer.singleShot(320, self._refresh_for_screen_change)
 
     def _refresh_for_screen_change(self) -> None:
         """Re-polish and lay out the dialog after a per-monitor DPI transition."""
@@ -491,6 +517,7 @@ class MessageDialog(_FramelessDialog):
         else:
             self.body_layout.addWidget(message_label)
 
+        self._message_text = str(message)
         if question:
             self.add_footer_spacer()
             no_button = self.add_button("No", primary=False, callback=self._choose_no)
@@ -506,11 +533,27 @@ class MessageDialog(_FramelessDialog):
             self.setMinimumHeight(170)
         else:
             self.add_footer_spacer()
+            self.copy_button = self.add_button("Copy text", primary=False, callback=self._copy_message)
+            self.copy_button.setIcon(qta.icon("fa6s.copy", color=self._colors["text"]))
+            self.copy_button.setToolTip("Copy the complete message to the clipboard")
             self.add_button("Got it", primary=True, callback=self.accept)
             self.setMinimumHeight(150)
 
         self.adjustSize()
         self._remember_preferred_size()
+
+    def _copy_message(self):
+        """Copy the exact displayed plain-text message and give brief feedback."""
+        QApplication.clipboard().setText(self._message_text)
+        self.copy_button.setText("Copied")
+        self.copy_button.setIcon(qta.icon("fa6s.check", color=self._colors["text"]))
+        QTimer.singleShot(1400, self._restore_copy_button)
+
+    def _restore_copy_button(self):
+        if not hasattr(self, "copy_button"):
+            return
+        self.copy_button.setText("Copy text")
+        self.copy_button.setIcon(qta.icon("fa6s.copy", color=self._colors["text"]))
 
     def _choose_yes(self):
         self.choice = StandardButton.Yes
@@ -630,7 +673,10 @@ class ShortcutCaptureDialog(_FramelessDialog):
             "Apply shortcut", primary=True, callback=self._apply_captured
         )
         self.apply_button.setEnabled(False)
-        self.resize(540, 370)
+        # Let Qt resolve the true content/minimum height instead of requesting
+        # 370px when the composed layouts require a little more (375px+).
+        self.adjustSize()
+        self.resize(540, max(self.minimumHeight(), self.sizeHint().height()))
         self._remember_preferred_size()
 
     def showEvent(self, event):
@@ -656,13 +702,23 @@ class ShortcutCaptureDialog(_FramelessDialog):
         value = getattr(modifiers, "value", None)
         return int(value if value is not None else modifiers)
 
+    def event(self, event):
+        # Eat ShortcutOverride before QAction/QShortcut processing. The global
+        # HotkeyManager is suspended by the owning page for this dialog's life.
+        if self._listening and event.type() == QEvent.Type.ShortcutOverride:
+            event.accept()
+            return True
+        return super().event(event)
+
     def keyPressEvent(self, event):
         key = event.key()
-        if key == Qt.Key.Key_Escape:
+        modifiers = self._modifier_value(event.modifiers())
+        no_modifiers = modifiers == int(Qt.KeyboardModifier.NoModifier.value)
+        if key == Qt.Key.Key_Escape and no_modifiers:
             self.reject()
             event.accept()
             return
-        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and no_modifiers:
             if self._captured_shortcut:
                 self._apply_captured()
             else:
@@ -671,7 +727,7 @@ class ShortcutCaptureDialog(_FramelessDialog):
                 )
             event.accept()
             return
-        if key == Qt.Key.Key_Backspace:
+        if key == Qt.Key.Key_Backspace and no_modifiers:
             self._begin_listening()
             event.accept()
             return
