@@ -37,6 +37,14 @@ class LogWindow(QWidget):
         header.addWidget(title)
         header.addStretch(1)
 
+        self.btn_open_tor_log = QPushButton(qta.icon("fa6s.file-lines"), "")
+        self.btn_open_tor_log.setObjectName("logIconButton")
+        self.btn_open_tor_log.setToolTip("Open the live Tor log file")
+        self.btn_open_tor_log.setAccessibleName("Open live Tor log file")
+        self.btn_open_tor_log.setFixedSize(30, 30)
+        self.btn_open_tor_log.clicked.connect(self.parent_.open_tor_log_dialog)
+        header.addWidget(self.btn_open_tor_log)
+
         self.btn_clear = QPushButton(qta.icon("fa6s.trash"), "")
         self.btn_clear.setObjectName("logIconButton")
         self.btn_clear.setToolTip("Clear logs")
@@ -59,6 +67,7 @@ class LogWindow(QWidget):
         self.text_edit = QTextEdit(self)
         self.text_edit.setObjectName("logText")
         self.text_edit.setReadOnly(True)
+        self.text_edit.document().setMaximumBlockCount(2000)
         self.text_edit.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         self.text_edit.setPlaceholderText("Events will appear here when TorProxy is active.")
         layout.addWidget(self.text_edit, 1)
@@ -82,6 +91,7 @@ class LogWindow(QWidget):
             QPushButton#logIconButton {{ background: transparent; border: 1px solid {border}; border-radius: 7px; }}
             QPushButton#logIconButton:hover {{ background: rgba(71, 163, 242, 0.14); border-color: #47a3f2; }}
         """)
+        self.btn_open_tor_log.setIcon(qta.icon("fa6s.file-lines", color=text))
         self.btn_clear.setIcon(qta.icon("fa6s.trash", color=text))
         self.btn_close.setIcon(qta.icon("fa6s.xmark", color=text))
         self._recolor_existing_logs()
