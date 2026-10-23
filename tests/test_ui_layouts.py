@@ -527,7 +527,7 @@ def test_bridge_settings_normalize_paste_and_render_individual_cards():
     assert 'remove_button.clicked.connect(partial(self.remove_bridge_record, record))' in settings_source
     assert 'copy_button.clicked.connect(partial(self.copy_bridge_record, record))' in settings_source
     assert "def _canonicalize_bridge_editor(self)" in settings_source
-    assert "SUPPORTED_BRIDGE_TRANSPORTS = (\"obfs4\", \"snowflake\", \"webtunnel\")" in parser_source
+    assert "SUPPORTED_BRIDGE_TRANSPORTS = (\"obfs4\", \"snowflake\", \"webtunnel\", \"meek_lite\")" in parser_source
     assert "return list(parse_bridge_text(text).records)" in qr_source
     assert "from .bridges import parse_bridge_text" in manager_source
 
