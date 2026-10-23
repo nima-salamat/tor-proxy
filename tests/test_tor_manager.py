@@ -70,6 +70,37 @@ def test_bridge_torrc_registers_lyrebird_transports_in_one_directive(tmp_path):
     assert 'Bridge webtunnel 192.0.2.10:443 ABCDEF url=https://bridge.example/ ver=0.0.1' in torrc
 
 
+def test_quoted_ipv6_webtunnel_bridge_is_normalized_for_torrc(tmp_path):
+    raw = 'Bridge webtunnel "[2001:db8:fe46:edd5:2139:2d5b:b732:854a]:443" ABCDEF url=https://bridge.example/ ver=0.0.1'
+    parsed = TorManager._parse_bridges(raw)
+    assert parsed == [
+        ("webtunnel", "webtunnel [2001:db8:fe46:edd5:2139:2d5b:b732:854a]:443 ABCDEF url=https://bridge.example/ ver=0.0.1")
+    ]
+
+    executable = tmp_path / "tor" / "tor.exe"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("fake tor", encoding="utf-8")
+    transport_dir = executable.parent / "pluggable_transports"
+    transport_dir.mkdir()
+    (transport_dir / "lyrebird.exe").write_text("fake transport", encoding="utf-8")
+    manager = TorManager(
+        TorSettings(
+            executable=executable,
+            bridges_enabled=True,
+            bridges=raw,
+            data_directory=tmp_path / "state",
+        )
+    )
+    bridge_lines = [
+        line for line in manager.render_torrc().splitlines()
+        if line.startswith("Bridge ")
+    ]
+    assert bridge_lines == [
+        "Bridge webtunnel [2001:db8:fe46:edd5:2139:2d5b:b732:854a]:443 ABCDEF url=https://bridge.example/ ver=0.0.1"
+    ]
+    assert '"[2001:db8:fe46:edd5:2139:2d5b:b732:854a]:443"' not in bridge_lines[0]
+
+
 def test_client_transport_plugin_path_is_not_torrc_quoted(tmp_path):
     path = tmp_path / "lyrebird.exe"
     assert TorManager._transport_exec_path(path) == str(path)
