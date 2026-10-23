@@ -128,13 +128,22 @@ def normalize_bridge_record(value: str) -> str:
     remainder_fields = filtered_remainder
 
     # Tor's Bridge grammar takes a 40-hex-character identity fingerprint as
-    # one token. Clipboard sources sometimes display it as ten groups of four;
-    # normalize that presentation instead of passing a short digest to torrc.
+    # one token. Clipboard sources sometimes group it with spaces in different
+    # chunk sizes; join only an all-hex sequence that totals exactly 40 chars.
+    first_option = next(
+        (index for index, token in enumerate(remainder_fields) if "=" in token),
+        len(remainder_fields),
+    )
+    fingerprint_chunks = remainder_fields[:first_option]
     if (
-        len(remainder_fields) >= 10
-        and all(re.fullmatch(r"[0-9a-fA-F]{4}", item.strip("\"'")) for item in remainder_fields[:10])
+        len(fingerprint_chunks) > 1
+        and all(re.fullmatch(r"[0-9a-fA-F]{1,40}", item.strip("\"'")) for item in fingerprint_chunks)
+        and sum(len(item.strip("\"'")) for item in fingerprint_chunks) == 40
     ):
-        remainder_fields = ["".join(item.strip("\"'") for item in remainder_fields[:10])] + remainder_fields[10:]
+        remainder_fields = [
+            "".join(item.strip("\"'") for item in fingerprint_chunks),
+            *remainder_fields[first_option:],
+        ]
 
     bare_tokens = [(index, token) for index, token in enumerate(remainder_fields) if "=" not in token]
     if bare_tokens:
