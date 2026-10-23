@@ -28,7 +28,7 @@ from functools import partial
 logger = logging.getLogger(__name__)
 
 from config import CONFIG
-from torproxy.bridges import parse_bridge_text
+from torproxy.bridges import SUPPORTED_BRIDGE_TRANSPORTS, bridge_identity_fingerprint, parse_bridge_text
 from ui_.window.dialogs import QMessageBox
 from ui_.worker.worker import Worker
 from ui_.window.qrcode_widget import QrCodeFloatingWindow
@@ -97,6 +97,20 @@ class SettingWindow(QWidget):
         self._saved_bridge_records = initial_bridges.records
         self._bridge_input_invalid = False
         self._bridge_normalizing = False
+        self._bridge_usage_enabled = bool(CONFIG["bridge"])
+        self._bridge_tor_ready = False
+        self._active_bridge_fingerprints: set[str] = set()
+        self._bridge_status_labels = {}
+        try:
+            tor_runner = self._parent.proxyWidget.tor
+            tor_runner.bridge_usage_changed.connect(self.update_bridge_usage)
+            self.update_bridge_usage({
+                "enabled": bool(tor_runner.bridge),
+                "ready": str(tor_runner.state).upper() == "READY",
+                "active_fingerprints": (),
+            })
+        except (AttributeError, RuntimeError):
+            logger.debug("Live bridge status is not available yet.", exc_info=True)
         self._bridge_normalize_timer = QTimer(self)
         self._bridge_normalize_timer.setSingleShot(True)
         self._bridge_normalize_timer.setInterval(650)
@@ -160,6 +174,10 @@ class SettingWindow(QWidget):
             QLabel#bridgeTransportBadge {{ color: {accent}; background: {hover}; border: 1px solid {border}; border-radius: 5px; padding: 3px 7px; font-size: 8px; font-weight: 800; }}
             QLabel#bridgeEndpoint {{ color: {text}; background: transparent; font-family: Consolas, monospace; font-size: 10pt; font-weight: 700; }}
             QLabel#bridgeRecordOptions {{ color: {muted}; background: transparent; font-family: Consolas, monospace; font-size: 8pt; }}
+            QLabel#bridgeUsageStatus {{ color: {muted}; background: transparent; font-size: 9px; font-weight: 600; padding-top: 2px; }}
+            QLabel#bridgeUsageStatus[usageState="active"] {{ color: #31b981; font-weight: 800; }}
+            QLabel#bridgeUsageStatus[usageState="waiting"] {{ color: {accent}; }}
+            QLabel#bridgeUsageStatus[usageState="inactive"] {{ color: {muted}; }}
             QPushButton#bridgeCardAction, QPushButton#bridgeCardRemove {{ min-height: 30px; min-width: 32px; padding: 0; border: 1px solid {border}; border-radius: 7px; background: transparent; }}
             QPushButton#bridgeCardAction:hover {{ background: {hover}; border-color: {accent}; }}
             QPushButton#bridgeCardRemove:hover {{ background: rgba(227, 107, 117, 0.13); border-color: #e36b75; }}
@@ -385,16 +403,19 @@ class SettingWindow(QWidget):
         )
         self.chk_auto_prune_bridges.setObjectName("autoPruneBridgesPreference")
         self.chk_auto_prune_bridges.setToolTip(
-            "Before connecting, test each bridge separately. Only remove failed records when at least one other bridge is confirmed working."
+            "Before connecting, test each bridge separately. Only remove a bridge after an explicit endpoint failure and "
+            "only when another bridge completes bootstrap. Timeouts, missing directory descriptors, and Lyrebird/TLS "
+            "runtime errors are inconclusive and never trigger removal."
         )
         self.chk_auto_prune_bridges.setChecked(bool(CONFIG["auto_prune_bridges"]))
         self.chk_auto_prune_bridges.setEnabled(bool(CONFIG["bridge"]))
         self.chk_auto_prune_bridges.toggled.connect(self.auto_prune_bridges_changed)
         self.bridges_page_layout.addWidget(self.chk_auto_prune_bridges)
         self.bridges_page_layout.addWidget(self._description(
-            "When enabled, TorProxy checks multiple bridges in parallel before connecting and saves the verified list. "
-            "Checks can delay startup. A bridge is not removed when the result is ambiguous, and the original list is "
-            "preserved if no bridge can be confirmed working."
+            "OFF by default. When enabled, TorProxy checks multiple bridges independently before connecting. Startup can take longer. "
+            "Only explicit per-bridge dial failures are eligible for removal, and only if at least one other bridge completes "
+            "Tor bootstrap. Unsupported Lyrebird/TLS options, generic SOCKS errors, missing relay descriptors, and inconclusive "
+            "timeouts preserve the list. If every check fails or is uncertain, nothing is deleted."
         ))
         self._refresh_bridge_cards(self._saved_bridge_records, removable=True)
         self.bridges_page_layout.addStretch(1)
@@ -427,12 +448,15 @@ class SettingWindow(QWidget):
             self.bridge_cards_layout.addWidget(empty)
             return
 
+        self._bridge_status_labels = {}
         icon_color = "#e8edf3" if CONFIG["mode"] == "dark" else "#253041"
         for record in records:
-            fields = record.split(maxsplit=2)
-            transport = fields[0]
-            address = fields[1] if len(fields) > 1 else "Address unavailable"
-            options = fields[2] if len(fields) > 2 else ""
+            fields = record.split()
+            has_transport = bool(fields and fields[0].casefold() in SUPPORTED_BRIDGE_TRANSPORTS)
+            transport = fields[0] if has_transport else "direct"
+            address_index = 1 if has_transport else 0
+            address = fields[address_index] if len(fields) > address_index else "Address unavailable"
+            options = " ".join(fields[address_index + 1:]) if len(fields) > address_index + 1 else ""
 
             card = QFrame(self.bridge_cards_host)
             card.setObjectName("bridgeCard")
@@ -460,6 +484,12 @@ class SettingWindow(QWidget):
                 options_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
                 options_label.setWordWrap(True)
                 detail.addWidget(options_label)
+
+            usage_label = QLabel(card)
+            usage_label.setObjectName("bridgeUsageStatus")
+            usage_label.setWordWrap(True)
+            self._bridge_status_labels[record] = usage_label
+            detail.addWidget(usage_label)
             card_layout.addLayout(detail, 1)
 
             copy_button = QPushButton(card)
@@ -481,6 +511,53 @@ class SettingWindow(QWidget):
             remove_button.clicked.connect(partial(self.remove_bridge_record, record))
             card_layout.addWidget(remove_button, 0, Qt.AlignmentFlag.AlignVCenter)
             self.bridge_cards_layout.addWidget(card)
+
+        self._update_bridge_card_statuses()
+
+    def update_bridge_usage(self, payload):
+        """Apply live, ControlPort-derived bridge usage without rebuilding cards."""
+        if not isinstance(payload, dict):
+            return
+        self._bridge_usage_enabled = bool(payload.get("enabled", False))
+        self._bridge_tor_ready = bool(payload.get("ready", False))
+        fingerprints = payload.get("active_fingerprints", ()) or ()
+        self._active_bridge_fingerprints = {
+            str(value).upper()
+            for value in fingerprints
+            if isinstance(value, str)
+        }
+        self._update_bridge_card_statuses()
+
+    def _update_bridge_card_statuses(self):
+        if not hasattr(self, "_bridge_status_labels"):
+            return
+        for record, label in tuple(self._bridge_status_labels.items()):
+            state = "inactive"
+            if not self._bridge_usage_enabled:
+                message = "Bridge mode is off"
+            elif not self._bridge_tor_ready:
+                message = "Waiting for Tor's verified connection"
+                state = "waiting"
+            else:
+                try:
+                    fingerprint = bridge_identity_fingerprint(record)
+                except (TypeError, ValueError):
+                    fingerprint = None
+                if fingerprint and fingerprint in self._active_bridge_fingerprints:
+                    message = "✓ Connected · observed as the first hop of a built circuit"
+                    state = "active"
+                elif not fingerprint:
+                    message = "Tor is ready · this record has no matchable relay identity"
+                    state = "waiting"
+                elif self._active_bridge_fingerprints:
+                    message = "Configured · not observed in a currently built circuit"
+                else:
+                    message = "Tor is ready · active bridge not yet identified"
+                    state = "waiting"
+            label.setText(message)
+            label.setProperty("usageState", state)
+            label.style().unpolish(label)
+            label.style().polish(label)
 
     def copy_bridge_record(self, record):
         QApplication.clipboard().setText(str(record))
@@ -819,6 +896,8 @@ class SettingWindow(QWidget):
         except Exception:
             pass
         self.inp_bridges.setEnabled(checked)
+        self._bridge_usage_enabled = checked
+        self._update_bridge_card_statuses()
         if hasattr(self, "chk_auto_prune_bridges"):
             self.chk_auto_prune_bridges.setEnabled(checked)
         CONFIG["bridge"] = bool(checked)
