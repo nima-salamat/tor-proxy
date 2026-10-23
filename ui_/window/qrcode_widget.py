@@ -3,7 +3,6 @@ from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QPushButton,
-    QMessageBox,
 )
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtCore import Qt, QTimer
@@ -15,6 +14,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+from ui_.window.dialogs import QMessageBox
 from ui_.worker.worker import Worker
 
 class QrCodeFloatingWindow(QWidget):
