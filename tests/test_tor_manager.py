@@ -246,6 +246,7 @@ def test_bridge_config_validation_error_uses_manager_settings_not_undefined_name
 
     executable = tmp_path / "tor.exe"
     executable.write_text("fake tor", encoding="utf-8")
+    executable.chmod(executable.stat().st_mode | 0o111)
     settings = TorSettings(
         executable=executable,
         bridges_enabled=True,
@@ -290,6 +291,7 @@ def test_bridge_digest_length_error_has_specific_actionable_message(tmp_path):
 
     executable = tmp_path / "tor.exe"
     executable.write_text("fake tor", encoding="utf-8")
+    executable.chmod(executable.stat().st_mode | 0o111)
     settings = TorSettings(
         executable=executable,
         bridges_enabled=True,
@@ -328,6 +330,7 @@ def test_bridge_config_validation_error_does_not_raise_name_error(tmp_path, monk
     executable = tmp_path / "tor" / "tor.exe"
     executable.parent.mkdir(parents=True)
     executable.write_text("fake tor", encoding="utf-8")
+    executable.chmod(executable.stat().st_mode | 0o111)
     transport_dir = executable.parent / "pluggable_transports"
     transport_dir.mkdir()
     (transport_dir / "lyrebird.exe").write_text("fake transport", encoding="utf-8")
