@@ -88,6 +88,24 @@ def normalize_bridge_record(value: str) -> str:
         authority = fields[0].strip("\"'")
         remainder_fields = fields[1:]
 
+        # WebTunnel bridge lines are identifiable by their required url= and
+        # ver= options. If a clipboard paste dropped only the leading
+        # "webtunnel" token, restore it instead of letting Tor concatenate
+        # those options into the identity fingerprint (causing
+        # "Key digest for Bridge is wrong length").
+        option_names = {
+            token.split("=", 1)[0].casefold()
+            for token in remainder_fields
+            if "=" in token
+        }
+        if {"url", "ver"}.issubset(option_names):
+            transport = "webtunnel"
+        elif option_names:
+            raise ValueError(
+                "This bridge has transport options but no transport label. "
+                "For WebTunnel, include 'webtunnel' before the address, or provide both url= and ver= so it can be detected."
+            )
+
     ipv6_match = _IPV6_AUTHORITY.fullmatch(authority)
     if ipv6_match:
         try:
