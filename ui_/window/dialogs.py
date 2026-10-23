@@ -278,7 +278,7 @@ class _FramelessDialog(QDialog):
             QPushButton#dialogSecondaryButton:hover {{ background: {self._colors["hover"]}; }}
             QScrollArea#dialogScroll {{ background: transparent; border: none; }}
             QScrollArea#dialogScroll QWidget {{ background: transparent; }}
-            QCheckBox#dontAskAgain {{ color: {self._colors["text"]}; background: transparent; spacing: 8px; font-size: 11px; }}
+            QCheckBox#dontAskAgain {{ color: {self._colors["text"]}; background: transparent; spacing: 8px; font-size: 8.25pt; }}
             QCheckBox#dontAskAgain::indicator {{ width: 16px; height: 16px; border: 1px solid {self._colors["border"]}; border-radius: 4px; background: {self._colors["panel"]}; }}
             QCheckBox#dontAskAgain::indicator:checked {{ background: {self._accent}; border-color: {self._accent}; }}
         """)
