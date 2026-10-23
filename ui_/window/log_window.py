@@ -89,7 +89,18 @@ class LogWindow(QWidget):
     @staticmethod
     def _message_level(message, level=None):
         """Prefer an explicit logger level, then classify common Tor event prefixes."""
-        if level:
+        if level is not None:
+            if isinstance(level, int):
+                if level >= 50:
+                    return "critical"
+                if level >= 40:
+                    return "error"
+                if level >= 30:
+                    return "warning"
+                if level <= 10:
+                    return "debug"
+                if level >= 20:
+                    return "info"
             normalized = str(level).strip().lower()
             if normalized in {"critical", "fatal"}:
                 return "critical"
