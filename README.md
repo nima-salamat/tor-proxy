@@ -111,6 +111,8 @@ OpenPGP verification is optional and can be enabled in Settings → Advanced. Wh
 1. Start TorProxy and select **Connect**.
 2. Wait for bootstrap to reach 100%. The application checks the managed Tor ControlPort and SOCKS listener separately from the local HTTP proxy.
 3. Use the HTTP proxy endpoint displayed by TorProxy. It listens on `127.0.0.1`; configure both HTTP and HTTPS proxy fields in your application to `127.0.0.1:<shown-proxy-port>`.
+
+To diagnose a stalled connection, open **Event Log → Live Tor log**. It streams the active `tor.log` from disk, uses severity colors, limits the number of rendered lines, and loads earlier entries in pages. The percentage can be populated from Tor's own bootstrap notices before the ControlPort status becomes available; TorProxy does not mark the connection as ready until the ControlPort identity and SOCKS listener checks pass.
 4. Test with **What is my IP?**. It sends an HTTPS request through the local proxy and reports the observed exit IP only if the proxied request succeeds.
 
 Do not expose the local HTTP proxy, SOCKS port, or ControlPort to a LAN. The application deliberately rejects non-loopback HTTP proxy binds.
