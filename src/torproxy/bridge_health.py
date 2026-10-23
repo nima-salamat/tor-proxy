@@ -226,7 +226,6 @@ def _probe_single_bridge(
                     "unexpected eof",
                     "eof",
                     "peer closed",
-                    "remote error: tls",
                 )
                 repeated_failures = sum(
                     any(marker in line for marker in repeated_dial_failures)
