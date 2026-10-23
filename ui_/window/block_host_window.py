@@ -176,8 +176,9 @@ class BlcokHostsWindow(QWidget):
 
     def _update_hosts_list(self):
         self.hosts_list.clear()
+        color = "#8dc8f0" if CONFIG["mode"] == "dark" else "#287db5"
         for host in get_blocked():
-            self.hosts_list.addItem(QListWidgetItem(qta.icon(self._rule_icon_name, color="#8dc8f0"), host))
+            self.hosts_list.addItem(QListWidgetItem(qta.icon(self._rule_icon_name, color=color), host))
         self._filter_rules(self.search_box.text() if hasattr(self, "search_box") else "")
 
     def _filter_rules(self, query):
@@ -206,7 +207,7 @@ class BlcokHostsWindow(QWidget):
         menu = QMenu(self)
         remove_action = menu.addAction(qta.icon("fa6s.trash", color="#d95d67"), "Remove rule")
         chosen = menu.exec(self.hosts_list.mapToGlobal(pos))
-        if chosen is remove_action:
+        if chosen == remove_action:
             self._confirm_remove(item.text())
 
     def _confirm_remove(self, host):

@@ -23,8 +23,6 @@ import qdarkstyle
 from qdarkstyle.dark.palette import DarkPalette
 from qdarkstyle.light.palette import LightPalette
 
-from pyzbar.pyzbar import decode
-import re
 import logging
 from functools import partial
 
@@ -33,7 +31,6 @@ logger = logging.getLogger(__name__)
 from config import CONFIG
 from ui_.worker.worker import Worker
 from ui_.window.qrcode_widget import QrCodeFloatingWindow
-from config import IS_WINDOWS
 from ui_.emojis import WRONG, CORRECT
 
 class SettingWindow(QWidget):
@@ -51,7 +48,7 @@ class SettingWindow(QWidget):
         self.settings_nav_buttons = []
         self.settings_nav_icon_names = (
             "fa6s.sliders",
-            "fa6s.bridge",
+            "fa6s.link",
             "fa6s.network-wired",
             "fa6s.shield-halved",
         )

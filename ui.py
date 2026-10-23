@@ -16,7 +16,7 @@ from PySide6.QtGui import QIcon, QAction, QActionGroup
 import qdarkstyle
 from qdarkstyle.dark.palette import DarkPalette
 from qdarkstyle.light.palette import LightPalette
-from PySide6.QtCore import Qt, Signal, QTimer, QEvent
+from PySide6.QtCore import QEvent, QTimer, Qt, Signal
 import qtawesome as qta
 from utils import resource_path
 import keyboard

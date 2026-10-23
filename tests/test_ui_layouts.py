@@ -261,3 +261,35 @@ def test_connect_button_exposes_actual_lifecycle_states_and_white_theme_explicit
     assert "Recent Tor log" in manager_source
     assert "QComboBox#systemProxyMode QAbstractItemView" in home_source
     assert "color: {text}" in home_source
+
+
+
+def test_menu_actions_use_fontawesome_and_window_restore_reactivates_layouts():
+    repository = Path(__file__).resolve().parents[1]
+    ui_source = (repository / "ui.py").read_text(encoding="utf-8")
+    settings_source = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
+    block_source = (repository / "ui_/window/block_host_window.py").read_text(encoding="utf-8")
+    exclude_source = (repository / "ui_/window/exclude_host_window.py").read_text(encoding="utf-8")
+    manager_source = (repository / "src/torproxy/tor_manager.py").read_text(encoding="utf-8")
+    main_source = (repository / "main.py").read_text(encoding="utf-8")
+
+    for icon_name in (
+        "fa6s.house",
+        "fa6s.gear",
+        "fa6s.shield-halved",
+        "fa6s.route",
+        "fa6s.boxes-stacked",
+        "fa6s.circle-question",
+        "fa6s.right-from-bracket",
+    ):
+        assert icon_name in ui_source
+    assert "def _refresh_layout_after_restore" in ui_source
+    assert "QEvent.Type.WindowStateChange" in ui_source
+    assert "SetWindowDisplayAffinity" not in main_source
+    assert 'self.settings_nav_icon_names' in settings_source
+    assert "def NewCircuitPeriod_changed" in settings_source
+    assert "settingsSectionTitle" in settings_source
+    assert "hostSearchBox" in block_source and "fa6s.shield-halved" in block_source
+    assert "hostSearchBox" in exclude_source and "fa6s.route" in exclude_source
+    assert "def _acquire_data_directory_lock" in manager_source
+    assert "def _release_data_directory_lock" in manager_source

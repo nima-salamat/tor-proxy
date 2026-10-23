@@ -70,3 +70,43 @@ def test_tor_config_validation_errors_keep_multiple_output_lines(tmp_path):
     detail = TorManager._summarize_process_output(output, max_lines=2)
     assert "Reading config file" in detail
     assert "Invalid value for ControlPort" in detail
+
+
+
+def test_data_directory_lock_prevents_two_managers_from_claiming_same_directory(tmp_path):
+    data_directory = tmp_path / "tor-state"
+    settings = TorSettings(
+        executable=tmp_path / "tor",
+        socks_port=19150,
+        control_port=19151,
+        data_directory=data_directory,
+    )
+    first = TorManager(settings)
+    second = TorManager(settings)
+
+    first._acquire_data_directory_lock()
+    try:
+        with pytest.raises(TorManagerError, match="already owns data directory"):
+            second._acquire_data_directory_lock()
+    finally:
+        first._release_data_directory_lock()
+
+    # A clean release makes the directory available for the next connection.
+    second._acquire_data_directory_lock()
+    second._release_data_directory_lock()
+
+
+def test_data_directory_lock_reports_other_process_and_cleans_up_after_stop(tmp_path, monkeypatch):
+    manager = TorManager(
+        TorSettings(
+            executable=tmp_path / "tor",
+            socks_port=19250,
+            control_port=19251,
+            data_directory=tmp_path / "tor-state",
+        )
+    )
+    manager._acquire_data_directory_lock()
+    manager.stop()
+    another = TorManager(manager.settings)
+    another._acquire_data_directory_lock()
+    another._release_data_directory_lock()

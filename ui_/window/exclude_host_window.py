@@ -202,8 +202,7 @@ class ExcludeHostsWindow(QWidget):
         menu = QMenu(self)
         remove_action = menu.addAction(qta.icon("fa6s.trash", color="#d95d67"), "Remove rule")
         chosen = menu.exec(self.hosts_list.mapToGlobal(pos))
-        if chosen is remove_action:
-            self._confirm_remove(item.text())
+        if chosen == remove_action:            self._confirm_remove(item.text())
 
     def _confirm_remove(self, host):
         reply = QMessageBox.question(
