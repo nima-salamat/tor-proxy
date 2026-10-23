@@ -21,7 +21,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
-    QMessageBox,
     QProgressBar,
     QPushButton,
     QVBoxLayout,
@@ -29,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from config import BUNDLE_DIR, CONFIG
+from ui_.window.dialogs import QMessageBox
 from torproxy.bundle import BundleProgress
 from updater import (
     delete_bundle,
