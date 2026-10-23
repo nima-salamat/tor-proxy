@@ -50,7 +50,7 @@ def _manager(tmp_path, bridge_text):
 
 
 def test_global_lyrebird_issue_skips_pruning_but_does_not_abort_normal_startup(monkeypatch, tmp_path):
-    bridge_text = "\\n".join(BRIDGES)
+    bridge_text = "\n".join(BRIDGES)
     runner, config = _runner(monkeypatch, tmp_path, bridge_text)
     manager = _manager(tmp_path, bridge_text)
     logs = []
@@ -78,12 +78,12 @@ def test_global_lyrebird_issue_skips_pruning_but_does_not_abort_normal_startup(m
 
 
 def test_with_one_working_bridge_only_confirmed_failures_are_pruned(monkeypatch, tmp_path):
-    bridge_text = "\\n".join(BRIDGES)
+    bridge_text = "\n".join(BRIDGES)
     runner, config = _runner(monkeypatch, tmp_path, bridge_text)
     manager = _manager(tmp_path, bridge_text)
     parsed_records = tuple(record for _kind, record in tor.TorManager._parse_bridges(bridge_text))
     retained = (parsed_records[0], parsed_records[2])
-    next_manager = _manager(tmp_path, "\\n".join(retained))
+    next_manager = _manager(tmp_path, "\n".join(retained))
     monkeypatch.setattr(runner, "_make_manager", lambda: next_manager)
     monkeypatch.setattr(
         bridge_health_module,
@@ -100,5 +100,5 @@ def test_with_one_working_bridge_only_confirmed_failures_are_pruned(monkeypatch,
     result = runner._auto_prune_bridges_before_start(manager)
 
     assert result is next_manager
-    assert config["bridges"] == "\\n".join(retained)
-    assert runner.bridges == "\\n".join(retained)
+    assert config["bridges"] == "\n".join(retained)
+    assert runner.bridges == "\n".join(retained)
