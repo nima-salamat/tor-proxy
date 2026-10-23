@@ -607,6 +607,13 @@ class ShortcutCaptureDialog(_FramelessDialog):
         Qt.Key.Key_Meta,
         Qt.Key.Key_AltGr,
     }
+    _MODIFIER_LABELS = {
+        Qt.Key.Key_Control: "Ctrl",
+        Qt.Key.Key_Shift: "Shift",
+        Qt.Key.Key_Alt: "Alt",
+        Qt.Key.Key_Meta: "Win",
+        Qt.Key.Key_AltGr: "AltGr",
+    }
 
     def __init__(self, parent=None, current_shortcut="Ctrl+Alt+P"):
         super().__init__(
@@ -618,10 +625,13 @@ class ShortcutCaptureDialog(_FramelessDialog):
         )
         self.shortcut: str | None = None
         self._captured_shortcut: str | None = None
+        self._pending_shortcut: str | None = None
+        self._pending_key: int | None = None
+        self._held_modifiers: dict[int, str] = {}
         self._listening = True
 
         intro = QLabel(
-            "Press the key combination you want to use. Release the keys, then press Enter to save.",
+            "Press the key combination you want to use. The preview updates while you press and hold keys; release the main key, then press Enter to save.",
             self.body_host,
         )
         intro.setObjectName("dialogMessage")
@@ -689,6 +699,9 @@ class ShortcutCaptureDialog(_FramelessDialog):
 
     def _begin_listening(self):
         self._captured_shortcut = None
+        self._pending_shortcut = None
+        self._pending_key = None
+        self._held_modifiers.clear()
         self._listening = True
         self.capture_value.setText("Press a modifier and a key…")
         self.badge.setText("●  LISTENING FOR INPUT")
@@ -717,6 +730,43 @@ class ShortcutCaptureDialog(_FramelessDialog):
             return True
         return super().event(event)
 
+    def _modifier_names(self, modifiers=0):
+        modifier_value = self._modifier_value(modifiers)
+        pairs = (
+            (Qt.KeyboardModifier.ControlModifier, Qt.Key.Key_Control, "Ctrl"),
+            (Qt.KeyboardModifier.AltModifier, Qt.Key.Key_Alt, "Alt"),
+            (Qt.KeyboardModifier.ShiftModifier, Qt.Key.Key_Shift, "Shift"),
+            (Qt.KeyboardModifier.MetaModifier, Qt.Key.Key_Meta, "Win"),
+        )
+        names = [
+            label for flag, key, label in pairs
+            if modifier_value & int(flag.value) or key in self._held_modifiers
+        ]
+        if Qt.Key.Key_AltGr in self._held_modifiers:
+            names.append("AltGr")
+        return names
+
+    def _live_chord(self, key=None, modifiers=0):
+        parts = self._modifier_names(modifiers)
+        if key is not None and key not in self._MODIFIER_KEYS:
+            key_text = QKeySequence(int(key)).toString(QKeySequence.SequenceFormat.PortableText)
+            parts.append(key_text or str(key))
+        return " + ".join(parts) if parts else "Press a modifier and a key…"
+
+    def _finish_capture(self, normalized):
+        self._captured_shortcut = normalized
+        self._pending_shortcut = None
+        self._pending_key = None
+        self._listening = False
+        self.capture_value.setText(normalized)
+        self.badge.setText("✓  COMBINATION CAPTURED")
+        self._listening_note.setText(
+            "Press Enter or Apply shortcut to save. Use Listen again or Backspace to record another combination."
+        )
+        self.apply_button.setEnabled(True)
+        if self.keyboardGrabber() is self:
+            self.releaseKeyboard()
+
     def keyPressEvent(self, event):
         key = event.key()
         modifiers = self._modifier_value(event.modifiers())
@@ -741,44 +791,97 @@ class ShortcutCaptureDialog(_FramelessDialog):
         if event.isAutoRepeat():
             event.accept()
             return
+        if not self._listening:
+            event.accept()
+            return
         if key in self._MODIFIER_KEYS:
-            self._listening_note.setText(
-                "Modifier detected. Keep it held and press the main key."
-            )
+            self._held_modifiers[key] = self._MODIFIER_LABELS[key]
+            self._pending_shortcut = None
+            self._pending_key = None
+            self._captured_shortcut = None
+            self.capture_value.setText(self._live_chord(modifiers=modifiers))
+            self.badge.setText("●  KEYS HELD")
+            self._listening_note.setText("Modifier detected. Keep it held and press the main key.")
+            self.apply_button.setEnabled(False)
             event.accept()
             return
         if key == Qt.Key.Key_unknown:
+            self._pending_shortcut = None
+            self._pending_key = key
+            self._captured_shortcut = None
+            self.capture_value.setText(self._live_chord(key, modifiers))
+            self.badge.setText("●  TRY ANOTHER KEY")
             self._listening_note.setText(
                 "That key cannot be represented. Try a letter, number, function key, or navigation key."
             )
+            self.apply_button.setEnabled(False)
             event.accept()
             return
 
+        self._pending_key = key
+        self._captured_shortcut = None
         try:
-            combined = self._modifier_value(event.modifiers()) | int(key)
+            combined = modifiers | int(key)
             sequence = QKeySequence(combined).toString(
                 QKeySequence.SequenceFormat.PortableText
             )
             normalized = parse_hotkey(sequence).text
         except (TypeError, ValueError, RuntimeError) as exc:
-            self._captured_shortcut = None
-            self.capture_value.setText("Unsupported combination")
-            self.badge.setText("●  TRY ANOTHER KEY")
+            self._pending_shortcut = None
+            self.capture_value.setText(self._live_chord(key, modifiers))
+            self.badge.setText("●  INPUT PREVIEW")
             self._listening_note.setText(str(exc))
             self.apply_button.setEnabled(False)
             event.accept()
             return
 
-        self._captured_shortcut = normalized
-        self._listening = False
+        # Show the chord on key-down, but don't finalize it until key-up. This
+        # keeps the preview live while the user is physically holding the keys.
+        self._pending_shortcut = normalized
         self.capture_value.setText(normalized)
-        self.badge.setText("✓  COMBINATION CAPTURED")
+        self.badge.setText("●  COMBINATION HELD")
         self._listening_note.setText(
-            "Press Enter or Apply shortcut to save. Use Listen again or Backspace to record another combination."
+            "Live preview — release the main key to finish capturing, then press Enter or Apply shortcut."
         )
-        self.apply_button.setEnabled(True)
-        self.releaseKeyboard()
+        self.apply_button.setEnabled(False)
         event.accept()
+
+    def keyReleaseEvent(self, event):
+        if not self._listening:
+            super().keyReleaseEvent(event)
+            return
+        if event.isAutoRepeat():
+            event.accept()
+            return
+
+        key = event.key()
+        if key in self._MODIFIER_KEYS:
+            self._held_modifiers.pop(key, None)
+            if not self._pending_shortcut:
+                self.capture_value.setText(self._live_chord())
+                if self._held_modifiers:
+                    self.badge.setText("●  KEYS HELD")
+                else:
+                    self.badge.setText("●  LISTENING FOR INPUT")
+            event.accept()
+            return
+
+        if key == self._pending_key:
+            normalized = self._pending_shortcut
+            self._pending_key = None
+            self._pending_shortcut = None
+            if normalized:
+                self._finish_capture(normalized)
+            else:
+                self._captured_shortcut = None
+                self.capture_value.setText(self._live_chord())
+                self.badge.setText("●  LISTENING FOR INPUT")
+                self._listening_note.setText(
+                    "Add Ctrl, Alt, Shift, or Win to create a valid global shortcut."
+                )
+            event.accept()
+            return
+        super().keyReleaseEvent(event)
 
     def _apply_captured(self):
         if not self._captured_shortcut:
