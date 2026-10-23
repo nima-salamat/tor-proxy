@@ -718,6 +718,14 @@ class TorManager:
                             "Check the transport executable path and its file permissions. The bridge itself "
                             "has not been shown to be offline. Live Tor log details: " + diagnostic
                         )
+                    if "tls: curvepreferences includes unsupported curve" in lowered_diagnostic:
+                        raise TorManagerError(
+                            "The bundled Lyrebird transport cannot negotiate TLS with this Go/TLS runtime "
+                            "('CurvePreferences includes unsupported curve'). This is a transport-bundle "
+                            "compatibility issue, not proof that the configured bridges are dead. Automatic "
+                            "cleanup will not remove bridge records for this error. Update or select a compatible "
+                            "Tor Expert Bundle and retry. Live Tor log details: " + diagnostic
+                        )
                     if "no configured transport called" in lowered_diagnostic:
                         transport_match = re.search(
                             r'no configured transport called\s+["\']([^"\']+)["\']',
