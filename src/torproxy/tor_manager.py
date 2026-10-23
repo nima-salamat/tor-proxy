@@ -167,14 +167,14 @@ class TorManager:
             except (psutil.NoSuchProcess, psutil.ZombieProcess):
                 continue
             except psutil.Error:
-                logger.debug("Could not inspect a running process while checking TorProxy's torrc.", exc_info=True)
+                LOGGER.debug("Could not inspect a running process while checking TorProxy's torrc.", exc_info=True)
             except (OSError, ValueError, TypeError):
-                logger.debug("Could not normalize a process command line while checking TorProxy's torrc.", exc_info=True)
+                LOGGER.debug("Could not normalize a process command line while checking TorProxy's torrc.", exc_info=True)
 
         if not matching:
             return
         process_ids = [process.pid for process in matching]
-        logger.warning(
+        LOGGER.warning(
             "Found stale Tor process(es) %s still referencing TorProxy's dedicated torrc; stopping them "
             "before reusing the data directory.",
             process_ids,
