@@ -344,6 +344,7 @@ def test_application_message_prompts_use_the_shared_custom_dialog():
         "ui_/window/block_host_window.py",
         "ui_/window/exclude_host_window.py",
         "ui_/window/updater_window.py",
+        "ui_/window/qrcode_widget.py",
     )
     for relative_path in paths:
         source = (repository / relative_path).read_text(encoding="utf-8")
@@ -384,3 +385,22 @@ def test_close_event_hides_to_tray_unless_exit_was_explicitly_authorized():
     assert close_event.index("event.ignore()") < close_event.index("event.accept()")
     assert 'self.hide_to_tray()' in close_event
     assert 'self.proxyWidget._stop_services()' in close_event
+
+
+
+def test_theme_switch_changes_its_mode_and_emits_the_new_mode(qt_app):
+    pytest.importorskip("qtawesome")
+    from ui_.btn.theme_switch import ThemeSwitch
+
+    switch = ThemeSwitch("dark")
+    emitted = []
+    switch.modeChanged.connect(emitted.append)
+
+    switch.toggle()
+    assert switch.mode == "light"
+    assert emitted == ["light"]
+
+    switch.set_mode("dark")
+    assert switch.mode == "dark"
+    switch._animation.stop()
+    switch.deleteLater()
