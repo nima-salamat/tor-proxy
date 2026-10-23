@@ -13,13 +13,13 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMenu,
-    QMessageBox,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
 from config import CONFIG
+from ui_.window.dialogs import QMessageBox
 from proxy import load_blocked, remove_blocked, save_blocked, add_to_blocked_hosts, get_blocked
 from ui_.worker.worker import Worker
 
