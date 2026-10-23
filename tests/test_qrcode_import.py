@@ -24,12 +24,12 @@ def test_bridge_qr_accepts_json_array_and_deduplicates_lines():
 def test_bridge_qr_accepts_torrc_prefix_and_multiline_text():
     payload = """Bridge obfs4 192.0.2.12:443 AABB cert=abc iat-mode=0
 # comment
-snowflake 198.51.100.12:443 fingerprint=abc
+snowflake 198.51.100.12:443 fingerprint=A1B2C3D4E5F60718293A4B5C6D7E8F9012345678
 not a bridge
 """
     assert parse_bridge_payload(payload) == [
         "obfs4 192.0.2.12:443 AABB cert=abc iat-mode=0",
-        "snowflake 198.51.100.12:443 fingerprint=abc",
+        "snowflake 198.51.100.12:443 fingerprint=A1B2C3D4E5F60718293A4B5C6D7E8F9012345678",
     ]
 
 
@@ -81,14 +81,14 @@ def test_add_bridge_lines_preserves_existing_entries_and_avoids_duplicates():
 def test_pasted_single_line_bridge_list_is_split_and_canonicalized():
     pasted = (
         "Bridge OBFS4 192.0.2.10:443 A1B2C3D4E5F60718293A4B5C6D7E8F9012345678 cert=abc   "
-        "snowflake 198.51.100.12:443 fingerprint=def "
+        "snowflake 198.51.100.12:443 fingerprint=A1B2C3D4E5F60718293A4B5C6D7E8F9012345678 "
         "WEBTUNNEL [2001:db8::12]:8443 url=https://bridge.example.net/"
     )
     parsed = parse_bridge_text(pasted)
     assert parsed.invalid_records == ()
     assert parsed.records == (
         "obfs4 192.0.2.10:443 A1B2C3D4E5F60718293A4B5C6D7E8F9012345678 cert=abc",
-        "snowflake 198.51.100.12:443 fingerprint=def",
+        "snowflake 198.51.100.12:443 fingerprint=A1B2C3D4E5F60718293A4B5C6D7E8F9012345678",
         "webtunnel [2001:db8::12]:8443 url=https://bridge.example.net/",
     )
 
