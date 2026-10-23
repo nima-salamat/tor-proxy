@@ -411,7 +411,18 @@ class TorRunner(QObject):
             diagnostic = manager._recent_tor_log_detail(max_lines=30).lower()
         except Exception:
             diagnostic = ""
-        combined = error_text + "\\n" + diagnostic
+        combined = error_text + "\n" + diagnostic
+
+        startup_timed_out = (
+            "did not become ready within" in error_text
+            or "startup timed out" in error_text
+        )
+        # Avoid using a stale log tail to turn configuration/startup-executable
+        # errors into a reason to mutate bridges. Re-probe only after an actual
+        # bootstrap timeout, or when the exception itself includes a specific
+        # endpoint-dial failure.
+        if not startup_timed_out and "error dialing:" not in error_text:
+            return False
 
         dial_failure_markers = (
             "connection refused",
@@ -456,10 +467,7 @@ class TorRunner(QObject):
 
         # Tor may have tried every configured bridge yet failed to complete
         # bootstrap. A fresh isolated check can find a working alternative.
-        return (
-            "did not become ready within" in error_text
-            or "startup timed out" in error_text
-        )
+        return startup_timed_out
 
     def _start_with_bridge_recovery(self, manager: TorManager) -> TorManager:
         """Start Tor, then make one conservative cleanup/retry after a real bootstrap failure."""
