@@ -338,7 +338,7 @@ class SettingWindow(QWidget):
         self.bridges_page_layout.addWidget(self.btn_bridge)
 
         self.inp_bridges = _BridgeTextEdit(self, placeholderText=(
-            "Paste bridge lines here…\nExample: obfs4 192.0.2.10:443 FINGERPRINT cert=… iat-mode=0"
+            "Paste bridge lines here…\nExample: obfs4 192.0.2.10:443 0123456789ABCDEF0123456789ABCDEF01234567 cert=… iat-mode=0"
         ))
         self.inp_bridges.setObjectName("bridgeRecordsInput")
         self.inp_bridges.setMinimumHeight(104)
