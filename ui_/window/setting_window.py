@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QScrollArea
 )
 from PySide6.QtCore import Qt, QThreadPool
+import qtawesome as qta
 
 import qdarkstyle
 from qdarkstyle.dark.palette import DarkPalette
@@ -33,7 +34,7 @@ from config import CONFIG
 from ui_.worker.worker import Worker
 from ui_.window.qrcode_widget import QrCodeFloatingWindow
 from config import IS_WINDOWS
-from ui_.emojis import WRONG, CORRECT, LIGHT, DARK
+from ui_.emojis import WRONG, CORRECT
 
 class SettingWindow(QWidget):
     def __init__(self, parent=None):
@@ -48,9 +49,20 @@ class SettingWindow(QWidget):
         self.settings_nav_group = QButtonGroup(self)
         self.settings_nav_group.setExclusive(True)
         self.settings_nav_buttons = []
-        for index, title in enumerate(("General", "Bridges", "Ports", "Advanced")):
+        self.settings_nav_icon_names = (
+            "fa6s.sliders",
+            "fa6s.bridge",
+            "fa6s.network-wired",
+            "fa6s.shield-halved",
+        )
+        for index, (title, icon_name) in enumerate(zip(
+            ("General", "Bridges", "Ports", "Advanced"), self.settings_nav_icon_names
+        )):
             button = QPushButton(title, self)
             button.setObjectName("settingsNavButton")
+            button.setIcon(qta.icon(icon_name, color="#eff1f4" if CONFIG["mode"] == "dark" else "#202832"))
+            button.setMinimumHeight(38)
+            button.setToolTip(title)
             button.setCheckable(True)
             button.clicked.connect(lambda _checked=False, page=index: self._set_settings_page(page))
             self.settings_nav_group.addButton(button, index)
@@ -72,15 +84,11 @@ class SettingWindow(QWidget):
         self.initialize_bridges_page()
         self.initialize_second_page()
         self.initialize_advanced_page()
-        self.setStyleSheet("""
-            QPushButton#settingsNavButton { min-height: 34px; padding: 0 16px; border-radius: 7px; font-weight: 600; }
-            QPushButton#settingsNavButton:checked { background: #287db5; color: #ffffff; border: 1px solid #287db5; }
-            QStackedWidget#settingsPages { border: 1px solid palette(mid); border-radius: 9px; }
-            QLabel#signatureVerificationDetails { color: palette(text); padding: 8px 0; }
-        """)
+        self.apply_theme(CONFIG["mode"])
 
     def _create_scroll_page(self):
         content = QWidget()
+        content.setObjectName("settingsPageContent")
         layout = QVBoxLayout(content)
         layout.setContentsMargins(18, 16, 18, 18)
         layout.setSpacing(14)
@@ -101,32 +109,92 @@ class SettingWindow(QWidget):
         for page_index, button in enumerate(self.settings_nav_buttons):
             button.setChecked(page_index == index)
 
-    def initialize_first_page(self):
-        mode_layout = QHBoxLayout()
-        self.first_page_layout.addLayout(mode_layout)
+    def apply_theme(self, mode):
+        dark = mode == "dark"
+        border = "#3b4552" if dark else "#d7dee7"
+        accent = "#287db5"
+        hover = "rgba(71, 163, 242, 0.14)" if dark else "rgba(24, 118, 191, 0.10)"
+        icon_color = "#eff1f4" if dark else "#202832"
+        self.setStyleSheet(f"""
+            QPushButton#settingsNavButton {{
+                min-height: 36px; padding: 0 13px; spacing: 8px;
+                border: 1px solid transparent; border-radius: 8px;
+                font-weight: 650; text-align: left;
+            }}
+            QPushButton#settingsNavButton:hover {{ background: {hover}; border-color: {border}; }}
+            QPushButton#settingsNavButton:checked {{ background: {accent}; color: #ffffff; border-color: {accent}; }}
+            QStackedWidget#settingsPages {{ border: none; background: transparent; }}
+            QScrollArea#settingsScrollArea {{ background: transparent; border: none; }}
+            QWidget#settingsPageContent {{ background: transparent; }}
+            QLabel#settingsSectionTitle {{ font-size: 15px; font-weight: 750; color: palette(text); background: transparent; }}
+            QLabel#settingsDescription {{ color: palette(mid); background: transparent; }}
+            QLabel#settingsFieldLabel {{ color: palette(text); font-weight: 650; background: transparent; }}
+            QFrame#settingsRowCard {{ background: palette(base); border: 1px solid {border}; border-radius: 10px; }}
+            QLineEdit, QTextEdit {{
+                background: palette(base); color: palette(text);
+                border: 1px solid {border}; border-radius: 8px; padding: 8px 10px;
+                selection-background-color: {accent};
+            }}
+            QLineEdit:focus, QTextEdit:focus {{ border: 1px solid {accent}; }}
+            QLineEdit:disabled {{ color: palette(mid); background: palette(alternate-base); }}
+            QPushButton#settingsActionButton {{
+                min-height: 36px; padding: 0 13px; border: 1px solid {border};
+                border-radius: 8px; background: transparent; color: palette(text); font-weight: 650;
+            }}
+            QPushButton#settingsActionButton:hover {{ background: {hover}; border-color: {accent}; }}
+            QCheckBox {{ spacing: 8px; color: palette(text); background: transparent; }}
+            QLabel#signatureVerificationDetails {{ color: palette(text); background: transparent; padding: 8px 0; }}
+        """)
+        for button, icon_name in zip(self.settings_nav_buttons, self.settings_nav_icon_names):
+            button.setIcon(qta.icon(icon_name, color=icon_color))
+        if hasattr(self, "btn_qrcode"):
+            self.btn_qrcode.setIcon(qta.icon("fa6s.qrcode", color=icon_color))
 
+    @staticmethod
+    def _section_title(text):
+        label = QLabel(text)
+        label.setObjectName("settingsSectionTitle")
+        return label
+
+    @staticmethod
+    def _description(text):
+        label = QLabel(text)
+        label.setObjectName("settingsDescription")
+        label.setWordWrap(True)
+        return label
+
+    def initialize_first_page(self):
+        self.first_page_layout.addWidget(self._section_title("Appearance"))
+        self.first_page_layout.addWidget(
+            self._description("Choose how TorProxy looks. The theme is synchronized with the top-right appearance button.")
+        )
+        mode_layout = QHBoxLayout()
+        mode_layout.setSpacing(14)
+        mode_layout.addWidget(QLabel("Color theme"))
         btn_group_mode = QButtonGroup(self)
 
-        # use CONFIG[...] (Config implements __getitem__)
-        self.btn_dark = QRadioButton("dark", self)
+        self.btn_dark = QRadioButton("Dark", self)
         self.btn_dark.setChecked(CONFIG["mode"] != "light")
         mode_layout.addWidget(self.btn_dark)
         btn_group_mode.addButton(self.btn_dark)
 
-        self.btn_light = QRadioButton("light", self)
+        self.btn_light = QRadioButton("Light", self)
         self.btn_light.setChecked(CONFIG["mode"] == "light")
         mode_layout.addWidget(self.btn_light)
         btn_group_mode.addButton(self.btn_light)
-        self.btn_dark.toggled.connect(
-            lambda checked: self.change_mode(self.btn_dark) if checked else None
-        )
-        self.btn_light.toggled.connect(
-            lambda checked: self.change_mode(self.btn_light) if checked else None
+        mode_layout.addStretch(1)
+        self.first_page_layout.addLayout(mode_layout)
+        self.first_page_layout.addWidget(self._section_title("Circuit behavior"))
+        self.first_page_layout.addWidget(
+            self._description("These values are used when Tor starts. Changing them while connected applies them on the next connection.")
         )
 
-        max_circuit_dirtiness_layout = QHBoxLayout()
-        max_circuit_dirtiness_layout.addWidget(QLabel("MaxCircuitDirtiness  "))
-        self.first_page_layout.addLayout(max_circuit_dirtiness_layout)
+        max_row = QFrame(self)
+        max_row.setObjectName("settingsRowCard")
+        max_circuit_dirtiness_layout = QHBoxLayout(max_row)
+        max_circuit_dirtiness_layout.setContentsMargins(14, 10, 14, 10)
+        max_circuit_dirtiness_layout.addWidget(QLabel("Max circuit dirtiness (seconds)"))
+        self.first_page_layout.addWidget(max_row)
 
         # read from parent.tor if available, else from CONFIG or fallback
         try:
@@ -137,23 +205,42 @@ class SettingWindow(QWidget):
             start_val = CONFIG["MaxCircuitDirtiness"] or 10
 
         self.inp_MaxCircuitDirtiness = QLineEdit(str(start_val))
+        self.inp_MaxCircuitDirtiness.setPlaceholderText("10–86400 seconds")
+        self.inp_MaxCircuitDirtiness.setMaximumWidth(180)
+        self.inp_MaxCircuitDirtiness.setToolTip("How long a circuit may be reused before Tor considers building another one.")
         max_circuit_dirtiness_layout.addWidget(self.inp_MaxCircuitDirtiness)
         self.inp_MaxCircuitDirtiness.textChanged.connect(self.MaxCircuitDirtiness_changed)
         self.lbl_MaxCircuitDirtiness = QLabel(CORRECT)
         max_circuit_dirtiness_layout.addWidget(self.lbl_MaxCircuitDirtiness)
 
+        new_period_row = QFrame(self)
+        new_period_row.setObjectName("settingsRowCard")
+        new_period_layout = QHBoxLayout(new_period_row)
+        new_period_layout.setContentsMargins(14, 10, 14, 10)
+        new_period_layout.addWidget(QLabel("New circuit period (seconds)"))
+        self.inp_NewCircuitPeriod = QLineEdit(str(CONFIG["NewCircuitPeriod"]))
+        self.inp_NewCircuitPeriod.setPlaceholderText("10–86400 seconds")
+        self.inp_NewCircuitPeriod.setMaximumWidth(180)
+        self.inp_NewCircuitPeriod.setToolTip("Tor's circuit-building interval; this does not automatically request NEWNYM.")
+        new_period_layout.addWidget(self.inp_NewCircuitPeriod)
+        self.lbl_NewCircuitPeriod = QLabel(CORRECT)
+        new_period_layout.addWidget(self.lbl_NewCircuitPeriod)
+        self.first_page_layout.addWidget(new_period_row)
+        self.inp_NewCircuitPeriod.textChanged.connect(self.NewCircuitPeriod_changed)
+
         # Automatic identity rotation is intentionally disabled by default.
         identity_note = QLabel(
-            "Identity changes are manual. Tor rate-limits NEWNYM; requesting it does not guarantee a new exit IP."
+            "Identity changes remain manual. Tor rate-limits NEWNYM; requesting it does not guarantee a new exit IP."
         )
+        identity_note.setObjectName("settingsDescription")
         identity_note.setWordWrap(True)
         self.first_page_layout.addWidget(identity_note)
 
     def initialize_bridges_page(self):
-        description = QLabel(
+        self.bridges_page_layout.addWidget(self._section_title("Bridge configuration"))
+        description = self._description(
             "Use bridges when direct access to Tor relays is blocked or unreliable. Bridge configuration is kept separate from listener ports."
         )
-        description.setWordWrap(True)
         self.bridges_page_layout.addWidget(description)
         self.btn_bridge = QCheckBox("Use Tor bridges", self)
         self.btn_bridge.setChecked(bool(CONFIG["bridge"]))
@@ -166,6 +253,8 @@ class SettingWindow(QWidget):
         self.inp_bridges.textChanged.connect(self.set_bridges)
         self.bridges_page_layout.addWidget(self.inp_bridges)
         self.btn_qrcode = QPushButton("Import bridges from QR code")
+        self.btn_qrcode.setObjectName("settingsActionButton")
+        self.btn_qrcode.setIcon(qta.icon("fa6s.qrcode", color="#eff1f4" if CONFIG["mode"] == "dark" else "#202832"))
         self.btn_qrcode.clicked.connect(self.show_qrcode)
         self.bridges_page_layout.addWidget(self.btn_qrcode)
         self.bridges_page_layout.addStretch(1)
@@ -173,14 +262,29 @@ class SettingWindow(QWidget):
         self.threadpool = QThreadPool(self)
 
     def initialize_second_page(self):
-        description = QLabel("Enable only the listeners you use. Active ports must be unique and within 1–65535.")
-        description.setWordWrap(True)
+        self.second_page_layout.addWidget(self._section_title("Listener ports"))
+        description = self._description("Enable only the listeners you use. Active ports must be unique and within 1–65535. Changes to active listeners apply on the next Tor start.")
         self.second_page_layout.addWidget(description)
         ports = ["tor_port", "proxy_port", "dns_port", "control_port"]
+        port_labels = {
+            "tor_port": "SOCKS listener",
+            "proxy_port": "HTTP proxy",
+            "dns_port": "DNS listener",
+            "control_port": "Control interface",
+        }
         for port in ports:
-            lyt = QHBoxLayout()
-            lbl = QLabel(port)
+            row = QFrame(self)
+            row.setObjectName("settingsRowCard")
+            lyt = QHBoxLayout(row)
+            lyt.setContentsMargins(14, 9, 14, 9)
+            lbl = QLabel(port_labels[port])
+            lbl.setObjectName("settingsFieldLabel")
+            lbl.setMinimumWidth(140)
             inp_port = QLineEdit()
+            inp_port.setObjectName("portValueInput")
+            inp_port.setPlaceholderText("Port 1–65535")
+            inp_port.setMaximumWidth(220)
+            inp_port.setToolTip("Local loopback listener port. Active listener ports must not conflict.")
 
             # populate input with existing value if present (avoid "None" string)
             current_val = CONFIG[port]
@@ -190,7 +294,8 @@ class SettingWindow(QWidget):
             inp_port.setEnabled(enabled_initial)
 
             lbl_status = QLabel(CORRECT if enabled_initial and self._is_valid_port(current_val) else WRONG)
-            check_port = QCheckBox()
+            check_port = QCheckBox("Enabled")
+            check_port.setToolTip("Enable or disable this listener on the next Tor start.")
             check_port.setChecked(enabled_initial)
 
             # connect text changed -> validator (partial binds the widgets)
@@ -205,12 +310,13 @@ class SettingWindow(QWidget):
             lyt.addWidget(lbl_status)
             lyt.addWidget(check_port)
 
-            self.second_page_layout.addLayout(lyt)
+            self.second_page_layout.addWidget(row)
 
     def initialize_advanced_page(self):
-        title = QLabel("Optional security verification")
-        title.setStyleSheet("font-size: 15px; font-weight: 700;")
-        self.advanced_page_layout.addWidget(title)
+        self.advanced_page_layout.addWidget(self._section_title("Optional security verification"))
+        self.advanced_page_layout.addWidget(
+            self._description("Choose whether to authenticate the Tor publisher using its signed release metadata.")
+        )
         self.chk_verify_tor_signatures = QCheckBox(
             "Verify Tor bundle signatures with OpenPGP (GnuPG)", self
         )
@@ -364,16 +470,33 @@ class SettingWindow(QWidget):
 
     def MaxCircuitDirtiness_changed(self):
         text = self.inp_MaxCircuitDirtiness.text().strip()
-        if text and text.isdigit():
+        if text.isdigit() and 10 <= int(text) <= 86400:
             val = int(text)
             try:
                 self._parent.proxyWidget.tor.MaxCircuitDirtiness = val
-            except Exception:
-                pass
-            CONFIG["MaxCircuitDirtiness"] = val
+                CONFIG["MaxCircuitDirtiness"] = val
+            except (ValueError, OSError, AttributeError) as exc:
+                logger.warning("Could not save MaxCircuitDirtiness: %s", exc)
+                self.lbl_MaxCircuitDirtiness.setText(WRONG)
+                return
             self.lbl_MaxCircuitDirtiness.setText(CORRECT)
         else:
             self.lbl_MaxCircuitDirtiness.setText(WRONG)
+
+    def NewCircuitPeriod_changed(self):
+        text = self.inp_NewCircuitPeriod.text().strip()
+        if text.isdigit() and 10 <= int(text) <= 86400:
+            value = int(text)
+            try:
+                CONFIG["NewCircuitPeriod"] = value
+                self._parent.proxyWidget.tor.NewCircuitPeriod = value
+            except (ValueError, OSError, AttributeError) as exc:
+                logger.warning("Could not save NewCircuitPeriod: %s", exc)
+                self.lbl_NewCircuitPeriod.setText(WRONG)
+                return
+            self.lbl_NewCircuitPeriod.setText(CORRECT)
+        else:
+            self.lbl_NewCircuitPeriod.setText(WRONG)
 
     def set_bridges(self):
         txt = self.inp_bridges.toPlainText()
