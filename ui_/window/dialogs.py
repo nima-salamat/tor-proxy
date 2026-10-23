@@ -8,7 +8,8 @@ from __future__ import annotations
 from enum import IntFlag
 
 import qtawesome as qta
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QPoint, QRect, Qt, QTimer
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -113,14 +114,8 @@ class DialogTitleBar(QWidget):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            handle = self._dialog.windowHandle()
-            if handle is not None:
-                try:
-                    if handle.startSystemMove():
-                        event.accept()
-                        return
-                except (AttributeError, RuntimeError):
-                    pass
+            # Keep dragging under Qt control so each move can be clamped to
+            # the available geometry, instead of relying on an OS move loop.
             self._drag_origin = event.globalPosition().toPoint()
             self._window_origin = self._dialog.pos()
             event.accept()
@@ -133,9 +128,8 @@ class DialogTitleBar(QWidget):
             and self._window_origin is not None
             and event.buttons() & Qt.MouseButton.LeftButton
         ):
-            self._dialog.move(
-                self._window_origin + event.globalPosition().toPoint() - self._drag_origin
-            )
+            requested = self._window_origin + event.globalPosition().toPoint() - self._drag_origin
+            self._dialog.move(self._dialog.clamp_to_screen(requested))
             event.accept()
             return
         super().mouseMoveEvent(event)
@@ -173,12 +167,15 @@ class _FramelessDialog(QDialog):
         self.setWindowTitle(title)
         self.setWindowModality(Qt.WindowModality.WindowModal if parent is not None else Qt.WindowModality.ApplicationModal)
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        # Let the rounded frame reveal true transparency at each corner; with
+        # an opaque QDialog Windows fills the exterior with a black rectangle.
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAutoFillBackground(False)
         self.setMinimumWidth(width)
         self.setMaximumWidth(680)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        root.setContentsMargins(1, 1, 1, 1)
         root.setSpacing(0)
 
         self.surface = QFrame(self)
@@ -292,16 +289,46 @@ class _FramelessDialog(QDialog):
         self.footer_layout.addWidget(button)
         return button
 
+    def _screen_for_position(self, position: QPoint):
+        rect = QRect(position, self.size())
+        screen = QGuiApplication.screenAt(rect.center())
+        if screen is not None:
+            return screen
+        parent = self.parentWidget()
+        handle = parent.windowHandle() if parent is not None else None
+        if handle is not None and handle.screen() is not None:
+            return handle.screen()
+        return QGuiApplication.primaryScreen()
+
+    def clamp_to_screen(self, position: QPoint) -> QPoint:
+        """Keep the full dialog inside a display's usable work area."""
+        screen = self._screen_for_position(position)
+        if screen is None:
+            return position
+        area = screen.availableGeometry()
+        width = min(self.width(), area.width())
+        height = min(self.height(), area.height())
+        x = min(max(position.x(), area.left()), area.right() - width + 1)
+        y = min(max(position.y(), area.top()), area.bottom() - height + 1)
+        return QPoint(x, y)
+
+    def _place_on_screen(self):
+        if self.parentWidget() is not None and self.parentWidget().isVisible():
+            center = self.parentWidget().mapToGlobal(self.parentWidget().rect().center())
+            target = center - self.rect().center()
+        else:
+            screen = QGuiApplication.primaryScreen()
+            if screen is None:
+                return
+            target = screen.availableGeometry().center() - self.rect().center()
+        self.move(self.clamp_to_screen(target))
+
     def showEvent(self, event):
         super().showEvent(event)
-        if self.parentWidget() is not None:
-            center = self.parentWidget().mapToGlobal(self.parentWidget().rect().center())
-            self.move(center - self.rect().center())
-        else:
-            screen = QApplication.primaryScreen()
-            if screen is not None:
-                area = screen.availableGeometry()
-                self.move(area.center() - self.rect().center())
+        # Qt may finalize the dialog size after showEvent; position again on
+        # the next loop turn using the actual geometry, never off-screen.
+        self._place_on_screen()
+        QTimer.singleShot(0, self._place_on_screen)
 
 
 class MessageDialog(_FramelessDialog):
