@@ -113,6 +113,7 @@ class _QrScannerThread(QThread):
     def __init__(self, camera_index: int = 0, parent=None):
         super().__init__(parent)
         self.camera_index = camera_index
+        self._capture = None
 
     @staticmethod
     def _open_camera(index: int):
@@ -147,6 +148,7 @@ class _QrScannerThread(QThread):
         capture = None
         try:
             capture = self._open_camera(self.camera_index)
+            self._capture = capture
             if capture is None or not capture.isOpened():
                 if capture is not None:
                     capture.release()
@@ -201,6 +203,17 @@ class _QrScannerThread(QThread):
         finally:
             if capture is not None:
                 capture.release()
+            self._capture = None
+
+    def stop_camera(self):
+        """Ask the loop to exit and release a blocking capture if necessary."""
+        self.requestInterruption()
+        capture = self._capture
+        if capture is not None:
+            try:
+                capture.release()
+            except cv2.error:
+                logger.debug("Camera release during scanner shutdown failed.", exc_info=True)
 
 
 class _ScanOverlay(QWidget):
@@ -393,8 +406,8 @@ class QrCodeFloatingWindow(_FramelessDialog):
 
     def _resize_preview_overlay(self):
         if hasattr(self, "scan_overlay") and hasattr(self, "camera_label"):
-            self.camera_label.setGeometry(self.preview_panel.rect())
-            self.scan_overlay.setGeometry(self.preview_panel.rect())
+            self.camera_label.setGeometry(self.preview_panel.contentsRect())
+            self.scan_overlay.setGeometry(self.preview_panel.contentsRect())
             self.scan_overlay.raise_()
 
     def showEvent(self, event):
@@ -422,8 +435,8 @@ class QrCodeFloatingWindow(_FramelessDialog):
         if self._finishing:
             return
         if self._scanner is not None and self._scanner.isRunning():
-            self._scanner.requestInterruption()
-            self._scanner.wait(1000)
+            self._scanner.stop_camera()
+            self._scanner.wait(1600)
         self._detected_bridges = []
         self._finishing = False
         self.import_button.hide()
@@ -520,9 +533,10 @@ class QrCodeFloatingWindow(_FramelessDialog):
         if scanner is None:
             return
         if scanner.isRunning():
-            scanner.requestInterruption()
-            if not scanner.wait(1400):
-                logger.warning("QR scanner is still shutting down after the stop request.")
+            scanner.stop_camera()
+            if not scanner.wait(1600):
+                logger.warning("QR scanner did not stop after camera release; waiting for safe shutdown.")
+                scanner.wait()
         self._scanner = None
 
     def accept(self):
