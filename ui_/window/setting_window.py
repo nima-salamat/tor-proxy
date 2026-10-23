@@ -470,8 +470,10 @@ class SettingWindow(QWidget):
         self.chk_auto_prune_bridges.setObjectName("autoPruneBridgesPreference")
         self.chk_auto_prune_bridges.setToolTip(
             "Check bridges independently before connecting and recheck once if real Tor bootstrap times out. "
-            "Remove only bridge-specific dial failures when another bridge completes bootstrap. Generic SOCKS warnings, "
-            "DNS-leak notices, missing-hop messages, and global Lyrebird/TLS errors do not prove a bridge is dead."
+            "A refused connection or permanent hostname-resolution failure is endpoint-specific; timeouts, resets, "
+            "and EOFs need repeated failed dial attempts. Cleanup requires another bridge to complete bootstrap. "
+            "Generic SOCKS warnings, DNS-leak notices, missing-hop messages, TLS/SNI errors, and local network "
+            "failures do not by themselves prove a bridge is dead."
         )
         self.chk_auto_prune_bridges.setChecked(bool(CONFIG["auto_prune_bridges"]))
         self.chk_auto_prune_bridges.setEnabled(bool(CONFIG["bridge"]))
