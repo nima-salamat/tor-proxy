@@ -6,9 +6,9 @@ from torproxy.bridge_health import BridgeProbeOutcome, check_bridges
 from torproxy.tor_manager import TorSettings
 
 BRIDGES = (
-    "obfs4 192.0.2.10:443 FINGERPRINT10",
-    "obfs4 192.0.2.11:443 FINGERPRINT11",
-    "obfs4 192.0.2.12:443 FINGERPRINT12",
+    "obfs4 192.0.2.10:443 1111111111111111111111111111111111111111",
+    "obfs4 192.0.2.11:443 2222222222222222222222222222222222222222",
+    "obfs4 192.0.2.12:443 3333333333333333333333333333333333333333",
 )
 
 
