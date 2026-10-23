@@ -17,6 +17,7 @@ if SRC_ROOT.is_dir() and str(SRC_ROOT) not in sys.path:
 
 from set_proxy import get_os_name, Os  # noqa: E402
 from torproxy.paths import user_directories  # noqa: E402
+from torproxy.hotkeys import parse_hotkey  # noqa: E402
 
 IS_WINDOWS = get_os_name() == Os.Windows
 IS_LINUX = get_os_name() == Os.Linux
@@ -50,6 +51,7 @@ DEFAULT_DATA: dict[str, Any] = {
     "log_level": "INFO",
     "verify_tor_signatures": False,
     "confirm_exit": True,
+    "global_shortcut": "Ctrl+Alt+P",
 }
 LEGACY_KEYS = set(DEFAULT_DATA) | {"data_usage_bytes", "exclude_hosts", "blocked_hosts"}
 
@@ -99,6 +101,14 @@ class Config:
             raise ConfigError("mode must be 'dark' or 'light'.")
         if data.get("system_proxy_mode", "unchanged") not in {"set", "unchanged", "clear"}:
             raise ConfigError("system_proxy_mode must be 'set', 'unchanged', or 'clear'.")
+
+        shortcut = data.get("global_shortcut", "Ctrl+Alt+P")
+        try:
+            parsed_shortcut = parse_hotkey(shortcut)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(f"global_shortcut is invalid: {exc}") from exc
+        if parsed_shortcut.text != shortcut:
+            raise ConfigError("global_shortcut must use canonical text such as 'Ctrl+Alt+P'.")
         for name in ("bridge", "proxy_port_checked", "tor_port_checked", "control_port_checked",
                      "dns_port_checked", "system_proxy_auto", "verify_tor_signatures", "confirm_exit"):
             if name in data and type(data[name]) is not bool:
