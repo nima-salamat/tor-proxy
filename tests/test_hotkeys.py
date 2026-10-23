@@ -91,7 +91,10 @@ def test_named_hotkeys_can_be_suspended_and_updated_during_capture():
     manager = HotkeyManager()
     backend = FakeBackend()
     manager._backend = backend
-    callback = lambda: None
+
+    def callback():
+        return None
+
     manager.register("window_visibility", "Ctrl+Alt+P", callback)
     assert backend.bindings["window_visibility"][0] == "Ctrl+Alt+P"
 
