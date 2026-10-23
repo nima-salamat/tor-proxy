@@ -84,6 +84,35 @@ def test_active_bridge_state_requires_ready_control_port_and_built_first_hop(tmp
     assert manager.get_active_bridge_fingerprints() == frozenset({fingerprint})
 
 
+def test_custom_sni_override_only_targets_webtunnel_and_preserves_explicit_value(tmp_path):
+    executable = tmp_path / "tor" / "tor.exe"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("fake tor", encoding="utf-8")
+    transport_dir = executable.parent / "pluggable_transports"
+    transport_dir.mkdir()
+    (transport_dir / "lyrebird.exe").write_text("fake transport", encoding="utf-8")
+
+    first_fp = "A1B2C3D4E5F60718293A4B5C6D7E8F9012345678"
+    second_fp = "B1B2C3D4E5F60718293A4B5C6D7E8F9012345678"
+    obfs_fp = "C1C2C3D4E5F60718293A4B5C6D7E8F9012345678"
+    manager = TorManager(TorSettings(
+        executable=executable,
+        bridges_enabled=True,
+        bridges="\\n".join((
+            f"webtunnel 192.0.2.10:443 {first_fp} url=https://bridge.example/ ver=0.0.1",
+            f"webtunnel 192.0.2.11:443 {second_fp} url=https://other.example/ ver=0.0.1 sni-imitation=custom.example",
+            f"obfs4 192.0.2.12:443 {obfs_fp} cert=abc",
+        )),
+        data_directory=tmp_path / "state",
+        webtunnel_sni_imitation="WWW.Google.COM",
+    ))
+
+    bridge_lines = [line for line in manager.render_torrc().splitlines() if line.startswith("Bridge ")]
+    assert bridge_lines[0].endswith("sni-imitation=www.google.com")
+    assert bridge_lines[1].endswith("sni-imitation=custom.example")
+    assert "sni-imitation=" not in bridge_lines[2]
+
+
 def test_bridge_torrc_infers_missing_webtunnel_label_from_url_and_ver(tmp_path):
     executable = tmp_path / "tor" / "tor.exe"
     executable.parent.mkdir(parents=True)
