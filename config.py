@@ -18,6 +18,7 @@ if SRC_ROOT.is_dir() and str(SRC_ROOT) not in sys.path:
 from set_proxy import get_os_name, Os  # noqa: E402
 from torproxy.paths import user_directories  # noqa: E402
 from torproxy.hotkeys import parse_hotkey  # noqa: E402
+from torproxy.bridges import normalize_sni_hostname  # noqa: E402
 
 IS_WINDOWS = get_os_name() == Os.Windows
 IS_LINUX = get_os_name() == Os.Linux
@@ -33,6 +34,7 @@ DEFAULT_DATA: dict[str, Any] = {
     "bridges": "",
     "bridge": False,
     "auto_prune_bridges": False,
+    "webtunnel_sni_imitation": "",
     "mode": "dark",
     "tor_port": None,
     "tor_port_checked": False,
@@ -127,6 +129,12 @@ class Config:
             raise ConfigError("Enabled listener ports must be distinct.")
         if not isinstance(data.get("bridges", ""), str):
             raise ConfigError("bridges must be text.")
+        try:
+            data["webtunnel_sni_imitation"] = normalize_sni_hostname(
+                data.get("webtunnel_sni_imitation", "") or ""
+            )
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(f"webtunnel_sni_imitation is invalid: {exc}") from exc
         if type(data.get("data_usage", 0)) is not int or data.get("data_usage", 0) < 0:
             raise ConfigError("data_usage must be a non-negative byte count.")
         interval = data.get("newnym_interval", 0)
