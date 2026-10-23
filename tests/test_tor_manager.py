@@ -98,7 +98,7 @@ def test_custom_sni_override_only_targets_webtunnel_and_preserves_explicit_value
     manager = TorManager(TorSettings(
         executable=executable,
         bridges_enabled=True,
-        bridges="\\n".join((
+        bridges="\n".join((
             f"webtunnel 192.0.2.10:443 {first_fp} url=https://bridge.example/ ver=0.0.1",
             f"webtunnel 192.0.2.11:443 {second_fp} url=https://other.example/ ver=0.0.1 sni-imitation=custom.example",
             f"obfs4 192.0.2.12:443 {obfs_fp} cert=abc",
