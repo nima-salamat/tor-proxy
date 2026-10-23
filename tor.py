@@ -349,17 +349,24 @@ class TorRunner(QObject):
                     "The selected Tor bundle could not initialize its pluggable transport, so the bridge results "
                     "cannot be trusted."
                 )
+            if not result.working:
+                self.log_message.emit(
+                    detail + " Automatic cleanup was skipped; the entire original bridge list was preserved. "
+                    "Continuing with Tor's normal startup, which will report any persistent bundle/runtime incompatibility."
+                )
+                if self.app_window is not None:
+                    self.app_window.data.value = "Continuing Tor startup; bridge list preserved"
+                # Do not let an isolated preflight error abort TorRunner before
+                # the real Tor instance can try configured alternatives.
+                return manager
+
+            # At least one bridge completed bootstrap. Results for other records
+            # that hit a local transport issue remain inconclusive and retained;
+            # only separately confirmed dial failures may be removed below.
             self.log_message.emit(
-                detail + " Automatic cleanup was skipped; the entire original bridge list was preserved. "
-                "Continuing with Tor's normal startup, which will report any persistent bundle/runtime incompatibility."
+                detail + " At least one bridge completed bootstrap, so only explicit failures from other records "
+                "will be eligible for cleanup; inconclusive records remain saved."
             )
-            if self.app_window is not None:
-                self.app_window.data.value = "Continuing Tor startup; bridge list preserved"
-            # Do not let an isolated preflight error abort TorRunner before the
-            # real Tor instance has a chance to try the configured alternatives.
-            # The regular TorManager startup path remains responsible for a
-            # definitive local-bundle error.
-            return manager
         if not result.working:
             self.log_message.emit(
                 "No bridge completed bootstrap within the check timeout. This does not prove the bridges are dead; "
