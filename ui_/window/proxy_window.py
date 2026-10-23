@@ -232,6 +232,8 @@ class ProxyWindow(QWidget):
         border = "#3b4552" if dark else "#d7dee7"
         muted = "#aab4c1" if dark else "#667386"
         accent = "#47a3f2" if dark else "#1876bf"
+        surface = "#202630" if dark else "#ffffff"
+        text = "#e8edf3" if dark else "#253041"
         self.home_content.setStyleSheet(f"""
             QWidget#homeContent {{ background: transparent; }}
             QPushButton#connectPulseButton {{ background: transparent; border: none; padding: 0; margin: 0; }}
@@ -244,9 +246,12 @@ class ProxyWindow(QWidget):
             QLabel#trafficUsage, QLabel#proxyStatusLabel, QLabel#exitIpLabel {{ color: {muted}; background: transparent; border: none; font-size: 11px; padding: 2px; }}
             QLabel#systemProxyTitle {{ color: {muted}; background: transparent; border: none; font-size: 10px; font-weight: 750; letter-spacing: 1px; }}
             QFrame#homeMetricSeparator {{ color: {border}; background: {border}; max-width: 1px; }}
-            QComboBox#systemProxyMode {{ min-height: 34px; padding: 0 12px; border: 1px solid {border}; border-radius: 8px; background: palette(base); color: palette(text); }}
+            QComboBox#systemProxyMode {{ min-height: 34px; padding: 0 12px; border: 1px solid {border}; border-radius: 8px; background: {surface}; color: {text}; }}
             QComboBox#systemProxyMode:hover {{ border-color: {accent}; }}
-            QPushButton#secondaryAction {{ min-height: 36px; padding: 0 14px; border-radius: 8px; background: transparent; color: palette(text); border: 1px solid {border}; font-weight: 600; }}
+            QComboBox#systemProxyMode QAbstractItemView {{ background: {surface}; color: {text}; selection-background-color: {accent}; selection-color: #ffffff; outline: none; border: 1px solid {border}; }}
+            QComboBox#systemProxyMode QAbstractItemView::item {{ background: {surface}; color: {text}; padding: 8px 10px; min-height: 22px; }}
+            QComboBox#systemProxyMode QAbstractItemView::item:selected {{ background: {accent}; color: #ffffff; }}
+            QPushButton#secondaryAction {{ min-height: 36px; padding: 0 14px; border-radius: 8px; background: transparent; color: {text}; border: 1px solid {border}; font-weight: 600; }}
             QPushButton#secondaryAction:hover {{ background: rgba(71, 163, 242, 0.12); border-color: {accent}; }}
             QPushButton#secondaryAction:checked {{ background: rgba(71, 163, 242, 0.18); border-color: {accent}; }}
         """)
@@ -405,8 +410,9 @@ class ProxyWindow(QWidget):
                 logger.exception("Could not authenticate to the managed Tor ControlPort: %s", e)
                 self.logs_widget.update_log(f"Tor bootstrap completed but ControlPort authentication failed: {e}")
                 self.connected = False
-                self.btn_status.setText("control authentication failed")
+                self.btn_status.setText("CONTROL AUTHENTICATION FAILED")
                 self.set_btn_status_style("disconnected")
+                self.connect_btn.set_connected(False)
                 self._update_proxy_buttons()
                 return
             self.connected = True
@@ -423,8 +429,13 @@ class ProxyWindow(QWidget):
         self.failed = True
         self.logs_widget.update_log(f"Tor supervisor reported a failure: {message}")
         logger.error("Tor supervisor failed: %s", message)
+        if self._parent is not None and hasattr(self._parent, "notify_user"):
+            self._parent.notify_user("Tor startup failed", str(message), level="warning")
         if self.running:
             self._stop_services()
+        self.connect_btn.set_connected(False)
+        self.btn_status.setText("TOR STARTUP FAILED · SEE EVENT LOG")
+        self.set_btn_status_style("disconnected")
 
     def set_btn_status_style(self, stmt):
         self.btn_status.setProperty("connectionState", stmt)
@@ -446,12 +457,14 @@ class ProxyWindow(QWidget):
 
     def _toggle(self):
         if self.running:
+            self.connect_btn.set_disconnecting()
             self._stop_services()
             return
 
         self.failed = False
+        self.connect_btn.set_connecting()
         self.connect_btn.setEnabled(False)
-        self.btn_status.setText("checking ports ...")
+        self.btn_status.setText("CHECKING PORTS…")
         self.set_btn_status_style("connecting")
 
         worker = Worker(self._check_ports_worker)
@@ -633,7 +646,8 @@ class ProxyWindow(QWidget):
         if self._stopping:
             return
         self._stopping = True
-        self.btn_status.setText("DISCONNECTING")
+        self.connect_btn.set_disconnecting()
+        self.btn_status.setText("DISCONNECTING…")
         self.set_btn_status_style("disconnecting")
 
         # Restore a policy-managed proxy when the app disconnects in Set mode.

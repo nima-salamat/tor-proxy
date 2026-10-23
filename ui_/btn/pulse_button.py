@@ -1,16 +1,17 @@
 from PySide6.QtWidgets import QPushButton
-from PySide6.QtCore import Qt, QEasingCurve, QPropertyAnimation, Property
+from PySide6.QtCore import Qt, QEasingCurve, QPropertyAnimation, Property, QTimer
 from PySide6.QtGui import QPainter, QColor, QBrush, QPen, QRadialGradient
 
 
 class PulseButton(QPushButton):
-    """Fixed-circle, animated Tor connect control; the controller owns its state."""
+    """Circular, animated Connect button synchronized with Tor's actual lifecycle."""
 
-    def __init__(self, text="Connect"):
+    def __init__(self, text="CONNECT"):
         super().__init__(text)
         self.setFixedSize(264, 264)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._state = "disconnected"
         self.connected = False
         self.hovered = False
         self._pulse_radius = 103.0
@@ -30,13 +31,47 @@ class PulseButton(QPushButton):
         self.halo_anim.setLoopCount(-1)
         self.halo_anim.setEasingCurve(QEasingCurve.Type.InOutSine)
 
+        self._connected_feedback_timer = QTimer(self)
+        self._connected_feedback_timer.setSingleShot(True)
+        self._connected_feedback_timer.timeout.connect(self._finish_connected_feedback)
         self.outer_anim.start()
         self.halo_anim.start()
 
-    def set_connected(self, connected):
-        self.connected = bool(connected)
-        self.setText("DISCONNECT" if self.connected else "CONNECT")
+    @property
+    def state(self):
+        return self._state
+
+    def _set_state(self, state, text):
+        self._connected_feedback_timer.stop()
+        self._state = state
+        self.connected = state in {"connected", "disconnect", "stopping"}
+        self.setText(text)
         self.update()
+
+    def set_connecting(self):
+        self._set_state("connecting", "CONNECTING…")
+        self.setToolTip("Starting Tor and waiting for bootstrap to complete.")
+
+    def set_connected(self, connected):
+        """Show a brief success acknowledgement, then leave a red Disconnect button."""
+        if not connected:
+            self._set_state("disconnected", "CONNECT")
+            self.setToolTip("Connect to Tor.")
+            return
+        self._set_state("connected", "CONNECTED")
+        self.setToolTip("Tor is connected. Disconnect from Tor.")
+        self._connected_feedback_timer.start(1000)
+
+    def _finish_connected_feedback(self):
+        if self._state == "connected":
+            self._state = "disconnect"
+            self.connected = True
+            self.setText("DISCONNECT")
+            self.update()
+
+    def set_disconnecting(self):
+        self._set_state("stopping", "DISCONNECTING…")
+        self.setToolTip("Stopping Tor and the local proxy.")
 
     def enterEvent(self, event):
         self.hovered = True
@@ -52,12 +87,20 @@ class PulseButton(QPushButton):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         center = self.rect().center()
-        base_color = QColor("#ff526d" if self.connected else "#2eae69")
-        highlight = QColor("#ff91a2" if self.connected else "#82e8ae")
+        colors = {
+            "disconnected": ("#2eae69", "#82e8ae", "#176942"),
+            "connecting": ("#328bd4", "#9bd1ff", "#1d4e89"),
+            "connected": ("#2cbb88", "#a6f4d3", "#146953"),
+            "disconnect": ("#ff526d", "#ff9caa", "#9d2941"),
+            "stopping": ("#e58a44", "#ffd0a5", "#8a4321"),
+        }
+        base, highlight, edge = colors.get(self._state, colors["disconnected"])
+        base_color = QColor(base)
+        highlight_color = QColor(highlight)
         if self.hovered:
-            highlight = highlight.lighter(108)
+            highlight_color = highlight_color.lighter(108)
 
-        # Animated rings are circular, low-alpha, and outside the main button face.
+        # During startup the outer rings move faster and use a cool blue color.
         for radius, alpha, width in (
             (self._halo_radius, 32, 2.0),
             (self._pulse_radius, 72, 2.4),
@@ -70,9 +113,9 @@ class PulseButton(QPushButton):
 
         main_radius = 100
         gradient = QRadialGradient(center.x() - 30, center.y() - 37, main_radius * 2.0)
-        gradient.setColorAt(0.0, highlight)
+        gradient.setColorAt(0.0, highlight_color)
         gradient.setColorAt(0.62, base_color)
-        gradient.setColorAt(1.0, QColor("#176942" if not self.connected else "#9d2941"))
+        gradient.setColorAt(1.0, QColor(edge))
         painter.setPen(QPen(base_color.lighter(128), 1.4))
         painter.setBrush(QBrush(gradient))
         painter.drawEllipse(center, main_radius, main_radius)
@@ -86,7 +129,7 @@ class PulseButton(QPushButton):
         painter.setPen(QColor("#ffffff"))
         font = painter.font()
         font.setBold(True)
-        font.setPointSize(14)
+        font.setPointSize(13 if self._state in {"connecting", "stopping"} else 14)
         painter.setFont(font)
         painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.text())
         painter.end()
