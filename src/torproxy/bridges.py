@@ -18,8 +18,11 @@ _TRANSPORT_PATTERN = "|".join(re.escape(name) for name in SUPPORTED_BRIDGE_TRANS
 # second overlapping match at the same endpoint, while still splitting
 # concatenated records and keeping bare IPv6 authorities out of prior args.
 _BRIDGE_START = re.compile(
-    rf"(?i)(?<!\S)(?:Bridge\s+)?(?:(?:{_TRANSPORT_PATTERN})\s+)?"
-    r"[\"']?(?:\[[0-9a-f:.]+\]|(?:\d{1,3}\.){3}\d{1,3}):\d{1,5}[\"']?(?=\s|$)"
+    # A bare authority is only a record start when it has the explicit torrc
+    # "Bridge" prefix. Otherwise it is also the endpoint token of the record
+    # immediately before it and would create an overlapping false record.
+    rf"(?i)(?<!\\S)(?:Bridge\\s+(?:(?:{_TRANSPORT_PATTERN})\\s+)?|(?:{_TRANSPORT_PATTERN})\\s+)"
+    r"[\"']?(?:\\[[0-9a-f:.]+\\]|(?:\\d{1,3}\\.){3}\\d{1,3}):\\d{1,5}[\"']?(?=\\s|$)"
 )
 _IPV4_AUTHORITY = re.compile(r"^(?P<host>[^:\s]+):(?P<port>\d{1,5})$")
 _IPV6_AUTHORITY = re.compile(r"^\[(?P<host>[^\]]+)\]:(?P<port>\d{1,5})$")
