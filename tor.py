@@ -153,7 +153,7 @@ class TorRunner(QObject):
         self.manager: TorManager | None = None
         self.app_window = None
         self._stopping = threading.Event()
-        self._last_report: tuple[str, int | None] | None = None
+        self._last_report: tuple[str, int | None, str] | None = None
         self.state = "STOPPED"
         self.last_error: str | None = None
         self.update_path(CONFIG["tor_path"])
@@ -228,10 +228,13 @@ class TorRunner(QObject):
             self.last_error = None
         elif message:
             self.last_error = str(message)
-        report = (state_text, progress)
+        detail = " ".join(str(message or "").split())
+        report = (state_text, progress, detail)
         if report != self._last_report:
             self._last_report = report
-            self.log_message.emit(f"Tor state: {state_text}" + (f" ({progress}%)" if progress is not None else ""))
+            progress_text = f" ({progress}%)" if progress is not None else ""
+            detail_text = f" — {detail}" if detail else ""
+            self.log_message.emit(f"Tor state: {state_text}{progress_text}{detail_text}")
         if self.app_window is not None and progress is not None:
             self.app_window.data.value = f"{progress}%"
 
@@ -251,6 +254,8 @@ class TorRunner(QObject):
             return manager
 
         self.log_message.emit("Checking configured bridges independently before connecting. Bridge addresses are hidden from the event log.")
+        if self.app_window is not None:
+            self.app_window.data.value = "Checking bridges…"
         from torproxy.bridge_health import check_bridges
 
         reserved_ports = [self.socks_port, self.control_port, self.dns_port]
@@ -266,6 +271,8 @@ class TorRunner(QObject):
             else:
                 label = "inconclusive; keeping it"
             self.log_message.emit(f"Bridge check {completed}/{total}: {label}.")
+            if self.app_window is not None:
+                self.app_window.data.value = f"Bridge check {completed}/{total}"
 
         try:
             result = check_bridges(
