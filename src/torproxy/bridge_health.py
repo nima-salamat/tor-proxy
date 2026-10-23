@@ -190,29 +190,46 @@ def _probe_single_bridge(
                         "transport_setup_unavailable",
                     )
 
-                explicit_dial_failure = (
-                    "error dialing:" in diagnostic
-                    and any(marker in diagnostic for marker in (
-                        "connection refused",
-                        "actively refused",
-                        "timed out",
-                        "timeout",
-                        "i/o timeout",
-                        "no connection could be made",
-                        "failed to respond",
-                        "period of time",
-                        "wsarecv",
-                        "connection reset by peer",
-                        "forcibly closed by the remote host",
-                        "forcibly closed by remote host",
-                        "no such host",
-                        "server misbehaving",
-                        "name or service not known",
-                        "unexpected eof",
-                        "eof",
-                    ))
+                dial_lines = [
+                    line for line in re.split(r"\\s+\\|\\s+|\\r?\\n", diagnostic)
+                    if "error dialing:" in line
+                ]
+                # These are strong endpoint-specific failures: a closed port,
+                # a refused TCP connection, a missing host, or a peer that
+                # repeatedly resets/closes the connection.
+                hard_dial_failures = (
+                    "connection refused",
+                    "actively refused",
+                    "no connection could be made",
+                    "connection reset by peer",
+                    "forcibly closed by the remote host",
+                    "forcibly closed by remote host",
+                    "no such host",
+                    "name or service not known",
+                    "unexpected eof",
+                    "eof",
                 )
-                if explicit_dial_failure or any(marker in diagnostic for marker in (
+                if any(any(marker in line for marker in hard_dial_failures) for line in dial_lines):
+                    return False
+
+                # One timeout may be a transient network delay. Only classify
+                # timeouts as bridge-specific after multiple independent dial
+                # attempts to this isolated bridge fail during the probe.
+                transient_dial_failures = (
+                    "timed out",
+                    "timeout",
+                    "i/o timeout",
+                    "failed to respond",
+                    "period of time",
+                    "wsarecv",
+                )
+                transient_failures = sum(
+                    any(marker in line for marker in transient_dial_failures)
+                    for line in dial_lines
+                )
+                if transient_failures >= 2:
+                    return False
+                if any(marker in diagnostic for marker in (
                     "bridge connection failed",
                     "failed to connect to bridge",
                     "bridge is unreachable",
