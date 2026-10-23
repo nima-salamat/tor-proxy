@@ -40,7 +40,6 @@ def normalize_sni_hostname(value: str) -> str:
     if not raw:
         return ""
     if any(char in raw for char in (":", "/", "\\", "@", "?", "#", ",", "\r", "\n", "\t", " ")):
-
         raise ValueError("SNI must be a hostname only (for example, www.example.com).")
     try:
         ipaddress.ip_address(raw.strip("[]"))
