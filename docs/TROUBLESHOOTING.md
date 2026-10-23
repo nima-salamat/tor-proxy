@@ -8,9 +8,13 @@
 4. The app validates torrc before launch. Invalid directives, duplicate ports, missing bridge transport binaries, or invalid bridge records should fail early.
 5. Check that another application is not occupying configured listener ports. TorProxy does not kill unrelated Tor processes.
 
-## Bootstrap stays below 100%
+## Bootstrap stays at 0% or appears frozen
 
-Check the system clock, connectivity, and whether Tor is blocked on the current network. If bridges are required, enable bridge mode and provide a current bridge record for a supported transport. A transport executable must exist in the selected bundle. Do not include bridge secrets or private network details in a public bug report.
+Open **Event Log → Live Tor log** to see the actual `tor.log` file while Tor is running. This view follows new file writes, colors Tor notice/warning/error lines, caps the visible buffer, and can load older entries in pages. The progress indicator now also reads Tor's `Bootstrapped N%` log notices if the ControlPort status is not yet available. A reported 100% is not treated as connected until the authenticated ControlPort and SOCKS listener are verified.
+
+At 0%, inspect the live file for the last `Bootstrapped N%` line and nearby `[warn]`/`[err]` messages. If the log never advances beyond `Bootstrapped 0% (starting)`, check whether the selected Tor bundle starts, whether its pluggable transport binary exists, and whether the network can reach the configured bridge. If the log reports progress but the UI is stuck, confirm the latest line in the live viewer rather than relying only on the percentage label. The popup's **Clear log history** action asks for confirmation before truncating the current Tor log; new entries continue to stream afterwards.
+
+Check the system clock, connectivity, and whether Tor is blocked on the current network. If bridges are required, enable bridge mode and provide complete supported bridge records. A transport executable must exist in the selected bundle. Do not include bridge secrets or private network details in a public bug report.
 
 Automatic bridge cleanup is an opt-in preflight in Settings → Bridges. It checks records independently before the normal connection starts, so it may delay startup. It never removes a bridge when the result is inconclusive, and keeps the full original list if no bridge is confirmed working. If several bridges are removed, recheck the network and transport executable before concluding the bridges themselves are invalid.
 
