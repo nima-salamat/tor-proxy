@@ -94,6 +94,7 @@ def _probe_single_bridge(
                 control_port=control_port,
                 dns_port=None,
                 data_directory=Path(temp_directory),
+                log_path=Path(temp_directory) / "tor-probe.log",
                 bridges_enabled=True,
                 bridges=record,
                 startup_timeout_seconds=timeout_seconds,
@@ -132,7 +133,33 @@ def _probe_single_bridge(
                 if cancel_event is not None and cancel_event.is_set():
                     return None
                 LOGGER.debug("An isolated bridge check did not finish (%s).", type(exc).__name__)
-                return False if bootstrap_seen.is_set() else None
+                # A startup timeout is not proof that a bridge is dead. Bootstrap
+                # can be slow and a transport can be missing globally in this
+                # selected bundle. Only a bridge-specific failure from Tor's own
+                # log is actionable for automatic cleanup.
+                try:
+                    diagnostic = manager._recent_tor_log_detail(max_lines=20).lower()
+                except Exception:
+                    diagnostic = ""
+                if any(marker in diagnostic for marker in (
+                    "no configured transport called",
+                    "unknown pluggable transport",
+                    "could not launch transport",
+                    "clienttransportplugin",
+                    "lyrebird",
+                )):
+                    return None
+                error_text = str(exc).lower()
+                if "did not become ready within" in error_text or "timed out" in error_text or "timeout" in error_text:
+                    return None
+                if any(marker in diagnostic for marker in (
+                    "bridge connection failed",
+                    "failed to connect to bridge",
+                    "bridge is unreachable",
+                    "connection to bridge timed out",
+                )):
+                    return False
+                return False if bootstrap_seen.is_set() and "bridge at" in diagnostic else None
             finally:
                 finished.set()
                 try:
