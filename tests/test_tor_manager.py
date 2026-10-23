@@ -36,11 +36,11 @@ def test_valid_bridge_record_keeps_transport_arguments():
 def test_tor_manager_splits_inline_records_using_the_shared_parser():
     parsed = TorManager._parse_bridges(
         "Bridge obfs4 192.0.2.4:443 A1B2C3D4E5F60718293A4B5C6D7E8F9012345678 cert=abc "
-        "Bridge snowflake 198.51.100.4:443 fingerprint=def"
+        "Bridge snowflake 198.51.100.4:443 fingerprint=A1B2C3D4E5F60718293A4B5C6D7E8F9012345678"
     )
     assert parsed == [
         ("obfs4", "obfs4 192.0.2.4:443 A1B2C3D4E5F60718293A4B5C6D7E8F9012345678 cert=abc"),
-        ("snowflake", "snowflake 198.51.100.4:443 fingerprint=def"),
+        ("snowflake", "snowflake 198.51.100.4:443 fingerprint=A1B2C3D4E5F60718293A4B5C6D7E8F9012345678"),
     ]
 
 
