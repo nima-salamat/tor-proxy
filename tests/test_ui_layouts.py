@@ -146,7 +146,7 @@ def test_window_uses_native_multimonitor_frame_and_persistent_notifications():
     assert "FramelessWindowHint" in ui_source
     assert "def moveEvent" in ui_source
     assert "_screen_for_geometry" in ui_source
-    assert "visible_width = min(72" in ui_source
+    assert "visible_width = min(120" in ui_source
     assert "CustomTitleBar(self)" in ui_source
     assert "startSystemMove" in titlebar_source
     assert "HighDpiScaleFactorRoundingPolicy.PassThrough" in main_source
@@ -318,16 +318,18 @@ def test_navigation_labels_frameless_pages_and_custom_shortcuts_dialog():
     repository = Path(__file__).resolve().parents[1]
     ui_source = (repository / "ui.py").read_text(encoding="utf-8")
     dialogs_source = (repository / "ui_/window/dialogs.py").read_text(encoding="utf-8")
+    shortcuts_source = (repository / "ui_/window/shortcuts_window.py").read_text(encoding="utf-8")
 
     assert "ToolButtonTextBesideIcon" in ui_source
     assert 'button.setObjectName("topNavButton")' in ui_source
     assert "page_area" not in ui_source
     assert "self.main_layout.addWidget(self.stack, 1)" in ui_source
     assert "QStackedWidget#pageStack {{ border: none; outline: none;" in ui_source
-    assert "ShortcutsDialog(self, is_windows=IS_WINDOWS)" in ui_source
-    assert "class ShortcutsDialog" in dialogs_source
-    assert 'QLabel#shortcutKey' in dialogs_source
-    assert '"Ctrl", "Alt", "P"' in dialogs_source
+    assert "self.shortcutsWidget = ShortcutsWindow(self)" in ui_source
+    assert "self._show_page(5)" in ui_source
+    assert "class ShortcutsWindow" in shortcuts_source
+    assert 'QLabel#shortcutsKeycap' in shortcuts_source
+    assert '"Ctrl", "Alt", "P"' in shortcuts_source
     assert "class QMessageBox:" in dialogs_source
 
 
