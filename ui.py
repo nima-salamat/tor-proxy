@@ -215,6 +215,9 @@ class Window(QMainWindow):
     def _on_hotkey_error(self, message):
         """Surface native registration conflicts in Event Log and the tray."""
         logger.warning("Global shortcut issue: %s", message)
+        settings = getattr(self, "settingWidget", None)
+        if settings is not None and hasattr(settings, "show_global_shortcut_error"):
+            settings.show_global_shortcut_error(message)
         try:
             self.proxyWidget.logs_widget.update_log(
                 "Global shortcut: {}".format(message), level="warning"
