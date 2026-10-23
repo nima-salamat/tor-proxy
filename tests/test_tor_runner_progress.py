@@ -6,8 +6,8 @@ from torproxy.tor_manager import TorState
 
 class _FakeData:
     def __init__(self):
-        self.value = ""
         self.values = []
+        self.value = ""
 
     @property
     def value(self):
