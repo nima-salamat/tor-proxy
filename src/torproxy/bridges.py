@@ -35,6 +35,7 @@ class BridgeTextParseResult:
 
     records: tuple[str, ...]
     invalid_records: tuple[str, ...]
+    errors: tuple[str, ...] = ()
 
 
 def _canonical_authority(value: str) -> str | None:
@@ -110,6 +111,31 @@ def normalize_bridge_record(value: str) -> str:
         raise ValueError("Bridge ports must be between 1 and 65535.")
 
     primary_authority = _canonical_authority(f"{host}:{port}")
+
+    # Tor's Bridge grammar takes a 40-hex-character identity fingerprint as
+    # one token. Clipboard sources sometimes display it as ten groups of four;
+    # normalize that presentation instead of passing a short digest to torrc.
+    if (
+        len(remainder_fields) >= 10
+        and all(re.fullmatch(r"[0-9a-fA-F]{4}", item.strip("\"'")) for item in remainder_fields[:10])
+    ):
+        remainder_fields = ["".join(item.strip("\"'") for item in remainder_fields[:10])] + remainder_fields[10:]
+
+    bare_tokens = [(index, token) for index, token in enumerate(remainder_fields) if "=" not in token]
+    if bare_tokens:
+        index, fingerprint = bare_tokens[0]
+        fingerprint = fingerprint.strip("\"'")
+        if index != 0 or not re.fullmatch(r"[0-9a-fA-F]{40}", fingerprint):
+            raise ValueError(
+                "The bridge fingerprint must be exactly 40 hexadecimal characters. "
+                "Copy the complete bridge line; do not use a nickname, partial fingerprint, or hashed fingerprint."
+            )
+        remainder_fields[0] = fingerprint
+        if len(bare_tokens) > 1:
+            raise ValueError(
+                "Unexpected extra text after the bridge fingerprint. Bridge options must use key=value format."
+            )
+
     clean_remainder: list[str] = []
     for token in remainder_fields:
         extra_authority = _canonical_authority(token)
@@ -166,18 +192,20 @@ def parse_bridge_text(text: str) -> BridgeTextParseResult:
     """
     records: list[str] = []
     invalid: list[str] = []
+    errors: list[str] = []
     seen: set[str] = set()
-    for candidate in _candidate_chunks(text):
+    for index, candidate in enumerate(_candidate_chunks(text), start=1):
         try:
             normalized = normalize_bridge_record(candidate)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as exc:
             invalid.append(candidate)
+            errors.append(f"Item {index}: {exc}")
             continue
         key = normalized.casefold()
         if key not in seen:
             seen.add(key)
             records.append(normalized)
-    return BridgeTextParseResult(tuple(records), tuple(invalid))
+    return BridgeTextParseResult(tuple(records), tuple(invalid), tuple(errors))
 
 
 def normalize_bridge_text(text: str) -> str:
