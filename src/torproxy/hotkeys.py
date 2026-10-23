@@ -5,7 +5,7 @@ import logging
 import os
 import threading
 from dataclasses import dataclass
-from typing import Callable
+from collections.abc import Callable
 
 LOGGER = logging.getLogger(__name__)
 MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, MOD_NOREPEAT = 1, 2, 4, 8, 0x4000
@@ -337,7 +337,7 @@ if os.name == "nt":
                     ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
                     wintypes.HWND, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
                 ]
-                user32.RegisterClassW.restype = wintypes.ATOM
+                user32.RegisterClassW.restype = ctypes.c_ushort
                 user32.RegisterClassW.argtypes = [ctypes.POINTER(_WNDCLASSW)]
                 user32.RegisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT]
                 user32.RegisterHotKey.restype = wintypes.BOOL
