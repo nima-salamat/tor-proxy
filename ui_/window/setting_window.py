@@ -300,6 +300,7 @@ class SettingWindow(QWidget):
         self.btn_bridge.stateChanged.connect(self.bridge_state_changed)
         self.bridges_page_layout.addWidget(self.btn_bridge)
         self.inp_bridges = QTextEdit(self, placeholderText="Enter your bridges (obfs4 or webtunnel)")
+        self.inp_bridges.setObjectName("bridgeRecordsInput")
         self.inp_bridges.setMinimumHeight(130)
         self.inp_bridges.setText(CONFIG["bridges"] or "")
         self.inp_bridges.setEnabled(bool(CONFIG["bridge"]))
@@ -310,6 +311,23 @@ class SettingWindow(QWidget):
         self.btn_qrcode.setIcon(qta.icon("fa6s.qrcode", color="#eff1f4" if CONFIG["mode"] == "dark" else "#202832"))
         self.btn_qrcode.clicked.connect(self.show_qrcode)
         self.bridges_page_layout.addWidget(self.btn_qrcode)
+
+        self.chk_auto_prune_bridges = QCheckBox(
+            "Automatically remove bridges that fail an isolated Tor check", self
+        )
+        self.chk_auto_prune_bridges.setObjectName("autoPruneBridgesPreference")
+        self.chk_auto_prune_bridges.setToolTip(
+            "Before connecting, test each bridge separately. Only remove failed records when at least one other bridge is confirmed working."
+        )
+        self.chk_auto_prune_bridges.setChecked(bool(CONFIG["auto_prune_bridges"]))
+        self.chk_auto_prune_bridges.setEnabled(bool(CONFIG["bridge"]))
+        self.chk_auto_prune_bridges.toggled.connect(self.auto_prune_bridges_changed)
+        self.bridges_page_layout.addWidget(self.chk_auto_prune_bridges)
+        self.bridges_page_layout.addWidget(self._description(
+            "When enabled, TorProxy checks multiple bridges in parallel before connecting and saves the verified list. "
+            "Checks can delay startup. A bridge is not removed when the result is ambiguous, and the original list is "
+            "preserved if no bridge can be confirmed working."
+        ))
         self.bridges_page_layout.addStretch(1)
         self.qrcode_widget = QrCodeFloatingWindow(self)
         self.threadpool = QThreadPool(self)
@@ -564,7 +582,20 @@ class SettingWindow(QWidget):
         except Exception:
             pass
         self.inp_bridges.setEnabled(checked)
+        if hasattr(self, "chk_auto_prune_bridges"):
+            self.chk_auto_prune_bridges.setEnabled(checked)
         CONFIG["bridge"] = bool(checked)
+
+    def auto_prune_bridges_changed(self, checked):
+        enabled = bool(checked)
+        try:
+            CONFIG["auto_prune_bridges"] = enabled
+        except (ValueError, OSError, KeyError) as exc:
+            logger.exception("Could not save automatic bridge cleanup preference.")
+            self.chk_auto_prune_bridges.blockSignals(True)
+            self.chk_auto_prune_bridges.setChecked(not enabled)
+            self.chk_auto_prune_bridges.blockSignals(False)
+            QMessageBox.warning(self, "Settings could not be saved", str(exc))
 
     def set_theme_mode(self, mode):
         """Synchronize the switch after theme changes from the title bar."""
