@@ -177,7 +177,7 @@ class Window(QMainWindow):
         self.notification_btn = QPushButton(self)
         self.notification_btn.setObjectName("notificationButton")
         self.notification_btn.setToolTip("Notifications")
-        self.notification_btn.setFixedSize(42, 30)
+        self.notification_btn.setFixedSize(56, 30)
         self.notification_btn.clicked.connect(self._show_notifications)
 
         self.toggle_btn = QPushButton(self)
