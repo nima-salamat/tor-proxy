@@ -241,7 +241,7 @@ class ProxyWindow(QWidget):
             QLabel#connectionStatus {{ color: {text}; background: transparent; border: none; padding: 4px; font-size: 12px; font-weight: 700; }}
             QLabel#connectionStatus[connectionState="connected"] {{ color: #2eae69; }}
             QLabel#connectionStatus[connectionState="connecting"] {{ color: {accent}; }}
-            QLabel#connectionStatus[connectionState="disconnected"] {{ color: palette(text); }}
+            QLabel#connectionStatus[connectionState="disconnected"] {{ color: {text}; }}
             QLabel#bootstrapPercent {{ color: {accent}; background: transparent; border: none; font-size: 14px; font-weight: 700; padding: 3px; }}
             QLabel#trafficUsage, QLabel#proxyStatusLabel, QLabel#exitIpLabel {{ color: {muted}; background: transparent; border: none; font-size: 11px; padding: 2px; }}
             QLabel#systemProxyTitle {{ color: {muted}; background: transparent; border: none; font-size: 10px; font-weight: 750; letter-spacing: 1px; }}
