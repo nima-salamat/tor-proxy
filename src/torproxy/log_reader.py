@@ -34,6 +34,15 @@ def _line_records(
     ]
 
 
+def _starts_on_line_boundary(path: Path, offset: int) -> bool:
+    """Return whether offset is at file start or immediately after a newline."""
+    if offset <= 0:
+        return True
+    with path.open("rb") as handle:
+        handle.seek(offset - 1)
+        return handle.read(1) == b"\n"
+
+
 def read_log_tail(path: Path, line_count: int) -> tuple[list[tuple[int, str]], int, int]:
     """Return at most line_count tail lines, their starting offset, and file size."""
     count = max(1, int(line_count))
@@ -51,7 +60,9 @@ def read_log_tail(path: Path, line_count: int) -> tuple[list[tuple[int, str]], i
             chunks.insert(0, chunk)
             newline_count += chunk.count(b"\n")
         data = b"".join(chunks)
-        lines = _line_records(data, cursor, drop_partial_first=cursor > 0)
+        lines = _line_records(
+            data, cursor, drop_partial_first=cursor > 0 and not _starts_on_line_boundary(path, cursor)
+        )
         visible = lines[-count:]
         first_offset = visible[0][0] if visible else size
         return visible, first_offset, size
