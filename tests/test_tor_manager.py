@@ -243,6 +243,21 @@ def test_bridge_config_validation_error_uses_manager_settings_not_undefined_name
         manager.start()
 
 
+def test_bridge_input_shape_diagnostic_hides_bridge_secrets():
+    fingerprint = "A1B2C3D4E5F60718293A4B5C6D7E8F9012345678"
+    source = (
+        "webtunnel 192.0.2.10:443 " + fingerprint +
+        " url=https://bridge.example/secret ver=0.0.1"
+    )
+    summary = TorManager._bridge_input_shape_diagnostics(source)
+    assert "item 1 (webtunnel)" in summary
+    assert "bare-token length=40 hex=True" in summary
+    assert "url,ver" in summary
+    assert fingerprint not in summary
+    assert "192.0.2.10" not in summary
+    assert "/secret" not in summary
+
+
 def test_bridge_digest_length_error_has_specific_actionable_message(tmp_path):
     from types import SimpleNamespace
 
