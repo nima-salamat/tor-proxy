@@ -3,7 +3,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QWidget,
     QButtonGroup,
-    QRadioButton,
     QVBoxLayout,
     QHBoxLayout,
     QPushButton,
@@ -32,6 +31,7 @@ from config import CONFIG
 from ui_.window.dialogs import QMessageBox
 from ui_.worker.worker import Worker
 from ui_.window.qrcode_widget import QrCodeFloatingWindow
+from ui_.btn.theme_switch import ThemeSwitch
 from ui_.emojis import WRONG, CORRECT
 
 class SettingWindow(QWidget):
@@ -127,6 +127,9 @@ class SettingWindow(QWidget):
             QLabel#settingsDescription {{ color: {muted}; font-size: 11px; padding: 0; }}
             QLabel#settingsFieldLabel {{ color: {text}; font-weight: 650; }}
             QLabel#signatureVerificationDetails {{ color: {muted}; background: transparent; padding: 3px 0; }}
+            QLabel#themeModeValue {{ color: {accent}; background: transparent; font-size: 11px; font-weight: 800; min-width: 44px; }}
+            QWidget#themeSwitch {{ background: transparent; border: none; }}
+            QCheckBox#confirmExitPreference {{ color: {text}; background: transparent; spacing: 8px; font-weight: 650; }}
             QPushButton#settingsNavButton {{
                 min-height: 34px; padding: 0 11px; spacing: 7px;
                 border: 1px solid transparent; border-radius: 7px;
@@ -153,8 +156,8 @@ class SettingWindow(QWidget):
                 border-radius: 7px; background: transparent; color: {text}; font-weight: 650;
             }}
             QPushButton#settingsActionButton:hover {{ background: {hover}; border-color: {accent}; }}
-            QCheckBox, QRadioButton {{ spacing: 7px; color: {text}; background: transparent; }}
-            QCheckBox:disabled, QRadioButton:disabled {{ color: {disabled}; }}
+            QCheckBox {{ spacing: 7px; color: {text}; background: transparent; }}
+            QCheckBox:disabled {{ color: {disabled}; }}
         """)
         # Qt stylesheets don't expose a portable ::placeholder selector. Set the
         # placeholder palette role explicitly so both light and dark remain legible.
@@ -188,22 +191,50 @@ class SettingWindow(QWidget):
         self.first_page_layout.addWidget(
             self._description("Choose how TorProxy looks. The theme is synchronized with the top-right appearance button.")
         )
-        mode_layout = QHBoxLayout()
-        mode_layout.setSpacing(14)
-        mode_layout.addWidget(QLabel("Color theme"))
-        btn_group_mode = QButtonGroup(self)
+        theme_row = QFrame(self)
+        theme_row.setObjectName("settingsRowCard")
+        mode_layout = QHBoxLayout(theme_row)
+        mode_layout.setContentsMargins(14, 10, 14, 10)
+        mode_layout.setSpacing(12)
 
-        self.btn_dark = QRadioButton("Dark", self)
-        self.btn_dark.setChecked(CONFIG["mode"] != "light")
-        mode_layout.addWidget(self.btn_dark)
-        btn_group_mode.addButton(self.btn_dark)
+        theme_copy = QVBoxLayout()
+        theme_copy.setSpacing(3)
+        theme_label = QLabel("Color theme")
+        theme_label.setObjectName("settingsFieldLabel")
+        theme_description = self._description("Switch between the light and dark appearance.")
+        theme_copy.addWidget(theme_label)
+        theme_copy.addWidget(theme_description)
+        mode_layout.addLayout(theme_copy, 1)
 
-        self.btn_light = QRadioButton("Light", self)
-        self.btn_light.setChecked(CONFIG["mode"] == "light")
-        mode_layout.addWidget(self.btn_light)
-        btn_group_mode.addButton(self.btn_light)
-        mode_layout.addStretch(1)
-        self.first_page_layout.addLayout(mode_layout)
+        self.theme_mode_label = QLabel("Light" if CONFIG["mode"] == "light" else "Dark")
+        self.theme_mode_label.setObjectName("themeModeValue")
+        mode_layout.addWidget(self.theme_mode_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.theme_switch = ThemeSwitch(CONFIG["mode"], self)
+        self.theme_switch.modeChanged.connect(self.change_mode)
+        mode_layout.addWidget(self.theme_switch, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.first_page_layout.addWidget(theme_row)
+
+        exit_row = QFrame(self)
+        exit_row.setObjectName("settingsRowCard")
+        exit_layout = QHBoxLayout(exit_row)
+        exit_layout.setContentsMargins(14, 10, 14, 10)
+        exit_layout.setSpacing(12)
+        exit_copy = QVBoxLayout()
+        exit_copy.setSpacing(3)
+        exit_title = QLabel("Exit confirmation")
+        exit_title.setObjectName("settingsFieldLabel")
+        exit_description = self._description(
+            "Ask before shutting down TorProxy. This setting is saved and can be changed later."
+        )
+        exit_copy.addWidget(exit_title)
+        exit_copy.addWidget(exit_description)
+        exit_layout.addLayout(exit_copy, 1)
+        self.chk_confirm_exit = QCheckBox("Ask before exit", self)
+        self.chk_confirm_exit.setObjectName("confirmExitPreference")
+        self.chk_confirm_exit.setChecked(bool(CONFIG["confirm_exit"]))
+        self.chk_confirm_exit.toggled.connect(self._set_confirm_exit_preference)
+        exit_layout.addWidget(self.chk_confirm_exit, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.first_page_layout.addWidget(exit_row)
         self.first_page_layout.addWidget(self._section_title("Circuit behavior"))
         self.first_page_layout.addWidget(
             self._description("These values are used when Tor starts. Changing them while connected applies them on the next connection.")
@@ -539,17 +570,42 @@ class SettingWindow(QWidget):
         self.inp_bridges.setEnabled(checked)
         CONFIG["bridge"] = bool(checked)
 
-    def change_mode(self, radiobtn):
-        mode = "light" if radiobtn.text().lower() == "light" else "dark"
+    def set_theme_mode(self, mode):
+        """Synchronize the switch after theme changes from the title bar."""
+        if mode not in {"dark", "light"}:
+            return
+        if hasattr(self, "theme_switch"):
+            self.theme_switch.set_mode(mode)
+        if hasattr(self, "theme_mode_label"):
+            self.theme_mode_label.setText("Light" if mode == "light" else "Dark")
+
+    def change_mode(self, mode):
+        # Accept a mode string from ThemeSwitch. Keep compatibility with callers
+        # that may still pass a radio-like object from older integrations.
+        if not isinstance(mode, str):
+            mode = "light" if str(getattr(mode, "text", lambda: "dark")()).lower() == "light" else "dark"
+        if mode not in {"dark", "light"}:
+            return
         if self._parent is not None and hasattr(self._parent, "_set_theme"):
             self._parent._set_theme(mode)
             return
         app = QApplication.instance()
-        if mode == "light":
-            app.setStyleSheet(qdarkstyle.load_stylesheet(palette=LightPalette()))
-        else:
-            app.setStyleSheet(qdarkstyle.load_stylesheet(palette=DarkPalette()))
+        if app is not None:
+            palette = LightPalette() if mode == "light" else DarkPalette()
+            app.setStyleSheet(qdarkstyle.load_stylesheet(palette=palette))
         CONFIG["mode"] = mode
+        self.set_theme_mode(mode)
+
+    def _set_confirm_exit_preference(self, enabled):
+        enabled = bool(enabled)
+        try:
+            CONFIG["confirm_exit"] = enabled
+        except (ValueError, OSError, KeyError) as exc:
+            logger.exception("Could not save exit confirmation preference.")
+            self.chk_confirm_exit.blockSignals(True)
+            self.chk_confirm_exit.setChecked(bool(CONFIG["confirm_exit"]))
+            self.chk_confirm_exit.blockSignals(False)
+            QMessageBox.warning(self, "Settings could not be saved", str(exc))
 
     # small utility
     @staticmethod
