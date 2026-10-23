@@ -450,8 +450,12 @@ class Window(QMainWindow):
             if hasattr(self, "page_actions") and index < len(self.page_actions):
                 self.page_actions[index].setChecked(True)
             if hasattr(self, "page_nav_buttons"):
+                neutral_icon = "#eff1f4" if CONFIG["mode"] == "dark" else "#202832"
                 for page_index, button in enumerate(self.page_nav_buttons):
-                    button.setChecked(page_index == index)
+                    selected = page_index == index
+                    button.setChecked(selected)
+                    icon_name = self.page_icon_names[page_index]
+                    button.setIcon(qta.icon(icon_name, color="#ffffff" if selected else neutral_icon))
             self._update_global_state()
     def _update_global_state(self):
         proxy_widget = getattr(self, "proxyWidget", None)
