@@ -291,10 +291,15 @@ class TorManager:
         """Use the same strict bridge parser as Settings and QR imports."""
         result = parse_bridge_text(text)
         if result.invalid_records:
+            details = " ".join(result.errors[:3])
+            if len(result.errors) > 3:
+                details += f" Plus {len(result.errors) - 3} more invalid item(s)."
             raise TorManagerError(
-                "One or more Bridge records are malformed. Each record must contain at most one address:port. "
-                "IPv6 endpoints must be written as [address]:port; quotes around the endpoint are normalized "
-                "automatically. A supported transport (obfs4, snowflake, webtunnel, or meek_lite) is optional. "
+                "One or more supported bridge records are malformed. "
+                + details
+                + " Each record must contain at most one address:port. IPv6 endpoints must be written as "
+                "[address]:port; quotes around the endpoint are normalized automatically. "
+                "A supported transport (obfs4, snowflake, webtunnel, or meek_lite) is optional. "
                 "Separate bridges with newlines, or paste them together and TorProxy will split them."
             )
         parsed: list[tuple[str, str]] = []
@@ -550,6 +555,14 @@ class TorManager:
                 # Read the preference from this manager instance; no local
                 # variable named "settings" exists in start().
                 bridges_enabled = bool(self.settings.bridges_enabled)
+                if bridges_enabled and "key digest for bridge is wrong length" in lowered_details:
+                    raise TorManagerError(
+                        "Tor rejected a bridge identity fingerprint because its digest has the wrong length. "
+                        "A supplied bridge fingerprint must be the complete 40-character hexadecimal value. "
+                        "Copy the bridge line directly from the Tor Project bridge source; do not paste a nickname, "
+                        "partial fingerprint, or hashed fingerprint. Tor diagnostics: "
+                        + (details or "no further details")
+                    )
                 if bridges_enabled and (
                     "bridge line did not parse" in lowered_details
                     or "is not a k=v value" in lowered_details
