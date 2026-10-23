@@ -16,7 +16,7 @@ from PySide6.QtGui import QIcon, QAction, QActionGroup
 import qdarkstyle
 from qdarkstyle.dark.palette import DarkPalette
 from qdarkstyle.light.palette import LightPalette
-from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtCore import Qt, Signal, QTimer, QEvent
 import qtawesome as qta
 from utils import resource_path
 import keyboard
@@ -31,7 +31,6 @@ from ui_.window.setting_window import SettingWindow
 from ui_.window.block_host_window import BlcokHostsWindow
 from ui_.window.exclude_host_window import ExcludeHostsWindow
 from ui_.window.updater_window import UpdaterWindow
-from ui_.emojis import QUIT, HOME, EXCLUDE_HOST, BLOCK_HOST, SETTING, HELP
 logger = logging.getLogger(__name__)
 
 class Window(QMainWindow):
@@ -67,7 +66,6 @@ class Window(QMainWindow):
             self.title_bar = CustomTitleBar(self)
             self.main_layout.addWidget(self.title_bar)
         self._createMenuBar()
-        self._show_page(0)
 
         # Each page owns its own content; avoid wasting vertical space on a duplicate global header.
         page_area = QWidget(self.main_widget)
@@ -77,6 +75,8 @@ class Window(QMainWindow):
         page_layout.setSpacing(0)
         page_layout.addWidget(self.stack, 1)
         self.main_layout.addWidget(page_area, 1)
+        # Select the first page after the stack has real geometry in the root layout.
+        self._show_page(0)
         self._apply_shell_styles()
 
         self._state_timer = QTimer(self)
@@ -104,6 +104,33 @@ class Window(QMainWindow):
         if IS_WINDOWS:
             self.listener_thread.start()
         self.toggle_visibility_signal.connect(self._toggle_visibility)
+
+    def _refresh_layout_after_restore(self):
+        if self.isMinimized() or not hasattr(self, "stack"):
+            return
+        # Windows can restore a frameless QWidget tree before the central
+        # layout has recomputed all child sizes. Activate layouts on the next
+        # event-loop turn and request a fresh paint without changing the window size.
+        for widget in (self.main_widget, self.stack, self.stack.currentWidget()):
+            if widget is None:
+                continue
+            layout = widget.layout()
+            if layout is not None:
+                layout.activate()
+            widget.updateGeometry()
+            widget.update()
+        self.main_layout.activate()
+        self.update()
+        self.repaint()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self._refresh_layout_after_restore)
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange and not self.isMinimized():
+            QTimer.singleShot(0, self._refresh_layout_after_restore)
 
     def _toggle_visibility(self):
         self.setHidden(not self.isHidden())
@@ -134,36 +161,42 @@ class Window(QMainWindow):
         self.main_layout.addWidget(menu_bar)
 
         actions = [
-            (HOME, "Overview", "Ctrl+H", self._show_home),
-            (SETTING, "Settings", "Ctrl+S", self._show_setting),
-            (BLOCK_HOST, "Blocked hosts", "Ctrl+B", self._show_block_host),
-            (EXCLUDE_HOST, "Bypass rules", "Ctrl+E", self._show_exclude_host),
-            ("Bundles", "Tor Bundles & Updates", "Ctrl+U", self._show_updater),
+            ("Home", "Home", "Ctrl+H", "fa6s.house", self._show_home),
+            ("Settings", "Settings", "Ctrl+S", "fa6s.gear", self._show_setting),
+            ("Block Host", "Blocked host rules", "Ctrl+B", "fa6s.shield-halved", self._show_block_host),
+            ("Exclude Host", "Bypass rules", "Ctrl+E", "fa6s.route", self._show_exclude_host),
+            ("Bundles", "Tor bundles and updates", "Ctrl+U", "fa6s.boxes-stacked", self._show_updater),
         ]
         self.page_action_group = QActionGroup(self)
         self.page_action_group.setExclusive(True)
         self.page_actions = []
-        for label, tooltip, shortcut, callback in actions:
+        self.page_icon_names = []
+        icon_color = "#eff1f4" if CONFIG["mode"] == "dark" else "#202832"
+        for label, tooltip, shortcut, icon_name, callback in actions:
             action = QAction(label, self)
+            action.setIcon(qta.icon(icon_name, color=icon_color))
             action.setCheckable(True)
             self.page_action_group.addAction(action)
             self.page_actions.append(action)
+            self.page_icon_names.append(icon_name)
             action.setShortcut(shortcut)
             action.setToolTip("{} ({})".format(tooltip, shortcut))
             action.triggered.connect(callback)
             menu_bar.addAction(action)
 
-        help_action = QAction(HELP, self)
-        help_action.setShortcut("F1")
-        help_action.setToolTip("Keyboard shortcuts")
-        help_action.triggered.connect(self._show_help)
-        menu_bar.addAction(help_action)
+        self.help_action = QAction("Help", self)
+        self.help_action.setIcon(qta.icon("fa6s.circle-question", color=icon_color))
+        self.help_action.setShortcut("F1")
+        self.help_action.setToolTip("Keyboard shortcuts")
+        self.help_action.triggered.connect(self._show_help)
+        menu_bar.addAction(self.help_action)
 
-        exit_action = QAction(QUIT, self)
-        exit_action.setShortcut("Ctrl+Q")
-        exit_action.setToolTip("Quit TorProxy")
-        exit_action.triggered.connect(self.ask_close)
-        menu_bar.addAction(exit_action)
+        self.exit_action = QAction("Exit", self)
+        self.exit_action.setIcon(qta.icon("fa6s.right-from-bracket", color=icon_color))
+        self.exit_action.setShortcut("Ctrl+Q")
+        self.exit_action.setToolTip("Quit TorProxy")
+        self.exit_action.triggered.connect(self.ask_close)
+        menu_bar.addAction(self.exit_action)
 
         self.global_state = QLabel("● Checking Tor state…", self)
         self.global_state.setObjectName("globalState")
@@ -253,10 +286,11 @@ class Window(QMainWindow):
             QMenuBar#topMenuBar, QWidget#menuBarCorner {{ background-color: {menu_surface}; }}
             QMenuBar#topMenuBar {{ border: none; border-bottom: 1px solid {border}; padding: 3px 8px; }}
             QMenuBar#topMenuBar::item {{ padding: 7px 10px; margin: 0 2px; border-radius: 7px; color: {text}; background: transparent; }}
+            QMenuBar#topMenuBar::item {{ spacing: 6px; }}
             QMenuBar#topMenuBar::item:selected {{ background: {hover}; }}
             QMenuBar#topMenuBar::item:checked {{ background: {accent}; color: #ffffff; }}
             QWidget#menuBarCorner {{ border-bottom: 1px solid {border}; }}
-            QWidget#menuBarCorner QLabel {{ background: transparent; color: {text}; border: none; }}
+            QWidget#menuBarCorner QLabel {{ background: transparent; color: {text}; border: none; padding: 0 4px; }}
             QWidget#menuBarCorner QPushButton {{ background: transparent; color: {text}; border: none; border-radius: 7px; }}
             QWidget#menuBarCorner QPushButton:hover {{ background: {hover}; }}
             QWidget#customTitleBar {{ background: {menu_surface}; border-bottom: 1px solid {border}; }}
@@ -268,8 +302,15 @@ class Window(QMainWindow):
             QPushButton#themeToggle:hover, QPushButton#notificationButton:hover {{ background: {hover}; }}
             QPushButton#notificationButton {{ font-weight: 700; }}
             QStackedWidget#pageStack {{ background: transparent; }}
+            QMenu {{ background: {menu_surface}; color: {text}; border: 1px solid {border}; padding: 5px; }}
+            QMenu::item {{ padding: 7px 20px 7px 10px; border-radius: 5px; }}
+            QMenu::item:selected {{ background: {hover}; }}
         """)
         icon_color = text
+        for action, icon_name in zip(self.page_actions, self.page_icon_names):
+            action.setIcon(qta.icon(icon_name, color=icon_color))
+        self.help_action.setIcon(qta.icon("fa6s.circle-question", color=icon_color))
+        self.exit_action.setIcon(qta.icon("fa6s.right-from-bracket", color=icon_color))
         self.toggle_btn.setIcon(qta.icon("fa6s.sun" if dark else "fa6s.moon", color=icon_color))
         self.notification_btn.setIcon(qta.icon("fa6s.bell", color=icon_color))
         self.notification_btn.setText(
@@ -315,6 +356,8 @@ class Window(QMainWindow):
             status = "Bootstrapping"
         else:
             status = "Stopped"
+        if status == "Failed · open Event Log":
+            status = "Failed"
         self.global_state.setText("●  {}".format(status))
         self.global_state.setToolTip(
             getattr(tor, "last_error", None)
@@ -341,6 +384,14 @@ class Window(QMainWindow):
                 button.blockSignals(False)
         if hasattr(self, "updater_window"):
             self.updater_window._apply_local_styles()
+        for page in (
+            getattr(self, "settingWidget", None),
+            getattr(self, "block_host_window", None),
+            getattr(self, "exclude_host_window", None),
+        ):
+            apply_theme = getattr(page, "apply_theme", None)
+            if callable(apply_theme):
+                apply_theme(mode)
         self._apply_shell_styles()
 
     def _toggle_theme(self):
