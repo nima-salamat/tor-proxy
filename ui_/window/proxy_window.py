@@ -435,7 +435,10 @@ class ProxyWindow(QWidget):
         if mode == "set":
             self.set_proxy_clicked()
         elif mode == "clear":
-            self._clear_system_proxy_mode()
+            if not self._system_proxy_is_cleared or self.proxy_set:
+                self._clear_system_proxy_mode()
+            else:
+                self._update_proxy_mode_status()
         else:
             self._update_proxy_mode_status()
 
