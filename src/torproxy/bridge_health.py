@@ -190,9 +190,6 @@ def _probe_single_bridge(
                 if "failed to find node for hop #1" in diagnostic:
                     return None
 
-                error_text = str(exc).lower()
-                if "did not become ready within" in error_text or "timed out" in error_text or "timeout" in error_text:
-                    return None
                 explicit_dial_failure = (
                     "error dialing:" in diagnostic
                     and any(marker in diagnostic for marker in (
@@ -212,6 +209,13 @@ def _probe_single_bridge(
                     "connection to bridge timed out",
                 )):
                     return False
+
+                # A plain bootstrap timeout without a bridge-specific dial
+                # failure is inconclusive. It might mean a slow network or a
+                # missing relay descriptor, not a dead bridge.
+                error_text = str(exc).lower()
+                if "did not become ready within" in error_text or "timed out" in error_text or "timeout" in error_text:
+                    return None
                 return False if bootstrap_seen.is_set() and "bridge at" in diagnostic else None
             finally:
                 finished.set()
