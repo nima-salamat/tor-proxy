@@ -8,6 +8,14 @@
 4. The app validates torrc before launch. Invalid directives, duplicate ports, missing bridge transport binaries, or invalid bridge records should fail early.
 5. Check that another application is not occupying configured listener ports. TorProxy does not kill unrelated Tor processes.
 
+## Check Exit IP closes the application or returns an error
+
+Exit-IP verification is sent through TorProxy's explicit local HTTP proxy; it never falls back to a direct internet request. Check the Event Log and the per-user log directory for `torproxy.log`. If the process exits without a Python traceback, inspect `torproxy-crash.log`, which captures Python's native-fault traceback when available. The IP checker needs a verified Tor connection and a working exit circuit; a failed endpoint or blocked API should be shown as a check failure, not interpreted as a disconnected bridge.
+
+## Custom WebTunnel SNI imitation
+
+By default, SNI imitation is disabled and Lyrebird uses the original hostname from the bridge's `url=`. To try an override, go to **Settings → Bridges**, select a suggested hostname or enter a DNS hostname, then reconnect. TorProxy adds `sni-imitation=<hostname>` only to WebTunnel records. The bridge URL, including its original path, remains unchanged. Support depends on the selected Lyrebird build and bridge configuration; not all bridges support it. To undo it, select **Use the hostname in url= (default; no override)** and reconnect.
+
 ## Lyrebird reports `CurvePreferences includes unsupported curve`
 
 This message is a local pluggable-transport/runtime compatibility error, not proof that the remote bridge is dead. TorProxy preserves bridge records when isolated checks hit this error and does not use it as a reason to delete nodes. If a direct (non-pluggable-transport) bridge is configured, TorProxy allows it to continue bootstrapping instead of aborting on one Lyrebird TLS warning. If every configured bridge uses Lyrebird, startup reports the incompatibility rather than wasting time deleting the list.
