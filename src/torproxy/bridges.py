@@ -37,6 +37,28 @@ class BridgeTextParseResult:
     invalid_records: tuple[str, ...]
 
 
+def _canonical_authority(value: str) -> str | None:
+    """Canonicalize a standalone IPv4:port or bracketed IPv6:port token."""
+    token = value.strip().strip("\"'")
+    ipv6 = _IPV6_AUTHORITY.fullmatch(token)
+    if ipv6:
+        try:
+            address = ipaddress.IPv6Address(ipv6.group("host")).compressed.casefold()
+            port = int(ipv6.group("port"))
+        except ValueError:
+            return None
+        return f"[{address}]:{port}" if 1 <= port <= 65535 else None
+    ipv4 = _IPV4_AUTHORITY.fullmatch(token)
+    if ipv4:
+        try:
+            address = str(ipaddress.IPv4Address(ipv4.group("host")))
+            port = int(ipv4.group("port"))
+        except ValueError:
+            return None
+        return f"{address}:{port}" if 1 <= port <= 65535 else None
+    return None
+
+
 def normalize_bridge_record(value: str) -> str:
     """Validate and canonicalize one Tor Bridge record, with or without a PT."""
     line = " ".join(str(value or "").strip().split())
@@ -87,10 +109,25 @@ def normalize_bridge_record(value: str) -> str:
     if not 1 <= port <= 65535:
         raise ValueError("Bridge ports must be between 1 and 65535.")
 
-    remainder = " ".join(remainder_fields)
-    # A quoted standalone token from copied content should not become a
-    # literal quote in torrc. Preserve key=value values, including quoted URLs.
-    remainder = re.sub(r'(?<![=\S])(["\'])([^"\']+)\1(?=\s|$)', r"\2", remainder)
+    primary_authority = _canonical_authority(f"{host}:{port}")
+    clean_remainder: list[str] = []
+    for token in remainder_fields:
+        extra_authority = _canonical_authority(token)
+        if extra_authority is not None:
+            # A duplicate endpoint is common when bridge text has been copied
+            # with an address repeated in the parameter tail. Drop it only when
+            # it is exactly the same endpoint; otherwise do not guess intent.
+            if extra_authority == primary_authority:
+                continue
+            raise ValueError(
+                "This bridge record contains a second, different address:port after its main endpoint. "
+                "Keep one complete bridge record per line."
+            )
+        if len(token) >= 2 and token[0] == token[-1] and token[0] in {"\"", "'"}:
+            token = token[1:-1]
+        clean_remainder.append(token)
+
+    remainder = " ".join(clean_remainder)
     normalized = f"{transport} {host}:{port}" if transport else f"{host}:{port}"
     return normalized + (f" {remainder}" if remainder else "")
 
