@@ -551,6 +551,18 @@ class QrCodeFloatingWindow(_FramelessDialog):
             self._set_status(f"Imported {len(imported)} bridge line(s) into Settings.", level="success")
         self.accept()
 
+    def import_bridges(self):
+        """Import decoded bridges when the settings field is empty."""
+        self._apply_detected_bridges("import")
+
+    def replace_bridges(self):
+        """Replace the current bridge list with the decoded QR result."""
+        self._apply_detected_bridges("replace")
+
+    def add_bridges(self):
+        """Append decoded bridges without duplicating existing entries."""
+        self._apply_detected_bridges("add")
+
     def showEvent(self, event):
         super().showEvent(event)
         QTimer.singleShot(0, self.start_scanning)
