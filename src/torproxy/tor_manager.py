@@ -310,6 +310,11 @@ class TorManager:
         return parsed
 
     @staticmethod
+    def _has_non_webtunnel_bridge_alternative(bridges: list[tuple[str, str]]) -> bool:
+        """Return whether a configured bridge does not depend on WebTunnel TLS."""
+        return any(transport != "webtunnel" for transport, _record in bridges)
+
+    @staticmethod
     def _bridge_input_shape_diagnostics(text: str, *, max_records: int = 8) -> str:
         """Summarize bridge token shapes without logging endpoints or fingerprints."""
         parsed = parse_bridge_text(text)
@@ -728,8 +733,8 @@ class TorManager:
                         # not proof that the remote bridge is dead. Give any
                         # non-WebTunnel alternative (including obfs4/Snowflake or
                         # a direct bridge) a chance before declaring startup failed.
-                        has_non_webtunnel_alternative = any(
-                            transport != "webtunnel" for transport, _record in configured_bridges
+                        has_non_webtunnel_alternative = self._has_non_webtunnel_bridge_alternative(
+                            configured_bridges
                         )
                         if not has_non_webtunnel_alternative:
                             raise TorManagerError(
