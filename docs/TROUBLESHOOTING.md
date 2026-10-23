@@ -8,6 +8,12 @@
 4. The app validates torrc before launch. Invalid directives, duplicate ports, missing bridge transport binaries, or invalid bridge records should fail early.
 5. Check that another application is not occupying configured listener ports. TorProxy does not kill unrelated Tor processes.
 
+## Lyrebird reports `CurvePreferences includes unsupported curve`
+
+This message is a local pluggable-transport/runtime compatibility error, not proof that the remote bridge is dead. TorProxy preserves bridge records when isolated checks hit this error and does not use it as a reason to delete nodes. If a direct (non-pluggable-transport) bridge is configured, TorProxy allows it to continue bootstrapping instead of aborting on one Lyrebird TLS warning. If every configured bridge uses Lyrebird, startup reports the incompatibility rather than wasting time deleting the list.
+
+Check which Tor Expert Bundle is selected in Bundles. The `16.0a14` line is an alpha prerelease; try a verified stable Tor Expert Bundle in the updater and repeat the connection test. The updater should select the exact Windows architecture and keep its normal integrity/signature checks. Do not copy `lyrebird.exe` from an unknown source or treat this error as evidence that the bridge endpoints themselves are all offline.
+
 ## Tor rejects a bridge fingerprint or says its key digest has the wrong length
 
 Tor bridge lines may contain a 40-character hexadecimal identity fingerprint. For WebTunnel and obfs4, the fingerprint is a bare token after the endpoint; some Snowflake lines also include a `fingerprint=...` transport option. Do not use a nickname, partial fingerprint, or the hashed fingerprint shown in Tor Relay Search in place of the bridge fingerprint. Copy the full bridge line from the Tor Project bridge source. TorProxy now rejects malformed fingerprints before launching Tor, can normalize fingerprints that are split into whitespace-separated hex groups, and reports item-specific reasons in Settings. If Tor still rejects the list, the error includes a secret-safe summary of token lengths and option names; it never prints bridge addresses, fingerprints, or WebTunnel secret paths in that summary.
