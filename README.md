@@ -123,7 +123,7 @@ A successful `NEWNYM` command means Tor accepted an identity/circuit request; it
 
 ## Bridges and advanced settings
 
-Bridge mode accepts bridge records whose transport is explicitly recognized by the current validator (obfs4, Snowflake, WebTunnel, or meek_lite). The selected Tor bundle must contain the corresponding pluggable-transport executable. Incorrect records or missing transport binaries are errors; they are not silently ignored.
+Bridge mode accepts complete records for the supported transports **obfs4**, **Snowflake**, and **WebTunnel**. TorProxy normalizes copied text to one canonical record per line, recognizes adjacent records pasted on a single line when their transport labels and IP:port authorities are recognizable, and removes the optional torrc `Bridge` prefix. The Settings page shows saved entries as individual cards with copy and remove actions. The same parser validates manual input, QR imports, and startup configuration so formats accepted by the UI are not silently rejected later. The selected Tor bundle must contain the matching pluggable-transport executable. Incomplete or unsupported records are reported and do not overwrite the previous saved list.
 
 In **Settings → Bridges**, you can optionally enable automatic bridge cleanup. Before connecting, TorProxy tests each configured bridge in an isolated Tor process (up to four checks in parallel). A failed record is removed from the saved list only when at least one other bridge is confirmed to complete bootstrap. Ambiguous results are retained, and if no bridge succeeds the entire original list is preserved. This preflight can add up to about 30 seconds per bridge-check wave; bridge addresses are not written to the event log.
 
