@@ -647,6 +647,10 @@ class SettingWindow(QWidget):
             f"color: {colors.get(kind, colors['success'])}; background: transparent; font-size: 10px;"
         )
 
+    def show_global_shortcut_error(self, message):
+        """Show backend registration failures next to the editable shortcut."""
+        self._set_global_shortcut_status(str(message), "error")
+
     def _global_shortcut_changed(self, sequence):
         shortcut_text = sequence.toString(QKeySequence.SequenceFormat.PortableText)
         try:
