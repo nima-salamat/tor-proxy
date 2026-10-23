@@ -522,7 +522,7 @@ class Window(QMainWindow):
     def ask_close(self):
         """Perform a deliberate application exit from either Exit command."""
         if bool(CONFIG["confirm_exit"]):
-            dialog = ExitConfirmDialog(self)
+            dialog = ExitConfirmDialog(self if self.isVisible() else None)
             dialog.exec()
             if dialog.dont_ask_checkbox.isChecked():
                 try:
@@ -539,6 +539,11 @@ class Window(QMainWindow):
                 return
         self._exit_authorized = True
         self.close()
+        # A window hidden to the tray is no longer a visible "last window".
+        # Quit explicitly so Exit works identically from the tray menu.
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
             
     
     def _show_help(self):
