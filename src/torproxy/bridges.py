@@ -40,7 +40,8 @@ def normalize_bridge_record(value: str) -> str:
     # Some clipboard exports surround IPv6 authorities with quotes. Tor's
     # Bridge grammar expects [IPv6]:port as a bare token; retaining quotes can
     # make Tor parse the endpoint as a transport k=v argument.
-    line = line.strip().strip("\"'")
+    if len(line) >= 2 and line[0] == line[-1] and line[0] in {"\"", "'"}:
+        line = line[1:-1].strip()
     line = re.sub(r"(?i)^Bridge\s+", "", line).strip()
     if not line or "\x00" in line or "\n" in line or "\r" in line:
         raise ValueError("A bridge must be a single non-empty record.")
