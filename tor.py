@@ -121,6 +121,7 @@ class TorRunner(QObject):
     log_message = Signal(str)
     service_failed = Signal(str)
     bridges_updated = Signal(str)
+    bridge_usage_changed = Signal(object)
 
     def __init__(self, socks_port: int, contorl_port: int, dns_port: int):
         super().__init__()
@@ -154,6 +155,7 @@ class TorRunner(QObject):
         self.app_window = None
         self._stopping = threading.Event()
         self._last_report: tuple[str, int | None, str] | None = None
+        self._last_bridge_usage_report: tuple[bool, bool, tuple[str, ...]] | None = None
         self.state = "STOPPED"
         self.last_error: str | None = None
         self.update_path(CONFIG["tor_path"])
@@ -208,6 +210,7 @@ class TorRunner(QObject):
             return
         self._stopping.clear()
         self._last_report = None
+        self._last_bridge_usage_report = None
         self.last_error = None
         try:
             self.manager = self._make_manager()
@@ -220,10 +223,32 @@ class TorRunner(QObject):
         self.thread.start()
         logger.info("Managed Tor supervisor started.")
 
+    def _publish_bridge_usage(self, manager: TorManager | None = None):
+        """Publish only bridge identities verified from Tor's live built circuits."""
+        manager = manager or self.manager
+        enabled = bool(self.bridge)
+        ready = self.state == "READY" and manager is not None and manager.state.value == "ready"
+        active: tuple[str, ...] = ()
+        if enabled and ready and manager is not None:
+            try:
+                active = tuple(sorted(manager.get_active_bridge_fingerprints()))
+            except Exception:
+                logger.debug("Could not resolve active bridge fingerprints.", exc_info=True)
+        report = (enabled, bool(ready), active)
+        if report == self._last_bridge_usage_report:
+            return
+        self._last_bridge_usage_report = report
+        self.bridge_usage_changed.emit({
+            "enabled": enabled,
+            "ready": bool(ready),
+            "active_fingerprints": active,
+        })
+
     def _on_status(self, state, progress, message):
         state_text = getattr(state, "value", str(state))
         normalized_state = str(state_text).upper().split(".")[-1]
         self.state = normalized_state
+        self._publish_bridge_usage(self.manager)
         if normalized_state != "FAILED":
             self.last_error = None
         elif message:
@@ -365,7 +390,9 @@ class TorRunner(QObject):
             self.manager = manager
             self.manager.start(on_status=self._on_status)
             self.proc = self.manager.process
-            while not self._stopping.wait(0.5):
+            self._publish_bridge_usage(self.manager)
+            while not self._stopping.wait(1.0):
+                self._publish_bridge_usage(self.manager)
                 process = self.manager.process
                 if process is None or process.poll() is not None:
                     if not self._stopping.is_set():
@@ -398,6 +425,7 @@ class TorRunner(QObject):
 
     def stop(self):
         self.state = "STOPPING"
+        self._publish_bridge_usage(self.manager)
         self._stopping.set()
         manager = self.manager
         if manager is not None:
@@ -408,6 +436,7 @@ class TorRunner(QObject):
         self.proc = None
         self.thread = None
         self.state = "STOPPED"
+        self._publish_bridge_usage(self.manager)
         logger.info("Managed Tor supervisor stopped.")
 
 
