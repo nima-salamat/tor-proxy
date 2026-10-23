@@ -485,6 +485,10 @@ def test_event_log_classifies_levels_and_inserts_plain_text_in_color(qt_app):
     fragment = block.begin().fragment()
     assert fragment.text() == "<b>literal text</b>"
     assert fragment.charFormat().foreground().color() == QColor("#ff7b82")
+
+    log.apply_theme("light")
+    fragment_after_theme = log.text_edit.document().begin().begin().fragment()
+    assert fragment_after_theme.charFormat().foreground().color() == QColor("#c62833")
     log.deleteLater()
     qt_app.processEvents()
 
