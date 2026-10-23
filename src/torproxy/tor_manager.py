@@ -292,9 +292,10 @@ class TorManager:
         result = parse_bridge_text(text)
         if result.invalid_records:
             raise TorManagerError(
-                "Each bridge must be a complete Tor bridge record with an IPv4:port or bracketed IPv6:port. "
-                "A supported transport (obfs4, snowflake, webtunnel, or meek_lite) is optional. Separate bridges "
-                "with newlines, or paste them together and TorProxy will split them."
+                "One or more Bridge records are malformed. Each record must contain at most one address:port. "
+                "IPv6 endpoints must be written as [address]:port; quotes around the endpoint are normalized "
+                "automatically. A supported transport (obfs4, snowflake, webtunnel, or meek_lite) is optional. "
+                "Separate bridges with newlines, or paste them together and TorProxy will split them."
             )
         parsed: list[tuple[str, str]] = []
         for record in result.records:
