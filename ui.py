@@ -291,7 +291,7 @@ class Window(QMainWindow):
             button = QPushButton(label, menu_bar)
             button.setObjectName("topNavButton")
             button.setIcon(qta.icon(icon_name, color=icon_color))
-            button.setIconSize(QSize(15, 15))
+            button.setIconSize(QSize(17, 17))
             button.setCheckable(True)
             button.setToolTip("{} ({})".format(tooltip, shortcut))
             button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -314,7 +314,7 @@ class Window(QMainWindow):
         self.exit_nav_button = QPushButton("Exit", menu_bar)
         self.exit_nav_button.setObjectName("topNavExitButton")
         self.exit_nav_button.setIcon(qta.icon("fa6s.right-from-bracket", color=icon_color))
-        self.exit_nav_button.setIconSize(QSize(15, 15))
+        self.exit_nav_button.setIconSize(QSize(17, 17))
         self.exit_nav_button.setToolTip("Exit TorProxy (Ctrl+Q)")
         self.exit_nav_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.exit_nav_button.clicked.connect(self.ask_close)
@@ -410,9 +410,9 @@ class Window(QMainWindow):
             QWidget#topMenuBar, QWidget#menuBarCorner {{ background-color: {menu_surface}; }}
             QWidget#topMenuBar {{ border: none; border-bottom: 1px solid {border}; }}
             QPushButton#topNavButton {{
-                min-height: 30px; padding: 0 6px; margin: 0 1px; border: 1px solid transparent;
+                min-height: 32px; padding: 0 8px; margin: 0 1px; border: 1px solid transparent;
                 border-bottom: 2px solid transparent; border-radius: 7px;
-                color: {text}; background: transparent; font-size: 10px; font-weight: 650;
+                color: {text}; background: transparent; font-size: 9pt; font-weight: 650;
             }}
             QPushButton#topNavButton:hover {{ background: {hover}; border-color: {border}; }}
             QPushButton#topNavButton:checked {{
@@ -421,8 +421,8 @@ class Window(QMainWindow):
             }}
             QPushButton#topNavButton:checked:hover {{ background: {accent}; color: #ffffff; }}
             QPushButton#topNavExitButton {{
-                min-height: 30px; padding: 0 8px; margin: 0 1px; border: 1px solid {border};
-                border-radius: 7px; color: {text}; background: transparent; font-size: 10px; font-weight: 700;
+                min-height: 32px; padding: 0 9px; margin: 0 1px; border: 1px solid {border};
+                border-radius: 7px; color: {text}; background: transparent; font-size: 9pt; font-weight: 700;
             }}
             QPushButton#topNavExitButton:hover {{ color: #ffffff; background: #b83336; border-color: #b83336; }}
             QWidget#menuBarCorner {{ border-bottom: 1px solid {border}; }}
