@@ -28,15 +28,15 @@ class CustomTitleBar(QWidget):
         self.btn_close.setObjectName("titleBarCloseButton")
         self.btn_min.setToolTip("Minimize")
         self.btn_max.setToolTip("Maximize / restore")
-        self.btn_close.setToolTip("Exit TorProxy")
+        self.btn_close.setToolTip("Hide TorProxy to the system tray")
         for button in (self.btn_min, self.btn_max, self.btn_close):
             button.setFixedSize(36, 30)
             button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         self.btn_min.clicked.connect(parent.showMinimized)
         self.btn_max.clicked.connect(self._toggle_maximized)
-        self.btn_close.clicked.connect(parent.ask_close)
-        self.btn_close.setAccessibleName("Exit TorProxy")
+        self.btn_close.clicked.connect(parent.hide_to_tray)
+        self.btn_close.setAccessibleName("Hide TorProxy to the system tray")
         self.btn_min.setAccessibleName("Minimize window")
         self.btn_max.setAccessibleName("Maximize or restore window")
 
