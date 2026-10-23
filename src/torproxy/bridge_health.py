@@ -150,6 +150,12 @@ def _probe_single_bridge(
                     diagnostic = manager._recent_tor_log_detail(max_lines=20).lower()
                 except Exception:
                     diagnostic = ""
+                if any(marker in diagnostic for marker in (
+                    "createprocessa() failed",
+                    "failed to start process",
+                    "failed at launch",
+                )):
+                    return BridgeProbeOutcome(None, "transport_launch_failed")
                 missing_transport = re.search(
                     r'no configured transport called\s+["\']([^"\']+)["\']',
                     diagnostic,
