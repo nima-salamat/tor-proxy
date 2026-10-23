@@ -42,7 +42,10 @@ class LogWindow(QWidget):
         self.btn_open_tor_log.setToolTip("Open the live Tor log file")
         self.btn_open_tor_log.setAccessibleName("Open live Tor log file")
         self.btn_open_tor_log.setFixedSize(30, 30)
-        self.btn_open_tor_log.clicked.connect(self.parent_.open_tor_log_dialog)
+        if self.parent_ is not None and hasattr(self.parent_, "open_tor_log_dialog"):
+            self.btn_open_tor_log.clicked.connect(self.parent_.open_tor_log_dialog)
+        else:
+            self.btn_open_tor_log.setEnabled(False)
         header.addWidget(self.btn_open_tor_log)
 
         self.btn_clear = QPushButton(qta.icon("fa6s.trash"), "")
@@ -56,7 +59,10 @@ class LogWindow(QWidget):
         self.btn_close.setObjectName("logIconButton")
         self.btn_close.setToolTip("Close event log")
         self.btn_close.setFixedSize(30, 30)
-        self.btn_close.clicked.connect(self.parent_.show_logs)
+        if self.parent_ is not None and hasattr(self.parent_, "show_logs"):
+            self.btn_close.clicked.connect(self.parent_.show_logs)
+        else:
+            self.btn_close.setEnabled(False)
         header.addWidget(self.btn_close)
         layout.addLayout(header)
 
