@@ -112,6 +112,21 @@ def normalize_bridge_record(value: str) -> str:
 
     primary_authority = _canonical_authority(f"{host}:{port}")
 
+    # Remove a duplicated copy of the main endpoint before validating the
+    # positional fingerprint. A second, different endpoint is an input error.
+    filtered_remainder: list[str] = []
+    for token in remainder_fields:
+        extra_authority = _canonical_authority(token)
+        if extra_authority == primary_authority:
+            continue
+        if extra_authority is not None:
+            raise ValueError(
+                "This bridge record contains a second, different address:port after its main endpoint. "
+                "Keep one complete bridge record per line."
+            )
+        filtered_remainder.append(token)
+    remainder_fields = filtered_remainder
+
     # Tor's Bridge grammar takes a 40-hex-character identity fingerprint as
     # one token. Clipboard sources sometimes display it as ten groups of four;
     # normalize that presentation instead of passing a short digest to torrc.
