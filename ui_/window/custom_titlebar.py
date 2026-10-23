@@ -86,8 +86,8 @@ class CustomTitleBar(QWidget):
             except (AttributeError, RuntimeError):
                 pass
         # Fallback for window systems that do not implement startSystemMove.
-        # Use global coordinates and no primary-screen clamp: negative X/Y are valid
-        # on multi-monitor desktops where a secondary display is left/above primary.
+        # Use global coordinates; the main window's moveEvent applies a
+        # multi-monitor-aware visibility clamp after each fallback move.
         self._start_pos = event.globalPosition().toPoint()
         event.accept()
 
