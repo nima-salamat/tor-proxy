@@ -172,6 +172,43 @@ def test_repeated_webtunnel_dial_timeouts_are_classified_as_bridge_specific(monk
     assert outcome is False
 
 
+def test_single_eof_or_connection_reset_is_inconclusive(monkeypatch, tmp_path):
+    outcome = _probe_with_fake_tor_log(
+        monkeypatch,
+        tmp_path,
+        'Managed proxy "C:\\\\TorProxy\\\\lyrebird.exe": Error dialing: '
+        "remote error: tls: unexpected EOF",
+    )
+    assert outcome is None
+
+
+def test_repeated_connection_resets_are_classified_as_bridge_specific(monkeypatch, tmp_path):
+    outcome = _probe_with_fake_tor_log(
+        monkeypatch,
+        tmp_path,
+        "Managed proxy: Error dialing: read tcp local:5512->198.51.100.8:443: "
+        "connection reset by peer\\n"
+        "Managed proxy: Error dialing: read tcp local:5513->198.51.100.8:443: "
+        "connection reset by peer",
+    )
+    assert outcome is False
+
+
+def test_tls_handshake_and_local_route_errors_are_not_pruned(monkeypatch, tmp_path):
+    handshake = _probe_with_fake_tor_log(
+        monkeypatch,
+        tmp_path,
+        "Managed proxy: Error dialing: remote error: tls: handshake failure",
+    )
+    unreachable = _probe_with_fake_tor_log(
+        monkeypatch,
+        tmp_path,
+        "Managed proxy: Error dialing: dial tcp 198.51.100.8:443: network is unreachable",
+    )
+    assert handshake is None
+    assert unreachable is None
+
+
 def test_windows_refused_connection_is_bridge_specific_even_with_lyrebird_path(monkeypatch, tmp_path):
     outcome = _probe_with_fake_tor_log(
         monkeypatch,
