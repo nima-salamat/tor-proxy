@@ -387,6 +387,26 @@ def test_close_event_hides_to_tray_unless_exit_was_explicitly_authorized():
     assert 'self.proxyWidget._stop_services()' in close_event
 
 
+def test_dialog_recalculates_size_and_styles_after_screen_change():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/dialogs.py").read_text(encoding="utf-8")
+    assert "handle.screenChanged.connect(self._on_screen_changed)" in source
+    assert "def _refresh_for_screen_change(self)" in source
+    assert 'font-size: 9pt;' in source
+    assert "self._place_on_screen(center_on_parent=False)" in source
+    assert "self._base_max_size = QSize(680, 16777215)" in source
+    assert "self._restore_size_limits()" in source
+
+
+def test_primary_navigation_uses_slightly_larger_text_and_icons():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui.py").read_text(encoding="utf-8")
+    assert "font-size: 9pt; font-weight: 650;" in source
+    assert "button.setIconSize(QSize(17, 17))" in source
+    assert "self.exit_nav_button.setIconSize(QSize(17, 17))" in source
+
+
+
 
 def test_theme_switch_changes_its_mode_and_emits_the_new_mode(qt_app):
     pytest.importorskip("qtawesome")
