@@ -240,8 +240,6 @@ class TorManager:
     @staticmethod
     def _parse_bridges(text: str) -> list[tuple[str, str]]:
         """Use the same strict bridge parser as Settings and QR imports."""
-        from .bridges import parse_bridge_text
-
         result = parse_bridge_text(text)
         if result.invalid_records:
             raise TorManagerError(
