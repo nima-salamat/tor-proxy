@@ -330,7 +330,8 @@ def test_navigation_labels_frameless_pages_and_custom_shortcuts_dialog():
     assert "self._show_page(5)" in ui_source
     assert "class ShortcutsWindow" in shortcuts_source
     assert 'QLabel#shortcutsKeycap' in shortcuts_source
-    assert '"Ctrl", "Alt", "P"' in shortcuts_source
+    assert 'tuple(str(CONFIG["global_shortcut"]).split("+"))' in shortcuts_source
+    assert "def update_global_shortcut(self, shortcut)" in shortcuts_source
     assert "class QMessageBox:" in dialogs_source
 
 
@@ -499,6 +500,7 @@ def test_global_hotkey_is_configurable_and_uses_native_session_recovery():
     assert 'QKeySequenceEdit(QKeySequence(self._saved_global_shortcut), self)' in settings_source
     assert 'CONFIG["global_shortcut"] = normalized' in settings_source
     assert 'self._parent._set_global_shortcut(normalized)' in settings_source
+    assert "shortcuts_page.update_global_shortcut(normalized)" in ui_source
     assert 'HotkeyManager(on_error=self.hotkey_error_signal.emit)' in ui_source
     assert 'self.hotkey_manager.register(' in ui_source
     assert 'self.hotkey_manager.update_shortcut("window_visibility", normalized)' in ui_source
