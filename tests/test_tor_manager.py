@@ -33,6 +33,17 @@ def test_valid_bridge_record_keeps_transport_arguments():
     assert parsed == [("obfs4", "obfs4 192.0.2.4:443 ABCDEF cert=abc")]
 
 
+def test_tor_manager_splits_inline_records_using_the_shared_parser():
+    parsed = TorManager._parse_bridges(
+        "Bridge obfs4 192.0.2.4:443 ABCDEF cert=abc "
+        "Bridge snowflake 198.51.100.4:443 fingerprint=def"
+    )
+    assert parsed == [
+        ("obfs4", "obfs4 192.0.2.4:443 ABCDEF cert=abc"),
+        ("snowflake", "snowflake 198.51.100.4:443 fingerprint=def"),
+    ]
+
+
 def test_stop_without_owned_process_is_idempotent():
     manager = TorManager(TorSettings(executable="/missing/tor", data_directory="/tmp/torproxy-test-state"))
     manager.stop()
