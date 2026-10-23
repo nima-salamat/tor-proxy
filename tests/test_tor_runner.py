@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 import tor
 import torproxy.bridge_health as bridge_health_module
 from torproxy.bridge_health import BridgeHealthResult
