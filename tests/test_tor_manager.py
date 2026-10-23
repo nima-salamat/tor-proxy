@@ -29,17 +29,17 @@ def test_invalid_bridge_syntax_is_rejected():
 
 
 def test_valid_bridge_record_keeps_transport_arguments():
-    parsed = TorManager._parse_bridges("obfs4 192.0.2.4:443 ABCDEF cert=abc")
-    assert parsed == [("obfs4", "obfs4 192.0.2.4:443 ABCDEF cert=abc")]
+    parsed = TorManager._parse_bridges("obfs4 192.0.2.4:443 A1B2C3D4E5F60718293A4B5C6D7E8F9012345678 cert=abc")
+    assert parsed == [("obfs4", "obfs4 192.0.2.4:443 A1B2C3D4E5F60718293A4B5C6D7E8F9012345678 cert=abc")]
 
 
 def test_tor_manager_splits_inline_records_using_the_shared_parser():
     parsed = TorManager._parse_bridges(
-        "Bridge obfs4 192.0.2.4:443 ABCDEF cert=abc "
+        "Bridge obfs4 192.0.2.4:443 A1B2C3D4E5F60718293A4B5C6D7E8F9012345678 cert=abc "
         "Bridge snowflake 198.51.100.4:443 fingerprint=def"
     )
     assert parsed == [
-        ("obfs4", "obfs4 192.0.2.4:443 ABCDEF cert=abc"),
+        ("obfs4", "obfs4 192.0.2.4:443 A1B2C3D4E5F60718293A4B5C6D7E8F9012345678 cert=abc"),
         ("snowflake", "snowflake 198.51.100.4:443 fingerprint=def"),
     ]
 
@@ -57,7 +57,7 @@ def test_bridge_torrc_registers_lyrebird_transports_in_one_directive(tmp_path):
             socks_port=19650,
             control_port=19651,
             bridges_enabled=True,
-            bridges="webtunnel 192.0.2.10:443 ABCDEF url=https://bridge.example/ ver=0.0.1",
+            bridges="webtunnel 192.0.2.10:443 A1B2C3D4E5F60718293A4B5C6D7E8F9012345678 url=https://bridge.example/ ver=0.0.1",
             data_directory=tmp_path / "state",
         )
     )
@@ -67,14 +67,14 @@ def test_bridge_torrc_registers_lyrebird_transports_in_one_directive(tmp_path):
         "ClientTransportPlugin meek_lite,obfs4,snowflake,webtunnel exec "
         + str(transport_dir / "lyrebird.exe")
     ]
-    assert 'Bridge webtunnel 192.0.2.10:443 ABCDEF url=https://bridge.example/ ver=0.0.1' in torrc
+    assert 'Bridge webtunnel 192.0.2.10:443 A1B2C3D4E5F60718293A4B5C6D7E8F9012345678 url=https://bridge.example/ ver=0.0.1' in torrc
 
 
 def test_quoted_ipv6_webtunnel_bridge_is_normalized_for_torrc(tmp_path):
-    raw = 'Bridge webtunnel "[2001:db8:fe46:edd5:2139:2d5b:b732:854a]:443" ABCDEF url=https://bridge.example/ ver=0.0.1'
+    raw = 'Bridge webtunnel "[2001:db8:fe46:edd5:2139:2d5b:b732:854a]:443" A1B2C3D4E5F60718293A4B5C6D7E8F9012345678 url=https://bridge.example/ ver=0.0.1'
     parsed = TorManager._parse_bridges(raw)
     assert parsed == [
-        ("webtunnel", "webtunnel [2001:db8:fe46:edd5:2139:2d5b:b732:854a]:443 ABCDEF url=https://bridge.example/ ver=0.0.1")
+        ("webtunnel", "webtunnel [2001:db8:fe46:edd5:2139:2d5b:b732:854a]:443 A1B2C3D4E5F60718293A4B5C6D7E8F9012345678 url=https://bridge.example/ ver=0.0.1")
     ]
 
     executable = tmp_path / "tor" / "tor.exe"
@@ -96,7 +96,7 @@ def test_quoted_ipv6_webtunnel_bridge_is_normalized_for_torrc(tmp_path):
         if line.startswith("Bridge ")
     ]
     assert bridge_lines == [
-        "Bridge webtunnel [2001:db8:fe46:edd5:2139:2d5b:b732:854a]:443 ABCDEF url=https://bridge.example/ ver=0.0.1"
+        "Bridge webtunnel [2001:db8:fe46:edd5:2139:2d5b:b732:854a]:443 A1B2C3D4E5F60718293A4B5C6D7E8F9012345678 url=https://bridge.example/ ver=0.0.1"
     ]
     assert '"[2001:db8:fe46:edd5:2139:2d5b:b732:854a]:443"' not in bridge_lines[0]
 
@@ -105,7 +105,7 @@ def test_plain_ipv6_bridge_does_not_require_lyrebird(tmp_path):
     executable = tmp_path / "tor" / "tor.exe"
     executable.parent.mkdir(parents=True)
     executable.write_text("fake tor", encoding="utf-8")
-    raw = 'Bridge "[2001:db8::12]:443" ABCDEF'
+    raw = 'Bridge "[2001:db8::12]:443" A1B2C3D4E5F60718293A4B5C6D7E8F9012345678'
     manager = TorManager(
         TorSettings(
             executable=executable,
@@ -118,7 +118,7 @@ def test_plain_ipv6_bridge_does_not_require_lyrebird(tmp_path):
     torrc = manager.render_torrc()
     assert "UseBridges 1" in torrc
     assert "ClientTransportPlugin " not in torrc
-    assert "Bridge [2001:db8::12]:443 ABCDEF" in torrc
+    assert "Bridge [2001:db8::12]:443 A1B2C3D4E5F60718293A4B5C6D7E8F9012345678" in torrc
 
 
 def test_mixed_inline_bridges_are_rendered_on_separate_torrc_lines(tmp_path):
@@ -133,8 +133,8 @@ def test_mixed_inline_bridges_are_rendered_on_separate_torrc_lines(tmp_path):
             executable=executable,
             bridges_enabled=True,
             bridges=(
-                "obfs4 192.0.2.10:443 ABCDEF cert=abc "
-                'Bridge "[2001:db8::12]:443" ABCDEF'
+                "obfs4 192.0.2.10:443 A1B2C3D4E5F60718293A4B5C6D7E8F9012345678 cert=abc "
+                'Bridge "[2001:db8::12]:443" A1B2C3D4E5F60718293A4B5C6D7E8F9012345678'
             ),
             data_directory=tmp_path / "state",
         )
@@ -144,8 +144,8 @@ def test_mixed_inline_bridges_are_rendered_on_separate_torrc_lines(tmp_path):
         if line.startswith("Bridge ")
     ]
     assert bridge_lines == [
-        "Bridge obfs4 192.0.2.10:443 ABCDEF cert=abc",
-        "Bridge [2001:db8::12]:443 ABCDEF",
+        "Bridge obfs4 192.0.2.10:443 A1B2C3D4E5F60718293A4B5C6D7E8F9012345678 cert=abc",
+        "Bridge [2001:db8::12]:443 A1B2C3D4E5F60718293A4B5C6D7E8F9012345678",
     ]
 
 
@@ -222,7 +222,7 @@ def test_bridge_config_validation_error_uses_manager_settings_not_undefined_name
     settings = TorSettings(
         executable=executable,
         bridges_enabled=True,
-        bridges='Bridge "[2001:db8::12]:443" ABCDEF',
+        bridges='Bridge "[2001:db8::12]:443" A1B2C3D4E5F60718293A4B5C6D7E8F9012345678',
         data_directory=tmp_path / "state",
         socks_port=19750,
         control_port=19751,
@@ -267,7 +267,7 @@ def test_bridge_config_validation_error_does_not_raise_name_error(tmp_path, monk
             socks_port=19750,
             control_port=19751,
             bridges_enabled=True,
-            bridges="webtunnel 192.0.2.10:443 ABCDEF url=https://bridge.example/ ver=0.0.1",
+            bridges="webtunnel 192.0.2.10:443 A1B2C3D4E5F60718293A4B5C6D7E8F9012345678 url=https://bridge.example/ ver=0.0.1",
             data_directory=tmp_path / "state",
             log_path=tmp_path / "logs" / "tor.log",
         ),
