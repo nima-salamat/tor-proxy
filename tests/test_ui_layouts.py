@@ -628,7 +628,8 @@ def test_custom_message_font_and_screen_change_refresh_are_dpi_aware():
 
 
 def test_shortcut_capture_event_is_safe_during_qdialog_initialization(qt_app):
-    from PySide6.QtCore import QEvent
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QKeyEvent
     from ui_.window.dialogs import ShortcutCaptureDialog
 
     dialog = ShortcutCaptureDialog(None, "Ctrl+Alt+P")
@@ -641,7 +642,7 @@ def test_shortcut_capture_event_is_safe_during_qdialog_initialization(qt_app):
     # The real capture path still works after restoring the listening state.
     dialog._begin_listening()
     dialog.keyPressEvent(
-        __import__("PySide6.QtGui", fromlist=["QKeyEvent"]).QKeyEvent(
+        QKeyEvent(
             QEvent.Type.KeyPress,
             Qt.Key.Key_K,
             Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier,
@@ -659,7 +660,7 @@ def test_custom_notification_dialog_keeps_copy_action_available(qt_app):
 
     message = "Global shortcut could not be registered (Win32 error 1409)."
     dialog = MessageDialog(None, "Global shortcut", message, level="warning")
-    assert dialog.copy_button.isVisible() is False  # the dialog is not shown in this test
+    assert dialog.copy_button.text() == "Copy text"
     dialog.copy_button.click()
     assert QApplication.clipboard().text() == message
     assert dialog.copy_button.text() == "Copied"
