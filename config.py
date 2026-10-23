@@ -32,6 +32,7 @@ DEFAULT_DATA: dict[str, Any] = {
     "schema_version": 1,
     "bridges": "",
     "bridge": False,
+    "auto_prune_bridges": False,
     "mode": "dark",
     "tor_port": None,
     "tor_port_checked": False,
@@ -109,7 +110,8 @@ class Config:
             raise ConfigError(f"global_shortcut is invalid: {exc}") from exc
         data["global_shortcut"] = parsed_shortcut.text
         for name in ("bridge", "proxy_port_checked", "tor_port_checked", "control_port_checked",
-                     "dns_port_checked", "system_proxy_auto", "verify_tor_signatures", "confirm_exit"):
+                     "dns_port_checked", "system_proxy_auto", "verify_tor_signatures", "confirm_exit",
+                     "auto_prune_bridges"):
             if name in data and type(data[name]) is not bool:
                 raise ConfigError(f"{name} must be true or false.")
         ports = []
