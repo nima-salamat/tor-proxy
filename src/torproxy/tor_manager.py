@@ -243,7 +243,7 @@ class TorManager:
         result = parse_bridge_text(text)
         if result.invalid_records:
             raise TorManagerError(
-                "Each bridge must be a complete obfs4, snowflake, or webtunnel record "
+                "Each bridge must be a complete supported bridge record (obfs4, snowflake, or webtunnel) "
                 "with an IPv4:port or bracketed IPv6:port authority. Separate bridges "
                 "with newlines, or paste them together and TorProxy will split them."
             )
