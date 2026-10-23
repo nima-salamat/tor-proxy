@@ -464,3 +464,48 @@ def test_theme_switch_uses_centered_dpi_aware_icon_painting():
     assert "round(x + (diameter - icon_size) / 2)" in source
     assert "round(y + (diameter - icon_size) / 2)" in source
     assert "icon.paint(painter, icon_rect, Qt.AlignmentFlag.AlignCenter)" in source
+
+
+
+def test_event_log_classifies_levels_and_inserts_plain_text_in_color(qt_app):
+    from PySide6.QtGui import QColor
+    from ui_.window.log_window import LogWindow
+
+    log = LogWindow()
+    log.apply_theme("dark")
+    assert log._message_level("Tor supervisor failed: control socket closed") == "error"
+    assert log._message_level("Retrying after rate limit") == "warning"
+    assert log._message_level("Started proxy and tor successfully.") == "success"
+    assert log._message_level("arbitrary event", "critical") == "critical"
+
+    log.update_log("<b>literal text</b>", level="error")
+    assert log.text_edit.toPlainText() == "<b>literal text</b>"
+    block = log.text_edit.document().begin()
+    fragment = block.begin().fragment()
+    assert fragment.text() == "<b>literal text</b>"
+    assert fragment.charFormat().foreground().color() == QColor("#ff7b82")
+    log.deleteLater()
+    qt_app.processEvents()
+
+
+def test_global_hotkey_is_configurable_and_uses_native_session_recovery():
+    repository = Path(__file__).resolve().parents[1]
+    config_source = (repository / "config.py").read_text(encoding="utf-8")
+    settings_source = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
+    ui_source = (repository / "ui.py").read_text(encoding="utf-8")
+    hotkeys_source = (repository / "src/torproxy/hotkeys.py").read_text(encoding="utf-8")
+
+    assert '"global_shortcut": "Ctrl+Alt+P"' in config_source
+    assert 'QKeySequenceEdit(QKeySequence(self._saved_global_shortcut), self)' in settings_source
+    assert 'CONFIG["global_shortcut"] = normalized' in settings_source
+    assert 'self._parent._set_global_shortcut(normalized)' in settings_source
+    assert 'HotkeyManager(on_error=self.hotkey_error_signal.emit)' in ui_source
+    assert 'self.hotkey_manager.register(' in ui_source
+    assert 'self.hotkey_manager.update_shortcut("window_visibility", normalized)' in ui_source
+    assert 'self.hotkey_manager.stop()' in ui_source
+    assert 'RegisterHotKey' in hotkeys_source
+    assert 'WTSRegisterSessionNotification' in hotkeys_source
+    assert 'WTS_SESSION_UNLOCK' in hotkeys_source
+    assert 'PBT_APMRESUMEAUTOMATIC' in hotkeys_source
+    assert 'keyboard.add_hotkey' in hotkeys_source  # fallback only, not the Windows path
+    assert 'keyboard.add_hotkey(\'ctrl+alt+p\'' not in ui_source
