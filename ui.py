@@ -203,6 +203,9 @@ class Window(QMainWindow):
         """Update the named visibility binding without rebuilding other hotkeys."""
         normalized = parse_hotkey(shortcut).text
         self.hotkey_manager.update_shortcut("window_visibility", normalized)
+        shortcuts_page = getattr(self, "shortcutsWidget", None)
+        if shortcuts_page is not None:
+            shortcuts_page.update_global_shortcut(normalized)
         logger.info("Global show/hide shortcut changed to %s.", normalized)
         self.proxyWidget.logs_widget.update_log(
             "Global show/hide shortcut changed to {}.".format(normalized), level="info"
