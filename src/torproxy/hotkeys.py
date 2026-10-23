@@ -107,9 +107,23 @@ class HotkeyManager:
             raise ValueError("A hotkey name and callable callback are required.")
         parsed = parse_hotkey(shortcut)
         with self._lock:
+            previous = self._bindings.get(name)
             self._bindings[name] = _Binding(parsed.text, callback)
             snapshot = self._snapshot()
-        self._backend.set_bindings(snapshot)
+        try:
+            self._backend.set_bindings(snapshot)
+        except Exception:
+            with self._lock:
+                if previous is None:
+                    self._bindings.pop(name, None)
+                else:
+                    self._bindings[name] = previous
+                rollback = self._snapshot()
+            try:
+                self._backend.set_bindings(rollback)
+            except Exception:
+                LOGGER.exception("Could not restore global-hotkey registrations after a failed add.")
+            raise
         return parsed.text
 
     def update_shortcut(self, name: str, shortcut: str) -> str:
@@ -117,9 +131,20 @@ class HotkeyManager:
         with self._lock:
             if name not in self._bindings:
                 raise KeyError(f"Unknown hotkey action: {name}")
+            previous = self._bindings[name].shortcut
             self._bindings[name].shortcut = parsed.text
             snapshot = self._snapshot()
-        self._backend.set_bindings(snapshot)
+        try:
+            self._backend.set_bindings(snapshot)
+        except Exception:
+            with self._lock:
+                self._bindings[name].shortcut = previous
+                rollback = self._snapshot()
+            try:
+                self._backend.set_bindings(rollback)
+            except Exception:
+                LOGGER.exception("Could not restore the previous global-hotkey registration.")
+            raise
         return parsed.text
 
     def get_shortcut(self, name: str) -> str:
@@ -159,16 +184,26 @@ class _KeyboardBackend:
 
     def set_bindings(self, bindings: dict[str, tuple[str, Callable[[], None]]]) -> None:
         with self._lock:
+            previous = dict(self._bindings)
             self._bindings = dict(bindings)
-            if self._started:
-                self._apply()
+            if not self._started:
+                return
+            try:
+                self._apply(strict=True)
+            except Exception:
+                self._bindings = previous
+                try:
+                    self._apply(strict=False)
+                except Exception:
+                    LOGGER.exception("Could not restore global shortcuts after a failed update.")
+                raise
 
     def start(self) -> None:
         with self._lock:
             self._started = True
-            self._apply()
+            self._apply(strict=False)
 
-    def _apply(self) -> None:
+    def _apply(self, *, strict: bool) -> None:
         import keyboard
         for handle in self._handles.values():
             try:
@@ -176,13 +211,18 @@ class _KeyboardBackend:
             except (KeyError, ValueError):
                 pass
         self._handles.clear()
+        errors = []
         for name, (shortcut, callback) in self._bindings.items():
             try:
                 self._handles[name] = keyboard.add_hotkey(
                     shortcut.lower(), callback, suppress=False, trigger_on_release=False
                 )
             except Exception as exc:
-                self._on_error(f"Could not register global shortcut '{shortcut}' ({name}): {exc}")
+                message = f"Could not register global shortcut '{shortcut}' ({name}): {exc}"
+                errors.append(message)
+                self._on_error(message)
+        if errors and strict:
+            raise RuntimeError("; ".join(errors))
 
     def stop(self) -> None:
         with self._lock:
@@ -242,14 +282,26 @@ if os.name == "nt":
             self._wts = None
             self._wndproc = None
             self._startup_error: str | None = None
+            self._reconfigure_done = threading.Event()
+            self._reconfigure_errors: list[str] = []
+            self._recovery_timers: list[threading.Timer] = []
+            self._recovery_lock = threading.Lock()
             self._class_name = f"TorProxyHotkeyWindow_{os.getpid()}"
 
         def set_bindings(self, bindings: dict[str, tuple[str, Callable[[], None]]]) -> None:
             with self._lock:
                 self._bindings = dict(bindings)
                 hwnd, user32 = self._hwnd, self._user32
-            if hwnd and user32:
-                user32.PostMessageW(hwnd, self.WM_APP_RECONFIGURE, 0, 0)
+            if not hwnd or not user32:
+                return
+
+            self._reconfigure_done.clear()
+            if not user32.PostMessageW(hwnd, self.WM_APP_RECONFIGURE, 0, 0):
+                raise ctypes.WinError(ctypes.get_last_error())
+            if not self._reconfigure_done.wait(4):
+                raise RuntimeError("Timed out while applying the global shortcut registration.")
+            if self._reconfigure_errors:
+                raise RuntimeError("; ".join(self._reconfigure_errors))
 
         def start(self) -> None:
             if self._thread and self._thread.is_alive():
@@ -263,29 +315,59 @@ if os.name == "nt":
             if self._startup_error:
                 raise RuntimeError(self._startup_error)
 
-        def _apply_hotkeys(self) -> None:
+        def _apply_hotkeys(self) -> list[str]:
             with self._lock:
                 bindings = dict(self._bindings)
             for hotkey_id in tuple(self._registered):
                 self._user32.UnregisterHotKey(self._hwnd, hotkey_id)
             self._registered.clear()
             self._id_to_name.clear()
+            errors = []
             for hotkey_id, (name, (shortcut, _callback)) in enumerate(bindings.items(), start=1):
                 try:
                     parsed = parse_hotkey(shortcut)
                 except ValueError as exc:
-                    self._on_error(f"Invalid shortcut for '{name}': {exc}")
+                    message = f"Invalid shortcut for '{name}': {exc}"
+                    errors.append(message)
+                    self._on_error(message)
                     continue
                 if not self._user32.RegisterHotKey(self._hwnd, hotkey_id, parsed.modifiers, parsed.virtual_key):
                     code = ctypes.get_last_error()
-                    self._on_error(
+                    message = (
                         f"Could not register '{parsed.text}' for '{name}' (Win32 error {code}). "
                         "Choose another shortcut if another app already owns it."
                     )
+                    errors.append(message)
+                    self._on_error(message)
                     continue
                 self._registered.add(hotkey_id)
                 self._id_to_name[hotkey_id] = name
-            LOGGER.info("Registered %d of %d Windows global shortcuts.", len(self._registered), len(bindings))
+            LOGGER.info(
+                "Registered %d of %d Windows global shortcuts.",
+                len(self._registered),
+                len(bindings),
+            )
+            return errors
+
+        def _post_reconfigure(self) -> None:
+            hwnd, user32 = self._hwnd, self._user32
+            if hwnd and user32:
+                try:
+                    user32.PostMessageW(hwnd, self.WM_APP_RECONFIGURE, 0, 0)
+                except Exception:
+                    LOGGER.debug("Could not post a hotkey recovery retry.", exc_info=True)
+
+        def _schedule_recovery_retries(self) -> None:
+            """Retry after the Windows shell and user desktop finish restoring."""
+            with self._recovery_lock:
+                for timer in self._recovery_timers:
+                    timer.cancel()
+                self._recovery_timers.clear()
+                for delay in (0.8, 2.5, 6.0):
+                    timer = threading.Timer(delay, self._post_reconfigure)
+                    timer.daemon = True
+                    self._recovery_timers.append(timer)
+                    timer.start()
 
         def _window_proc(self, hwnd, message, wparam, lparam):
             if message == self.WM_HOTKEY:
@@ -299,17 +381,24 @@ if os.name == "nt":
                         LOGGER.exception("Global hotkey callback failed for %s.", name)
                 return 0
             if message == self.WM_APP_RECONFIGURE:
-                self._apply_hotkeys()
+                self._reconfigure_errors = self._apply_hotkeys()
+                self._reconfigure_done.set()
                 return 0
             if message == self.WM_WTSSESSION_CHANGE and int(wparam) == self.WTS_SESSION_UNLOCK:
                 LOGGER.info("Windows session unlocked; refreshing global shortcuts.")
                 self._apply_hotkeys()
+                self._schedule_recovery_retries()
                 return 0
             if message == self.WM_POWERBROADCAST and int(wparam) == self.PBT_APMRESUMEAUTOMATIC:
                 LOGGER.info("Windows resumed; refreshing global shortcuts.")
                 self._apply_hotkeys()
+                self._schedule_recovery_retries()
                 return 1
             if message == self.WM_CLOSE:
+                with self._recovery_lock:
+                    for timer in self._recovery_timers:
+                        timer.cancel()
+                    self._recovery_timers.clear()
                 for hotkey_id in tuple(self._registered):
                     self._user32.UnregisterHotKey(hwnd, hotkey_id)
                 self._registered.clear()
