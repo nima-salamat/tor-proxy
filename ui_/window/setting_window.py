@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QScrollArea
 )
-from PySide6.QtCore import Qt, QThreadPool
+from PySide6.QtCore import Qt, QThreadPool, QTimer
 from PySide6.QtGui import QColor, QPalette
 import qtawesome as qta
 
@@ -28,11 +28,26 @@ from functools import partial
 logger = logging.getLogger(__name__)
 
 from config import CONFIG
+from torproxy.bridges import parse_bridge_text
 from ui_.window.dialogs import QMessageBox
 from ui_.worker.worker import Worker
 from ui_.window.qrcode_widget import QrCodeFloatingWindow
 from ui_.btn.theme_switch import ThemeSwitch
 from ui_.emojis import WRONG, CORRECT
+
+class _BridgeTextEdit(QTextEdit):
+    """Text editor that formats valid pasted bridge records immediately."""
+
+    def insertFromMimeData(self, source):
+        pasted = source.text() if source is not None else ""
+        parsed = parse_bridge_text(pasted)
+        if parsed.records and not parsed.invalid_records:
+            # A bridge is stored as one canonical record per line regardless of
+            # whether the clipboard had newlines or joined records with spaces.
+            self.insertPlainText("\\n".join(parsed.records))
+            return
+        super().insertFromMimeData(source)
+
 
 class SettingWindow(QWidget):
     def __init__(self, parent=None):
@@ -78,6 +93,13 @@ class SettingWindow(QWidget):
         self.second_page, self.second_page_layout = self._create_scroll_page()
         self.advanced_page, self.advanced_page_layout = self._create_scroll_page()
         self.settings_nav_buttons[0].setChecked(True)
+        initial_bridges = parse_bridge_text(str(CONFIG["bridges"] or ""))
+        self._saved_bridge_records = initial_bridges.records
+        self._bridge_normalizing = False
+        self._bridge_normalize_timer = QTimer(self)
+        self._bridge_normalize_timer.setSingleShot(True)
+        self._bridge_normalize_timer.setInterval(650)
+        self._bridge_normalize_timer.timeout.connect(self._canonicalize_bridge_editor)
 
         self.initialize_first_page()
         self.initialize_bridges_page()
@@ -292,23 +314,55 @@ class SettingWindow(QWidget):
     def initialize_bridges_page(self):
         self.bridges_page_layout.addWidget(self._section_title("Bridge configuration"))
         description = self._description(
-            "Use bridges when direct access to Tor relays is blocked or unreliable. Bridge configuration is kept separate from listener ports."
+            "Paste complete Tor bridge records below. TorProxy detects adjacent records, fixes spacing, and stores one bridge per line. "
+            "Each saved bridge appears as its own card so you can copy or remove it separately."
         )
         self.bridges_page_layout.addWidget(description)
         self.btn_bridge = QCheckBox("Use Tor bridges", self)
         self.btn_bridge.setChecked(bool(CONFIG["bridge"]))
         self.btn_bridge.stateChanged.connect(self.bridge_state_changed)
         self.bridges_page_layout.addWidget(self.btn_bridge)
-        self.inp_bridges = QTextEdit(self, placeholderText="Enter your bridges (obfs4 or webtunnel)")
+
+        self.inp_bridges = _BridgeTextEdit(self, placeholderText=(
+            "Paste bridge lines here…\\nExample: obfs4 192.0.2.10:443 FINGERPRINT cert=… iat-mode=0"
+        ))
         self.inp_bridges.setObjectName("bridgeRecordsInput")
-        self.inp_bridges.setMinimumHeight(130)
+        self.inp_bridges.setMinimumHeight(104)
         self.inp_bridges.setText(CONFIG["bridges"] or "")
         self.inp_bridges.setEnabled(bool(CONFIG["bridge"]))
+        self.inp_bridges.setToolTip(
+            "Paste one or many bridges. Records can be separated by newlines or spaces; recognized bridge starts are separated automatically."
+        )
         self.inp_bridges.textChanged.connect(self.set_bridges)
         self.bridges_page_layout.addWidget(self.inp_bridges)
+
+        self.bridge_status_label = QLabel(self)
+        self.bridge_status_label.setObjectName("bridgeInputStatus")
+        self.bridge_status_label.setWordWrap(True)
+        self.bridges_page_layout.addWidget(self.bridge_status_label)
+
+        bridge_list_header = QHBoxLayout()
+        bridge_list_title = QLabel("Saved bridge cards", self)
+        bridge_list_title.setObjectName("settingsSectionTitle")
+        bridge_list_header.addWidget(bridge_list_title)
+        bridge_list_header.addStretch(1)
+        self.bridge_count_label = QLabel("0 bridges", self)
+        self.bridge_count_label.setObjectName("bridgeCountLabel")
+        bridge_list_header.addWidget(self.bridge_count_label)
+        self.bridges_page_layout.addLayout(bridge_list_header)
+
+        self.bridge_cards_host = QWidget(self)
+        self.bridge_cards_host.setObjectName("bridgeCardsHost")
+        self.bridge_cards_layout = QVBoxLayout(self.bridge_cards_host)
+        self.bridge_cards_layout.setContentsMargins(0, 0, 0, 0)
+        self.bridge_cards_layout.setSpacing(7)
+        self.bridges_page_layout.addWidget(self.bridge_cards_host)
+
         self.btn_qrcode = QPushButton("Import bridges from QR code")
         self.btn_qrcode.setObjectName("settingsActionButton")
-        self.btn_qrcode.setIcon(qta.icon("fa6s.qrcode", color="#eff1f4" if CONFIG["mode"] == "dark" else "#202832"))
+        self.btn_qrcode.setIcon(qta.icon(
+            "fa6s.qrcode", color="#eff1f4" if CONFIG["mode"] == "dark" else "#202832"
+        ))
         self.btn_qrcode.clicked.connect(self.show_qrcode)
         self.bridges_page_layout.addWidget(self.btn_qrcode)
 
@@ -328,9 +382,128 @@ class SettingWindow(QWidget):
             "Checks can delay startup. A bridge is not removed when the result is ambiguous, and the original list is "
             "preserved if no bridge can be confirmed working."
         ))
+        self._refresh_bridge_cards(self._saved_bridge_records, removable=True)
         self.bridges_page_layout.addStretch(1)
         self.qrcode_widget = QrCodeFloatingWindow(self)
         self.threadpool = QThreadPool(self)
+
+    def _refresh_bridge_cards(self, records, *, removable=True):
+        """Render the saved bridge list as independent, copyable/removable cards."""
+        while self.bridge_cards_layout.count():
+            item = self.bridge_cards_layout.takeAt(0)
+            widget = item.widget()
+            nested = item.layout()
+            if widget is not None:
+                widget.deleteLater()
+            elif nested is not None:
+                while nested.count():
+                    child = nested.takeAt(0)
+                    if child.widget() is not None:
+                        child.widget().deleteLater()
+
+        records = tuple(records)
+        self.bridge_count_label.setText(f"{len(records)} bridge{'s' if len(records) != 1 else ''}")
+        if not records:
+            empty = QLabel(
+                "No bridge addresses saved yet. Paste one or more complete bridge records above.",
+                self.bridge_cards_host,
+            )
+            empty.setObjectName("bridgeEmptyState")
+            empty.setWordWrap(True)
+            self.bridge_cards_layout.addWidget(empty)
+            return
+
+        icon_color = "#e8edf3" if CONFIG["mode"] == "dark" else "#253041"
+        for record in records:
+            fields = record.split(maxsplit=2)
+            transport = fields[0]
+            address = fields[1] if len(fields) > 1 else "Address unavailable"
+            options = fields[2] if len(fields) > 2 else ""
+
+            card = QFrame(self.bridge_cards_host)
+            card.setObjectName("bridgeCard")
+            card_layout = QHBoxLayout(card)
+            card_layout.setContentsMargins(11, 9, 9, 9)
+            card_layout.setSpacing(10)
+
+            detail = QVBoxLayout()
+            detail.setContentsMargins(0, 0, 0, 0)
+            detail.setSpacing(4)
+            transport_badge = QLabel(transport.upper(), card)
+            transport_badge.setObjectName("bridgeTransportBadge")
+            transport_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            transport_badge.setMaximumWidth(112)
+            detail.addWidget(transport_badge, 0, Qt.AlignmentFlag.AlignLeft)
+
+            address_label = QLabel(address, card)
+            address_label.setObjectName("bridgeEndpoint")
+            address_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            address_label.setWordWrap(True)
+            detail.addWidget(address_label)
+            if options:
+                options_label = QLabel(options, card)
+                options_label.setObjectName("bridgeRecordOptions")
+                options_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                options_label.setWordWrap(True)
+                detail.addWidget(options_label)
+            card_layout.addLayout(detail, 1)
+
+            copy_button = QPushButton(card)
+            copy_button.setObjectName("bridgeCardAction")
+            copy_button.setIcon(qta.icon("fa6s.copy", color=icon_color))
+            copy_button.setToolTip("Copy full bridge record")
+            copy_button.setAccessibleName("Copy bridge record")
+            copy_button.setFixedSize(34, 32)
+            copy_button.clicked.connect(partial(self.copy_bridge_record, record))
+            card_layout.addWidget(copy_button, 0, Qt.AlignmentFlag.AlignVCenter)
+
+            remove_button = QPushButton(card)
+            remove_button.setObjectName("bridgeCardRemove")
+            remove_button.setIcon(qta.icon("fa6s.trash-can", color="#e36b75"))
+            remove_button.setToolTip("Remove this bridge")
+            remove_button.setAccessibleName(f"Remove {transport} bridge {address}")
+            remove_button.setFixedSize(34, 32)
+            remove_button.setEnabled(bool(removable))
+            remove_button.clicked.connect(partial(self.remove_bridge_record, record))
+            card_layout.addWidget(remove_button, 0, Qt.AlignmentFlag.AlignVCenter)
+            self.bridge_cards_layout.addWidget(card)
+
+    def copy_bridge_record(self, record):
+        QApplication.clipboard().setText(str(record))
+        if hasattr(self, "bridge_status_label"):
+            self.bridge_status_label.setText("Copied one complete bridge record to the clipboard.")
+
+    def remove_bridge_record(self, record):
+        current_text = self.inp_bridges.toPlainText()
+        parsed = parse_bridge_text(current_text)
+        if parsed.invalid_records:
+            self.bridge_status_label.setText(
+                "Fix the incomplete or unsupported text above before removing saved bridge cards. "
+                "Your last valid saved list is still preserved."
+            )
+            return
+        remaining = list(parsed.records)
+        try:
+            remaining.remove(record)
+        except ValueError:
+            return
+        self.inp_bridges.setPlainText("\\n".join(remaining))
+        self.bridge_status_label.setText(
+            f"Removed one bridge. {len(remaining)} bridge{'s' if len(remaining) != 1 else ''} remain."
+        )
+
+    def _canonicalize_bridge_editor(self):
+        text = self.inp_bridges.toPlainText()
+        parsed = parse_bridge_text(text)
+        if parsed.invalid_records:
+            return
+        normalized = "\\n".join(parsed.records)
+        if normalized != text:
+            self._bridge_normalizing = True
+            try:
+                self.inp_bridges.setPlainText(normalized)
+            finally:
+                self._bridge_normalizing = False
 
     def initialize_second_page(self):
         self.second_page_layout.addWidget(self._section_title("Listener ports"))
