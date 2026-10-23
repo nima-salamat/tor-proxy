@@ -542,15 +542,31 @@ def test_shortcut_capture_dialog_captures_confirms_and_allows_retry(qt_app):
         Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier,
     )
     dialog.keyPressEvent(chord)
+    assert dialog._captured_shortcut is None
+    assert dialog._pending_shortcut == "Ctrl+Shift+K"
+    assert not dialog.apply_button.isEnabled()
+    assert dialog.capture_value.text() == "Ctrl+Shift+K"
+
+    release = QKeyEvent(
+        QEvent.Type.KeyRelease,
+        Qt.Key.Key_K,
+        Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier,
+    )
+    dialog.keyReleaseEvent(release)
     assert dialog._captured_shortcut == "Ctrl+Shift+K"
     assert dialog.apply_button.isEnabled()
-    assert dialog.capture_value.text() == "Ctrl+Shift+K"
 
     dialog._begin_listening()
     assert dialog._captured_shortcut is None
     assert not dialog.apply_button.isEnabled()
 
     dialog.keyPressEvent(chord)
+    release_again = QKeyEvent(
+        QEvent.Type.KeyRelease,
+        Qt.Key.Key_K,
+        Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier,
+    )
+    dialog.keyReleaseEvent(release_again)
     enter = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier)
     dialog.keyPressEvent(enter)
     assert dialog.shortcut == "Ctrl+Shift+K"
@@ -592,6 +608,16 @@ def test_shortcut_capture_displays_chord_and_suppresses_qt_shortcut_override(qt_
     )
     dialog.keyPressEvent(chord)
     assert dialog.capture_value.text() == "Ctrl+Shift+K"
+    assert dialog._captured_shortcut is None
+    assert dialog._pending_shortcut == "Ctrl+Shift+K"
+    assert not dialog.apply_button.isEnabled()
+    dialog.keyReleaseEvent(
+        QKeyEvent(
+            QEvent.Type.KeyRelease,
+            Qt.Key.Key_K,
+            Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier,
+        )
+    )
     assert dialog._captured_shortcut == "Ctrl+Shift+K"
     assert dialog.apply_button.isEnabled()
     assert dialog.height() >= dialog.minimumHeight()
@@ -599,6 +625,38 @@ def test_shortcut_capture_displays_chord_and_suppresses_qt_shortcut_override(qt_
     dialog.deleteLater()
     qt_app.processEvents()
 
+
+
+
+def test_shortcut_capture_shows_modifiers_and_key_during_keydown(qt_app):
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QKeyEvent
+    from ui_.window.dialogs import ShortcutCaptureDialog
+
+    dialog = ShortcutCaptureDialog(None, "Ctrl+Alt+P")
+    dialog._begin_listening()
+    dialog.keyPressEvent(
+        QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Control, Qt.KeyboardModifier.NoModifier)
+    )
+    assert dialog.capture_value.text() == "Ctrl"
+    assert dialog._captured_shortcut is None
+
+    dialog.keyPressEvent(
+        QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_K, Qt.KeyboardModifier.ControlModifier)
+    )
+    assert dialog.capture_value.text() == "Ctrl+K"
+    assert dialog._pending_shortcut == "Ctrl+K"
+    assert dialog._captured_shortcut is None
+    assert not dialog.apply_button.isEnabled()
+
+    dialog.keyReleaseEvent(
+        QKeyEvent(QEvent.Type.KeyRelease, Qt.Key.Key_K, Qt.KeyboardModifier.ControlModifier)
+    )
+    assert dialog._captured_shortcut == "Ctrl+K"
+    assert dialog.apply_button.isEnabled()
+    dialog.reject()
+    dialog.deleteLater()
+    qt_app.processEvents()
 
 def test_shortcut_capture_uses_shared_scope_to_pause_global_and_local_shortcuts():
     repository = Path(__file__).resolve().parents[1]
