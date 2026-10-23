@@ -418,13 +418,6 @@ class TorRunner(QObject):
             "did not become ready within" in error_text
             or "startup timed out" in error_text
         )
-        # Avoid using a stale log tail to turn configuration/startup-executable
-        # errors into a reason to mutate bridges. Re-probe only after an actual
-        # bootstrap timeout, or when the exception itself includes a specific
-        # endpoint-dial failure.
-        if not startup_timed_out and "error dialing:" not in error_text:
-            return False
-
         dial_failure_markers = (
             "connection refused",
             "actively refused",
@@ -448,6 +441,11 @@ class TorRunner(QObject):
             "error dialing:" in combined
             and any(marker in combined for marker in dial_failure_markers)
         )
+        # Recheck a failed endpoint even if Tor exited before the overall
+        # bootstrap timeout. Do not run a probe wave for other early exits just
+        # because an old log happens to contain unrelated diagnostic lines.
+        if not startup_timed_out and not has_explicit_dial_failure and "error dialing:" not in error_text:
+            return False
         if has_explicit_dial_failure:
             return True
 
