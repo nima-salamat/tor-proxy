@@ -150,7 +150,7 @@ def test_window_uses_native_multimonitor_frame_and_persistent_notifications():
     assert "CustomTitleBar(self)" in ui_source
     assert "startSystemMove" in titlebar_source
     assert "HighDpiScaleFactorRoundingPolicy.PassThrough" in main_source
-    assert "QActionGroup" in ui_source and "QToolButton#topNavButton:checked" in ui_source
+    assert "QActionGroup" in ui_source and "QPushButton#topNavButton:checked" in ui_source
     assert 'self.notification_btn = QPushButton(self)' in ui_source
     assert 'qta.icon("fa6s.bell"' in ui_source
     assert "def notify_user(self, title, message, level=\"info\")" in ui_source
@@ -213,7 +213,7 @@ def test_theme_sync_and_titlebar_use_fontawesome_icons_and_consistent_corner_bac
     assert "QToolButton#topNavButton:checked" in ui_source
     assert "def _set_theme(self, mode)" in ui_source
     assert "self._parent._set_theme(mode)" in settings_source
-    assert "self.btn_light.toggled.connect" in settings_source
+    assert "self.theme_switch.modeChanged.connect" in settings_source
     assert 'qta.icon("fa6s.window-minimize"' in titlebar_source
     assert 'qta.icon("fa6s.window-maximize"' in titlebar_source
     assert 'qta.icon("fa6s.xmark"' in titlebar_source
@@ -320,7 +320,8 @@ def test_navigation_labels_frameless_pages_and_custom_shortcuts_dialog():
     dialogs_source = (repository / "ui_/window/dialogs.py").read_text(encoding="utf-8")
     shortcuts_source = (repository / "ui_/window/shortcuts_window.py").read_text(encoding="utf-8")
 
-    assert "ToolButtonTextBesideIcon" in ui_source
+    assert "QPushButton(label, menu_bar)" in ui_source
+    assert "button.setIcon(qta.icon(icon_name" in ui_source
     assert 'button.setObjectName("topNavButton")' in ui_source
     assert "page_area" not in ui_source
     assert "self.main_layout.addWidget(self.stack, 1)" in ui_source
@@ -348,3 +349,38 @@ def test_application_message_prompts_use_the_shared_custom_dialog():
         source = (repository / relative_path).read_text(encoding="utf-8")
         assert "from ui_.window.dialogs import QMessageBox" in source, relative_path
         assert "from PySide6.QtWidgets import QApplication, QMessageBox" not in source
+
+
+
+def test_theme_switch_is_animated_and_exit_confirmation_is_persistent():
+    repository = Path(__file__).resolve().parents[1]
+    config_source = (repository / "config.py").read_text(encoding="utf-8")
+    settings_source = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
+    switch_source = (repository / "ui_/btn/theme_switch.py").read_text(encoding="utf-8")
+    ui_source = (repository / "ui.py").read_text(encoding="utf-8")
+    dialog_source = (repository / "ui_/window/dialogs.py").read_text(encoding="utf-8")
+    titlebar_source = (repository / "ui_/window/custom_titlebar.py").read_text(encoding="utf-8")
+
+    assert '"confirm_exit": True' in config_source
+    assert '"confirm_exit")' in config_source
+    assert 'self.chk_confirm_exit.setChecked(bool(CONFIG["confirm_exit"]))' in settings_source
+    assert 'CONFIG["confirm_exit"] = enabled' in settings_source
+    assert 'self.theme_switch.modeChanged.connect(self.change_mode)' in settings_source
+    assert 'self._animation.setDuration(180)' in switch_source
+    assert 'qta.icon(icon_name, color=icon_color)' in switch_source
+    assert 'class ExitConfirmDialog(MessageDialog)' in dialog_source
+    assert '"Don\'t ask me again"' in dialog_source
+    assert 'self._exit_authorized = True' in ui_source
+    assert 'if not getattr(self, "_exit_authorized", False)' in ui_source
+    assert 'self.hide_to_tray()' in titlebar_source
+    assert 'self.tray_toggle_action.triggered.connect(self._toggle_visibility)' in ui_source
+    assert 'self.tray_exit_action.triggered.connect(self.ask_close)' in ui_source
+
+
+def test_close_event_hides_to_tray_unless_exit_was_explicitly_authorized():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui.py").read_text(encoding="utf-8")
+    close_event = source[source.index("    def closeEvent(self, event):"):]
+    assert close_event.index("event.ignore()") < close_event.index("event.accept()")
+    assert 'self.hide_to_tray()' in close_event
+    assert 'self.proxyWidget._stop_services()' in close_event
