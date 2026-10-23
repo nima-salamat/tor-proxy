@@ -227,7 +227,13 @@ class _ScanOverlay(QWidget):
         self._timer = QTimer(self)
         self._timer.setInterval(35)
         self._timer.timeout.connect(self._advance)
-        self._timer.start()
+
+    def start_animation(self):
+        if not self._timer.isActive():
+            self._timer.start()
+
+    def stop_animation(self):
+        self._timer.stop()
 
     def _advance(self):
         self._phase = (self._phase + 3) % 100
@@ -459,11 +465,13 @@ class QrCodeFloatingWindow(_FramelessDialog):
         self._scanner.start()
 
     def _camera_started(self, backend_name: str):
+        self.scan_overlay.start_animation()
         self._set_status(f"{backend_name}. Center the QR code in the frame.", level="scanning")
         self.scan_overlay.show()
         self.scan_overlay.raise_()
 
     def _camera_failed(self, message: str):
+        self.scan_overlay.stop_animation()
         logger.warning("QR camera unavailable: %s", message)
         self.scan_overlay.hide()
         self.camera_label.setPixmap(QPixmap())
@@ -487,6 +495,7 @@ class QrCodeFloatingWindow(_FramelessDialog):
 
     def _qr_detected(self, payload: str):
         bridges = parse_bridge_payload(payload)
+        self.scan_overlay.stop_animation()
         self.scan_overlay.hide()
         self._detected_bridges = bridges
         if not bridges:
@@ -542,13 +551,16 @@ class QrCodeFloatingWindow(_FramelessDialog):
         self._scanner = None
 
     def accept(self):
+        self.scan_overlay.stop_animation()
         self._stop_scanner()
         super().accept()
 
     def reject(self):
+        self.scan_overlay.stop_animation()
         self._stop_scanner()
         super().reject()
 
     def closeEvent(self, event):
+        self.scan_overlay.stop_animation()
         self._stop_scanner()
         super().closeEvent(event)
