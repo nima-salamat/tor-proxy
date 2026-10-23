@@ -15,7 +15,15 @@ from .tor_manager import TorManager, TorSettings
 LOGGER = logging.getLogger(__name__)
 DEFAULT_PROBE_TIMEOUT_SECONDS = 30.0
 DEFAULT_MAX_WORKERS = 4
-ProbeStatus = bool | None
+@dataclass(frozen=True)
+class BridgeProbeOutcome:
+    """A bridge result, optionally carrying a local setup/transport issue."""
+
+    status: bool | None
+    issue: str | None = None
+
+
+ProbeStatus = bool | None | BridgeProbeOutcome
 ProbeCallback = Callable[[int, int, str, str], None]
 
 
@@ -27,6 +35,7 @@ class BridgeHealthResult:
     working: tuple[str, ...]
     failed: tuple[str, ...]
     inconclusive: tuple[str, ...]
+    issues: tuple[str, ...] = ()
 
     @property
     def retained(self) -> tuple[str, ...]:
@@ -141,14 +150,27 @@ def _probe_single_bridge(
                     diagnostic = manager._recent_tor_log_detail(max_lines=20).lower()
                 except Exception:
                     diagnostic = ""
+                missing_transport = re.search(
+                    r'no configured transport called\s+["\']([^"\']+)["\']',
+                    diagnostic,
+                    re.IGNORECASE,
+                )
+                if missing_transport:
+                    name = missing_transport.group(1)
+                    return BridgeProbeOutcome(
+                        None,
+                        f"missing_transport:{name}",
+                    )
                 if any(marker in diagnostic for marker in (
-                    "no configured transport called",
                     "unknown pluggable transport",
                     "could not launch transport",
                     "clienttransportplugin",
                     "lyrebird",
                 )):
-                    return None
+                    return BridgeProbeOutcome(
+                        None,
+                        "transport_setup_unavailable",
+                    )
                 error_text = str(exc).lower()
                 if "did not become ready within" in error_text or "timed out" in error_text or "timeout" in error_text:
                     return None
@@ -214,6 +236,7 @@ def check_bridges(
         )
 
     outcomes: dict[str, ProbeStatus] = {}
+    issues: list[str] = []
     completed = 0
     worker_count = max(1, min(int(max_workers), len(unique_records)))
     with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="torproxy-bridge-check") as executor:
@@ -230,9 +253,18 @@ def check_bridges(
                 LOGGER.debug("An isolated bridge check could not be classified (%s).", type(exc).__name__)
                 outcome = None
             outcomes[record] = outcome
+            outcome_status = outcome.status if isinstance(outcome, BridgeProbeOutcome) else outcome
+            if isinstance(outcome, BridgeProbeOutcome) and outcome.issue and outcome.issue not in issues:
+                issues.append(outcome.issue)
             completed += 1
             if on_result is not None:
-                status = "working" if outcome is True else "failed" if outcome is False else "inconclusive"
+                status = (
+                    "infrastructure"
+                    if isinstance(outcome, BridgeProbeOutcome) and outcome.issue
+                    else "working" if outcome_status is True
+                    else "failed" if outcome_status is False
+                    else "inconclusive"
+                )
                 try:
                     on_result(completed, len(unique_records), record, status)
                 except Exception:
@@ -241,7 +273,11 @@ def check_bridges(
     if cancel_event is not None and cancel_event.is_set():
         return BridgeHealthResult(original, (), (), original)
 
-    working = tuple(record for record in unique_records if outcomes.get(record) is True)
-    failed = tuple(record for record in unique_records if outcomes.get(record) is False)
-    inconclusive = tuple(record for record in unique_records if outcomes.get(record) is None)
-    return BridgeHealthResult(original, working, failed, inconclusive)
+    def status_for(record: str) -> bool | None:
+        outcome = outcomes.get(record)
+        return outcome.status if isinstance(outcome, BridgeProbeOutcome) else outcome
+
+    working = tuple(record for record in unique_records if status_for(record) is True)
+    failed = tuple(record for record in unique_records if status_for(record) is False)
+    inconclusive = tuple(record for record in unique_records if status_for(record) is None)
+    return BridgeHealthResult(original, working, failed, inconclusive, tuple(issues))
