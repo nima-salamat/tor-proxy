@@ -47,7 +47,7 @@ def test_parser_reports_second_endpoint_as_invalid_without_mutating_saved_record
         f"webtunnel {IPV6} A1B2C3D4E5F60718293A4B5C6D7E8F9012345678 url=https://bridge.example/ ver=0.0.1",
     )
     assert len(parsed.invalid_records) == 1
-    assert "second, different address:port" in parsed.invalid_records[0] or "second" in parsed.invalid_records[0]
+    assert "second, different address:port" in parsed.errors[0] or "second" in parsed.errors[0]
 
 
 def test_bare_ipv6_bridge_without_transport_remains_supported():
