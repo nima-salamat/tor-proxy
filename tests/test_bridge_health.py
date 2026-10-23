@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 
-from torproxy.bridge_health import check_bridges
+from torproxy.bridge_health import BridgeProbeOutcome, check_bridges
 from torproxy.tor_manager import TorSettings
 
 BRIDGES = (
@@ -76,6 +76,30 @@ def test_duplicate_records_are_checked_once_but_order_and_duplicates_are_retaine
     assert call_counts == {BRIDGES[0]: 1, BRIDGES[1]: 1}
     assert result.retained == original
     assert result.should_prune is False
+
+
+def test_missing_transport_is_reported_as_local_issue_not_bridge_failure(tmp_path):
+    settings = _settings(tmp_path)
+    progress = []
+
+    result = check_bridges(
+        settings,
+        max_workers=1,
+        probe=lambda *_args: BridgeProbeOutcome(None, "missing_transport:webtunnel"),
+        on_result=lambda done, total, _record, status: progress.append((done, total, status)),
+    )
+
+    assert result.working == ()
+    assert result.failed == ()
+    assert result.inconclusive == BRIDGES
+    assert result.retained == BRIDGES
+    assert result.should_prune is False
+    assert result.issues == ("missing_transport:webtunnel",)
+    assert progress == [
+        (1, 3, "infrastructure"),
+        (2, 3, "infrastructure"),
+        (3, 3, "infrastructure"),
+    ]
 
 
 def test_cancelled_check_preserves_original_bridge_list_and_does_not_probe(tmp_path):
