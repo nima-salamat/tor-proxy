@@ -163,7 +163,7 @@ def test_settings_and_bundle_pages_use_available_height_without_duplicate_subtit
     settings_source = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
     updater_source = (repository / "ui_/window/updater_window.py").read_text(encoding="utf-8")
     proxy_source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
-    assert 'enumerate(("General", "Bridges", "Ports", "Advanced"))' in settings_source
+    assert '("General", "Bridges", "Ports", "Advanced"), self.settings_nav_icon_names' in settings_source
     assert "verify_tor_signatures" in settings_source
     assert "QScrollArea" in settings_source and "setWidgetResizable(True)" in settings_source
     assert "lbl_page_number" not in settings_source
@@ -373,7 +373,7 @@ def test_theme_switch_is_animated_and_exit_confirmation_is_persistent():
     assert '"Don\'t ask me again"' in dialog_source
     assert 'self._exit_authorized = True' in ui_source
     assert 'if not getattr(self, "_exit_authorized", False)' in ui_source
-    assert 'self.hide_to_tray()' in titlebar_source
+    assert "parent.hide_to_tray" in titlebar_source
     assert 'self.tray_toggle_action.triggered.connect(self._toggle_visibility)' in ui_source
     assert 'self.tray_exit_action.triggered.connect(self.ask_close)' in ui_source
 
