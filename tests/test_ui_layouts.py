@@ -532,6 +532,7 @@ def test_global_hotkey_is_configurable_and_uses_native_session_recovery():
 def test_shortcut_capture_dialog_captures_confirms_and_allows_retry(qt_app):
     from PySide6.QtCore import Qt, QEvent
     from PySide6.QtGui import QKeyEvent
+    from PySide6.QtWidgets import QDialog
     from ui_.window.dialogs import ShortcutCaptureDialog
 
     dialog = ShortcutCaptureDialog(None, "Ctrl+Alt+P")
@@ -554,6 +555,6 @@ def test_shortcut_capture_dialog_captures_confirms_and_allows_retry(qt_app):
     enter = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier)
     dialog.keyPressEvent(enter)
     assert dialog.shortcut == "Ctrl+Shift+K"
-    assert dialog.result() == dialog.DialogCode.Accepted
+    assert dialog.result() == QDialog.DialogCode.Accepted
     dialog.deleteLater()
     qt_app.processEvents()
