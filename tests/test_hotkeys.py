@@ -1,6 +1,6 @@
 import pytest
 
-from torproxy.hotkeys import HotkeyManager, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, parse_hotkey
+from torproxy.hotkeys import HotkeyManager, MOD_CONTROL, MOD_NOREPEAT, parse_hotkey
 
 
 def test_global_hotkey_is_normalized_and_maps_to_win32_chord():
