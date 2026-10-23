@@ -493,6 +493,26 @@ def test_event_log_classifies_levels_and_inserts_plain_text_in_color(qt_app):
     qt_app.processEvents()
 
 
+def test_bridge_settings_normalize_paste_and_render_individual_cards():
+    repository = Path(__file__).resolve().parents[1]
+    settings_source = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
+    parser_source = (repository / "src/torproxy/bridges.py").read_text(encoding="utf-8")
+    qr_source = (repository / "src/torproxy/bridge_qr.py").read_text(encoding="utf-8")
+    manager_source = (repository / "src/torproxy/tor_manager.py").read_text(encoding="utf-8")
+
+    assert "class _BridgeTextEdit(QTextEdit)" in settings_source
+    assert "parsed = parse_bridge_text(pasted)" in settings_source
+    assert "self.insertPlainText" in settings_source
+    assert "def _refresh_bridge_cards(self, records, *, removable=True)" in settings_source
+    assert 'card.setObjectName("bridgeCard")' in settings_source
+    assert 'remove_button.clicked.connect(partial(self.remove_bridge_record, record))' in settings_source
+    assert 'copy_button.clicked.connect(partial(self.copy_bridge_record, record))' in settings_source
+    assert "def _canonicalize_bridge_editor(self)" in settings_source
+    assert "SUPPORTED_BRIDGE_TRANSPORTS = (\"obfs4\", \"snowflake\", \"webtunnel\")" in parser_source
+    assert "return list(parse_bridge_text(text).records)" in qr_source
+    assert "from .bridges import parse_bridge_text" in manager_source
+
+
 def test_automatic_bridge_cleanup_is_opt_in_and_conservative():
     repository = Path(__file__).resolve().parents[1]
     config_source = (repository / "config.py").read_text(encoding="utf-8")
