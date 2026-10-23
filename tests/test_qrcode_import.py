@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from torproxy.bridge_qr import (
     bridge_import_actions,
@@ -72,3 +73,19 @@ def test_add_bridge_lines_preserves_existing_entries_and_avoids_duplicates():
         "webtunnel bridge.example.org:443 url=x",
         "snowflake 198.51.100.4:443 fingerprint",
     ]
+
+
+
+def test_qr_scanner_button_callbacks_exist_for_application_startup():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/qrcode_widget.py").read_text(encoding="utf-8")
+
+    # The Import/Replace/Add buttons bind these callbacks during __init__, so
+    # the methods must be present before SettingsWindow can be constructed.
+    assert "callback=self.import_bridges" in source
+    assert "callback=self.replace_bridges" in source
+    assert "callback=self.add_bridges" in source
+    assert "def import_bridges(self):" in source
+    assert "def replace_bridges(self):" in source
+    assert "def add_bridges(self):" in source
+    assert "def _apply_detected_bridges(self, mode: str):" in source
