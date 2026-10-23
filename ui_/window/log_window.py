@@ -105,10 +105,17 @@ class LogWindow(QWidget):
 
         text = str(message).strip()
         prefix = re.match(
-            r"^(?:\[[^]]+\]\s*)?\[?(DEBUG|INFO|NOTICE|WARN(?:ING)?|ERR(?:OR)?|CRITICAL|FATAL)\]?\b",
+            r"^\s*\[?(DEBUG|INFO|NOTICE|WARN(?:ING)?|ERR(?:OR)?|CRITICAL|FATAL)\]?(?=\s|:|$)",
             text,
             re.I,
         )
+        if prefix is None:
+            without_tag = re.sub(r"^\s*\[[^]]+\]\s*", "", text)
+            prefix = re.match(
+                r"^(DEBUG|INFO|NOTICE|WARN(?:ING)?|ERR(?:OR)?|CRITICAL|FATAL)\b",
+                without_tag,
+                re.I,
+            )
         if prefix:
             token = prefix.group(1).lower()
             if token in {"err", "error"}:
