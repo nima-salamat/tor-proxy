@@ -500,12 +500,12 @@ def test_bridge_text_editor_canonicalizes_multi_record_clipboard_paste(qt_app):
     editor = _BridgeTextEdit()
     clipboard = QMimeData()
     clipboard.setText(
-        "Bridge OBFS4 192.0.2.10:443 ABCDEF cert=abc "
+        "Bridge OBFS4 192.0.2.10:443 A1B2C3D4E5F60718293A4B5C6D7E8F9012345678 cert=abc "
         "snowflake 198.51.100.12:443 fingerprint=def"
     )
     editor.insertFromMimeData(clipboard)
     assert editor.toPlainText() == (
-        "obfs4 192.0.2.10:443 ABCDEF cert=abc\n"
+        "obfs4 192.0.2.10:443 A1B2C3D4E5F60718293A4B5C6D7E8F9012345678 cert=abc\n"
         "snowflake 198.51.100.12:443 fingerprint=def"
     )
     editor.deleteLater()
