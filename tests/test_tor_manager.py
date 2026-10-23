@@ -339,9 +339,13 @@ def test_bridge_input_shape_diagnostic_hides_bridge_secrets():
 def test_bridge_digest_length_error_has_specific_actionable_message(tmp_path):
     from types import SimpleNamespace
 
-    executable = tmp_path / "tor.exe"
+    executable = tmp_path / "tor" / "tor.exe"
+    executable.parent.mkdir()
     executable.write_text("fake tor", encoding="utf-8")
     executable.chmod(executable.stat().st_mode | 0o111)
+    transport_dir = executable.parent / "pluggable_transports"
+    transport_dir.mkdir()
+    (transport_dir / "lyrebird.exe").write_text("fake transport", encoding="utf-8")
     settings = TorSettings(
         executable=executable,
         bridges_enabled=True,
@@ -357,8 +361,8 @@ def test_bridge_digest_length_error_has_specific_actionable_message(tmp_path):
     def fake_run(_command, **_kwargs):
         return SimpleNamespace(
             returncode=1,
-            stdout="[warn] Key digest for Bridge is wrong length.\\n"
-                   "[err] Bridge line did not parse.\\n",
+            stdout="[warn] Key digest for Bridge is wrong length.\n"
+                   "[err] Bridge line did not parse.\n",
         )
 
     manager = TorManager(settings, run_factory=fake_run)
