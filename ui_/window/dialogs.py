@@ -1,7 +1,7 @@
-"""Shared custom frameless dialogs and the dedicated keyboard-shortcuts screen.
+"""Shared custom frameless message dialogs for the desktop application.
 
-All application message prompts use this module so their layout, typography,
-theme, controls, and keyboard behavior remain consistent across pages.
+All message prompts use the same layout, typography, theme, controls, and
+keyboard behavior, regardless of which page raises the prompt.
 """
 from __future__ import annotations
 
