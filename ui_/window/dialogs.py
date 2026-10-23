@@ -247,11 +247,11 @@ class _FramelessDialog(QDialog):
             QLabel#shortcutCategory {{
                 color: {self._accent};
                 background: transparent;
-                font-size: 11px;
+                font-size: 8.25pt;
                 font-weight: 800;
                 padding-top: 5px;
             }}
-            QLabel#shortcutName {{ color: {self._colors["text"]}; background: transparent; font-size: 12px; }}
+            QLabel#shortcutName {{ color: {self._colors["text"]}; background: transparent; font-size: 9pt; }}
             QLabel#shortcutDescription {{ color: {self._colors["muted"]}; background: transparent; font-size: 7.5pt; }}
             QLabel#shortcutKey {{
                 color: {self._colors["text"]};
@@ -261,7 +261,7 @@ class _FramelessDialog(QDialog):
                 border-radius: 5px;
                 padding: 4px 7px;
                 min-width: 18px;
-                font-size: 10px;
+                font-size: 7.5pt;
                 font-weight: 750;
             }}
             QPushButton#dialogPrimaryButton {{
