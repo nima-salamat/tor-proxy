@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from torproxy.tor_manager import TorManager, TorSettings
 from ui_.window.tor_log_dialog import read_log_page_before, read_log_tail
 
