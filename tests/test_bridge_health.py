@@ -102,6 +102,21 @@ def test_missing_transport_is_reported_as_local_issue_not_bridge_failure(tmp_pat
     ]
 
 
+def test_transport_executable_launch_failure_is_not_a_dead_bridge(tmp_path):
+    result = check_bridges(
+        _settings(tmp_path),
+        max_workers=1,
+        probe=lambda *_args: BridgeProbeOutcome(None, "transport_launch_failed"),
+    )
+
+    assert result.working == ()
+    assert result.failed == ()
+    assert result.inconclusive == BRIDGES
+    assert result.retained == BRIDGES
+    assert result.should_prune is False
+    assert result.issues == ("transport_launch_failed",)
+
+
 def test_cancelled_check_preserves_original_bridge_list_and_does_not_probe(tmp_path):
     settings = _settings(tmp_path)
     cancelled = threading.Event()
