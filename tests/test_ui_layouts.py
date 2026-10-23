@@ -501,18 +501,59 @@ def test_global_hotkey_is_configurable_and_uses_native_session_recovery():
     ui_source = (repository / "ui.py").read_text(encoding="utf-8")
     hotkeys_source = (repository / "src/torproxy/hotkeys.py").read_text(encoding="utf-8")
 
+    dialogs_source = (repository / "ui_/window/dialogs.py").read_text(encoding="utf-8")
+    shortcuts_source = (repository / "ui_/window/shortcuts_window.py").read_text(encoding="utf-8")
+
     assert '"global_shortcut": "Ctrl+Alt+P"' in config_source
-    assert 'QKeySequenceEdit(QKeySequence(self._saved_global_shortcut), self)' in settings_source
-    assert 'CONFIG["global_shortcut"] = normalized' in settings_source
-    assert 'self._parent._set_global_shortcut(normalized)' in settings_source
-    assert "shortcuts_page.update_global_shortcut(normalized)" in ui_source
+    assert "QKeySequenceEdit" not in settings_source
+    assert "global_shortcut" not in settings_source
+    assert "def _global_shortcut_changed" not in settings_source
+    assert "class ShortcutCaptureDialog" in dialogs_source
+    assert "Press Enter to save" in dialogs_source
+    assert "def change_global_shortcut(self)" in shortcuts_source
+    assert 'self.change_shortcut_button.clicked.connect(self.change_global_shortcut)' in shortcuts_source
+    assert "QKeySequenceEdit" not in shortcuts_source
     assert 'HotkeyManager(on_error=self.hotkey_error_signal.emit)' in ui_source
     assert 'self.hotkey_manager.register(' in ui_source
     assert 'self.hotkey_manager.update_shortcut("window_visibility", normalized)' in ui_source
+    assert 'CONFIG["global_shortcut"] = normalized' in ui_source
     assert 'self.hotkey_manager.stop()' in ui_source
     assert 'RegisterHotKey' in hotkeys_source
     assert 'WTSRegisterSessionNotification' in hotkeys_source
     assert 'WTS_SESSION_UNLOCK' in hotkeys_source
     assert 'PBT_APMRESUMEAUTOMATIC' in hotkeys_source
+    assert '_schedule_recovery_retries()' in hotkeys_source
+    assert '_reconfigure_done.wait(4)' in hotkeys_source
     assert 'keyboard.add_hotkey' in hotkeys_source  # fallback only, not the Windows path
     assert 'keyboard.add_hotkey(\'ctrl+alt+p\'' not in ui_source
+
+
+
+def test_shortcut_capture_dialog_captures_confirms_and_allows_retry(qt_app):
+    from PySide6.QtCore import Qt, QEvent
+    from PySide6.QtGui import QKeyEvent
+    from ui_.window.dialogs import ShortcutCaptureDialog
+
+    dialog = ShortcutCaptureDialog(None, "Ctrl+Alt+P")
+    dialog._begin_listening()
+    chord = QKeyEvent(
+        QEvent.Type.KeyPress,
+        Qt.Key.Key_K,
+        Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier,
+    )
+    dialog.keyPressEvent(chord)
+    assert dialog._captured_shortcut == "Ctrl+Shift+K"
+    assert dialog.apply_button.isEnabled()
+    assert dialog.capture_value.text() == "Ctrl+Shift+K"
+
+    dialog._begin_listening()
+    assert dialog._captured_shortcut is None
+    assert not dialog.apply_button.isEnabled()
+
+    dialog.keyPressEvent(chord)
+    enter = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier)
+    dialog.keyPressEvent(enter)
+    assert dialog.shortcut == "Ctrl+Shift+K"
+    assert dialog.result() == dialog.DialogCode.Accepted
+    dialog.deleteLater()
+    qt_app.processEvents()
