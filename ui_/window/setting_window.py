@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QStackedWidget,
     QListWidget,
-    QMessageBox,
     QFrame,
     QScrollArea
 )
@@ -30,6 +29,7 @@ from functools import partial
 logger = logging.getLogger(__name__)
 
 from config import CONFIG
+from ui_.window.dialogs import QMessageBox
 from ui_.worker.worker import Worker
 from ui_.window.qrcode_widget import QrCodeFloatingWindow
 from ui_.emojis import WRONG, CORRECT
