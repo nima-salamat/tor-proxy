@@ -309,6 +309,49 @@ class TorManager:
             parsed.append((transport, record))
         return parsed
 
+    @staticmethod
+    def _bridge_input_shape_diagnostics(text: str, *, max_records: int = 8) -> str:
+        """Summarize bridge token shapes without logging endpoints or fingerprints."""
+        parsed = parse_bridge_text(text)
+        parts: list[str] = []
+        for index, record in enumerate(parsed.records[:max_records], start=1):
+            fields = record.split()
+            first = fields[0].casefold() if fields else ""
+            has_transport = first in SUPPORTED_BRIDGE_TRANSPORTS
+            transport = first if has_transport else "direct"
+            endpoint_index = 1 if has_transport else 0
+            remainder = fields[endpoint_index + 1:]
+            bare = [token for token in remainder if "=" not in token]
+            fingerprint_options = [
+                token.split("=", 1)[1]
+                for token in remainder
+                if token.casefold().startswith("fingerprint=")
+            ]
+            if bare:
+                digest_summary = ", ".join(
+                    f"bare-token length={len(token)} hex={bool(re.fullmatch(r'[0-9a-fA-F]{40}', token))}"
+                    for token in bare
+                )
+            else:
+                digest_summary = "no bare identity fingerprint"
+            for option in fingerprint_options:
+                digest_summary += (
+                    f"; fingerprint option length={len(option)} "
+                    f"hex={bool(re.fullmatch(r'[0-9a-fA-F]{40}', option))}"
+                )
+            option_names = [
+                token.split("=", 1)[0]
+                for token in remainder
+                if "=" in token
+            ]
+            options = ",".join(option_names[:12]) or "none"
+            parts.append(f"item {index} ({transport}): {digest_summary}; options={options}")
+        if len(parsed.records) > max_records:
+            parts.append(f"{len(parsed.records) - max_records} more bridge item(s) omitted")
+        if parsed.invalid_records:
+            parts.append(f"{len(parsed.invalid_records)} item(s) were rejected by the bridge parser")
+        return "Bridge input shape (secret values hidden): " + " | ".join(parts or ["no records parsed"])
+
     def render_torrc(self) -> str:
         settings = self.settings
         self.data_directory.mkdir(parents=True, exist_ok=True)
@@ -560,7 +603,9 @@ class TorManager:
                         "Tor rejected a bridge identity fingerprint because its digest has the wrong length. "
                         "A supplied bridge fingerprint must be the complete 40-character hexadecimal value. "
                         "Copy the bridge line directly from the Tor Project bridge source; do not paste a nickname, "
-                        "partial fingerprint, or hashed fingerprint. Tor diagnostics: "
+                        "partial fingerprint, or hashed fingerprint. "
+                        + self._bridge_input_shape_diagnostics(self.settings.bridges)
+                        + " Tor diagnostics: "
                         + (details or "no further details")
                     )
                 if bridges_enabled and (
