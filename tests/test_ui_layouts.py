@@ -144,11 +144,13 @@ def test_window_uses_native_multimonitor_frame_and_persistent_notifications():
     main_source = (repository / "main.py").read_text(encoding="utf-8")
     titlebar_source = (repository / "ui_/window/custom_titlebar.py").read_text(encoding="utf-8")
     assert "FramelessWindowHint" in ui_source
-    assert "def moveEvent" not in ui_source
+    assert "def moveEvent" in ui_source
+    assert "_screen_for_geometry" in ui_source
+    assert "visible_width = min(72" in ui_source
     assert "CustomTitleBar(self)" in ui_source
     assert "startSystemMove" in titlebar_source
     assert "HighDpiScaleFactorRoundingPolicy.PassThrough" in main_source
-    assert "QActionGroup" in ui_source and "QMenuBar#topMenuBar::item:checked" in ui_source
+    assert "QActionGroup" in ui_source and "QToolButton#topNavButton:checked" in ui_source
     assert 'self.notification_btn = QPushButton(self)' in ui_source
     assert 'qta.icon("fa6s.bell"' in ui_source
     assert "def notify_user(self, title, message, level=\"info\")" in ui_source
@@ -208,7 +210,7 @@ def test_theme_sync_and_titlebar_use_fontawesome_icons_and_consistent_corner_bac
     settings_source = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
     titlebar_source = (repository / "ui_/window/custom_titlebar.py").read_text(encoding="utf-8")
     assert "QMenuBar#topMenuBar, QWidget#menuBarCorner" in ui_source
-    assert "QMenuBar#topMenuBar::item:checked" in ui_source
+    assert "QToolButton#topNavButton:checked" in ui_source
     assert "def _set_theme(self, mode)" in ui_source
     assert "self._parent._set_theme(mode)" in settings_source
     assert "self.btn_light.toggled.connect" in settings_source
@@ -309,3 +311,38 @@ def test_host_rule_pages_have_searchable_lists_and_theme_refresh_hooks():
     assert "QMenu" in exclude_source and "fa6s.trash" in exclude_source
     assert '"fa6s.link"' in settings_source
     assert "NewCircuitPeriod" in settings_source
+
+
+
+def test_navigation_labels_frameless_pages_and_custom_shortcuts_dialog():
+    repository = Path(__file__).resolve().parents[1]
+    ui_source = (repository / "ui.py").read_text(encoding="utf-8")
+    dialogs_source = (repository / "ui_/window/dialogs.py").read_text(encoding="utf-8")
+
+    assert "ToolButtonTextBesideIcon" in ui_source
+    assert 'button.setObjectName("topNavButton")' in ui_source
+    assert "page_area" not in ui_source
+    assert "self.main_layout.addWidget(self.stack, 1)" in ui_source
+    assert "QStackedWidget#pageStack {{ border: none; outline: none;" in ui_source
+    assert "ShortcutsDialog(self, is_windows=IS_WINDOWS)" in ui_source
+    assert "class ShortcutsDialog" in dialogs_source
+    assert 'QLabel#shortcutKey' in dialogs_source
+    assert '"Ctrl", "Alt", "P"' in dialogs_source
+    assert "class QMessageBox:" in dialogs_source
+
+
+def test_application_message_prompts_use_the_shared_custom_dialog():
+    repository = Path(__file__).resolve().parents[1]
+    paths = (
+        "main.py",
+        "ui.py",
+        "ui_/window/setting_window.py",
+        "ui_/window/proxy_window.py",
+        "ui_/window/block_host_window.py",
+        "ui_/window/exclude_host_window.py",
+        "ui_/window/updater_window.py",
+    )
+    for relative_path in paths:
+        source = (repository / relative_path).read_text(encoding="utf-8")
+        assert "from ui_.window.dialogs import QMessageBox" in source, relative_path
+        assert "from PySide6.QtWidgets import QApplication, QMessageBox" not in source
