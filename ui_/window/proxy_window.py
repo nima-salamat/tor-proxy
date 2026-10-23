@@ -584,7 +584,7 @@ class ProxyWindow(QWidget):
             self.running = True
             self.failed = False
             # Don't mark connected True until your Data signals 100% (existing logic)
-            self.logs_widget.update_log("Started proxy and tor successfully.")
+            self.logs_widget.update_log("Local proxy started; Tor bootstrap is in progress. Wait for the verified CONNECTED state.")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Start failed: {e}")
             self.running = False
