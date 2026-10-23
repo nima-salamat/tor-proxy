@@ -187,7 +187,7 @@ def test_repeated_connection_resets_are_classified_as_bridge_specific(monkeypatc
         monkeypatch,
         tmp_path,
         "Managed proxy: Error dialing: read tcp local:5512->198.51.100.8:443: "
-        "connection reset by peer\\n"
+        "connection reset by peer\n"
         "Managed proxy: Error dialing: read tcp local:5513->198.51.100.8:443: "
         "connection reset by peer",
     )
