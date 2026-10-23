@@ -272,11 +272,13 @@ class TorRunner(QObject):
 
         def report_progress(completed, total, _record, status):
             if status == "working":
-                label = "reachable"
+                label = "completed bootstrap"
             elif status == "failed":
-                label = "did not complete bootstrap"
+                label = "bridge-specific connection failure"
+            elif status == "infrastructure":
+                label = "local transport setup issue; keeping it"
             else:
-                label = "inconclusive; keeping it"
+                label = "not proven either way; keeping it"
             self.log_message.emit(f"Bridge check {completed}/{total}: {label}.")
             if self.app_window is not None:
                 self.app_window.data.value = f"Bridge check {completed}/{total}"
@@ -297,8 +299,31 @@ class TorRunner(QObject):
 
         if self._stopping.is_set():
             return manager
+        if result.issues:
+            issue = result.issues[0]
+            if issue.startswith("missing_transport:"):
+                transport_name = issue.split(":", 1)[1]
+                detail = (
+                    f"The selected Tor bundle did not register the '{transport_name}' pluggable transport. "
+                    "The bridge checks are inconclusive because of a local transport/bundle problem, not because "
+                    "the bridge addresses were proven dead. No bridge was removed. Update TorProxy's Tor Expert "
+                    "Bundle from the updater, select the updated bundle, then retry."
+                )
+            else:
+                detail = (
+                    "The selected Tor bundle could not initialize its pluggable transport. "
+                    "Bridge checks are inconclusive; no bridge was removed. Update or select a compatible Tor "
+                    "Expert Bundle in the updater and inspect Live Tor log for the transport error."
+                )
+            self.log_message.emit(detail)
+            if self.app_window is not None:
+                self.app_window.data.value = "Bridge transport unavailable"
+            raise TorManagerError(detail)
         if not result.working:
-            self.log_message.emit("No bridge was confirmed working; the original list was preserved and Tor will try it normally.")
+            self.log_message.emit(
+                "No bridge completed bootstrap within the check timeout. This does not prove the bridges are dead; "
+                "the original list was preserved. Check the selected Tor bundle, network access and Live Tor log."
+            )
             return manager
         if not result.should_prune:
             self.log_message.emit("Bridge check complete. No confirmed-unusable bridges needed removal.")
