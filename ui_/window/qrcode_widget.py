@@ -108,7 +108,7 @@ class _QrScannerThread(QThread):
     frame_ready = Signal(QImage)
     camera_ready = Signal(str)
     scanner_error = Signal(str)
-    qr_found = Signal(str)
+    qr_found = Signal(str, QImage, object)
 
     def __init__(self, camera_index: int = 0, parent=None):
         super().__init__(parent)
@@ -125,11 +125,18 @@ class _QrScannerThread(QThread):
         return cv2.VideoCapture(index)
 
     @staticmethod
-    def _decode_qr(frame, detector) -> str | None:
+    def _decode_qr(frame, detector) -> tuple[str | None, list[tuple[float, float]] | None]:
+        """Return decoded text and its polygon in camera-frame coordinates."""
         try:
-            value, _points, _straight = detector.detectAndDecode(frame)
+            value, points, _straight = detector.detectAndDecode(frame)
             if value and value.strip():
-                return value.strip()
+                polygon = None
+                if points is not None and len(points):
+                    polygon = [
+                        (float(point[0]), float(point[1]))
+                        for point in points.reshape(-1, 2)
+                    ]
+                return value.strip(), polygon
         except cv2.error:
             logger.debug("OpenCV QR decode failed for one frame.", exc_info=True)
 
@@ -139,10 +146,14 @@ class _QrScannerThread(QThread):
                     if getattr(result, "type", "") == "QRCODE":
                         value = result.data.decode("utf-8", errors="replace").strip()
                         if value:
-                            return value
+                            polygon = [
+                                (float(point.x), float(point.y))
+                                for point in getattr(result, "polygon", ())
+                            ]
+                            return value, polygon or None
             except (OSError, ValueError, UnicodeError):
                 logger.debug("Fallback QR decoding failed for one frame.", exc_info=True)
-        return None
+        return None, None
 
     def run(self):
         capture = None
@@ -178,7 +189,7 @@ class _QrScannerThread(QThread):
                 frame_count += 1
 
                 # Detect against the unmirrored camera frame for decoder compatibility.
-                payload = self._decode_qr(frame, detector)
+                payload, corners = self._decode_qr(frame, detector)
                 display_frame = cv2.flip(frame, 1)
                 rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
                 height, width, channels = rgb.shape
@@ -189,13 +200,14 @@ class _QrScannerThread(QThread):
                     channels * width,
                     QImage.Format.Format_RGB888,
                 ).copy()
-                # Cap UI refresh to around 20 fps while continuing to scan every frame.
+                if payload:
+                    # Keep precisely the frame where the code was detected so
+                    # the UI can freeze it and draw a polygon over that QR.
+                    self.qr_found.emit(payload, image, corners or [])
+                    break
+                # Cap UI refresh to around 20 fps while scanning every frame.
                 if frame_count % 2 == 0:
                     self.frame_ready.emit(image)
-
-                if payload:
-                    self.qr_found.emit(payload)
-                    break
                 self.msleep(8)
         except (cv2.error, OSError, RuntimeError) as exc:
             logger.exception("QR camera scanner failed.")
