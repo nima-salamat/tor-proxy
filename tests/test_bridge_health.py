@@ -194,6 +194,17 @@ def test_generic_socks_failure_and_dns_leak_warning_are_not_bridge_health_proof(
     assert outcome is None
 
 
+def test_explicit_dial_failure_is_not_hidden_by_missing_hop_notice(monkeypatch, tmp_path):
+    outcome = _probe_with_fake_tor_log(
+        monkeypatch,
+        tmp_path,
+        "Failed to find node for hop #1 of our path. Discarding this circuit.\\n"
+        'Managed proxy "C:\\\\TorProxy\\\\lyrebird.exe": Error dialing: '
+        "dial tcp 10.10.34.34:443: connectex: actively refused",
+    )
+    assert outcome is False
+
+
 def test_missing_guard_descriptor_is_inconclusive_not_a_dead_bridge(monkeypatch, tmp_path):
     outcome = _probe_with_fake_tor_log(
         monkeypatch,
