@@ -196,6 +196,36 @@ def test_bootstrap_progress_parser_reads_tor_log_notice_formats():
     assert TorManager._parse_bootstrap_log_line("[warn] Bridge connection failed") is None
 
 
+def test_active_bridge_fingerprints_only_include_first_hop_of_built_circuits(tmp_path):
+    from types import SimpleNamespace
+
+    fingerprint = "A1B2C3D4E5F60718293A4B5C6D7E8F9012345678"
+    not_built = "B1B2C3D4E5F60718293A4B5C6D7E8F9012345678"
+    manager = TorManager(
+        TorSettings(
+            executable=tmp_path / "tor",
+            data_directory=tmp_path / "state",
+            bridges_enabled=True,
+            bridges=f"webtunnel [2001:db8::12]:443 {fingerprint} url=https://bridge.example/ ver=0.0.1",
+        )
+    )
+    manager.state = TorState.READY
+    manager._controller = SimpleNamespace(get_circuits=lambda: [
+        SimpleNamespace(status="BUILT", path=[(f"${fingerprint}~Bridge", "Bridge"), ("C" * 40, "middle")]),
+        SimpleNamespace(status="LAUNCHED", path=[(f"${not_built}~Other", "Other")]),
+        SimpleNamespace(status="BUILT", path=[]),
+    ])
+
+    assert manager.get_active_bridge_fingerprints() == frozenset({fingerprint})
+
+    manager.settings = TorSettings(
+        executable=tmp_path / "tor",
+        data_directory=tmp_path / "state",
+        bridges_enabled=False,
+    )
+    assert manager.get_active_bridge_fingerprints() == frozenset()
+
+
 def test_bridge_settings_can_override_tor_log_path(tmp_path):
     log_path = tmp_path / "probe.log"
     manager = TorManager(
