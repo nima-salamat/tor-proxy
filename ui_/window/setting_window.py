@@ -492,18 +492,12 @@ class SettingWindow(QWidget):
     def go_to_next_page(self):
         self._set_settings_page(min(self.page_setting.count() - 1, self.page_setting.currentIndex() + 1))
     def show_qrcode(self):
-        worker = Worker(self.qrcode_widget.run)
-        worker.signals.finished.connect(self.show_qrcode_widget)
-        worker.signals.error.connect(self.show_qrcode_widget)
-        self.threadpool.start(worker)
+        """Open the live QR scanner modally; camera work stays on its own thread."""
         self.btn_qrcode.setDisabled(True)
-
-    def show_qrcode_widget(self, *args):
-        self.qrcode_widget.setParent(self)
-        self.qrcode_widget.move(80, 0)
-        self.qrcode_widget.show()
-        self.qrcode_widget.timer.start(30)
-        self.btn_qrcode.setEnabled(True)
+        try:
+            self.qrcode_widget.exec()
+        finally:
+            self.btn_qrcode.setEnabled(True)
         
     def newnym_inp_changed(self):
         text = self.newnym_inp.text().strip()
