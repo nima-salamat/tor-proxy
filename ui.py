@@ -200,24 +200,36 @@ class Window(QMainWindow):
         logger.debug("TorProxy window hidden to the system tray.")
 
     def _set_global_shortcut(self, shortcut):
-        """Update the named visibility binding without rebuilding other hotkeys."""
+        """Apply and persist a global shortcut as one transaction."""
         normalized = parse_hotkey(shortcut).text
+        previous = str(CONFIG["global_shortcut"])
+        if normalized == previous:
+            return normalized
+
+        # Register first. Native Windows registration is synchronous for edits,
+        # so a conflicting key combination can be rejected before config changes.
         self.hotkey_manager.update_shortcut("window_visibility", normalized)
+        try:
+            CONFIG["global_shortcut"] = normalized
+        except Exception:
+            try:
+                self.hotkey_manager.update_shortcut("window_visibility", previous)
+            except Exception:
+                logger.exception("Failed to roll back the previous global shortcut.")
+            raise
+
         shortcuts_page = getattr(self, "shortcutsWidget", None)
         if shortcuts_page is not None:
             shortcuts_page.update_global_shortcut(normalized)
         logger.info("Global show/hide shortcut changed to %s.", normalized)
         self.proxyWidget.logs_widget.update_log(
-            "Global show/hide shortcut changed to {}.".format(normalized), level="info"
+            "Global show/hide shortcut changed to {}.".format(normalized), level="success"
         )
         return normalized
 
     def _on_hotkey_error(self, message):
         """Surface native registration conflicts in Event Log and the tray."""
         logger.warning("Global shortcut issue: %s", message)
-        settings = getattr(self, "settingWidget", None)
-        if settings is not None and hasattr(settings, "show_global_shortcut_error"):
-            settings.show_global_shortcut_error(message)
         try:
             self.proxyWidget.logs_widget.update_log(
                 "Global shortcut: {}".format(message), level="warning"
