@@ -361,10 +361,8 @@ class _FramelessDialog(QDialog):
 
     def _refresh_for_screen_change(self) -> None:
         """Re-polish and lay out the dialog after a per-monitor DPI transition."""
-        screen = self._active_screen
-        if screen is None:
-            handle = self.windowHandle()
-            screen = handle.screen() if handle is not None else None
+        handle = self.windowHandle()
+        screen = self._active_screen or (handle.screen() if handle is not None else None)
         if screen is None:
             screen = self._screen_for_position(self.pos())
         if screen is None:
@@ -391,17 +389,21 @@ class _FramelessDialog(QDialog):
         for widget in self.findChildren(QWidget):
             widget.updateGeometry()
             widget.update()
-        self._place_on_screen()
+        # Keep its drag destination instead of centering it back over the owner.
+        self._place_on_screen(center_on_parent=False)
 
-    def _place_on_screen(self):
-        if self.parentWidget() is not None and self.parentWidget().isVisible():
+    def _place_on_screen(self, *, center_on_parent: bool = False):
+        if center_on_parent and self.parentWidget() is not None and self.parentWidget().isVisible():
             center = self.parentWidget().mapToGlobal(self.parentWidget().rect().center())
             target = center - self.rect().center()
         else:
-            screen = self._screen_for_position(self.pos()) if self.isVisible() else QGuiApplication.primaryScreen()
+            handle = self.windowHandle()
+            screen = handle.screen() if handle is not None else None
+            if screen is None:
+                screen = self._screen_for_position(self.pos()) if self.isVisible() else QGuiApplication.primaryScreen()
             if screen is None:
                 return
-            target = screen.availableGeometry().center() - self.rect().center()
+            target = QPoint(self.pos()) if self.isVisible() else screen.availableGeometry().center() - self.rect().center()
         self.move(self.clamp_to_screen(target))
 
     def showEvent(self, event):
@@ -411,9 +413,9 @@ class _FramelessDialog(QDialog):
         # the next loop turn using the actual geometry.
         if self._preferred_size is None:
             self._remember_preferred_size()
-        self._place_on_screen()
+        self._place_on_screen(center_on_parent=True)
         QTimer.singleShot(0, self._connect_screen_change_signal)
-        QTimer.singleShot(0, self._place_on_screen)
+        QTimer.singleShot(0, lambda: self._place_on_screen(center_on_parent=True))
 
 
 class MessageDialog(_FramelessDialog):
