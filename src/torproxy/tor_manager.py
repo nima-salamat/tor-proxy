@@ -585,6 +585,16 @@ class TorManager:
                 if self.settings.bridges_enabled:
                     diagnostic = self._recent_tor_log_detail(max_lines=20)
                     lowered_diagnostic = diagnostic.lower()
+                    if any(marker in lowered_diagnostic for marker in (
+                        "createprocessa() failed",
+                        "failed to start process",
+                        "failed at launch",
+                    )):
+                        raise TorManagerError(
+                            "Tor could not launch the bundled bridge transport executable. "
+                            "Check the transport executable path and its file permissions. The bridge itself "
+                            "has not been shown to be offline. Live Tor log details: " + diagnostic
+                        )
                     if "no configured transport called" in lowered_diagnostic:
                         transport_match = re.search(
                             r'no configured transport called\s+["\']([^"\']+)["\']',
