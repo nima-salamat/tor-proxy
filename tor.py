@@ -236,7 +236,14 @@ class TorRunner(QObject):
             detail_text = f" — {detail}" if detail else ""
             self.log_message.emit(f"Tor state: {state_text}{progress_text}{detail_text}")
         if self.app_window is not None and progress is not None:
-            self.app_window.data.value = f"{progress}%"
+            if normalized_state == "READY" and progress >= 100:
+                self.app_window.data.value = "100%"
+            elif progress >= 100:
+                # A log line can reach 100% before ControlPort identity and the
+                # SOCKS listener are verified. Never let that masquerade as ready.
+                self.app_window.data.value = "Verifying Tor listeners…"
+            else:
+                self.app_window.data.value = f"{progress}%"
 
     def _auto_prune_bridges_before_start(self, manager: TorManager) -> TorManager:
         """Verify a multi-bridge list without deleting anything on ambiguous outcomes."""
