@@ -13,7 +13,7 @@ from torproxy.bridge_qr import (
 
 def test_bridge_qr_accepts_json_array_and_deduplicates_lines():
     bridges = [
-        "obfs4 192.0.2.10:443 AABBCCDDEEFF cert=abc iat-mode=0",
+        "obfs4 192.0.2.10:443 A1B2C3D4E5F60718293A4B5C6D7E8F9012345678 cert=abc iat-mode=0",
         "webtunnel 198.51.100.11:443 url=https://bridges.example.org/",
     ]
     payload = json.dumps(bridges + [bridges[0]])
@@ -22,13 +22,13 @@ def test_bridge_qr_accepts_json_array_and_deduplicates_lines():
 
 
 def test_bridge_qr_accepts_torrc_prefix_and_multiline_text():
-    payload = """Bridge obfs4 192.0.2.12:443 AABB cert=abc iat-mode=0
+    payload = """Bridge obfs4 192.0.2.12:443 A1B2C3D4E5F60718293A4B5C6D7E8F9012345678 cert=abc iat-mode=0
 # comment
 snowflake 198.51.100.12:443 fingerprint=A1B2C3D4E5F60718293A4B5C6D7E8F9012345678
 not a bridge
 """
     assert parse_bridge_payload(payload) == [
-        "obfs4 192.0.2.12:443 AABB cert=abc iat-mode=0",
+        "obfs4 192.0.2.12:443 A1B2C3D4E5F60718293A4B5C6D7E8F9012345678 cert=abc iat-mode=0",
         "snowflake 198.51.100.12:443 fingerprint=A1B2C3D4E5F60718293A4B5C6D7E8F9012345678",
     ]
 
