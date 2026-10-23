@@ -127,8 +127,6 @@ class SettingWindow(QWidget):
             QLabel#settingsDescription {{ color: {muted}; font-size: 11px; padding: 0; }}
             QLabel#settingsFieldLabel {{ color: {text}; font-weight: 650; }}
             QLabel#signatureVerificationDetails {{ color: {muted}; background: transparent; padding: 3px 0; }}
-            QKeySequenceEdit#globalShortcutEdit {{ color: {text}; background: {field}; border: 1px solid {border}; border-radius: 7px; padding: 5px 9px; min-height: 30px; min-width: 190px; }}
-            QKeySequenceEdit#globalShortcutEdit:focus {{ border-color: {accent}; }}
             QLabel#globalShortcutStatus {{ background: transparent; font-size: 10px; }}
             QLabel#themeModeValue {{ color: {accent}; background: transparent; font-size: 11px; font-weight: 800; min-width: 44px; }}
             QWidget#themeSwitch {{ background: transparent; border: none; }}
