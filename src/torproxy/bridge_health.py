@@ -200,6 +200,9 @@ def _probe_single_bridge(
                         "no connection could be made",
                         "network is unreachable",
                         "host is down",
+                        "failed to respond",
+                        "period of time",
+                        "wsarecv",
                     ))
                 )
                 if explicit_dial_failure or any(marker in diagnostic for marker in (
