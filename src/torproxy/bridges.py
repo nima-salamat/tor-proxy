@@ -212,8 +212,12 @@ def normalize_bridge_text(text: str) -> str:
     """Return canonical newline-separated text, raising if any chunk is invalid."""
     result = parse_bridge_text(text)
     if result.invalid_records:
+        detail = "; ".join(result.errors[:3])
+        if len(result.errors) > 3:
+            detail += f"; plus {len(result.errors) - 3} more item(s)"
         raise ValueError(
             f"{len(result.invalid_records)} bridge item(s) could not be recognized. "
-            "Use one complete obfs4, snowflake, webtunnel or meek_lite record per line."
+            f"{detail} "
+            "Use one complete bridge record per line."
         )
     return "\n".join(result.records)
