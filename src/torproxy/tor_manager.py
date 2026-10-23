@@ -292,8 +292,8 @@ class TorManager:
         result = parse_bridge_text(text)
         if result.invalid_records:
             raise TorManagerError(
-                "Each bridge must be a complete supported bridge record (obfs4, snowflake, webtunnel, or meek_lite) "
-                "with an IPv4:port or bracketed IPv6:port authority. Separate bridges "
+                "Each bridge must be a complete Tor bridge record with an IPv4:port or bracketed IPv6:port. "
+                "A supported transport (obfs4, snowflake, webtunnel, or meek_lite) is optional. Separate bridges "
                 "with newlines, or paste them together and TorProxy will split them."
             )
         parsed: list[tuple[str, str]] = []
