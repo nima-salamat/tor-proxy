@@ -190,12 +190,6 @@ def _probe_single_bridge(
                         "transport_setup_unavailable",
                     )
 
-                # Relay/guard directory state is not bridge liveness. Tor can
-                # temporarily lack a node descriptor even when the bridge
-                # transport itself is reachable, so do not prune on this notice.
-                if "failed to find node for hop #1" in diagnostic:
-                    return None
-
                 explicit_dial_failure = (
                     "error dialing:" in diagnostic
                     and any(marker in diagnostic for marker in (
@@ -225,6 +219,13 @@ def _probe_single_bridge(
                     "connection to bridge timed out",
                 )):
                     return False
+
+                # Relay/guard directory state is not bridge liveness. Tor can
+                # temporarily lack a node descriptor even when the bridge
+                # transport itself is reachable. It is inconclusive only when
+                # no explicit bridge endpoint dial failure was recorded.
+                if "failed to find node for hop #1" in diagnostic:
+                    return None
 
                 # A plain bootstrap timeout without a bridge-specific dial
                 # failure is inconclusive. It might mean a slow network or a
