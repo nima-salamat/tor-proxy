@@ -762,8 +762,8 @@ class SettingWindow(QWidget):
             self._bridge_normalize_timer.stop()
             invalid_count = len(parsed.invalid_records)
             self.bridge_status_label.setText(
-                f"Could not recognize {invalid_count} item(s). Use complete obfs4, snowflake, webtunnel or meek_lite "
-                "webtunnel records with an IPv4:port or bracketed IPv6:port. "
+                f"Could not recognize {invalid_count} item(s). Use complete Tor bridge records with an IPv4:port "
+                "or bracketed IPv6:port, optionally preceded by obfs4, snowflake, webtunnel or meek_lite. "
                 "The last valid saved bridge list remains active until this text is fixed."
             )
             if not self._bridge_input_invalid:
