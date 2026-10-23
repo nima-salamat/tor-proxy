@@ -203,7 +203,7 @@ def test_tls_handshake_and_local_route_errors_are_not_pruned(monkeypatch, tmp_pa
     repeated_handshake = _probe_with_fake_tor_log(
         monkeypatch,
         tmp_path,
-        "Managed proxy: Error dialing: remote error: tls: handshake failure\\n"
+        "Managed proxy: Error dialing: remote error: tls: handshake failure\n"
         "Managed proxy: Error dialing: remote error: tls: handshake failure",
     )
     unreachable = _probe_with_fake_tor_log(
