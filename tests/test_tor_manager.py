@@ -214,6 +214,35 @@ def test_early_startup_exit_reports_recent_tor_log_details(tmp_path):
     assert "old detail that should fall outside the bounded tail" not in detail
 
 
+def test_bridge_config_validation_error_uses_manager_settings_not_undefined_name(tmp_path):
+    from types import SimpleNamespace
+
+    executable = tmp_path / "tor.exe"
+    executable.write_text("fake tor", encoding="utf-8")
+    settings = TorSettings(
+        executable=executable,
+        bridges_enabled=True,
+        bridges='Bridge "[2001:db8::12]:443" ABCDEF',
+        data_directory=tmp_path / "state",
+        socks_port=19750,
+        control_port=19751,
+    )
+
+    def fake_run(command, **_kwargs):
+        assert "--verify-config" in command
+        return SimpleNamespace(
+            returncode=1,
+            stdout=(
+                '[warn] Bridge line did not parse.\\n'
+                '[err] Reading config failed--see warnings above.\\n'
+            ),
+        )
+
+    manager = TorManager(settings, run_factory=fake_run)
+    with pytest.raises(TorManagerError, match="Tor rejected one of the configured Bridge records"):
+        manager.start()
+
+
 def test_tor_config_validation_errors_keep_multiple_output_lines(tmp_path):
     output = "[warn] Reading config file\n[err] Invalid value for ControlPort\n"
     detail = TorManager._summarize_process_output(output, max_lines=2)
