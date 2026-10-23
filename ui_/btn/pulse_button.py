@@ -17,14 +17,14 @@ class PulseButton(QPushButton):
         self._halo_radius = 115.0
 
         self.outer_anim = QPropertyAnimation(self, b"pulseRadius", self)
-        self.outer_anim.setStartValue(98)
-        self.outer_anim.setEndValue(123)
+        self.outer_anim.setStartValue(101)
+        self.outer_anim.setEndValue(124)
         self.outer_anim.setDuration(1800)
         self.outer_anim.setLoopCount(-1)
         self.outer_anim.setEasingCurve(QEasingCurve.Type.InOutSine)
 
         self.halo_anim = QPropertyAnimation(self, b"haloRadius", self)
-        self.halo_anim.setStartValue(102)
+        self.halo_anim.setStartValue(108)
         self.halo_anim.setEndValue(127)
         self.halo_anim.setDuration(2600)
         self.halo_anim.setLoopCount(-1)
@@ -68,7 +68,7 @@ class PulseButton(QPushButton):
             painter.setPen(QPen(ring_color, width))
             painter.drawEllipse(center, int(radius), int(radius))
 
-        main_radius = 94
+        main_radius = 100
         gradient = QRadialGradient(center.x() - 30, center.y() - 37, main_radius * 2.0)
         gradient.setColorAt(0.0, highlight)
         gradient.setColorAt(0.62, base_color)

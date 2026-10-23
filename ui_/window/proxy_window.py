@@ -666,16 +666,24 @@ class ProxyWindow(QWidget):
 
     # ----- proxy manual control handlers (new) -----
     def set_proxy_clicked(self):
-        # Explicit user action; never invoked automatically by bootstrap.
+        # Used by the Set-system-proxy policy after Tor bootstrap has succeeded.
         if not self.running or not self.connected:
-            QMessageBox.information(self, "TorProxy", "Start Tor and wait for successful bootstrap before enabling the system proxy.")
+            self.proxy_status_label.setText(
+                "Will apply the system proxy automatically after Tor connects."
+            )
             return
+        if getattr(self, "_system_proxy_action_busy", False):
+            return
+        self._system_proxy_action_busy = True
+        self.system_proxy_mode.setEnabled(False)
         worker = Worker(lambda: manage_proxy("127.0.0.1", self.proxy.port, "set"))
         worker.signals.finished.connect(self._on_set_proxy_finished)
         worker.signals.error.connect(self._on_set_proxy_error)
         self.thread_pool.start(worker)
 
     def _on_set_proxy_finished(self, result):
+        self._system_proxy_action_busy = False
+        self.system_proxy_mode.setEnabled(True)
         if str(result).strip().lower() != "true":
             self._on_set_proxy_error("The operating system did not apply the proxy settings.")
             return
@@ -685,6 +693,8 @@ class ProxyWindow(QWidget):
         self._update_proxy_buttons()
 
     def _on_set_proxy_error(self, err):
+        self._system_proxy_action_busy = False
+        self.system_proxy_mode.setEnabled(True)
         logger.exception("Error setting proxy: %s", err)
         self.logs_widget.update_log(f"Error setting proxy: {err}")
         QMessageBox.warning(self, "Proxy Error", f"Failed to set proxy: {err}")
