@@ -125,6 +125,8 @@ A successful `NEWNYM` command means Tor accepted an identity/circuit request; it
 
 Bridge mode accepts bridge records whose transport is explicitly recognized by the current validator (obfs4, Snowflake, WebTunnel, or meek_lite). The selected Tor bundle must contain the corresponding pluggable-transport executable. Incorrect records or missing transport binaries are errors; they are not silently ignored.
 
+In **Settings → Bridges**, you can optionally enable automatic bridge cleanup. Before connecting, TorProxy tests each configured bridge in an isolated Tor process (up to four checks in parallel). A failed record is removed from the saved list only when at least one other bridge is confirmed to complete bootstrap. Ambiguous results are retained, and if no bridge succeeds the entire original list is preserved. This preflight can add up to about 30 seconds per bridge-check wave; bridge addresses are not written to the event log.
+
 The supervised Tor configuration currently supports circuit dirtiness, new-circuit period, IPv4/IPv6 client behavior, bridge records, and local listener endpoints. Country-specific `ExitNodes`/`StrictNodes` controls are not presented as supported UI features in this redesign. Avoid unreviewed Tor directives.
 
 ## Blocked hosts and exclusions
