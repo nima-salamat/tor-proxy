@@ -17,7 +17,7 @@ from pathlib import Path
 import psutil
 
 from .paths import user_directories
-from .bridges import parse_bridge_text
+from .bridges import SUPPORTED_BRIDGE_TRANSPORTS, parse_bridge_text
 
 
 _ACTIVE_DATA_DIRECTORIES: set[str] = set()
@@ -296,7 +296,12 @@ class TorManager:
                 "with an IPv4:port or bracketed IPv6:port authority. Separate bridges "
                 "with newlines, or paste them together and TorProxy will split them."
             )
-        return [(record.split(maxsplit=1)[0], record) for record in result.records]
+        parsed: list[tuple[str, str]] = []
+        for record in result.records:
+            first = record.split(maxsplit=1)[0].casefold()
+            transport = first if first in SUPPORTED_BRIDGE_TRANSPORTS else ""
+            parsed.append((transport, record))
+        return parsed
 
     def render_torrc(self) -> str:
         settings = self.settings
@@ -327,25 +332,27 @@ class TorManager:
             if not bridge_records:
                 raise TorManagerError("Bridge mode is enabled but no valid bridge records were provided.")
             executable = Path(settings.executable)
-            transport_dir = executable.parent / "pluggable_transports"
-            transport_candidates = [
-                transport_dir / ("lyrebird.exe" if os.name == "nt" else "lyrebird"),
-                transport_dir / "lyrebird",
-                transport_dir / "lyrebird.exe",
-            ]
-            transport = next((candidate for candidate in transport_candidates if candidate.is_file()), None)
-            if transport is None:
-                raise TorManagerError("Bridge transport executable (lyrebird) was not found beside the selected Tor bundle.")
             lines.append("UseBridges 1")
-            # A single plugin declaration is important for Lyrebird: it registers
-            # all supported PT names from the same managed executable, as in the
-            # Tor Expert Bundle documentation. Individual repeated declarations
-            # can leave a transport name unregistered with some bundle versions.
-            transport_exec = self._transport_exec_path(transport)
-            lines.append(
-                "ClientTransportPlugin meek_lite,obfs4,snowflake,webtunnel exec "
-                + transport_exec
-            )
+            needs_transport = any(transport for transport, _record in bridge_records)
+            if needs_transport:
+                transport_dir = executable.parent / "pluggable_transports"
+                transport_candidates = [
+                    transport_dir / ("lyrebird.exe" if os.name == "nt" else "lyrebird"),
+                    transport_dir / "lyrebird",
+                    transport_dir / "lyrebird.exe",
+                ]
+                transport = next((candidate for candidate in transport_candidates if candidate.is_file()), None)
+                if transport is None:
+                    raise TorManagerError(
+                        "Bridge transport executable (lyrebird) was not found beside the selected Tor bundle."
+                    )
+                # A single plugin declaration is important for Lyrebird: it registers
+                # all supported PT names from the same managed executable.
+                transport_exec = self._transport_exec_path(transport)
+                lines.append(
+                    "ClientTransportPlugin meek_lite,obfs4,snowflake,webtunnel exec "
+                    + transport_exec
+                )
             lines.extend("Bridge " + record for _, record in bridge_records)
         elif settings.bridges.strip():
             LOGGER.warning("Bridge records are configured but bridge mode is disabled.")
