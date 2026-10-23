@@ -49,6 +49,7 @@ DEFAULT_DATA: dict[str, Any] = {
     "system_proxy_mode": "unchanged",
     "log_level": "INFO",
     "verify_tor_signatures": False,
+    "confirm_exit": True,
 }
 LEGACY_KEYS = set(DEFAULT_DATA) | {"data_usage_bytes", "exclude_hosts", "blocked_hosts"}
 
@@ -99,7 +100,7 @@ class Config:
         if data.get("system_proxy_mode", "unchanged") not in {"set", "unchanged", "clear"}:
             raise ConfigError("system_proxy_mode must be 'set', 'unchanged', or 'clear'.")
         for name in ("bridge", "proxy_port_checked", "tor_port_checked", "control_port_checked",
-                     "dns_port_checked", "system_proxy_auto", "verify_tor_signatures"):
+                     "dns_port_checked", "system_proxy_auto", "verify_tor_signatures", "confirm_exit"):
             if name in data and type(data[name]) is not bool:
                 raise ConfigError(f"{name} must be true or false.")
         ports = []
