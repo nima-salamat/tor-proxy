@@ -128,6 +128,6 @@ def normalize_bridge_text(text: str) -> str:
     if result.invalid_records:
         raise ValueError(
             f"{len(result.invalid_records)} bridge item(s) could not be recognized. "
-            "Use one complete obfs4, snowflake or webtunnel record per line."
+            "Use one complete obfs4, snowflake, webtunnel or meek_lite record per line."
         )
     return "\n".join(result.records)
