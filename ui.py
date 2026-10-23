@@ -19,11 +19,9 @@ from qdarkstyle.light.palette import LightPalette
 from PySide6.QtCore import QEvent, QTimer, Qt, Signal, QSize, QPoint
 import qtawesome as qta
 from utils import resource_path
-import keyboard
-import threading
-import time
 import logging
 from config import CONFIG, IS_WINDOWS
+from torproxy.hotkeys import HotkeyManager, parse_hotkey
 from ui_.worker.worker import Worker
 from ui_.window.proxy_window import ProxyWindow
 from ui_.window.custom_titlebar import CustomTitleBar
@@ -37,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 class Window(QMainWindow):
     toggle_visibility_signal = Signal()
+    hotkey_error_signal = Signal(str)
     def __init__(self):
         super().__init__()
         if IS_WINDOWS:
@@ -106,11 +105,15 @@ class Window(QMainWindow):
         self.tray_icon.activated.connect(self._on_tray_activated)
         self.tray_icon.show()
 
-        self.listener_running = True
-        self.listener_thread = threading.Thread(target=self._start_key_listener, daemon=True)
-        if IS_WINDOWS:
-            self.listener_thread.start()
         self.toggle_visibility_signal.connect(self._toggle_visibility)
+        self.hotkey_error_signal.connect(self._on_hotkey_error)
+        self.hotkey_manager = HotkeyManager(on_error=self.hotkey_error_signal.emit)
+        self.hotkey_manager.register(
+            "window_visibility",
+            str(CONFIG["global_shortcut"]),
+            lambda: self.toggle_visibility_signal.emit(),
+        )
+        self.hotkey_manager.start()
 
     def _refresh_layout_after_restore(self):
         if self.isMinimized() or not hasattr(self, "stack"):
@@ -196,11 +199,31 @@ class Window(QMainWindow):
             self.tray_icon.show()
         logger.debug("TorProxy window hidden to the system tray.")
 
-    def _start_key_listener(self):
-        keyboard.add_hotkey('ctrl+alt+p', lambda: self.toggle_visibility_signal.emit())
-        while self.listener_running:
-            time.sleep(0.5)
-        keyboard.unhook_all_hotkeys()
+    def _set_global_shortcut(self, shortcut):
+        """Update the named visibility binding without rebuilding other hotkeys."""
+        normalized = parse_hotkey(shortcut).text
+        self.hotkey_manager.update_shortcut("window_visibility", normalized)
+        logger.info("Global show/hide shortcut changed to %s.", normalized)
+        self.proxyWidget.logs_widget.update_log(
+            "Global show/hide shortcut changed to {}.".format(normalized), level="info"
+        )
+        return normalized
+
+    def _on_hotkey_error(self, message):
+        """Surface native registration conflicts in Event Log and the tray."""
+        logger.warning("Global shortcut issue: %s", message)
+        try:
+            self.proxyWidget.logs_widget.update_log(
+                "Global shortcut: {}".format(message), level="warning"
+            )
+        except Exception:
+            logger.debug("Could not append hotkey warning to Event Log.", exc_info=True)
+        try:
+            self.tray_icon.showMessage(
+                "Global shortcut", message, QSystemTrayIcon.MessageIcon.Warning, 4500
+            )
+        except Exception:
+            logger.debug("Could not show global-hotkey tray notification.", exc_info=True)
 
     def show_tray(self):
         self.hide()
@@ -611,9 +634,8 @@ class Window(QMainWindow):
         self._closing = True
         if hasattr(self, "_state_timer"):
             self._state_timer.stop()
-        self.listener_running = False
-        if IS_WINDOWS and hasattr(self, "listener_thread") and self.listener_thread.is_alive():
-            self.listener_thread.join(timeout=1.0)
+        if hasattr(self, "hotkey_manager"):
+            self.hotkey_manager.stop()
         try:
             self.tray_icon.hide()
         except Exception:
