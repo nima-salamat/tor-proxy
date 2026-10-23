@@ -67,6 +67,8 @@ class ProxyWindow(QWidget):
         self.logs_open = False
         self._logs_animation = None
         self._system_proxy_action_busy = False
+        self._system_proxy_is_cleared = False
+        self._system_proxy_clear_failed = False
         self.logs_widget.setMinimumWidth(0)
         self.logs_widget.setMaximumWidth(0)
         self.logs_widget.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
@@ -139,6 +141,12 @@ class ProxyWindow(QWidget):
         self.proxy_status_label.setWordWrap(True)
         self.home_layout.addWidget(self.proxy_status_label)
 
+        self.tor_ip_label = QLabel("Exit IP: not checked")
+        self.tor_ip_label.setObjectName("exitIpLabel")
+        self.tor_ip_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.tor_ip_label.setWordWrap(True)
+        self.home_layout.addWidget(self.tor_ip_label)
+
         utility_row = QHBoxLayout()
         utility_row.setSpacing(8)
         self.btn_change_identity = QPushButton(qta.icon("fa6s.arrows-rotate"), "  New Identity")
@@ -163,6 +171,8 @@ class ProxyWindow(QWidget):
         self._apply_home_theme()
         self._update_proxy_buttons()
         self._update_proxy_mode_status()
+        if CONFIG["system_proxy_mode"] == "clear":
+            self._clear_system_proxy_mode()
         self.timer = QTimer(self)
         self.timer.setInterval(int(CONFIG["newnym_interval"] or 0))
 
@@ -228,7 +238,7 @@ class ProxyWindow(QWidget):
             QLabel#connectionStatus[connectionState="connecting"] {{ color: {accent}; }}
             QLabel#connectionStatus[connectionState="disconnected"] {{ color: palette(text); }}
             QLabel#bootstrapPercent {{ color: {accent}; background: transparent; border: none; font-size: 14px; font-weight: 700; padding: 3px; }}
-            QLabel#trafficUsage, QLabel#proxyStatusLabel {{ color: {muted}; background: transparent; border: none; font-size: 11px; padding: 2px; }}
+            QLabel#trafficUsage, QLabel#proxyStatusLabel, QLabel#exitIpLabel {{ color: {muted}; background: transparent; border: none; font-size: 11px; padding: 2px; }}
             QLabel#systemProxyTitle {{ color: {muted}; background: transparent; border: none; font-size: 10px; font-weight: 750; letter-spacing: 1px; }}
             QFrame#homeMetricSeparator {{ color: {border}; background: {border}; max-width: 1px; }}
             QComboBox#systemProxyMode {{ min-height: 34px; padding: 0 12px; border: 1px solid {border}; border-radius: 8px; background: palette(base); color: palette(text); }}
@@ -273,11 +283,15 @@ class ProxyWindow(QWidget):
                 "Will apply the system proxy automatically after Tor connects."
             )
         elif mode == "clear":
-            status = (
-                "System proxy is set to direct mode."
-                if not self.proxy_set else
-                "Clear mode is selected; system proxy cleanup is pending."
-            )
+            if self._system_proxy_action_busy:
+                status = "Clearing the system proxy…"
+            elif self._system_proxy_clear_failed:
+                status = "Could not clear the system proxy; it may still be enabled."
+            elif self._system_proxy_is_cleared:
+                status = "System proxy is cleared; direct mode is active."
+            else:
+                status = "Clear mode selected; system proxy cleanup is pending."
+
         else:
             status = (
                 "System proxy is currently set by TorProxy; no automatic changes will be made."
@@ -290,6 +304,8 @@ class ProxyWindow(QWidget):
         if getattr(self, "_system_proxy_action_busy", False):
             return
         self._system_proxy_action_busy = True
+        self._system_proxy_clear_failed = False
+        self.proxy_status_label.setText("Clearing the system proxy…")
         self.system_proxy_mode.setEnabled(False)
         worker = Worker(lambda: manage_proxy("127.0.0.1", self.proxy.port, "disable"))
         worker.signals.finished.connect(self._on_system_proxy_cleared)
@@ -303,12 +319,15 @@ class ProxyWindow(QWidget):
             self._on_system_proxy_clear_failed("The operating system did not clear the system proxy.")
             return
         self.proxy_set = False
+        self._system_proxy_is_cleared = True
+        self._system_proxy_clear_failed = False
         self.proxy_status_label.setText("System proxy cleared; direct mode is active.")
         self.logs_widget.update_log("System proxy cleared by the selected policy.")
         self._update_proxy_buttons()
 
     def _on_system_proxy_clear_failed(self, error):
         self._system_proxy_action_busy = False
+        self._system_proxy_clear_failed = True
         self.system_proxy_mode.setEnabled(True)
         self.logs_widget.update_log("Could not clear system proxy: {}".format(error))
         QMessageBox.warning(self, "System proxy", "Could not clear the system proxy. Check the event log.")
@@ -622,6 +641,7 @@ class ProxyWindow(QWidget):
                 restored = manage_proxy("127.0.0.1", self.proxy.port, "clear")
                 if restored:
                     self.proxy_set = False
+                    self._system_proxy_is_cleared = False
                     self.proxy_status_label.setText("Previous system proxy settings restored.")
                 else:
                     self.proxy_status_label.setText("System proxy changed externally or could not be restored; inspect settings manually")
@@ -688,8 +708,15 @@ class ProxyWindow(QWidget):
             self._on_set_proxy_error("The operating system did not apply the proxy settings.")
             return
         self.proxy_set = True
+        self._system_proxy_is_cleared = False
+        self._system_proxy_clear_failed = False
         self.proxy_status_label.setText(f"System proxy active at 127.0.0.1:{self.proxy.port}")
         self.logs_widget.update_log(f"System proxy explicitly enabled at 127.0.0.1:{self.proxy.port}")
+        if not self.running or not self.connected or CONFIG["system_proxy_mode"] != "set":
+            # The setting changed while the OS call was in flight. Restore the
+            # pre-existing system state rather than leave a dead local endpoint.
+            self.clear_proxy_clicked()
+            return
         self._update_proxy_buttons()
 
     def _on_set_proxy_error(self, err):
@@ -713,6 +740,7 @@ class ProxyWindow(QWidget):
             self._on_clear_proxy_error("Original proxy settings could not be safely restored; existing external changes were left untouched.")
             return
         self.proxy_set = False
+        self._system_proxy_is_cleared = False
         self.proxy_status_label.setText("System proxy: original settings restored")
         self.logs_widget.update_log("The original system proxy settings were restored.")
         self._update_proxy_buttons()
