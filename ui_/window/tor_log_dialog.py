@@ -286,6 +286,17 @@ class TorLogDialog(_FramelessDialog):
             self._older_offset = self._visible_lines[0][0]
         self._update_pagination_state()
 
+    def _remove_first_document_lines(self, count: int):
+        """Drop old QTextDocument blocks in place instead of rebuilding the whole viewer."""
+        document = self.log_view.document()
+        removable = min(max(0, int(count)), max(0, document.blockCount() - 1))
+        for _ in range(removable):
+            cursor = QTextCursor(document)
+            cursor.movePosition(QTextCursor.MoveOperation.Start)
+            cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+            cursor.removeSelectedText()
+            cursor.deleteChar()
+
     def _update_pagination_state(self):
         exhausted = self._older_offset <= 0
         full = len(self._visible_lines) >= self.max_visible_lines
@@ -367,25 +378,26 @@ class TorLogDialog(_FramelessDialog):
             was_at_bottom = old_vertical >= old_maximum - 2
 
             self._visible_lines.extend(new_lines)
-            before_trim = len(self._visible_lines)
-            self._trim_visible()
-            removed_lines = before_trim - len(self._visible_lines)
+            removed_lines = max(0, len(self._visible_lines) - self.max_visible_lines)
             if removed_lines:
-                line_height = max(1, self.log_view.fontMetrics().lineSpacing())
-                preserved_vertical = max(0, old_vertical - removed_lines * line_height)
-                self._render_all(
-                    vertical_value=preserved_vertical,
-                    horizontal_value=old_horizontal,
-                    scroll_to_end=was_at_bottom,
-                )
-            else:
-                for _line_offset, text in new_lines:
-                    self._append_line_widget(text)
-                self._restore_scroll_position(
-                    old_vertical,
-                    old_horizontal,
-                    follow_bottom=was_at_bottom,
-                )
+                # Keep the widget live: append fresh rows and delete only the
+                # overflow at the top. Re-rendering the full document on every
+                # saturated poll was causing visible jumps and horizontal shifts.
+                del self._visible_lines[:removed_lines]
+                if self._visible_lines:
+                    self._older_offset = self._visible_lines[0][0]
+            for _line_offset, text in new_lines:
+                self._append_line_widget(text)
+            if removed_lines:
+                self._remove_first_document_lines(removed_lines)
+            line_height = max(1, self.log_view.fontMetrics().lineSpacing())
+            preserved_vertical = max(0, old_vertical - removed_lines * line_height)
+            self._restore_scroll_position(
+                preserved_vertical,
+                old_horizontal,
+                follow_bottom=was_at_bottom,
+            )
+            self._update_pagination_state()
         self._update_status()
 
     def load_older(self):
