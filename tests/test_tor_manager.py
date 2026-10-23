@@ -44,6 +44,33 @@ def test_tor_manager_splits_inline_records_using_the_shared_parser():
     ]
 
 
+def test_bridge_torrc_infers_missing_webtunnel_label_from_url_and_ver(tmp_path):
+    executable = tmp_path / "tor" / "tor.exe"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("fake tor", encoding="utf-8")
+    transport_dir = executable.parent / "pluggable_transports"
+    transport_dir.mkdir()
+    (transport_dir / "lyrebird.exe").write_text("fake transport", encoding="utf-8")
+    fingerprint = "A1B2C3D4E5F60718293A4B5C6D7E8F9012345678"
+    endpoint = "[2001:db8::12]:443"
+    manager = TorManager(
+        TorSettings(
+            executable=executable,
+            bridges_enabled=True,
+            bridges=f'{endpoint} {fingerprint} url=https://bridge.example/secret ver=0.0.1',
+            data_directory=tmp_path / "state",
+        )
+    )
+
+    bridge_lines = [
+        line for line in manager.render_torrc().splitlines()
+        if line.startswith("Bridge ")
+    ]
+    assert bridge_lines == [
+        f"Bridge webtunnel {endpoint} {fingerprint} url=https://bridge.example/secret ver=0.0.1"
+    ]
+
+
 def test_bridge_torrc_registers_lyrebird_transports_in_one_directive(tmp_path):
     executable = tmp_path / "tor" / "tor.exe"
     executable.parent.mkdir(parents=True)
