@@ -353,20 +353,20 @@ class TorManager:
     @staticmethod
     def _parse_bootstrap_log_line(line: str) -> tuple[int, str] | None:
         """Parse bootstrap progress emitted to Tor's configured notice log."""
-        match = re.search(r"\\bPROGRESS=(\\d{1,3})\\b", line, re.IGNORECASE)
+        match = re.search(r"\bPROGRESS=(\d{1,3})\b", line, re.IGNORECASE)
         if match:
             progress = int(match.group(1))
             if not 0 <= progress <= 100:
                 return None
-            summary = re.search(r"\\bSUMMARY=(?:\"([^\"]*)\"|(.*?))(?:\\s+\\w+=|$)", line, re.IGNORECASE)
-            tag = re.search(r"\\bTAG=([A-Za-z0-9_-]+)", line, re.IGNORECASE)
+            summary = re.search(r"\bSUMMARY=(?:"([^"]*)"|(.*?))(?:\s+\w+=|$)", line, re.IGNORECASE)
+            tag = re.search(r"\bTAG=([A-Za-z0-9_-]+)", line, re.IGNORECASE)
             detail = (summary.group(1) or summary.group(2) or "").strip() if summary else ""
             if not detail:
                 detail = tag.group(1).replace("_", " ") if tag else "Tor bootstrap in progress"
             return progress, detail
 
         match = re.search(
-            r"\\bBootstrapped\\s+(\\d{1,3})%\\s*(?:\\(([^)]*)\\))?\\s*:?[ \\t]*(.*)$",
+            r"\bBootstrapped\s+(\d{1,3})%\s*(?:\(([^)]*)\))?\s*:?[ \t]*(.*)$",
             line,
             re.IGNORECASE,
         )
@@ -400,7 +400,7 @@ class TorManager:
             return []
 
         payload = self._bootstrap_log_pending + chunk
-        lines = payload.split(b"\\n")
+        lines = payload.split(b"\n")
         self._bootstrap_log_pending = lines.pop() if lines else b""
         updates: list[tuple[int, str]] = []
         for raw_line in lines:
