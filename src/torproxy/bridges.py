@@ -10,7 +10,7 @@ import re
 from dataclasses import dataclass
 
 
-SUPPORTED_BRIDGE_TRANSPORTS = ("obfs4", "snowflake", "webtunnel")
+SUPPORTED_BRIDGE_TRANSPORTS = ("obfs4", "snowflake", "webtunnel", "meek_lite")
 _TRANSPORT_PATTERN = "|".join(re.escape(name) for name in SUPPORTED_BRIDGE_TRANSPORTS)
 # A second transport label followed by a valid-looking literal authority marks
 # a new record even when a clipboard source has collapsed all lines into one.
@@ -46,7 +46,7 @@ def normalize_bridge_record(value: str) -> str:
         raise ValueError("A bridge needs a supported transport and address:port.")
     transport = fields[0].casefold()
     if transport not in SUPPORTED_BRIDGE_TRANSPORTS:
-        raise ValueError("Supported bridge transports are obfs4, snowflake and webtunnel.")
+        raise ValueError("Supported bridge transports are obfs4, snowflake, webtunnel and meek_lite.")
 
     authority = fields[1]
     ipv6_match = _IPV6_AUTHORITY.fullmatch(authority)
