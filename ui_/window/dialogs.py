@@ -547,7 +547,11 @@ class MessageDialog(_FramelessDialog):
         QApplication.clipboard().setText(self._message_text)
         self.copy_button.setText("Copied")
         self.copy_button.setIcon(qta.icon("fa6s.check", color=self._colors["text"]))
-        QTimer.singleShot(1400, self._restore_copy_button)
+        if not hasattr(self, "_copy_feedback_timer"):
+            self._copy_feedback_timer = QTimer(self)
+            self._copy_feedback_timer.setSingleShot(True)
+            self._copy_feedback_timer.timeout.connect(self._restore_copy_button)
+        self._copy_feedback_timer.start(1400)
 
     def _restore_copy_button(self):
         if not hasattr(self, "copy_button"):
