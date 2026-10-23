@@ -493,6 +493,25 @@ def test_event_log_classifies_levels_and_inserts_plain_text_in_color(qt_app):
     qt_app.processEvents()
 
 
+def test_automatic_bridge_cleanup_is_opt_in_and_conservative():
+    repository = Path(__file__).resolve().parents[1]
+    config_source = (repository / "config.py").read_text(encoding="utf-8")
+    settings_source = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
+    runner_source = (repository / "tor.py").read_text(encoding="utf-8")
+    home_source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+    checker_source = (repository / "src/torproxy/bridge_health.py").read_text(encoding="utf-8")
+
+    assert '"auto_prune_bridges": False' in config_source
+    assert '"auto_prune_bridges"' in config_source
+    assert 'self.chk_auto_prune_bridges.toggled.connect(self.auto_prune_bridges_changed)' in settings_source
+    assert 'CONFIG["auto_prune_bridges"]' in runner_source
+    assert 'if not result.working:' in runner_source
+    assert 'return self.original' in checker_source
+    assert 'bool(self.working and self.failed)' in checker_source
+    assert 'self.tor.bridges_updated.connect(self._sync_bridge_editor)' in home_source
+
+
+
 def test_global_hotkey_is_configurable_and_uses_native_session_recovery():
     repository = Path(__file__).resolve().parents[1]
     config_source = (repository / "config.py").read_text(encoding="utf-8")
