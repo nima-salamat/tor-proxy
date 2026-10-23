@@ -96,7 +96,7 @@ def test_pasted_single_line_bridge_list_is_split_and_canonicalized():
 def test_bridge_parser_deduplicates_and_reports_unrecognized_chunks():
     pasted = (
         "obfs4 192.0.2.10:443 fingerprint "
-        "obfs4 192.0.2.10:443 fingerprint "
+        "obfs4 192.0.2.10:443 fingerprint\n"
         "invalid-content"
     )
     parsed = parse_bridge_text(pasted)
