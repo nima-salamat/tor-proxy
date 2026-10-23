@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from config import CONFIG
 from ui_.window.dialogs import _FramelessDialog
 
 logger = logging.getLogger(__name__)
@@ -51,6 +50,24 @@ _BRIDGE_LINE_RE = re.compile(
     r"(?P<host>\[[0-9a-fA-F:.]+\]|[A-Za-z0-9.-]+):(?P<port>\d{1,5})(?:\s+.*)?$",
     re.IGNORECASE,
 )
+
+
+def bridge_import_actions(existing_text: str) -> tuple[bool, bool, bool]:
+    """Return (show_import, show_replace, show_add) for the current text field."""
+    has_existing = bool(str(existing_text or "").strip())
+    return not has_existing, has_existing, has_existing
+
+
+def merge_bridge_lines(existing_text: str, imported_lines: Iterable[str]) -> list[str]:
+    """Append new bridge lines without deleting or duplicating existing entries."""
+    merged = [line.strip() for line in str(existing_text or "").splitlines() if line.strip()]
+    seen = {line.casefold() for line in merged}
+    for line in imported_lines:
+        candidate = str(line).strip()
+        if candidate and candidate.casefold() not in seen:
+            merged.append(candidate)
+            seen.add(candidate.casefold())
+    return merged
 
 
 def parse_bridge_payload(payload: str) -> list[str]:
@@ -306,7 +323,7 @@ class _ScanOverlay(QWidget):
         return QPolygonF(
             [
                 QPointF(
-                    image_rect.left() + (source_width - x) * scale_x,
+                    image_rect.left() + (source_width - 1 - x) * scale_x,
                     image_rect.top() + y * scale_y,
                 )
                 for x, y in self._detected_corners
@@ -475,8 +492,7 @@ class QrCodeFloatingWindow(_FramelessDialog):
         self.results_toggle.setObjectName("qrResultsToggle")
         self.results_toggle.setIcon(qta.icon("fa6s.chevron-down", color="#53d9c5"))
         self.results_toggle.setCheckable(True)
-        self.results_toggle.setToolButtonStyle if hasattr(self.results_toggle, "setToolButtonStyle") else None
-        self.results_toggle.clicked.connect(self._toggle_detected_results)
+                self.results_toggle.clicked.connect(self._toggle_detected_results)
         self.results_toggle.hide()
         self.body_layout.addWidget(self.results_toggle)
 
@@ -571,15 +587,11 @@ class QrCodeFloatingWindow(_FramelessDialog):
     def _configure_import_actions(self):
         settings = self.parent_
         editor = getattr(settings, "inp_bridges", None)
-        existing = editor.toPlainText().strip() if editor is not None else ""
-        if existing:
-            self.import_button.hide()
-            self.replace_button.show()
-            self.add_bridges_button.show()
-        else:
-            self.import_button.show()
-            self.replace_button.hide()
-            self.add_bridges_button.hide()
+        existing = editor.toPlainText() if editor is not None else ""
+        show_import, show_replace, show_add = bridge_import_actions(existing)
+        self.import_button.setVisible(show_import)
+        self.replace_button.setVisible(show_replace)
+        self.add_bridges_button.setVisible(show_add)
 
     def _apply_detected_bridges(self, mode: str):
         if not self._detected_bridges:
@@ -592,14 +604,7 @@ class QrCodeFloatingWindow(_FramelessDialog):
 
         imported = list(self._detected_bridges)
         if mode == "add":
-            existing = [line.strip() for line in editor.toPlainText().splitlines() if line.strip()]
-            seen = {line.casefold() for line in existing}
-            merged = list(existing)
-            for line in imported:
-                if line.casefold() not in seen:
-                    merged.append(line)
-                    seen.add(line.casefold())
-            imported = merged
+            imported = merge_bridge_lines(editor.toPlainText(), imported)
 
         editor.setPlainText("\n".join(imported))
         enable_checkbox = getattr(settings, "btn_bridge", None)
