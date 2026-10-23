@@ -92,7 +92,9 @@ def read_log_page_before(
             chunks.insert(0, chunk)
             newline_count += chunk.count(b"\n")
         data = b"".join(chunks)
-        lines = _line_records(data, cursor, drop_partial_first=cursor > 0)
+        lines = _line_records(
+            data, cursor, drop_partial_first=cursor > 0 and not _starts_on_line_boundary(path, cursor)
+        )
         # The last line before the boundary may be a partial suffix if a page
         # boundary is not exactly at a line start. Exclude any line crossing it.
         lines = [(offset, text) for offset, text in lines if offset < boundary]
