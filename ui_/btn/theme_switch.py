@@ -35,8 +35,13 @@ class ThemeSwitch(QWidget):
     def set_mode(self, mode: str, *, animate: bool = False) -> None:
         if mode not in {"dark", "light"}:
             return
+        changed = mode != self._mode
         self._mode = mode
         self.setAccessibleDescription("Dark theme" if mode == "dark" else "Light theme")
+        if not changed:
+            # Do not interrupt an animation when the parent synchronizes the
+            # modeChanged signal emitted by a click on this very control.
+            return
         target = 1.0 if mode == "light" else 0.0
         self._animation.stop()
         if animate and abs(self._thumb_progress - target) > 0.01:
