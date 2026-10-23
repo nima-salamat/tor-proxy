@@ -536,6 +536,23 @@ class TorManager:
                 for log_progress, log_detail in self._read_bootstrap_log_updates():
                     last_detail = log_detail
                     self._emit(on_status, TorState.BOOTSTRAPPING, log_progress, log_detail)
+                if self.settings.bridges_enabled:
+                    diagnostic = self._recent_tor_log_detail(max_lines=20)
+                    lowered_diagnostic = diagnostic.lower()
+                    if "no configured transport called" in lowered_diagnostic:
+                        transport_match = re.search(
+                            r'no configured transport called\\s+["\']([^"\']+)["\']',
+                            diagnostic,
+                            re.IGNORECASE,
+                        )
+                        transport_name = transport_match.group(1) if transport_match else "a configured bridge transport"
+                        raise TorManagerError(
+                            f"Tor cannot use the configured {transport_name} bridge because the selected "
+                            "Lyrebird executable did not register that transport. Update the Tor Expert Bundle "
+                            "from the updater, select a bundle that supports this transport, and open Live Tor log "
+                            f"for details. {diagnostic}"
+                        )
+
                 try:
                     if self._controller is None:
                         if not self._port_ready(self.settings.control_port):
