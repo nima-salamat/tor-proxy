@@ -529,7 +529,7 @@ def test_bridge_settings_normalize_paste_and_render_individual_cards():
     assert "def _canonicalize_bridge_editor(self)" in settings_source
     assert "SUPPORTED_BRIDGE_TRANSPORTS = (\"obfs4\", \"snowflake\", \"webtunnel\", \"meek_lite\")" in parser_source
     assert "return list(parse_bridge_text(text).records)" in qr_source
-    assert "from .bridges import parse_bridge_text" in manager_source
+    assert "from .bridges import SUPPORTED_BRIDGE_TRANSPORTS, parse_bridge_text" in manager_source
 
 
 def test_automatic_bridge_cleanup_is_opt_in_and_conservative():
