@@ -9,14 +9,16 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QPushButton,
-    QMessageBox,
+    QToolButton,
+    QWidgetAction,
+    QFrame,
     QSystemTrayIcon
 )
-from PySide6.QtGui import QIcon, QAction, QActionGroup
+from PySide6.QtGui import QIcon, QAction, QActionGroup, QGuiApplication
 import qdarkstyle
 from qdarkstyle.dark.palette import DarkPalette
 from qdarkstyle.light.palette import LightPalette
-from PySide6.QtCore import QEvent, QTimer, Qt, Signal
+from PySide6.QtCore import QEvent, QTimer, Qt, Signal, QSize
 import qtawesome as qta
 from utils import resource_path
 import keyboard
@@ -31,6 +33,7 @@ from ui_.window.setting_window import SettingWindow
 from ui_.window.block_host_window import BlcokHostsWindow
 from ui_.window.exclude_host_window import ExcludeHostsWindow
 from ui_.window.updater_window import UpdaterWindow
+from ui_.window.dialogs import QMessageBox, ShortcutsDialog
 logger = logging.getLogger(__name__)
 
 class Window(QMainWindow):
@@ -51,6 +54,9 @@ class Window(QMainWindow):
         # Existing feature pages remain the authoritative widgets and controllers.
         self.stack = QStackedWidget()
         self.stack.setObjectName("pageStack")
+        self.stack.setFrameShape(QFrame.Shape.NoFrame)
+        self.stack.setLineWidth(0)
+        self._constraining_move = False
         self.proxyWidget = ProxyWindow(self)
         self.stack.addWidget(self.proxyWidget)
         self.settingWidget = SettingWindow(self)
@@ -67,14 +73,9 @@ class Window(QMainWindow):
             self.main_layout.addWidget(self.title_bar)
         self._createMenuBar()
 
-        # Each page owns its own content; avoid wasting vertical space on a duplicate global header.
-        page_area = QWidget(self.main_widget)
-        page_area.setObjectName("pageSurface")
-        page_layout = QVBoxLayout(page_area)
-        page_layout.setContentsMargins(16, 12, 16, 14)
-        page_layout.setSpacing(0)
-        page_layout.addWidget(self.stack, 1)
-        self.main_layout.addWidget(page_area, 1)
+        # Pages fill the central surface directly; no extra card/frame around Home,
+        # Settings, or the other stacked pages.
+        self.main_layout.addWidget(self.stack, 1)
         # Select the first page after the stack has real geometry in the root layout.
         self._show_page(0)
         self._apply_shell_styles()
@@ -132,6 +133,47 @@ class Window(QMainWindow):
         if event.type() == QEvent.Type.WindowStateChange and not self.isMinimized():
             QTimer.singleShot(0, self._refresh_layout_after_restore)
 
+    def _screen_for_geometry(self, geometry):
+        center = geometry.center()
+        screen = QGuiApplication.screenAt(center)
+        if screen is not None:
+            return screen
+        screens = QGuiApplication.screens()
+        if not screens:
+            return None
+
+        def distance_to_screen(candidate):
+            area = candidate.availableGeometry()
+            nearest_x = min(max(center.x(), area.left()), area.right())
+            nearest_y = min(max(center.y(), area.top()), area.bottom())
+            return (center.x() - nearest_x) ** 2 + (center.y() - nearest_y) ** 2
+
+        return min(screens, key=distance_to_screen)
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        if self._constraining_move or self.isMinimized() or self.isMaximized() or self.isFullScreen():
+            return
+        screen = self._screen_for_geometry(self.frameGeometry())
+        if screen is None:
+            return
+        area = screen.availableGeometry()
+        visible_width = min(72, max(32, area.width() // 12))
+        visible_titlebar = min(40, max(28, area.height() // 12))
+        frame = self.frameGeometry()
+        min_x = area.left() - frame.width() + visible_width
+        max_x = area.right() - visible_width + 1
+        min_y = area.top()
+        max_y = area.bottom() - visible_titlebar + 1
+        target_x = min(max(self.x(), min_x), max_x)
+        target_y = min(max(self.y(), min_y), max_y)
+        if target_x != self.x() or target_y != self.y():
+            self._constraining_move = True
+            try:
+                self.move(target_x, target_y)
+            finally:
+                self._constraining_move = False
+
     def _toggle_visibility(self):
         self.setHidden(not self.isHidden())
 
@@ -157,6 +199,7 @@ class Window(QMainWindow):
     def _createMenuBar(self):
         menu_bar = QMenuBar(self)
         menu_bar.setObjectName("topMenuBar")
+        menu_bar.setNativeMenuBar(False)
         self.menu_bar = menu_bar
         self.main_layout.addWidget(menu_bar)
 
@@ -171,37 +214,61 @@ class Window(QMainWindow):
         self.page_action_group.setExclusive(True)
         self.page_actions = []
         self.page_icon_names = []
+        self.page_nav_buttons = []
+        self._nav_widget_actions = []
         icon_color = "#eff1f4" if CONFIG["mode"] == "dark" else "#202832"
+
+        def add_nav_button(action):
+            # QWidgetAction + QToolButton makes icon/text order explicit on
+            # Windows, Linux, and macOS: each label sits to the icon's right.
+            button = QToolButton(menu_bar)
+            button.setObjectName("topNavButton")
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            button.setAutoRaise(True)
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            button.setIconSize(QSize(16, 16))
+            button.setDefaultAction(action)
+            widget_action = QWidgetAction(menu_bar)
+            widget_action.setDefaultWidget(button)
+            menu_bar.addAction(widget_action)
+            self.addAction(action)  # keep shortcuts active for widget-based menu items
+            self.page_nav_buttons.append(button)
+            self._nav_widget_actions.append(widget_action)
+            return button
+
         for label, tooltip, shortcut, icon_name, callback in actions:
             action = QAction(label, self)
             action.setIcon(qta.icon(icon_name, color=icon_color))
             action.setCheckable(True)
+            action.setShortcut(shortcut)
+            action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+            action.setToolTip("{} ({})".format(tooltip, shortcut))
+            action.triggered.connect(callback)
             self.page_action_group.addAction(action)
             self.page_actions.append(action)
             self.page_icon_names.append(icon_name)
-            action.setShortcut(shortcut)
-            action.setToolTip("{} ({})".format(tooltip, shortcut))
-            action.triggered.connect(callback)
-            menu_bar.addAction(action)
+            add_nav_button(action)
 
         self.help_action = QAction("Help", self)
         self.help_action.setIcon(qta.icon("fa6s.circle-question", color=icon_color))
         self.help_action.setShortcut("F1")
+        self.help_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
         self.help_action.setToolTip("Keyboard shortcuts")
         self.help_action.triggered.connect(self._show_help)
-        menu_bar.addAction(self.help_action)
+        self.help_nav_button = add_nav_button(self.help_action)
 
         self.exit_action = QAction("Exit", self)
         self.exit_action.setIcon(qta.icon("fa6s.right-from-bracket", color=icon_color))
         self.exit_action.setShortcut("Ctrl+Q")
+        self.exit_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
         self.exit_action.setToolTip("Quit TorProxy")
         self.exit_action.triggered.connect(self.ask_close)
-        menu_bar.addAction(self.exit_action)
+        self.exit_nav_button = add_nav_button(self.exit_action)
 
         self.global_state = QPushButton("● Checking Tor state…", self)
         self.global_state.setObjectName("globalState")
         self.global_state.setFlat(True)
-        self.global_state.setMinimumWidth(104)
+        self.global_state.setMinimumWidth(80)
         self.global_state.setToolTip("Open the Home Event Log when Tor reports a failure.")
         self.global_state.clicked.connect(self._open_event_log)
         self.global_state.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -212,7 +279,7 @@ class Window(QMainWindow):
         self.notification_btn = QPushButton(self)
         self.notification_btn.setObjectName("notificationButton")
         self.notification_btn.setToolTip("Notifications")
-        self.notification_btn.setFixedSize(56, 30)
+        self.notification_btn.setFixedSize(44, 30)
         self.notification_btn.clicked.connect(self._show_notifications)
 
         self.toggle_btn = QPushButton(self)
@@ -226,7 +293,7 @@ class Window(QMainWindow):
         corner.setObjectName("menuBarCorner")
         corner_layout = QHBoxLayout(corner)
         corner_layout.setContentsMargins(0, 0, 0, 0)
-        corner_layout.setSpacing(6)
+        corner_layout.setSpacing(4)
         corner_layout.addWidget(self.global_state)
         corner_layout.addWidget(self.notification_btn)
         corner_layout.addWidget(self.toggle_btn)
@@ -284,20 +351,19 @@ class Window(QMainWindow):
         accent = "#287db5"
         hover = "rgba(71, 163, 242, 0.15)" if dark else "rgba(24, 118, 191, 0.11)"
         self.setStyleSheet(f"""
-            QWidget#pageSurface {{ background: {surface}; }}
             QMenuBar#topMenuBar, QWidget#menuBarCorner {{ background-color: {menu_surface}; }}
-            QMenuBar#topMenuBar {{ border: none; border-bottom: 1px solid {border}; padding: 3px 8px; }}
-            QMenuBar#topMenuBar::item {{
-                padding: 7px 11px; margin: 0 2px; border: 1px solid transparent;
+            QMenuBar#topMenuBar {{ border: none; border-bottom: 1px solid {border}; padding: 3px 6px; spacing: 0; }}
+            QToolButton#topNavButton {{
+                padding: 7px 8px; margin: 0 1px; border: 1px solid transparent;
                 border-bottom: 2px solid transparent; border-radius: 7px;
-                color: {text}; background: transparent; spacing: 6px;
+                color: {text}; background: transparent; spacing: 6px; font-size: 11px;
             }}
-            QMenuBar#topMenuBar::item:selected {{ background: {hover}; border-color: {border}; }}
-            QMenuBar#topMenuBar::item:checked {{
+            QToolButton#topNavButton:hover {{ background: {hover}; border-color: {border}; }}
+            QToolButton#topNavButton:checked {{
                 background: {accent}; color: #ffffff; border: 1px solid {accent};
                 border-bottom: 2px solid #9bd8ff; font-weight: 700;
             }}
-            QMenuBar#topMenuBar::item:checked:!selected {{ background: {accent}; color: #ffffff; }}
+            QToolButton#topNavButton:checked:hover {{ background: {accent}; color: #ffffff; }}
             QWidget#menuBarCorner {{ border-bottom: 1px solid {border}; }}
             QWidget#menuBarCorner QLabel {{ background: transparent; color: {text}; border: none; padding: 0 4px; }}
             QPushButton#globalState {{ background: transparent; color: {text}; border: none; border-radius: 7px; padding: 0 4px; font-size: 10px; }}
@@ -312,7 +378,7 @@ class Window(QMainWindow):
             QPushButton#themeToggle, QPushButton#notificationButton {{ background: transparent; min-height: 28px; border: none; border-radius: 7px; padding: 0 7px; }}
             QPushButton#themeToggle:hover, QPushButton#notificationButton:hover {{ background: {hover}; }}
             QPushButton#notificationButton {{ font-weight: 700; }}
-            QStackedWidget#pageStack {{ background: transparent; }}
+            QStackedWidget#pageStack {{ border: none; outline: none; background: {surface}; padding: 0; margin: 0; }}
             QMenu {{ background: {menu_surface}; color: {text}; border: 1px solid {border}; padding: 5px; }}
             QMenu::item {{ padding: 7px 20px 7px 10px; border-radius: 5px; }}
             QMenu::item:selected {{ background: {hover}; }}
@@ -327,7 +393,7 @@ class Window(QMainWindow):
         self.notification_btn.setText(
             str(len(self._notification_entries) if len(self._notification_entries) < 100 else "99+")
         )
-        self.notification_btn.setFixedSize(56, 30)
+        self.notification_btn.setFixedSize(44, 30)
         if IS_WINDOWS and hasattr(self, "title_bar"):
             self.title_bar.update_theme(icon_color)
         if hasattr(self, "proxyWidget") and hasattr(self.proxyWidget, "_apply_home_theme"):
@@ -432,20 +498,8 @@ class Window(QMainWindow):
             
     
     def _show_help(self):
-        QMessageBox.information(
-            self,
-            "Keyboard Shortcuts",
-            (
-                "<b>Keyboard Shortcuts:</b><br><br>"+
-                ("Alt + Ctrl + P → Hide/Show Hotkey<br>" if IS_WINDOWS else "")+
-                "Ctrl + H → Home<br>"
-                "Ctrl + S → Setting<br>"
-                "Ctrl + B → Block Host<br>"
-                "Ctrl + E → Bypass rules<br>"
-                "Ctrl + U → Tor bundles and updates<br>"
-                "Ctrl + Q → Quit"
-            )
-        )
+        dialog = ShortcutsDialog(self, is_windows=IS_WINDOWS)
+        dialog.exec()
     
     def _show_home(self):
         self._show_page(0)
