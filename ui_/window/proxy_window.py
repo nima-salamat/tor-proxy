@@ -27,6 +27,8 @@ from ui_.worker.worker import Worker
 from ui_.worker.utils import Data
 from config import CONFIG
 from ui_.window.dialogs import QMessageBox
+from torproxy.paths import user_directories
+from ui_.window.tor_log_dialog import TorLogDialog
 import json
 import logging
 import qtawesome as qta
@@ -197,6 +199,13 @@ class ProxyWindow(QWidget):
             editor.setPlainText(bridge_text)
         finally:
             editor.blockSignals(was_blocked)
+
+    def open_tor_log_dialog(self):
+        """Open a live, paginated view of the actual managed Tor log file."""
+        manager = getattr(self.tor, "manager", None)
+        path = getattr(manager, "log_path", None) or (user_directories().logs / "tor.log")
+        dialog = TorLogDialog(self, path, manager=manager)
+        dialog.exec()
 
     def change_data_usage(self):
         self.lbl_data_usage.setText(f"Proxy traffic (both directions): {CONFIG['data_usage']/1024**2:.2f} MiB")
