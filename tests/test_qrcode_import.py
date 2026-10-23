@@ -116,6 +116,27 @@ webtunnel bridge.example.org:443 url=https://bridge.example.org/
     ]
 
 
+def test_inline_paste_splits_transport_and_plain_ipv6_bridge_records():
+    pasted = (
+        "obfs4 192.0.2.10:443 ABCDEF cert=abc "
+        'Bridge "[2001:db8:fe46:edd5:2139:2d5b:b732:854a]:443" ABCDEF '
+        "webtunnel 198.51.100.12:443 FINGERPRINT url=https://bridge.example/"
+    )
+    parsed = parse_bridge_text(pasted)
+    assert parsed.invalid_records == ()
+    assert parsed.records == (
+        "obfs4 192.0.2.10:443 ABCDEF cert=abc",
+        "[2001:db8:fe46:edd5:2139:2d5b:b732:854a]:443 ABCDEF",
+        "webtunnel 198.51.100.12:443 FINGERPRINT url=https://bridge.example/",
+    )
+
+
+def test_plain_ipv6_bridge_record_without_transport_is_normalized():
+    parsed = parse_bridge_text('Bridge "[2001:db8::12]:443" ABCDEF')
+    assert parsed.invalid_records == ()
+    assert parsed.records == ("[2001:db8::12]:443 ABCDEF",)
+
+
 def test_qr_scanner_button_callbacks_exist_for_application_startup():
     repository = Path(__file__).resolve().parents[1]
     source = (repository / "ui_/window/qrcode_widget.py").read_text(encoding="utf-8")
