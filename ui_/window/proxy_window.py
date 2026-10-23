@@ -47,6 +47,8 @@ class ProxyWindow(QWidget):
         self.proxy_set = has_proxy_snapshot()  # also recover safely after an unclean previous exit
         self._stopping = False
         self._identity_busy = False
+        self._exit_ip_check_busy = False
+        self._exit_ip_worker = None
         self._parent = parent
         chosen_ports = []
         while len(chosen_ports) < 4:
@@ -218,29 +220,72 @@ class ProxyWindow(QWidget):
         self.lbl_data_usage.setText(f"Proxy traffic (both directions): {CONFIG['data_usage']/1024**2:.2f} MiB")
 
     def whatismyip_clicked(self):
+        if self._exit_ip_check_busy:
+            return
         if not self.running or not self.connected:
             self.tor_ip_label.setText("Exit IP: unavailable — Tor proxy is not ready")
+            logger.info("Exit-IP check ignored because Tor is not in the verified connected state.")
             return
-        proxy_url = f"http://127.0.0.1:{self.proxy.port}"
-        self.btn_whatismyip.setEnabled(False)
-        self.tor_ip_label.setText("Exit IP: checking through Tor proxy…")
-        self.worker = Worker(lambda: what_is_my_ip(proxy=proxy_url, timeout=10))
-        self.worker.signals.finished.connect(self._on_exit_ip_checked)
-        self.worker.signals.error.connect(self._on_exit_ip_failed)
-        self.thread_pool.start(self.worker)
+
+        try:
+            proxy_port = int(self.proxy.port)
+            if not 1 <= proxy_port <= 65535:
+                raise ValueError("The local HTTP proxy port is invalid.")
+            proxy_url = f"http://127.0.0.1:{proxy_port}"
+            self._exit_ip_check_busy = True
+            self.btn_whatismyip.setEnabled(False)
+            self.tor_ip_label.setText("Exit IP: checking through Tor proxy…")
+            worker = Worker(self._perform_exit_ip_check, proxy_url)
+            worker.signals.finished.connect(self._on_exit_ip_checked)
+            worker.signals.error.connect(self._on_exit_ip_failed)
+            self._exit_ip_worker = worker
+            self.thread_pool.start(worker)
+            logger.debug("Started exit-IP verification through the local HTTP proxy.")
+        except Exception as exc:
+            logger.exception("Could not start the proxied exit-IP check.")
+            self._on_exit_ip_failed(f"{type(exc).__name__}: {exc}")
+
+    @staticmethod
+    def _perform_exit_ip_check(proxy_url: str) -> str:
+        """Request an exit IP through the explicit local proxy, never directly."""
+        return what_is_my_ip(proxy=proxy_url, timeout=10)
+
+    def _finish_exit_ip_check(self):
+        self._exit_ip_check_busy = False
+        self._exit_ip_worker = None
+        try:
+            self.btn_whatismyip.setEnabled(True)
+        except RuntimeError:
+            logger.debug("Exit-IP button was destroyed before its worker completed.")
 
     def _on_exit_ip_checked(self, result):
-        if result and result != "None":
-            self.tor_ip_label.setText("Observed exit IP (proxied): " + result)
-        else:
-            self.tor_ip_label.setText("Exit IP: unverified")
-        self.btn_whatismyip.setEnabled(True)
+        try:
+            address = str(result or "").strip()
+            if address and address.casefold() != "none":
+                self.tor_ip_label.setText("Observed exit IP (proxied): " + address)
+                logger.info("Exit-IP verification completed through the local proxy.")
+            else:
+                self.tor_ip_label.setText("Exit IP: unverified")
+                logger.warning("Exit-IP endpoint returned an empty response.")
+        except Exception:
+            logger.exception("Could not display the verified exit-IP result.")
+            try:
+                self.tor_ip_label.setText("Exit IP result could not be displayed; see the event log")
+            except RuntimeError:
+                pass
+        finally:
+            self._finish_exit_ip_check()
 
     def _on_exit_ip_failed(self, error):
-        logger.warning("Proxied exit-IP check failed: %s", error)
-        self.tor_ip_label.setText("Exit IP check failed — no direct fallback used")
-        self.logs_widget.update_log(f"Exit-IP verification failed: {error}")
-        self.btn_whatismyip.setEnabled(True)
+        message = str(error or "Unknown exit-IP verification failure.")
+        logger.warning("Proxied exit-IP check failed: %s", message)
+        try:
+            self.tor_ip_label.setText("Exit IP check failed — no direct fallback used")
+            self.logs_widget.update_log(f"Exit-IP verification failed: {message}", level="error")
+        except (RuntimeError, AttributeError):
+            logger.exception("Could not display the exit-IP verification failure.")
+        finally:
+            self._finish_exit_ip_check()
 
     def show_logs(self):
         opening = not self.logs_open
