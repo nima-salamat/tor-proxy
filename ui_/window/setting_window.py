@@ -467,33 +467,37 @@ class SettingWindow(QWidget):
 
     def MaxCircuitDirtiness_changed(self):
         text = self.inp_MaxCircuitDirtiness.text().strip()
-        if text.isdigit() and 10 <= int(text) <= 86400:
-            val = int(text)
-            try:
-                self._parent.proxyWidget.tor.MaxCircuitDirtiness = val
-                CONFIG["MaxCircuitDirtiness"] = val
-            except (ValueError, OSError, AttributeError) as exc:
-                logger.warning("Could not save MaxCircuitDirtiness: %s", exc)
-                self.lbl_MaxCircuitDirtiness.setText(WRONG)
-                return
-            self.lbl_MaxCircuitDirtiness.setText(CORRECT)
-        else:
+        if not (text.isdigit() and 10 <= int(text) <= 86400):
             self.lbl_MaxCircuitDirtiness.setText(WRONG)
+            return
+        value = int(text)
+        try:
+            CONFIG["MaxCircuitDirtiness"] = value
+        except (ValueError, OSError) as exc:
+            logger.warning("Could not save MaxCircuitDirtiness: %s", exc)
+            self.lbl_MaxCircuitDirtiness.setText(WRONG)
+            return
+        proxy = getattr(self._parent, "proxyWidget", None)
+        if proxy is not None and hasattr(proxy, "tor"):
+            proxy.tor.MaxCircuitDirtiness = value
+        self.lbl_MaxCircuitDirtiness.setText(CORRECT)
 
     def NewCircuitPeriod_changed(self):
         text = self.inp_NewCircuitPeriod.text().strip()
-        if text.isdigit() and 10 <= int(text) <= 86400:
-            value = int(text)
-            try:
-                CONFIG["NewCircuitPeriod"] = value
-                self._parent.proxyWidget.tor.NewCircuitPeriod = value
-            except (ValueError, OSError, AttributeError) as exc:
-                logger.warning("Could not save NewCircuitPeriod: %s", exc)
-                self.lbl_NewCircuitPeriod.setText(WRONG)
-                return
-            self.lbl_NewCircuitPeriod.setText(CORRECT)
-        else:
+        if not (text.isdigit() and 10 <= int(text) <= 86400):
             self.lbl_NewCircuitPeriod.setText(WRONG)
+            return
+        value = int(text)
+        try:
+            CONFIG["NewCircuitPeriod"] = value
+        except (ValueError, OSError) as exc:
+            logger.warning("Could not save NewCircuitPeriod: %s", exc)
+            self.lbl_NewCircuitPeriod.setText(WRONG)
+            return
+        proxy = getattr(self._parent, "proxyWidget", None)
+        if proxy is not None and hasattr(proxy, "tor"):
+            proxy.tor.NewCircuitPeriod = value
+        self.lbl_NewCircuitPeriod.setText(CORRECT)
 
     def set_bridges(self):
         txt = self.inp_bridges.toPlainText()
