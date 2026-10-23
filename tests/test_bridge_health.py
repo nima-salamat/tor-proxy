@@ -62,7 +62,7 @@ def test_all_failed_bridges_are_preserved_without_a_confirmed_working_bridge(tmp
     assert result.should_prune is False
 
 
-def test_duplicate_records_are_checked_once_but_order_and_duplicates_are_retained(tmp_path):
+def test_duplicate_records_are_checked_once_and_deduplicated_in_saved_list(tmp_path):
     original = (BRIDGES[0], BRIDGES[0], BRIDGES[1])
     settings = _settings(tmp_path, original)
     call_counts = {}
@@ -74,7 +74,7 @@ def test_duplicate_records_are_checked_once_but_order_and_duplicates_are_retaine
     result = check_bridges(settings, max_workers=2, probe=fake_probe)
 
     assert call_counts == {BRIDGES[0]: 1, BRIDGES[1]: 1}
-    assert result.retained == original
+    assert result.retained == (BRIDGES[0], BRIDGES[1])
     assert result.should_prune is False
 
 
