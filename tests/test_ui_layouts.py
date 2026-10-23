@@ -669,29 +669,15 @@ def test_custom_notification_dialog_keeps_copy_action_available(qt_app):
 
 
 
-def test_qr_scan_overlay_sweeps_full_preview_and_freezes_detection_marker(qt_app):
-    from ui_.window.qrcode_widget import _ScanOverlay
+def test_qr_scan_canvas_paints_frame_and_marker_in_shared_geometry():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/qrcode_widget.py").read_text(encoding="utf-8")
 
-    overlay = _ScanOverlay()
-    overlay.resize(800, 450)
-    overlay.set_source_size((1280, 720))
-    image_rect = overlay._image_rect()
-    assert image_rect.width() == pytest.approx(800)
-    assert image_rect.height() == pytest.approx(450)
-
-    overlay.start_animation()
-    assert overlay._timer.isActive()
-    overlay.set_detected(
-        [(100, 100), (500, 100), (500, 400), (100, 400)],
-        (1280, 720),
-    )
-    assert not overlay._timer.isActive()
-    polygon = overlay._mapped_polygon()
-    assert len(polygon) == 4
-    # The live preview is mirrored, so the marker mirrors the detected X axis too.
-    assert polygon.boundingRect().center().x() == pytest.approx(800 - (300 / 1280) * 800, abs=1)
-
-    overlay.clear_detection()
-    assert len(overlay._detected_corners) == 0
-    overlay.deleteLater()
-    qt_app.processEvents()
+    assert "class _ScanOverlay(QWidget)" in source
+    assert "painter.drawImage(image_rect, self._frame)" in source
+    assert "image_rect.left() + (source_width - 1 - x) * scale_x" in source
+    assert "self.scan_overlay = _ScanOverlay(self.preview_panel)" in source
+    assert "self.camera_label" not in source
+    assert "QPixmap" not in source
+    assert "def set_detected(self, corners, source_size)" in source
+    assert "self._timer.stop()" in source
