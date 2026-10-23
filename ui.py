@@ -161,7 +161,7 @@ class Window(QMainWindow):
         if screen is None:
             return
         area = screen.availableGeometry()
-        visible_width = min(72, max(32, area.width() // 12))
+        visible_width = min(120, max(88, area.width() // 12))
         visible_titlebar = min(40, max(28, area.height() // 12))
         frame = self.frameGeometry()
         min_x = area.left() - frame.width() + visible_width
