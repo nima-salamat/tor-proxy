@@ -4,6 +4,9 @@ All notable changes are recorded here. Dates and release numbers are added only 
 
 ## Unreleased — UI, updater, and security redesign
 
+- Added a live on-disk Tor log viewer launched from Event Log, with colored severities, configurable visible-line limits, paginated older history, live tailing, and confirmation before clearing the active log.
+- Fixed the bootstrap display path to parse Tor's own `Bootstrapped N%` notices when ControlPort status is delayed; `100%` from a log alone no longer marks Tor connected before ControlPort and SOCKS verification.
+
 - Added an opt-in bridge health check that tests multiple bridge records independently in parallel and removes confirmed failures only when at least one alternative completes Tor bootstrap; inconclusive checks and all-failed lists are preserved.
 - Updated shortcut capture to show the live modifier/key combination while keys are held and finalize the binding on key release.
 
