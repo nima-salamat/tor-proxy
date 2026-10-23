@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QPushButton,
-    QToolButton,
+    QButtonGroup,
     QFrame,
     QSystemTrayIcon
 )
@@ -31,7 +31,7 @@ from ui_.window.setting_window import SettingWindow
 from ui_.window.block_host_window import BlcokHostsWindow
 from ui_.window.exclude_host_window import ExcludeHostsWindow
 from ui_.window.updater_window import UpdaterWindow
-from ui_.window.dialogs import QMessageBox
+from ui_.window.dialogs import QMessageBox, ExitConfirmDialog
 from ui_.window.shortcuts_window import ShortcutsWindow
 logger = logging.getLogger(__name__)
 
@@ -88,16 +88,20 @@ class Window(QMainWindow):
         self._update_global_state()
         self._set_theme(CONFIG["mode"])
 
+        self._exit_authorized = False
         self.tray_icon = QSystemTrayIcon(self)
         self.tray_icon.setIcon(QIcon(resource_path("assets/icon.png")))
-        tray_menu = QMenu()
-        show_action = QAction("Show TorProxy", self)
-        show_action.triggered.connect(self.show)
-        tray_menu.addAction(show_action)
-        quit_action = QAction("Quit", self)
-        quit_action.triggered.connect(lambda: (self.show(), self.close()))
-        tray_menu.addAction(quit_action)
-        self.tray_icon.setContextMenu(tray_menu)
+        self.tray_icon.setToolTip("TorProxy")
+        self.tray_menu = QMenu(self)
+        self.tray_toggle_action = QAction("Show / Hide TorProxy", self)
+        self.tray_toggle_action.triggered.connect(self._toggle_visibility)
+        self.tray_menu.addAction(self.tray_toggle_action)
+        self.tray_menu.addSeparator()
+        self.tray_exit_action = QAction("Exit TorProxy", self)
+        self.tray_exit_action.setIcon(qta.icon("fa6s.right-from-bracket", color="#d9534f"))
+        self.tray_exit_action.triggered.connect(self.ask_close)
+        self.tray_menu.addAction(self.tray_exit_action)
+        self.tray_icon.setContextMenu(self.tray_menu)
         self.tray_icon.activated.connect(self.show_window)
         self.tray_icon.show()
 
@@ -176,7 +180,20 @@ class Window(QMainWindow):
                 self._constraining_move = False
 
     def _toggle_visibility(self):
-        self.setHidden(not self.isHidden())
+        if self.isVisible() and not self.isMinimized():
+            self.hide_to_tray()
+            return
+        self.showNormal()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def hide_to_tray(self):
+        """Hide the main window without stopping Tor or removing the tray icon."""
+        self.hide()
+        if hasattr(self, "tray_icon") and not self.tray_icon.isVisible():
+            self.tray_icon.show()
+        logger.debug("TorProxy window hidden to the system tray.")
 
     def _start_key_listener(self):
         keyboard.add_hotkey('ctrl+alt+p', lambda: self.toggle_visibility_signal.emit())
@@ -191,13 +208,15 @@ class Window(QMainWindow):
         
     
     def show_window(self, reason):
-        if reason == QSystemTrayIcon.Trigger:
-            if self.isHidden():
-                self.show()
-            else:
-                self.hide()
+        if reason in (
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+        ):
+            self._toggle_visibility()
    
     def _createMenuBar(self):
+        # Use regular buttons: their icons and labels render consistently on every
+        # platform, unlike native menu items whose icon/text style is OS-dependent.
         menu_bar = QWidget(self.main_widget)
         menu_bar.setObjectName("topMenuBar")
         menu_layout = QHBoxLayout(menu_bar)
@@ -219,24 +238,11 @@ class Window(QMainWindow):
         self.page_actions = []
         self.page_icon_names = []
         self.page_nav_buttons = []
+        self.page_nav_group = QButtonGroup(self)
+        self.page_nav_group.setExclusive(True)
         icon_color = "#eff1f4" if CONFIG["mode"] == "dark" else "#202832"
 
-        def add_nav_button(action):
-            # QWidgetAction + QToolButton makes icon/text order explicit on
-            # Windows, Linux, and macOS: each label sits to the icon's right.
-            button = QToolButton(menu_bar)
-            button.setObjectName("topNavButton")
-            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-            button.setAutoRaise(True)
-            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            button.setIconSize(QSize(16, 16))
-            button.setDefaultAction(action)
-            menu_layout.addWidget(button)
-            self.addAction(action)  # keep shortcuts active for widget-based menu items
-            self.page_nav_buttons.append(button)
-            return button
-
-        for label, tooltip, shortcut, icon_name, callback in actions:
+        for index, (label, tooltip, shortcut, icon_name, callback) in enumerate(actions):
             action = QAction(label, self)
             action.setIcon(qta.icon(icon_name, color=icon_color))
             action.setCheckable(True)
@@ -245,24 +251,46 @@ class Window(QMainWindow):
             action.setToolTip("{} ({})".format(tooltip, shortcut))
             action.triggered.connect(callback)
             self.page_action_group.addAction(action)
+            self.addAction(action)
             self.page_actions.append(action)
             self.page_icon_names.append(icon_name)
-            add_nav_button(action)
+
+            button = QPushButton(label, menu_bar)
+            button.setObjectName("topNavButton")
+            button.setIcon(qta.icon(icon_name, color=icon_color))
+            button.setIconSize(QSize(15, 15))
+            button.setCheckable(True)
+            button.setToolTip("{} ({})".format(tooltip, shortcut))
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            button.clicked.connect(callback)
+            menu_layout.addWidget(button)
+            self.page_nav_group.addButton(button, index)
+            self.page_nav_buttons.append(button)
             if label == "Help":
                 self.help_action = action
+                self.help_nav_button = button
 
         self.exit_action = QAction("Exit", self)
         self.exit_action.setIcon(qta.icon("fa6s.right-from-bracket", color=icon_color))
         self.exit_action.setShortcut("Ctrl+Q")
         self.exit_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
-        self.exit_action.setToolTip("Quit TorProxy")
+        self.exit_action.setToolTip("Exit TorProxy")
         self.exit_action.triggered.connect(self.ask_close)
-        self.exit_nav_button = add_nav_button(self.exit_action)
+        self.addAction(self.exit_action)
+
+        self.exit_nav_button = QPushButton("Exit", menu_bar)
+        self.exit_nav_button.setObjectName("topNavExitButton")
+        self.exit_nav_button.setIcon(qta.icon("fa6s.right-from-bracket", color=icon_color))
+        self.exit_nav_button.setIconSize(QSize(15, 15))
+        self.exit_nav_button.setToolTip("Exit TorProxy (Ctrl+Q)")
+        self.exit_nav_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.exit_nav_button.clicked.connect(self.ask_close)
+        menu_layout.addWidget(self.exit_nav_button)
 
         self.global_state = QPushButton("● Checking Tor state…", self)
         self.global_state.setObjectName("globalState")
         self.global_state.setFlat(True)
-        self.global_state.setMinimumWidth(80)
+        self.global_state.setMinimumWidth(74)
         self.global_state.setToolTip("Open the Home Event Log when Tor reports a failure.")
         self.global_state.clicked.connect(self._open_event_log)
         self.global_state.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -273,7 +301,7 @@ class Window(QMainWindow):
         self.notification_btn = QPushButton(self)
         self.notification_btn.setObjectName("notificationButton")
         self.notification_btn.setToolTip("Notifications")
-        self.notification_btn.setFixedSize(44, 30)
+        self.notification_btn.setFixedSize(38, 30)
         self.notification_btn.clicked.connect(self._show_notifications)
 
         self.toggle_btn = QPushButton(self)
@@ -287,7 +315,7 @@ class Window(QMainWindow):
         corner.setObjectName("menuBarCorner")
         corner_layout = QHBoxLayout(corner)
         corner_layout.setContentsMargins(0, 0, 0, 0)
-        corner_layout.setSpacing(4)
+        corner_layout.setSpacing(3)
         corner_layout.addWidget(self.global_state)
         corner_layout.addWidget(self.notification_btn)
         corner_layout.addWidget(self.toggle_btn)
@@ -348,17 +376,22 @@ class Window(QMainWindow):
         self.setStyleSheet(f"""
             QWidget#topMenuBar, QWidget#menuBarCorner {{ background-color: {menu_surface}; }}
             QWidget#topMenuBar {{ border: none; border-bottom: 1px solid {border}; }}
-            QToolButton#topNavButton {{
-                padding: 7px 8px; margin: 0 1px; border: 1px solid transparent;
+            QPushButton#topNavButton {{
+                min-height: 30px; padding: 0 6px; margin: 0 1px; border: 1px solid transparent;
                 border-bottom: 2px solid transparent; border-radius: 7px;
-                color: {text}; background: transparent; spacing: 6px; font-size: 11px;
+                color: {text}; background: transparent; font-size: 10px; font-weight: 650;
             }}
-            QToolButton#topNavButton:hover {{ background: {hover}; border-color: {border}; }}
-            QToolButton#topNavButton:checked {{
+            QPushButton#topNavButton:hover {{ background: {hover}; border-color: {border}; }}
+            QPushButton#topNavButton:checked {{
                 background: {accent}; color: #ffffff; border: 1px solid {accent};
-                border-bottom: 2px solid #9bd8ff; font-weight: 700;
+                border-bottom: 2px solid #9bd8ff; font-weight: 750;
             }}
-            QToolButton#topNavButton:checked:hover {{ background: {accent}; color: #ffffff; }}
+            QPushButton#topNavButton:checked:hover {{ background: {accent}; color: #ffffff; }}
+            QPushButton#topNavExitButton {{
+                min-height: 30px; padding: 0 8px; margin: 0 1px; border: 1px solid {border};
+                border-radius: 7px; color: {text}; background: transparent; font-size: 10px; font-weight: 700;
+            }}
+            QPushButton#topNavExitButton:hover {{ color: #ffffff; background: #b83336; border-color: #b83336; }}
             QWidget#menuBarCorner {{ border-bottom: 1px solid {border}; }}
             QWidget#menuBarCorner QLabel {{ background: transparent; color: {text}; border: none; padding: 0 4px; }}
             QPushButton#globalState {{ background: transparent; color: {text}; border: none; border-radius: 7px; padding: 0 4px; font-size: 10px; }}
@@ -379,9 +412,13 @@ class Window(QMainWindow):
             QMenu::item:selected {{ background: {hover}; }}
         """)
         icon_color = text
-        for action, icon_name in zip(self.page_actions, self.page_icon_names):
-            action.setIcon(qta.icon(icon_name, color="#ffffff" if action.isChecked() else icon_color))
+        for index, (action, icon_name) in enumerate(zip(self.page_actions, self.page_icon_names)):
+            color = "#ffffff" if action.isChecked() else icon_color
+            action.setIcon(qta.icon(icon_name, color=color))
+            if index < len(self.page_nav_buttons):
+                self.page_nav_buttons[index].setIcon(qta.icon(icon_name, color=color))
         self.exit_action.setIcon(qta.icon("fa6s.right-from-bracket", color=icon_color))
+        self.exit_nav_button.setIcon(qta.icon("fa6s.right-from-bracket", color=icon_color))
         self.toggle_btn.setIcon(qta.icon("fa6s.sun" if dark else "fa6s.moon", color=icon_color))
         self.notification_btn.setIcon(qta.icon("fa6s.bell", color=icon_color))
         self.notification_btn.setText(
@@ -412,6 +449,9 @@ class Window(QMainWindow):
             self.stack.setCurrentIndex(index)
             if hasattr(self, "page_actions") and index < len(self.page_actions):
                 self.page_actions[index].setChecked(True)
+            if hasattr(self, "page_nav_buttons"):
+                for page_index, button in enumerate(self.page_nav_buttons):
+                    button.setChecked(page_index == index)
             self._update_global_state()
     def _update_global_state(self):
         proxy_widget = getattr(self, "proxyWidget", None)
@@ -456,13 +496,9 @@ class Window(QMainWindow):
         palette = DarkPalette() if mode == "dark" else LightPalette()
         app.setStyleSheet(qdarkstyle.load_stylesheet(palette=palette))
         if hasattr(self, "settingWidget"):
-            for button, selected in (
-                (self.settingWidget.btn_dark, mode == "dark"),
-                (self.settingWidget.btn_light, mode == "light"),
-            ):
-                button.blockSignals(True)
-                button.setChecked(selected)
-                button.blockSignals(False)
+            sync_theme = getattr(self.settingWidget, "set_theme_mode", None)
+            if callable(sync_theme):
+                sync_theme(mode)
         if hasattr(self, "updater_window"):
             self.updater_window._apply_local_styles()
         for page in (
@@ -480,16 +516,25 @@ class Window(QMainWindow):
         self._set_theme("light" if CONFIG["mode"] == "dark" else "dark")
 
     def ask_close(self):
-        reply = QMessageBox.question(
-            self,
-            "Confirm Exit",
-            "Are you sure you want to quit?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
-        if reply == QMessageBox.Yes:
-            
-            self.close()
+        """Perform a deliberate application exit from either Exit command."""
+        if bool(CONFIG["confirm_exit"]):
+            dialog = ExitConfirmDialog(self)
+            dialog.exec()
+            if dialog.dont_ask_checkbox.isChecked():
+                try:
+                    CONFIG["confirm_exit"] = False
+                except (ValueError, OSError, KeyError):
+                    logger.exception("Could not persist the do-not-ask-again preference.")
+                if hasattr(self, "settingWidget"):
+                    checkbox = getattr(self.settingWidget, "chk_confirm_exit", None)
+                    if checkbox is not None:
+                        checkbox.blockSignals(True)
+                        checkbox.setChecked(bool(CONFIG["confirm_exit"]))
+                        checkbox.blockSignals(False)
+            if dialog.choice != QMessageBox.Yes:
+                return
+        self._exit_authorized = True
+        self.close()
             
     
     def _show_help(self):
@@ -514,8 +559,16 @@ class Window(QMainWindow):
         self.tray_icon.showMessage(title, message, QSystemTrayIcon.Information, 2000)
 
     def closeEvent(self, event):
-        # The custom title bar's Exit action confirms, then closes and stops services.
+        # OS taskbar close and the titlebar × are hide actions, not application
+        # exits. Only one of the explicit Exit commands sets this flag.
+        if not getattr(self, "_exit_authorized", False):
+            event.ignore()
+            self.hide_to_tray()
+            return
+
         self._closing = True
+        if hasattr(self, "_state_timer"):
+            self._state_timer.stop()
         self.listener_running = False
         if IS_WINDOWS and hasattr(self, "listener_thread") and self.listener_thread.is_alive():
             self.listener_thread.join(timeout=1.0)
@@ -527,5 +580,5 @@ class Window(QMainWindow):
             self.proxyWidget._stop_services()
         except Exception:
             logger.exception("Failed while stopping services during application shutdown.")
-        logger.info("TorProxy window closed.")
+        logger.info("TorProxy application exit accepted.")
         event.accept()
