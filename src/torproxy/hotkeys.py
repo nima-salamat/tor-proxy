@@ -92,6 +92,7 @@ class HotkeyManager:
     def __init__(self, on_error: Callable[[str], None] | None = None):
         self._bindings: dict[str, _Binding] = {}
         self._lock = threading.RLock()
+        self._suspend_depth = 0
         self._on_error = on_error or (lambda message: LOGGER.warning("%s", message))
         self._backend = _WindowsBackend(self._report_error) if os.name == "nt" else _KeyboardBackend(self._report_error)
 
@@ -109,7 +110,7 @@ class HotkeyManager:
         with self._lock:
             previous = self._bindings.get(name)
             self._bindings[name] = _Binding(parsed.text, callback)
-            snapshot = self._snapshot()
+            snapshot = self._backend_snapshot()
         try:
             self._backend.set_bindings(snapshot)
         except Exception:
@@ -118,7 +119,7 @@ class HotkeyManager:
                     self._bindings.pop(name, None)
                 else:
                     self._bindings[name] = previous
-                rollback = self._snapshot()
+                rollback = self._backend_snapshot()
             try:
                 self._backend.set_bindings(rollback)
             except Exception:
@@ -133,13 +134,13 @@ class HotkeyManager:
                 raise KeyError(f"Unknown hotkey action: {name}")
             previous = self._bindings[name].shortcut
             self._bindings[name].shortcut = parsed.text
-            snapshot = self._snapshot()
+            snapshot = self._backend_snapshot()
         try:
             self._backend.set_bindings(snapshot)
         except Exception:
             with self._lock:
                 self._bindings[name].shortcut = previous
-                rollback = self._snapshot()
+                rollback = self._backend_snapshot()
             try:
                 self._backend.set_bindings(rollback)
             except Exception:
@@ -154,6 +155,42 @@ class HotkeyManager:
     def _snapshot(self) -> dict[str, tuple[str, Callable[[], None]]]:
         return {name: (item.shortcut, item.callback) for name, item in self._bindings.items()}
 
+    def _backend_snapshot(self) -> dict[str, tuple[str, Callable[[], None]]]:
+        """Return active bindings, or an empty map during modal key capture."""
+        with self._lock:
+            return {} if self._suspend_depth else self._snapshot()
+
+    def suspend(self) -> None:
+        """Temporarily unregister all global hotkeys (nestable, for key capture)."""
+        with self._lock:
+            self._suspend_depth += 1
+            first_suspend = self._suspend_depth == 1
+        if not first_suspend:
+            return
+        try:
+            self._backend.set_bindings({})
+            LOGGER.debug("Global hotkeys suspended while a shortcut is being captured.")
+        except Exception:
+            with self._lock:
+                self._suspend_depth = max(0, self._suspend_depth - 1)
+            raise
+
+    def resume(self) -> None:
+        """Restore the latest registered bindings after modal key capture ends."""
+        with self._lock:
+            if self._suspend_depth == 0:
+                return
+            self._suspend_depth -= 1
+            if self._suspend_depth:
+                return
+            snapshot = self._snapshot()
+        try:
+            self._backend.set_bindings(snapshot)
+            LOGGER.debug("Global hotkeys resumed after shortcut capture.")
+        except Exception as exc:
+            self._report_error(f"Could not restore global shortcuts after key capture: {exc}")
+            raise
+
     def start(self) -> None:
         try:
             self._backend.start()
@@ -164,7 +201,7 @@ class HotkeyManager:
             # Retain a best-effort fallback if an unusual Windows installation
             # blocks native window creation. Native registration remains primary.
             fallback = _KeyboardBackend(self._report_error)
-            fallback.set_bindings(self._snapshot())
+            fallback.set_bindings(self._backend_snapshot())
             fallback.start()
             self._backend = fallback
 
