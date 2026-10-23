@@ -107,8 +107,7 @@ class Config:
             parsed_shortcut = parse_hotkey(shortcut)
         except (TypeError, ValueError) as exc:
             raise ConfigError(f"global_shortcut is invalid: {exc}") from exc
-        if parsed_shortcut.text != shortcut:
-            raise ConfigError("global_shortcut must use canonical text such as 'Ctrl+Alt+P'.")
+        data["global_shortcut"] = parsed_shortcut.text
         for name in ("bridge", "proxy_port_checked", "tor_port_checked", "control_port_checked",
                      "dns_port_checked", "system_proxy_auto", "verify_tor_signatures", "confirm_exit"):
             if name in data and type(data[name]) is not bool:
