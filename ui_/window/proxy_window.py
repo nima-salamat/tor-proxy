@@ -5,7 +5,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QFrame,
     QPushButton,
-    QMessageBox,
     QComboBox,
     QSizePolicy,
 )
@@ -27,6 +26,7 @@ from ui_.btn.pulse_button import PulseButton
 from ui_.worker.worker import Worker
 from ui_.worker.utils import Data
 from config import CONFIG
+from ui_.window.dialogs import QMessageBox
 import json
 import logging
 import qtawesome as qta
