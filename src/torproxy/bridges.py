@@ -233,6 +233,29 @@ def _candidate_chunks(text: str) -> list[str]:
     return chunks
 
 
+def bridge_identity_fingerprint(record: str) -> str | None:
+    """Return a bridge identity fingerprint when the record explicitly provides one.
+
+    The optional Snowflake `fingerprint=` transport setting is not the relay
+    identity, so it must not be used to claim that a circuit is using this bridge.
+    """
+    parsed = normalize_bridge_record(record)
+    fields = parsed.split()
+    if fields and fields[0].casefold() in SUPPORTED_BRIDGE_TRANSPORTS:
+        authority_index = 1
+    else:
+        authority_index = 0
+    remainder = fields[authority_index + 1:]
+    for token in remainder:
+        if "=" in token:
+            break
+        value = token.strip("\"'").upper()
+        if re.fullmatch(r"[0-9A-F]{40}", value):
+            return value
+        return None
+    return None
+
+
 def parse_bridge_text(text: str) -> BridgeTextParseResult:
     """Parse text containing line-separated or concatenated bridge records.
 
