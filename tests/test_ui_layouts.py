@@ -550,6 +550,44 @@ def test_bridge_cards_show_only_control_port_verified_active_bridge():
     assert "fingerprint=" in bridge_source
 
 
+def test_exit_ip_check_is_guarded_logged_and_never_uses_direct_fallback():
+    repository = Path(__file__).resolve().parents[1]
+    home_source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+    worker_source = (repository / "ui_/worker/worker.py").read_text(encoding="utf-8")
+    ip_source = (repository / "src/torproxy/ip_check.py").read_text(encoding="utf-8")
+    main_source = (repository / "main.py").read_text(encoding="utf-8")
+
+    assert "if self._exit_ip_check_busy:" in home_source
+    assert "self.thread_pool.start(worker)" in home_source
+    assert "worker.signals.error.connect(self._on_exit_ip_failed)" in home_source
+    assert "def _finish_exit_ip_check(self):" in home_source
+    assert "finally:\\n            self._finish_exit_ip_check()" in home_source
+    assert "logger.exception(\"Background task failed (%s).\", task_name)" in worker_source
+    assert "direct requests are disabled" in ip_source
+    assert "session.trust_env = False" in ip_source
+    assert "faulthandler.enable(file=handle, all_threads=True)" in main_source
+    assert '"torproxy-crash.log"' in main_source
+
+
+def test_webtunnel_sni_setting_defaults_to_url_host_and_supports_custom_presets():
+    repository = Path(__file__).resolve().parents[1]
+    config_source = (repository / "config.py").read_text(encoding="utf-8")
+    settings_source = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
+    runner_source = (repository / "tor.py").read_text(encoding="utf-8")
+    manager_source = (repository / "src/torproxy/tor_manager.py").read_text(encoding="utf-8")
+    bridge_source = (repository / "src/torproxy/bridges.py").read_text(encoding="utf-8")
+
+    assert '"webtunnel_sni_imitation": ""' in config_source
+    assert '"Use the hostname in url= (default; no override)", ""' in settings_source
+    assert '"www.google.com"' in settings_source
+    assert "def save_webtunnel_sni_imitation(self):" in settings_source
+    assert 'webtunnel_sni_imitation=str(CONFIG["webtunnel_sni_imitation"] or "")' in runner_source
+    assert "normalize_sni_hostname(settings.webtunnel_sni_imitation or \"\")" in manager_source
+    assert 'record += " sni-imitation=" + sni_imitation' in manager_source
+    assert "def normalize_sni_hostname(value: str) -> str:" in bridge_source
+    assert "sni-imitation=" in bridge_source
+
+
 def test_automatic_bridge_cleanup_is_opt_in_and_conservative():
     repository = Path(__file__).resolve().parents[1]
     config_source = (repository / "config.py").read_text(encoding="utf-8")
