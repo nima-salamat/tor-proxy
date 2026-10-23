@@ -12,11 +12,14 @@ from dataclasses import dataclass
 
 SUPPORTED_BRIDGE_TRANSPORTS = ("obfs4", "snowflake", "webtunnel", "meek_lite")
 _TRANSPORT_PATTERN = "|".join(re.escape(name) for name in SUPPORTED_BRIDGE_TRANSPORTS)
-# A second transport label followed by a valid-looking literal authority marks
-# a new record even when a clipboard source has collapsed all lines into one.
+# Consume the authority token as well as the optional PT name. Recognize
+# both PT bridge records ("obfs4 [IPv6]:443 ...") and ordinary bridge
+# records ("Bridge [IPv6]:443 ..."). Consuming the authority prevents a
+# second overlapping match at the same endpoint, while still splitting
+# concatenated records and keeping bare IPv6 authorities out of prior args.
 _BRIDGE_START = re.compile(
-    rf"(?i)(?<!\S)(?:Bridge\s+)?(?:{_TRANSPORT_PATTERN})\s+"
-    r"(?=(?:[\"']?(?:\[[0-9a-f:.]+\]|(?:\d{1,3}\.){3}\d{1,3}):\d{1,5}[\"']?)(?:\s|$))"
+    rf"(?i)(?<!\S)(?:Bridge\s+)?(?:(?:{_TRANSPORT_PATTERN})\s+)?"
+    r"[\"']?(?:\[[0-9a-f:.]+\]|(?:\d{1,3}\.){3}\d{1,3}):\d{1,5}[\"']?(?=\s|$)"
 )
 _IPV4_AUTHORITY = re.compile(r"^(?P<host>[^:\s]+):(?P<port>\d{1,5})$")
 _IPV6_AUTHORITY = re.compile(r"^\[(?P<host>[^\]]+)\]:(?P<port>\d{1,5})$")
@@ -35,11 +38,10 @@ class BridgeTextParseResult:
 
 
 def normalize_bridge_record(value: str) -> str:
-    """Validate and canonicalize one complete supported bridge record."""
+    """Validate and canonicalize one Tor Bridge record, with or without a PT."""
     line = " ".join(str(value or "").strip().split())
     # Some clipboard exports surround IPv6 authorities with quotes. Tor's
-    # Bridge grammar expects [IPv6]:port as a bare token; retaining quotes can
-    # make Tor parse the endpoint as a transport k=v argument.
+    # Bridge grammar expects [IPv6]:port as a bare token.
     if len(line) >= 2 and line[0] == line[-1] and line[0] in {"\"", "'"}:
         line = line[1:-1].strip()
     line = re.sub(r"(?i)^Bridge\s+", "", line).strip()
@@ -47,25 +49,35 @@ def normalize_bridge_record(value: str) -> str:
         raise ValueError("A bridge must be a single non-empty record.")
 
     fields = line.split()
-    if len(fields) < 2:
-        raise ValueError("A bridge needs a supported transport and address:port.")
-    transport = fields[0].casefold()
-    if transport not in SUPPORTED_BRIDGE_TRANSPORTS:
-        raise ValueError("Supported bridge transports are obfs4, snowflake, webtunnel and meek_lite.")
+    if not fields:
+        raise ValueError("A bridge must contain an address and port.")
 
-    authority = fields[1].strip("\"'")
+    first = fields[0].casefold()
+    has_transport = first in SUPPORTED_BRIDGE_TRANSPORTS
+    if has_transport:
+        if len(fields) < 2:
+            raise ValueError("A bridge needs a transport and address:port.")
+        transport = first
+        authority = fields[1].strip("\"'")
+        remainder_fields = fields[2:]
+    else:
+        transport = ""
+        authority = fields[0].strip("\"'")
+        remainder_fields = fields[1:]
+
     ipv6_match = _IPV6_AUTHORITY.fullmatch(authority)
     if ipv6_match:
         try:
-            ipaddress.IPv6Address(ipv6_match.group("host"))
+            host = f"[{ipaddress.IPv6Address(ipv6_match.group('host')).compressed}]"
         except ValueError as exc:
             raise ValueError("The bridge contains an invalid IPv6 address.") from exc
         port = int(ipv6_match.group("port"))
-        host = f"[{ipv6_match.group('host')}]"
     else:
         ipv4_match = _IPV4_AUTHORITY.fullmatch(authority)
         if ipv4_match is None:
-            raise ValueError("Bridge addresses must be IPv4:port or bracketed IPv6:port.")
+            raise ValueError(
+                "Bridge addresses must be IPv4:port or bracketed IPv6:port, optionally preceded by a supported transport."
+            )
         try:
             host = str(ipaddress.IPv4Address(ipv4_match.group("host")))
         except ValueError as exc:
@@ -75,11 +87,12 @@ def normalize_bridge_record(value: str) -> str:
     if not 1 <= port <= 65535:
         raise ValueError("Bridge ports must be between 1 and 65535.")
 
-    remainder = " ".join(fields[2:])
-    # Keep key=value parameters intact, while removing accidental quoting
-    # around whole standalone tokens copied from a browser or chat window.
+    remainder = " ".join(remainder_fields)
+    # A quoted standalone token from copied content should not become a
+    # literal quote in torrc. Preserve key=value values, including quoted URLs.
     remainder = re.sub(r'(?<![=\S])(["\'])([^"\']+)\1(?=\s|$)', r"\2", remainder)
-    return f"{transport} {host}:{port}" + (f" {remainder}" if remainder else "")
+    normalized = f"{transport} {host}:{port}" if transport else f"{host}:{port}"
+    return normalized + (f" {remainder}" if remainder else "")
 
 
 def _candidate_chunks(text: str) -> list[str]:
