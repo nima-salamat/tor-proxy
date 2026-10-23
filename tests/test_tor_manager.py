@@ -101,6 +101,54 @@ def test_quoted_ipv6_webtunnel_bridge_is_normalized_for_torrc(tmp_path):
     assert '"[2001:db8:fe46:edd5:2139:2d5b:b732:854a]:443"' not in bridge_lines[0]
 
 
+def test_plain_ipv6_bridge_does_not_require_lyrebird(tmp_path):
+    executable = tmp_path / "tor" / "tor.exe"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("fake tor", encoding="utf-8")
+    raw = 'Bridge "[2001:db8::12]:443" ABCDEF'
+    manager = TorManager(
+        TorSettings(
+            executable=executable,
+            bridges_enabled=True,
+            bridges=raw,
+            data_directory=tmp_path / "state",
+        )
+    )
+
+    torrc = manager.render_torrc()
+    assert "UseBridges 1" in torrc
+    assert "ClientTransportPlugin " not in torrc
+    assert "Bridge [2001:db8::12]:443 ABCDEF" in torrc
+
+
+def test_mixed_inline_bridges_are_rendered_on_separate_torrc_lines(tmp_path):
+    executable = tmp_path / "tor" / "tor.exe"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("fake tor", encoding="utf-8")
+    transport_dir = executable.parent / "pluggable_transports"
+    transport_dir.mkdir()
+    (transport_dir / "lyrebird.exe").write_text("fake transport", encoding="utf-8")
+    manager = TorManager(
+        TorSettings(
+            executable=executable,
+            bridges_enabled=True,
+            bridges=(
+                "obfs4 192.0.2.10:443 ABCDEF cert=abc "
+                'Bridge "[2001:db8::12]:443" ABCDEF'
+            ),
+            data_directory=tmp_path / "state",
+        )
+    )
+    bridge_lines = [
+        line for line in manager.render_torrc().splitlines()
+        if line.startswith("Bridge ")
+    ]
+    assert bridge_lines == [
+        "Bridge obfs4 192.0.2.10:443 ABCDEF cert=abc",
+        "Bridge [2001:db8::12]:443 ABCDEF",
+    ]
+
+
 def test_client_transport_plugin_path_is_not_torrc_quoted(tmp_path):
     path = tmp_path / "lyrebird.exe"
     assert TorManager._transport_exec_path(path) == str(path)
