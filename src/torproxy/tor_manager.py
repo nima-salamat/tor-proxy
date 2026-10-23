@@ -541,7 +541,7 @@ class TorManager:
                     lowered_diagnostic = diagnostic.lower()
                     if "no configured transport called" in lowered_diagnostic:
                         transport_match = re.search(
-                            r'no configured transport called\\s+["\']([^"\']+)["\']',
+                            r'no configured transport called\s+["\']([^"\']+)["\']',
                             diagnostic,
                             re.IGNORECASE,
                         )
