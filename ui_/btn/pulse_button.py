@@ -45,6 +45,18 @@ class PulseButton(QPushButton):
         self._connected_feedback_timer.stop()
         self._state = state
         self.connected = state in {"connected", "disconnect", "stopping"}
+        # Give startup a quicker, more noticeable pulse while keeping the
+        # connected/disconnected idle animation calm.
+        animation_speeds = {
+            "disconnected": (1800, 2600),
+            "connecting": (760, 1280),
+            "connected": (1350, 2100),
+            "disconnect": (2050, 2900),
+            "stopping": (980, 1550),
+        }
+        outer_duration, halo_duration = animation_speeds.get(state, (1800, 2600))
+        self.outer_anim.setDuration(outer_duration)
+        self.halo_anim.setDuration(halo_duration)
         self.setText(text)
         self.update()
 
@@ -101,12 +113,13 @@ class PulseButton(QPushButton):
             highlight_color = highlight_color.lighter(108)
 
         # During startup the outer rings move faster and use a cool blue color.
-        for radius, alpha, width in (
-            (self._halo_radius, 32, 2.0),
-            (self._pulse_radius, 72, 2.4),
+        for radius, alpha, width, low, high in (
+            (self._halo_radius, 36, 2.0, 108.0, 127.0),
+            (self._pulse_radius, 78, 2.4, 101.0, 124.0),
         ):
             ring_color = QColor(base_color)
-            ring_color.setAlpha(alpha)
+            progress = min(1.0, max(0.0, (radius - low) / (high - low)))
+            ring_color.setAlpha(int(alpha * (1.0 - 0.78 * progress)))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.setPen(QPen(ring_color, width))
             painter.drawEllipse(center, int(radius), int(radius))
