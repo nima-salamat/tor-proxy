@@ -233,8 +233,8 @@ def test_bridge_config_validation_error_uses_manager_settings_not_undefined_name
         return SimpleNamespace(
             returncode=1,
             stdout=(
-                '[warn] Bridge line did not parse.\\n'
-                '[err] Reading config failed--see warnings above.\\n'
+                '[warn] Bridge line did not parse.\n'
+                '[err] Reading config failed--see warnings above.\n'
             ),
         )
 
