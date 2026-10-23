@@ -21,8 +21,8 @@ _BRIDGE_START = re.compile(
     # A bare authority is only a record start when it has the explicit torrc
     # "Bridge" prefix. Otherwise it is also the endpoint token of the record
     # immediately before it and would create an overlapping false record.
-    rf"(?i)(?<!\\S)(?:Bridge\\s+(?:(?:{_TRANSPORT_PATTERN})\\s+)?|(?:{_TRANSPORT_PATTERN})\\s+)"
-    r"[\"']?(?:\\[[0-9a-f:.]+\\]|(?:\\d{1,3}\\.){3}\\d{1,3}):\\d{1,5}[\"']?(?=\\s|$)"
+    rf"(?i)(?<!\S)(?:Bridge\s+(?:(?:{_TRANSPORT_PATTERN})\s+)?|(?:{_TRANSPORT_PATTERN})\s+)"
+    r"[\"']?(?:\[[0-9a-f:.]+\]|(?:\d{1,3}\.){3}\d{1,3}):\d{1,5}[\"']?(?=\s|$)"
 )
 _IPV4_AUTHORITY = re.compile(r"^(?P<host>[^:\s]+):(?P<port>\d{1,5})$")
 _IPV6_AUTHORITY = re.compile(r"^\[(?P<host>[^\]]+)\]:(?P<port>\d{1,5})$")
