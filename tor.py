@@ -330,35 +330,36 @@ class TorRunner(QObject):
             issue = result.issues[0]
             if issue == "transport_launch_failed":
                 detail = (
-                    "Tor could not launch the bundled pluggable-transport executable. "
-                    "This is a local executable path/startup problem, not evidence that the configured bridges are dead. "
-                    "The original bridge list was preserved. Check that the selected Tor Expert Bundle contains "
-                    "tor/pluggable_transports/lyrebird.exe and retry after selecting the correct bundle."
+                    "The isolated bridge checks could not launch Lyrebird. This is a local executable path/startup "
+                    "problem, not evidence that the configured bridges are dead."
                 )
             elif issue == "transport_runtime_incompatible":
                 detail = (
-                    "The bundled Lyrebird transport reported 'tls: CurvePreferences includes unsupported curve'. "
-                    "This is a transport/runtime compatibility error, not evidence that any bridge is dead. "
-                    "No bridge was removed. Update or select a compatible Tor Expert Bundle and retry."
+                    "The isolated bridge checks found 'tls: CurvePreferences includes unsupported curve' in Lyrebird. "
+                    "This is a transport/runtime compatibility error, not evidence that the bridges are dead."
                 )
             elif issue.startswith("missing_transport:"):
                 transport_name = issue.split(":", 1)[1]
                 detail = (
                     f"The selected Tor bundle did not register the '{transport_name}' pluggable transport. "
-                    "The bridge checks are inconclusive because of a local transport/bundle problem, not because "
-                    "the bridge addresses were proven dead. No bridge was removed. Update TorProxy's Tor Expert "
-                    "Bundle from the updater, select the updated bundle, then retry."
+                    "The result cannot be used to assess bridge availability."
                 )
             else:
                 detail = (
-                    "The selected Tor bundle could not initialize its pluggable transport. "
-                    "Bridge checks are inconclusive; no bridge was removed. Update or select a compatible Tor "
-                    "Expert Bundle in the updater and inspect Live Tor log for the transport error."
+                    "The selected Tor bundle could not initialize its pluggable transport, so the bridge results "
+                    "cannot be trusted."
                 )
-            self.log_message.emit(detail)
+            self.log_message.emit(
+                detail + " Automatic cleanup was skipped; the entire original bridge list was preserved. "
+                "Continuing with Tor's normal startup, which will report any persistent bundle/runtime incompatibility."
+            )
             if self.app_window is not None:
-                self.app_window.data.value = "Bridge transport unavailable"
-            raise TorManagerError(detail)
+                self.app_window.data.value = "Continuing Tor startup; bridge list preserved"
+            # Do not let an isolated preflight error abort TorRunner before the
+            # real Tor instance has a chance to try the configured alternatives.
+            # The regular TorManager startup path remains responsible for a
+            # definitive local-bundle error.
+            return manager
         if not result.working:
             self.log_message.emit(
                 "No bridge completed bootstrap within the check timeout. This does not prove the bridges are dead; "
