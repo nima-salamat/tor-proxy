@@ -51,7 +51,7 @@ Rules accept hostnames/IP literals, not URLs, user-info, paths, or `host:port` a
 
 ## Bridge records
 
-Bridge mode accepts complete records for obfs4, Snowflake, or WebTunnel with an IPv4:port or bracketed IPv6:port authority. The shared parser normalizes spacing, removes an optional `Bridge` prefix, splits recognizable adjacent records into separate lines, and deduplicates exact repeated records. Manual paste, QR import, the individual bridge-card list, and Tor configuration validation use the same rules. Unrecognized or incomplete text is reported without overwriting the last valid saved bridge list. Transport executable lookup is relative to the selected bundle; missing executables remain startup errors.
+Bridge mode accepts complete records for obfs4, Snowflake, WebTunnel, or meek_lite with an IPv4:port or bracketed IPv6:port authority. The shared parser normalizes spacing, removes an optional `Bridge` prefix, splits recognizable adjacent records into separate lines, and deduplicates exact repeated records. Manual paste, QR import, the individual bridge-card list, and Tor configuration validation use the same rules. Unrecognized or incomplete text is reported without overwriting the last valid saved bridge list. Transport executable lookup is relative to the selected bundle; missing executables remain startup errors.
 
 The optional `auto_prune_bridges` preference performs individual, isolated bridge checks before startup, with up to four checks in parallel. Confirmed failures are saved as removed only if another bridge is confirmed working; inconclusive checks and a list with no confirmed success are preserved. This is off by default and can add startup delay.
 
