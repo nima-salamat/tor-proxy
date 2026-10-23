@@ -238,7 +238,7 @@ class ProxyWindow(QWidget):
             QWidget#homeContent {{ background: transparent; }}
             QPushButton#connectPulseButton {{ background: transparent; border: none; padding: 0; margin: 0; }}
             QPushButton#connectPulseButton:hover, QPushButton#connectPulseButton:pressed, QPushButton#connectPulseButton:focus {{ background: transparent; border: none; }}
-            QLabel#connectionStatus {{ color: palette(text); background: transparent; border: none; padding: 4px; font-size: 12px; font-weight: 700; }}
+            QLabel#connectionStatus {{ color: {text}; background: transparent; border: none; padding: 4px; font-size: 12px; font-weight: 700; }}
             QLabel#connectionStatus[connectionState="connected"] {{ color: #2eae69; }}
             QLabel#connectionStatus[connectionState="connecting"] {{ color: {accent}; }}
             QLabel#connectionStatus[connectionState="disconnected"] {{ color: palette(text); }}
@@ -410,9 +410,18 @@ class ProxyWindow(QWidget):
                 logger.exception("Could not authenticate to the managed Tor ControlPort: %s", e)
                 self.logs_widget.update_log(f"Tor bootstrap completed but ControlPort authentication failed: {e}")
                 self.connected = False
-                self.btn_status.setText("CONTROL AUTHENTICATION FAILED")
-                self.set_btn_status_style("disconnected")
+                self.failed = True
                 self.connect_btn.set_connected(False)
+                if self.running:
+                    self._stop_services()
+                self.btn_status.setText("CONTROL AUTHENTICATION FAILED · SEE EVENT LOG")
+                self.set_btn_status_style("disconnected")
+                if self._parent is not None and hasattr(self._parent, "notify_user"):
+                    self._parent.notify_user(
+                        "Tor control authentication failed",
+                        str(e),
+                        level="warning",
+                    )
                 self._update_proxy_buttons()
                 return
             self.connected = True

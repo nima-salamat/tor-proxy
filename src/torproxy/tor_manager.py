@@ -81,6 +81,7 @@ class TorManager:
         self.process: subprocess.Popen | None = None
         self._controller = None
         self._log_handle = None
+        self._log_start_offset = 0
         self.state = TorState.STOPPED
         self.bootstrap_progress: int | None = None
         self.last_error: str | None = None
@@ -216,11 +217,15 @@ class TorManager:
     def _recent_tor_log_detail(self, *, max_lines: int = 5) -> str:
         """Return bounded recent Tor diagnostics for early process-exit errors."""
         try:
-            lines = [
-                line.strip()
-                for line in self.log_path.read_text(encoding="utf-8", errors="replace").splitlines()
-                if line.strip()
-            ]
+            with self.log_path.open("rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                size = handle.tell()
+                start = max(self._log_start_offset, size - 8192)
+                handle.seek(start)
+                if start > self._log_start_offset:
+                    handle.readline()  # Skip a partial first line from the bounded tail.
+                recent_text = handle.read().decode("utf-8", errors="replace")
+            lines = [line.strip() for line in recent_text.splitlines() if line.strip()]
         except OSError as exc:
             return f"Tor log unavailable at {self.log_path}: {exc}"
         if not lines:
@@ -287,6 +292,8 @@ class TorManager:
                 )
 
             self._log_handle = self.log_path.open("ab", buffering=0)
+            self._log_handle.seek(0, os.SEEK_END)
+            self._log_start_offset = self._log_handle.tell()
             kwargs = {
                 "stdin": subprocess.DEVNULL,
                 "stdout": self._log_handle,

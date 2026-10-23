@@ -56,6 +56,7 @@ def test_early_startup_exit_reports_recent_tor_log_details(tmp_path):
         "[err] Could not bind to 127.0.0.1:19051: Address already in use\n",
         encoding="utf-8",
     )
+    manager._log_start_offset = 0
 
     detail = manager._recent_tor_log_detail(max_lines=2)
     assert "Tor log" in detail
