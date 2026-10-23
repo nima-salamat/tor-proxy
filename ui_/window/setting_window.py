@@ -437,6 +437,7 @@ class SettingWindow(QWidget):
                         child.widget().deleteLater()
 
         records = tuple(records)
+        self._bridge_status_labels = {}
         self.bridge_count_label.setText(f"{len(records)} bridge{'s' if len(records) != 1 else ''}")
         if not records:
             empty = QLabel(
@@ -448,7 +449,6 @@ class SettingWindow(QWidget):
             self.bridge_cards_layout.addWidget(empty)
             return
 
-        self._bridge_status_labels = {}
         icon_color = "#e8edf3" if CONFIG["mode"] == "dark" else "#253041"
         for record in records:
             fields = record.split()
