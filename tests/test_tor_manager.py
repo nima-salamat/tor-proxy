@@ -44,6 +44,26 @@ def test_tor_manager_splits_inline_records_using_the_shared_parser():
     ]
 
 
+def test_webtunnel_tls_issue_allows_non_webtunnel_alternatives():
+    webtunnel = (
+        "webtunnel",
+        "webtunnel 192.0.2.10:443 A1B2C3D4E5F60718293A4B5C6D7E8F9012345678 "
+        "url=https://bridge.example/ ver=0.0.1",
+    )
+    obfs4 = (
+        "obfs4",
+        "obfs4 192.0.2.11:443 B1B2C3D4E5F60718293A4B5C6D7E8F9012345678 cert=abc",
+    )
+    direct = (
+        "",
+        "192.0.2.12:443 C1C2C3D4E5F60718293A4B5C6D7E8F9012345678",
+    )
+
+    assert not TorManager._has_non_webtunnel_bridge_alternative([webtunnel])
+    assert TorManager._has_non_webtunnel_bridge_alternative([webtunnel, obfs4])
+    assert TorManager._has_non_webtunnel_bridge_alternative([webtunnel, direct])
+
+
 def test_active_bridge_state_requires_ready_control_port_and_built_first_hop(tmp_path):
     from types import SimpleNamespace
 
