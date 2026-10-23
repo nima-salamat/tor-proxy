@@ -108,6 +108,8 @@ class TorLogDialog(_FramelessDialog):
         self.log_view.setObjectName("torLogText")
         self.log_view.setReadOnly(True)
         self.log_view.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
+        # Force a left-to-right scrollbar/text layout even when the parent app or OS uses RTL.
+        self.log_view.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         self.log_view.setPlaceholderText("Waiting for Tor to create tor.log…")
         self.log_view.setUndoRedoEnabled(False)
         self.body_layout.addWidget(self.log_view, 1)
