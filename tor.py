@@ -134,8 +134,14 @@ class TorRunner(QObject):
         self.ExcludeNodes: list[str] = []
         self.ExitNodes: list[str] = []
         self.StrictNodes = 0
-        self.MaxCircuitDirtiness = 600
-        self.NewCircuitPeriod = 60
+        try:
+            self.MaxCircuitDirtiness = max(10, min(86400, int(CONFIG["MaxCircuitDirtiness"] or 600)))
+        except (TypeError, ValueError):
+            self.MaxCircuitDirtiness = 600
+        try:
+            self.NewCircuitPeriod = max(10, min(86400, int(CONFIG["NewCircuitPeriod"] or 60)))
+        except (TypeError, ValueError):
+            self.NewCircuitPeriod = 60
         self.Log = "notice"
         self.bridge_types = ["obfs4", "webtunnel", "snowflake"]
         self.tor_path: str | None = None

@@ -198,11 +198,13 @@ class Window(QMainWindow):
         self.exit_action.triggered.connect(self.ask_close)
         menu_bar.addAction(self.exit_action)
 
-        self.global_state = QLabel("● Checking Tor state…", self)
+        self.global_state = QPushButton("● Checking Tor state…", self)
         self.global_state.setObjectName("globalState")
-        self.global_state.setMinimumWidth(112)
-        self.global_state.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.global_state.setWordWrap(False)
+        self.global_state.setFlat(True)
+        self.global_state.setMinimumWidth(104)
+        self.global_state.setToolTip("Open the Home Event Log when Tor reports a failure.")
+        self.global_state.clicked.connect(self._open_event_log)
+        self.global_state.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._notification_entries = []
         self.notifications_menu = QMenu(self)
         empty_notification = self.notifications_menu.addAction("No notifications")
@@ -291,6 +293,8 @@ class Window(QMainWindow):
             QMenuBar#topMenuBar::item:checked {{ background: {accent}; color: #ffffff; }}
             QWidget#menuBarCorner {{ border-bottom: 1px solid {border}; }}
             QWidget#menuBarCorner QLabel {{ background: transparent; color: {text}; border: none; padding: 0 4px; }}
+            QPushButton#globalState {{ background: transparent; color: {text}; border: none; border-radius: 7px; padding: 0 4px; font-size: 10px; }}
+            QPushButton#globalState:hover {{ background: {hover}; }}
             QWidget#menuBarCorner QPushButton {{ background: transparent; color: {text}; border: none; border-radius: 7px; }}
             QWidget#menuBarCorner QPushButton:hover {{ background: {hover}; }}
             QWidget#customTitleBar {{ background: {menu_surface}; border-bottom: 1px solid {border}; }}
@@ -316,11 +320,21 @@ class Window(QMainWindow):
         self.notification_btn.setText(
             str(len(self._notification_entries) if len(self._notification_entries) < 100 else "99+")
         )
-        self.notification_btn.setFixedSize(42, 30)
+        self.notification_btn.setFixedSize(56, 30)
         if IS_WINDOWS and hasattr(self, "title_bar"):
             self.title_bar.update_theme(icon_color)
         if hasattr(self, "proxyWidget") and hasattr(self.proxyWidget, "_apply_home_theme"):
             self.proxyWidget._apply_home_theme()
+
+    def _open_event_log(self):
+        self._show_home()
+        proxy = getattr(self, "proxyWidget", None)
+        if proxy is not None and (
+            getattr(proxy, "failed", False)
+            or getattr(getattr(proxy, "tor", None), "state", "") == "FAILED"
+        ):
+            if not getattr(proxy, "logs_open", False):
+                proxy.show_logs()
 
     def _on_navigation_changed(self, row):
         # Compatibility hook for integrations which select a page by index.
