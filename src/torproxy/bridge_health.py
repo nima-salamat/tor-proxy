@@ -191,7 +191,7 @@ def _probe_single_bridge(
                     )
 
                 dial_lines = [
-                    line for line in re.split(r"\\s+\\|\\s+|\\r?\\n", diagnostic)
+                    line for line in re.split(r"\s+\|\s+|\r?\n", diagnostic)
                     if "error dialing:" in line
                 ]
                 # These are strong endpoint-specific failures: a closed port,
