@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from torproxy.bridges import normalize_bridge_record, parse_bridge_text
+from torproxy.bridges import bridge_identity_fingerprint, normalize_bridge_record, parse_bridge_text
 
 
 IPV6 = "[2001:db8:fe46:edd5:2139:2d5b:b732:854a]:443"
@@ -52,6 +52,17 @@ def test_parser_reports_second_endpoint_as_invalid_without_mutating_saved_record
 
 def test_bare_ipv6_bridge_without_transport_remains_supported():
     assert normalize_bridge_record(f'"{IPV6}"') == IPV6
+
+
+def test_identity_fingerprint_can_be_extracted_for_bridge_card_matching():
+    fingerprint = "A1B2C3D4E5F60718293A4B5C6D7E8F9012345678"
+    assert bridge_identity_fingerprint(
+        f"webtunnel {IPV6} {fingerprint} url=https://bridge.example/ ver=0.0.1"
+    ) == fingerprint
+    assert bridge_identity_fingerprint(
+        f"snowflake 192.0.2.10:443 fingerprint={fingerprint}"
+    ) is None
+    assert bridge_identity_fingerprint(f'"{IPV6}" {fingerprint}') == fingerprint
 
 
 def test_webtunnel_transport_is_inferred_when_url_and_ver_are_present():
