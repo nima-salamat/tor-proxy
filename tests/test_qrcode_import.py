@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import json
 
-from ui_.window.qrcode_widget import parse_bridge_payload
+from ui_.window.qrcode_widget import (
+    bridge_import_actions,
+    merge_bridge_lines,
+    parse_bridge_payload,
+)
 
 
 def test_bridge_qr_accepts_json_array_and_deduplicates_lines():
@@ -47,4 +51,24 @@ meek_lite bridge.example.net:8443 front=cdn.example.org
     assert parse_bridge_payload(payload) == [
         "obfs4 203.0.113.2:443 fingerprint cert=x",
         "meek_lite bridge.example.net:8443 front=cdn.example.org",
+    ]
+
+
+
+def test_bridge_action_choices_depend_on_existing_settings_text():
+    assert bridge_import_actions("") == (True, False, False)
+    assert bridge_import_actions("  \n  ") == (True, False, False)
+    assert bridge_import_actions("obfs4 192.0.2.4:443 fingerprint") == (False, True, True)
+
+
+def test_add_bridge_lines_preserves_existing_entries_and_avoids_duplicates():
+    existing = "obfs4 192.0.2.4:443 fingerprint\nwebtunnel bridge.example.org:443 url=x"
+    incoming = [
+        "OBFS4 192.0.2.4:443 FINGERPRINT",
+        "snowflake 198.51.100.4:443 fingerprint",
+    ]
+    assert merge_bridge_lines(existing, incoming) == [
+        "obfs4 192.0.2.4:443 fingerprint",
+        "webtunnel bridge.example.org:443 url=x",
+        "snowflake 198.51.100.4:443 fingerprint",
     ]
