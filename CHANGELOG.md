@@ -4,6 +4,9 @@ All notable changes are recorded here. Dates and release numbers are added only 
 
 ## Unreleased — UI, updater, and security redesign
 
+- Bridge cards now show live usage only when the authenticated Tor ControlPort reports a currently built circuit whose first-hop identity matches that card's configured bridge fingerprint. Configured, unobserved, or identity-unmatchable bridges are labelled accordingly instead of being shown as connected merely because Bridge mode is enabled.
+- Automatic bridge preflight now treats Lyrebird TLS curve/runtime errors as local transport issues: it preserves the full list and continues into normal Tor startup rather than aborting from the preflight helper. If one bridge completes bootstrap, only explicit dial failures of other records can be pruned; inconclusive transport results remain saved. A direct-bridge alternative is allowed to continue when Lyrebird reports an unsupported TLS curve.
+
 - Bridge parsing now validates both bare 40-hex identity fingerprints and `fingerprint=` parameters before writing `torrc`; grouped hex chunks are normalized, and invalid items show indexed reasons instead of reaching Tor's config parser. If Tor still rejects a digest, diagnostics summarize token lengths/options without exposing bridge addresses, identity fingerprints, or WebTunnel secret URLs.
 
 - Fixed Windows pluggable-transport launch configuration: Lyrebird's native executable path is now passed as a literal path token instead of the Torrc-escaped, quoted path that caused `CreateProcessA()` to fail. Transport launch errors are now distinguished from unreachable bridges, so the auto-check never prunes bridge records for a local executable/configuration failure.
