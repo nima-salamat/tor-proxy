@@ -36,3 +36,36 @@ def test_stop_without_owned_process_is_idempotent():
     manager = TorManager(TorSettings(executable="/missing/tor", data_directory="/tmp/torproxy-test-state"))
     manager.stop()
     assert manager.state is TorState.STOPPED
+
+
+
+def test_early_startup_exit_reports_recent_tor_log_details(tmp_path):
+    manager = TorManager(
+        TorSettings(
+            executable=tmp_path / "tor",
+            socks_port=19050,
+            control_port=19051,
+            data_directory=tmp_path / "state" / "tor",
+        )
+    )
+    manager.log_path = tmp_path / "logs" / "tor.log"
+    manager.log_path.parent.mkdir(parents=True)
+    manager.log_path.write_text(
+        "old detail that should fall outside the bounded tail\n"
+        "[warn] Opening Control listener failed\n"
+        "[err] Could not bind to 127.0.0.1:19051: Address already in use\n",
+        encoding="utf-8",
+    )
+
+    detail = manager._recent_tor_log_detail(max_lines=2)
+    assert "Tor log" in detail
+    assert "Opening Control listener failed" in detail
+    assert "Address already in use" in detail
+    assert "old detail that should fall outside the bounded tail" not in detail
+
+
+def test_tor_config_validation_errors_keep_multiple_output_lines(tmp_path):
+    output = "[warn] Reading config file\n[err] Invalid value for ControlPort\n"
+    detail = TorManager._summarize_process_output(output, max_lines=2)
+    assert "Reading config file" in detail
+    assert "Invalid value for ControlPort" in detail

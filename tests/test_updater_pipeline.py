@@ -261,7 +261,8 @@ def test_https_only_install_marker_is_accepted_with_digest_and_safe_executable(t
 
     bundle_name = "tor-expert-bundle-linux-x86_64-15.0.26"
     bundle = tmp_path / bundle_name
-    executable = bundle / "tor" / ("tor.exe" if os.name == "nt" else "tor")
+    # This fixture deliberately mocks the Linux platform regardless of the CI host.
+    executable = bundle / "tor" / "tor"
     executable.parent.mkdir(parents=True)
     executable.write_bytes(b"explicitly unsigned test tor")
     if os.name != "nt":

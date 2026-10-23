@@ -240,3 +240,24 @@ def test_manage_proxy_disable_dispatches_explicit_clear_to_the_current_platform(
     )
     assert set_proxy.manage_proxy("127.0.0.1", 9151, "disable")
     assert linux_calls == [("127.0.0.1", 9151)]
+
+
+
+def test_connect_button_exposes_actual_lifecycle_states_and_white_theme_explicit_colors():
+    repository = Path(__file__).resolve().parents[1]
+    pulse_source = (repository / "ui_/btn/pulse_button.py").read_text(encoding="utf-8")
+    home_source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+    manager_source = (repository / "src/torproxy/tor_manager.py").read_text(encoding="utf-8")
+
+    assert 'self._set_state("connecting", "CONNECTING…")' in pulse_source
+    assert 'self._set_state("connected", "CONNECTED")' in pulse_source
+    assert 'self._connected_feedback_timer.start(1000)' in pulse_source
+    assert 'self._state = "disconnect"' in pulse_source
+    assert 'self.setText("DISCONNECT")' in pulse_source
+    assert "self.connect_btn.set_connecting()" in home_source
+    assert "self.connect_btn.set_disconnecting()" in home_source
+    assert "Tor startup failed" in home_source
+    assert "Tor rejected its configuration" in manager_source
+    assert "Recent Tor log" in manager_source
+    assert "QComboBox#systemProxyMode QAbstractItemView" in home_source
+    assert "color: {text}" in home_source
