@@ -33,7 +33,8 @@ from ui_.window.setting_window import SettingWindow
 from ui_.window.block_host_window import BlcokHostsWindow
 from ui_.window.exclude_host_window import ExcludeHostsWindow
 from ui_.window.updater_window import UpdaterWindow
-from ui_.window.dialogs import QMessageBox, ShortcutsDialog
+from ui_.window.dialogs import QMessageBox
+from ui_.window.shortcuts_window import ShortcutsWindow
 logger = logging.getLogger(__name__)
 
 class Window(QMainWindow):
@@ -67,6 +68,8 @@ class Window(QMainWindow):
         self.stack.addWidget(self.exclude_host_window)
         self.updater_window = UpdaterWindow(self)
         self.stack.addWidget(self.updater_window)
+        self.shortcutsWidget = ShortcutsWindow(self)
+        self.stack.addWidget(self.shortcutsWidget)
 
         if IS_WINDOWS:
             self.title_bar = CustomTitleBar(self)
@@ -209,6 +212,7 @@ class Window(QMainWindow):
             ("Block Host", "Blocked host rules", "Ctrl+B", "fa6s.shield-halved", self._show_block_host),
             ("Exclude Host", "Bypass rules", "Ctrl+E", "fa6s.route", self._show_exclude_host),
             ("Bundles", "Tor bundles and updates", "Ctrl+U", "fa6s.boxes-stacked", self._show_updater),
+            ("Help", "Keyboard shortcuts", "F1", "fa6s.circle-question", self._show_help),
         ]
         self.page_action_group = QActionGroup(self)
         self.page_action_group.setExclusive(True)
@@ -248,14 +252,8 @@ class Window(QMainWindow):
             self.page_actions.append(action)
             self.page_icon_names.append(icon_name)
             add_nav_button(action)
-
-        self.help_action = QAction("Help", self)
-        self.help_action.setIcon(qta.icon("fa6s.circle-question", color=icon_color))
-        self.help_action.setShortcut("F1")
-        self.help_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
-        self.help_action.setToolTip("Keyboard shortcuts")
-        self.help_action.triggered.connect(self._show_help)
-        self.help_nav_button = add_nav_button(self.help_action)
+            if label == "Help":
+                self.help_action = action
 
         self.exit_action = QAction("Exit", self)
         self.exit_action.setIcon(qta.icon("fa6s.right-from-bracket", color=icon_color))
@@ -386,7 +384,6 @@ class Window(QMainWindow):
         icon_color = text
         for action, icon_name in zip(self.page_actions, self.page_icon_names):
             action.setIcon(qta.icon(icon_name, color="#ffffff" if action.isChecked() else icon_color))
-        self.help_action.setIcon(qta.icon("fa6s.circle-question", color=icon_color))
         self.exit_action.setIcon(qta.icon("fa6s.right-from-bracket", color=icon_color))
         self.toggle_btn.setIcon(qta.icon("fa6s.sun" if dark else "fa6s.moon", color=icon_color))
         self.notification_btn.setIcon(qta.icon("fa6s.bell", color=icon_color))
@@ -475,6 +472,7 @@ class Window(QMainWindow):
             getattr(self, "settingWidget", None),
             getattr(self, "block_host_window", None),
             getattr(self, "exclude_host_window", None),
+            getattr(self, "shortcutsWidget", None),
         ):
             apply_theme = getattr(page, "apply_theme", None)
             if callable(apply_theme):
@@ -498,8 +496,7 @@ class Window(QMainWindow):
             
     
     def _show_help(self):
-        dialog = ShortcutsDialog(self, is_windows=IS_WINDOWS)
-        dialog.exec()
+        self._show_page(5)
     
     def _show_home(self):
         self._show_page(0)
