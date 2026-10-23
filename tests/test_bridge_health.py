@@ -1,0 +1,291 @@
+from __future__ import annotations
+
+import threading
+
+import torproxy.bridge_health as bridge_health_module
+from torproxy.bridge_health import BridgeProbeOutcome, check_bridges
+from torproxy.tor_manager import TorSettings
+
+BRIDGES = (
+    "obfs4 192.0.2.10:443 1111111111111111111111111111111111111111",
+    "obfs4 192.0.2.11:443 2222222222222222222222222222222222222222",
+    "obfs4 192.0.2.12:443 3333333333333333333333333333333333333333",
+)
+
+
+def _settings(tmp_path, bridges=BRIDGES):
+    return TorSettings(
+        executable=tmp_path / "tor",
+        socks_port=19450,
+        control_port=19451,
+        bridges_enabled=True,
+        bridges="\n".join(bridges),
+        data_directory=tmp_path / "state" / "tor",
+    )
+
+
+def test_bridge_cleanup_removes_only_failed_records_when_another_is_verified(tmp_path):
+    settings = _settings(tmp_path)
+    outcomes = {
+        BRIDGES[0]: True,
+        BRIDGES[1]: False,
+        BRIDGES[2]: None,
+    }
+    progress = []
+
+    def fake_probe(_settings, record, _timeout, _excluded, _claimed, _lock, _cancel):
+        return outcomes[record]
+
+    result = check_bridges(settings, max_workers=1, probe=fake_probe,
+                           on_result=lambda done, total, _record, state: progress.append((done, total, state)))
+
+    assert result.working == (BRIDGES[0],)
+    assert result.failed == (BRIDGES[1],)
+    assert result.inconclusive == (BRIDGES[2],)
+    assert result.retained == (BRIDGES[0], BRIDGES[2])
+    assert result.removed == (BRIDGES[1],)
+    assert result.should_prune is True
+    assert sorted(state for _done, _total, state in progress) == ["failed", "inconclusive", "working"]
+
+
+def test_all_failed_bridges_are_preserved_without_a_confirmed_working_bridge(tmp_path):
+    settings = _settings(tmp_path)
+    result = check_bridges(
+        settings,
+        max_workers=1,
+        probe=lambda *_args: False,
+    )
+
+    assert result.working == ()
+    assert result.failed == BRIDGES
+    assert result.retained == BRIDGES
+    assert result.removed == ()
+    assert result.should_prune is False
+
+
+def test_duplicate_records_are_checked_once_and_deduplicated_in_saved_list(tmp_path):
+    original = (BRIDGES[0], BRIDGES[0], BRIDGES[1])
+    settings = _settings(tmp_path, original)
+    call_counts = {}
+
+    def fake_probe(_settings, record, _timeout, _excluded, _claimed, _lock, _cancel):
+        call_counts[record] = call_counts.get(record, 0) + 1
+        return True
+
+    result = check_bridges(settings, max_workers=2, probe=fake_probe)
+
+    assert call_counts == {BRIDGES[0]: 1, BRIDGES[1]: 1}
+    assert result.retained == (BRIDGES[0], BRIDGES[1])
+    assert result.should_prune is False
+
+
+def test_missing_transport_is_reported_as_local_issue_not_bridge_failure(tmp_path):
+    settings = _settings(tmp_path)
+    progress = []
+
+    result = check_bridges(
+        settings,
+        max_workers=1,
+        probe=lambda *_args: BridgeProbeOutcome(None, "missing_transport:webtunnel"),
+        on_result=lambda done, total, _record, status: progress.append((done, total, status)),
+    )
+
+    assert result.working == ()
+    assert result.failed == ()
+    assert result.inconclusive == BRIDGES
+    assert result.retained == BRIDGES
+    assert result.should_prune is False
+    assert result.issues == ("missing_transport:webtunnel",)
+    assert progress == [
+        (1, 3, "infrastructure"),
+        (2, 3, "infrastructure"),
+        (3, 3, "infrastructure"),
+    ]
+
+
+def test_transport_executable_launch_failure_is_not_a_dead_bridge(tmp_path):
+    result = check_bridges(
+        _settings(tmp_path),
+        max_workers=1,
+        probe=lambda *_args: BridgeProbeOutcome(None, "transport_launch_failed"),
+    )
+
+    assert result.working == ()
+    assert result.failed == ()
+    assert result.inconclusive == BRIDGES
+    assert result.retained == BRIDGES
+    assert result.should_prune is False
+    assert result.issues == ("transport_launch_failed",)
+
+
+def _probe_with_fake_tor_log(monkeypatch, tmp_path, diagnostic):
+    class FakeManager:
+        def __init__(self, _settings):
+            self.diagnostic = diagnostic
+
+        def start(self, on_status=None):
+            raise RuntimeError("Tor did not become ready within 30s")
+
+        def _recent_tor_log_detail(self, max_lines=20):
+            return self.diagnostic
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(bridge_health_module, "TorManager", FakeManager)
+    return bridge_health_module._probe_single_bridge(
+        _settings(tmp_path),
+        BRIDGES[0],
+        1.0,
+        set(),
+        set(),
+        threading.Lock(),
+        None,
+    )
+
+
+def test_unsupported_tls_curve_is_a_global_transport_issue_not_dead_bridge(monkeypatch, tmp_path):
+    outcome = _probe_with_fake_tor_log(
+        monkeypatch,
+        tmp_path,
+        "Managed proxy: Error dialing: tls: CurvePreferences includes unsupported curve",
+    )
+    assert outcome == BridgeProbeOutcome(None, "transport_runtime_incompatible")
+
+
+def test_single_webtunnel_dial_timeout_is_inconclusive(monkeypatch, tmp_path):
+    outcome = _probe_with_fake_tor_log(
+        monkeypatch,
+        tmp_path,
+        "Managed proxy: Error dialing: read tcp local:5512->198.51.100.8:443: i/o timeout",
+    )
+    assert outcome is None
+
+
+def test_repeated_webtunnel_dial_timeouts_are_classified_as_bridge_specific(monkeypatch, tmp_path):
+    outcome = _probe_with_fake_tor_log(
+        monkeypatch,
+        tmp_path,
+        "Managed proxy: Error dialing: read tcp local:5512->198.51.100.8:443: i/o timeout\n"
+        "Managed proxy: Error dialing: read tcp local:5513->198.51.100.8:443: wsarecv timeout",
+    )
+    assert outcome is False
+
+
+def test_single_eof_or_connection_reset_is_inconclusive(monkeypatch, tmp_path):
+    outcome = _probe_with_fake_tor_log(
+        monkeypatch,
+        tmp_path,
+        'Managed proxy "C:\\\\TorProxy\\\\lyrebird.exe": Error dialing: '
+        "remote error: tls: unexpected EOF",
+    )
+    assert outcome is None
+
+
+def test_repeated_connection_resets_are_classified_as_bridge_specific(monkeypatch, tmp_path):
+    outcome = _probe_with_fake_tor_log(
+        monkeypatch,
+        tmp_path,
+        "Managed proxy: Error dialing: read tcp local:5512->198.51.100.8:443: "
+        "connection reset by peer\n"
+        "Managed proxy: Error dialing: read tcp local:5513->198.51.100.8:443: "
+        "connection reset by peer",
+    )
+    assert outcome is False
+
+
+def test_tls_handshake_and_local_route_errors_are_not_pruned(monkeypatch, tmp_path):
+    handshake = _probe_with_fake_tor_log(
+        monkeypatch,
+        tmp_path,
+        "Managed proxy: Error dialing: remote error: tls: handshake failure",
+    )
+    repeated_handshake = _probe_with_fake_tor_log(
+        monkeypatch,
+        tmp_path,
+        "Managed proxy: Error dialing: remote error: tls: handshake failure\n"
+        "Managed proxy: Error dialing: remote error: tls: handshake failure",
+    )
+    unreachable = _probe_with_fake_tor_log(
+        monkeypatch,
+        tmp_path,
+        "Managed proxy: Error dialing: dial tcp 198.51.100.8:443: network is unreachable",
+    )
+    temporary_dns_failure = _probe_with_fake_tor_log(
+        monkeypatch,
+        tmp_path,
+        "Managed proxy: Error dialing: lookup bridge.example: temporary failure in name resolution",
+    )
+    assert handshake is None
+    assert repeated_handshake is None
+    assert unreachable is None
+    assert temporary_dns_failure is None
+
+
+def test_windows_refused_connection_is_bridge_specific_even_with_lyrebird_path(monkeypatch, tmp_path):
+    outcome = _probe_with_fake_tor_log(
+        monkeypatch,
+        tmp_path,
+        'Managed proxy "C:\\\\TorProxy\\\\lyrebird.exe": Error dialing: error dialing '
+        'my.benches.date:443: dial tcp 10.10.34.34:443: connectex: '
+        'No connection could be made because the target machine actively refused it.',
+    )
+    assert outcome is False
+
+
+def test_dns_hostname_not_found_is_bridge_specific(monkeypatch, tmp_path):
+    outcome = _probe_with_fake_tor_log(
+        monkeypatch,
+        tmp_path,
+        'Managed proxy "C:\\\\TorProxy\\\\lyrebird.exe": Error dialing: '
+        'lookup bridge.invalid on 127.0.0.1:53: no such host',
+    )
+    assert outcome is False
+
+
+def test_generic_socks_failure_and_dns_leak_warning_are_not_bridge_health_proof(monkeypatch, tmp_path):
+    outcome = _probe_with_fake_tor_log(
+        monkeypatch,
+        tmp_path,
+        "Proxy Client: unable to connect OR connection (handshaking (proxy)) "
+        'with [2001:db8::12]:443 ("general SOCKS server failure"). '
+        "Your application (using socks5 to port 443) is giving Tor only an IP address.",
+    )
+    assert outcome is None
+
+
+def test_explicit_dial_failure_is_not_hidden_by_missing_hop_notice(monkeypatch, tmp_path):
+    outcome = _probe_with_fake_tor_log(
+        monkeypatch,
+        tmp_path,
+        "Failed to find node for hop #1 of our path. Discarding this circuit.\\n"
+        'Managed proxy "C:\\\\TorProxy\\\\lyrebird.exe": Error dialing: '
+        "dial tcp 10.10.34.34:443: connectex: actively refused",
+    )
+    assert outcome is False
+
+
+def test_missing_guard_descriptor_is_inconclusive_not_a_dead_bridge(monkeypatch, tmp_path):
+    outcome = _probe_with_fake_tor_log(
+        monkeypatch,
+        tmp_path,
+        "Failed to find node for hop #1 of our path. Discarding this circuit.",
+    )
+    assert outcome is None
+
+
+def test_cancelled_check_preserves_original_bridge_list_and_does_not_probe(tmp_path):
+    settings = _settings(tmp_path)
+    cancelled = threading.Event()
+    cancelled.set()
+    calls = []
+
+    result = check_bridges(
+        settings,
+        cancel_event=cancelled,
+        probe=lambda *_args: calls.append(True) or True,
+    )
+
+    assert calls == []
+    assert result.retained == BRIDGES
+    assert result.should_prune is False

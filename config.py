@@ -17,6 +17,8 @@ if SRC_ROOT.is_dir() and str(SRC_ROOT) not in sys.path:
 
 from set_proxy import get_os_name, Os  # noqa: E402
 from torproxy.paths import user_directories  # noqa: E402
+from torproxy.hotkeys import parse_hotkey  # noqa: E402
+from torproxy.bridges import normalize_sni_hostname  # noqa: E402
 
 IS_WINDOWS = get_os_name() == Os.Windows
 IS_LINUX = get_os_name() == Os.Linux
@@ -31,6 +33,8 @@ DEFAULT_DATA: dict[str, Any] = {
     "schema_version": 1,
     "bridges": "",
     "bridge": False,
+    "auto_prune_bridges": False,
+    "webtunnel_sni_imitation": "",
     "mode": "dark",
     "tor_port": None,
     "tor_port_checked": False,
@@ -43,9 +47,14 @@ DEFAULT_DATA: dict[str, Any] = {
     "tor_path": None,
     "data_usage": 0,
     "MaxCircuitDirtiness": 600,
+    "NewCircuitPeriod": 60,
     "newnym_interval": 0,
     "system_proxy_auto": False,
+    "system_proxy_mode": "unchanged",
     "log_level": "INFO",
+    "verify_tor_signatures": False,
+    "confirm_exit": True,
+    "global_shortcut": "Ctrl+Alt+P",
 }
 LEGACY_KEYS = set(DEFAULT_DATA) | {"data_usage_bytes", "exclude_hosts", "blocked_hosts"}
 
@@ -93,8 +102,18 @@ class Config:
     def _validate(data: dict[str, Any]) -> None:
         if data.get("mode", "dark") not in {"dark", "light"}:
             raise ConfigError("mode must be 'dark' or 'light'.")
+        if data.get("system_proxy_mode", "unchanged") not in {"set", "unchanged", "clear"}:
+            raise ConfigError("system_proxy_mode must be 'set', 'unchanged', or 'clear'.")
+
+        shortcut = data.get("global_shortcut", "Ctrl+Alt+P")
+        try:
+            parsed_shortcut = parse_hotkey(shortcut)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(f"global_shortcut is invalid: {exc}") from exc
+        data["global_shortcut"] = parsed_shortcut.text
         for name in ("bridge", "proxy_port_checked", "tor_port_checked", "control_port_checked",
-                     "dns_port_checked", "system_proxy_auto"):
+                     "dns_port_checked", "system_proxy_auto", "verify_tor_signatures", "confirm_exit",
+                     "auto_prune_bridges"):
             if name in data and type(data[name]) is not bool:
                 raise ConfigError(f"{name} must be true or false.")
         ports = []
@@ -110,11 +129,20 @@ class Config:
             raise ConfigError("Enabled listener ports must be distinct.")
         if not isinstance(data.get("bridges", ""), str):
             raise ConfigError("bridges must be text.")
+        try:
+            data["webtunnel_sni_imitation"] = normalize_sni_hostname(
+                data.get("webtunnel_sni_imitation", "") or ""
+            )
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(f"webtunnel_sni_imitation is invalid: {exc}") from exc
         if type(data.get("data_usage", 0)) is not int or data.get("data_usage", 0) < 0:
             raise ConfigError("data_usage must be a non-negative byte count.")
         interval = data.get("newnym_interval", 0)
         if type(interval) is not int or not 0 <= interval <= 86400000:
             raise ConfigError("newnym_interval must be a duration in milliseconds between 0 and 86400000.")
+        new_circuit_period = data.get("NewCircuitPeriod", 60)
+        if type(new_circuit_period) is not int or not 10 <= new_circuit_period <= 86400:
+            raise ConfigError("NewCircuitPeriod must be an integer between 10 and 86400 seconds.")
 
     def _save_data(self, data: dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)

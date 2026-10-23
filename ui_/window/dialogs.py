@@ -1,0 +1,899 @@
+"""Shared custom frameless message dialogs for the desktop application.
+
+All message prompts use the same layout, typography, theme, controls, and
+keyboard behavior, regardless of which page raises the prompt.
+"""
+from __future__ import annotations
+
+from enum import IntFlag
+
+import qtawesome as qta
+from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, QTimer
+from PySide6.QtGui import QGuiApplication, QKeySequence
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QCheckBox,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
+
+from config import CONFIG
+from torproxy.hotkeys import parse_hotkey
+
+
+class StandardButton(IntFlag):
+    NoButton = 0
+    Ok = 1
+    Yes = 2
+    No = 4
+    Cancel = 8
+
+
+class QMessageBox:
+    """Drop-in subset of QMessageBox's static API backed by custom dialogs."""
+
+    StandardButton = StandardButton
+    NoButton = StandardButton.NoButton
+    Ok = StandardButton.Ok
+    Yes = StandardButton.Yes
+    No = StandardButton.No
+    Cancel = StandardButton.Cancel
+
+    @staticmethod
+    def information(parent, title, text, buttons=StandardButton.Ok, defaultButton=StandardButton.Ok):
+        dialog = MessageDialog(parent, title, text, level="info")
+        dialog.exec()
+        return StandardButton.Ok
+
+    @staticmethod
+    def warning(parent, title, text, buttons=StandardButton.Ok, defaultButton=StandardButton.Ok):
+        dialog = MessageDialog(parent, title, text, level="warning")
+        dialog.exec()
+        return StandardButton.Ok
+
+    @staticmethod
+    def critical(parent, title, text, buttons=StandardButton.Ok, defaultButton=StandardButton.Ok):
+        dialog = MessageDialog(parent, title, text, level="critical")
+        dialog.exec()
+        return StandardButton.Ok
+
+    @staticmethod
+    def question(
+        parent,
+        title,
+        text,
+        buttons=StandardButton.Yes | StandardButton.No,
+        defaultButton=StandardButton.No,
+    ):
+        dialog = MessageDialog(
+            parent, title, text, level="question", question=True, default_button=defaultButton
+        )
+        dialog.exec()
+        return dialog.choice
+
+
+class DialogTitleBar(QWidget):
+    """Small draggable title strip for custom dialogs."""
+
+    def __init__(self, dialog: QDialog, title: str, icon_name: str, accent: str):
+        super().__init__(dialog)
+        self._dialog = dialog
+        self._drag_origin: QPoint | None = None
+        self._window_origin: QPoint | None = None
+        self.setObjectName("dialogTitleBar")
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(18, 12, 12, 10)
+        layout.setSpacing(10)
+
+        self.icon = QLabel(self)
+        self.icon.setFixedSize(22, 22)
+        self.icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.icon.setPixmap(qta.icon(icon_name, color=accent).pixmap(20, 20))
+        layout.addWidget(self.icon)
+
+        self.title = QLabel(title, self)
+        self.title.setObjectName("dialogTitle")
+        self.title.setWordWrap(False)
+        self.title.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        layout.addWidget(self.title, 1)
+
+        self.close_button = QPushButton(self)
+        self.close_button.setObjectName("dialogCloseButton")
+        self.close_button.setFixedSize(30, 28)
+        self.close_button.setIcon(qta.icon("fa6s.xmark", color=accent))
+        self.close_button.setToolTip("Close")
+        self.close_button.clicked.connect(dialog.reject)
+        layout.addWidget(self.close_button)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            # Keep dragging under Qt control so each move can be clamped to
+            # the available geometry, instead of relying on an OS move loop.
+            self._drag_origin = event.globalPosition().toPoint()
+            self._window_origin = self._dialog.pos()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if (
+            self._drag_origin is not None
+            and self._window_origin is not None
+            and event.buttons() & Qt.MouseButton.LeftButton
+        ):
+            requested = self._window_origin + event.globalPosition().toPoint() - self._drag_origin
+            self._dialog.move(self._dialog.clamp_to_screen(requested))
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_origin = None
+        self._window_origin = None
+        super().mouseReleaseEvent(event)
+
+
+class _FramelessDialog(QDialog):
+    """Reusable custom shell shared by message prompts and shortcuts."""
+
+    def __init__(
+        self,
+        parent: QWidget | None,
+        title: str,
+        icon_name: str,
+        accent: str,
+        *,
+        width: int = 480,
+    ):
+        super().__init__(parent)
+        dark = CONFIG["mode"] == "dark"
+        self._dark = dark
+        self._accent = accent
+        self._colors = {
+            "surface": "#202630" if dark else "#ffffff",
+            "panel": "#252c36" if dark else "#f6f8fb",
+            "border": "#3b4552" if dark else "#d7dee7",
+            "text": "#e8edf3" if dark else "#253041",
+            "muted": "#9ba7b5" if dark else "#657386",
+            "hover": "rgba(71, 163, 242, 0.13)" if dark else "rgba(24, 118, 191, 0.09)",
+        }
+        self.setWindowTitle(title)
+        self.setWindowModality(Qt.WindowModality.WindowModal if parent is not None else Qt.WindowModality.ApplicationModal)
+        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
+        # Let the rounded frame reveal true transparency at each corner; with
+        # an opaque QDialog Windows fills the exterior with a black rectangle.
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAutoFillBackground(False)
+        self.setMinimumWidth(width)
+        self.setMaximumWidth(680)
+        self._base_min_width = width
+        self._base_min_height = 0
+        self._base_min_size = QSize(width, 0)
+        self._base_max_size = QSize(680, 16777215)
+        self._preferred_size: QSize | None = None
+        self._screen_change_connected = False
+        self._active_screen = None
+        self._screen_dpi_connected = None
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(1, 1, 1, 1)
+        root.setSpacing(0)
+
+        self.surface = QFrame(self)
+        self.surface.setObjectName("dialogSurface")
+        root.addWidget(self.surface)
+        surface_layout = QVBoxLayout(self.surface)
+        surface_layout.setContentsMargins(0, 0, 0, 0)
+        surface_layout.setSpacing(0)
+
+        self.title_bar = DialogTitleBar(self, title, icon_name, accent)
+        surface_layout.addWidget(self.title_bar)
+
+        self.body_host = QWidget(self.surface)
+        self.body_host.setObjectName("dialogBody")
+        self.body_layout = QVBoxLayout(self.body_host)
+        self.body_layout.setContentsMargins(22, 18, 22, 16)
+        self.body_layout.setSpacing(12)
+        surface_layout.addWidget(self.body_host, 1)
+
+        self.footer = QWidget(self.surface)
+        self.footer.setObjectName("dialogFooter")
+        self.footer_layout = QHBoxLayout(self.footer)
+        self.footer_layout.setContentsMargins(20, 10, 20, 16)
+        self.footer_layout.setSpacing(9)
+        surface_layout.addWidget(self.footer)
+
+        self.setStyleSheet(f"""
+            QDialog {{ background: transparent; color: {self._colors["text"]}; }}
+            QFrame#dialogSurface {{
+                background: {self._colors["surface"]};
+                border: 1px solid {self._colors["border"]};
+                border-radius: 14px;
+            }}
+            QWidget#dialogTitleBar {{
+                background: {self._colors["surface"]};
+                border-bottom: 1px solid {self._colors["border"]};
+                border-top-left-radius: 14px;
+                border-top-right-radius: 14px;
+            }}
+            QLabel#dialogTitle {{
+                color: {self._colors["text"]};
+                font-size: 10.5pt;
+                font-weight: 750;
+                background: transparent;
+            }}
+            QPushButton#dialogCloseButton {{
+                background: transparent;
+                color: {self._colors["text"]};
+                border: none;
+                border-radius: 7px;
+            }}
+            QPushButton#dialogCloseButton:hover {{ background: {self._colors["hover"]}; }}
+            QWidget#dialogBody {{ background: {self._colors["surface"]}; }}
+            QWidget#dialogFooter {{
+                background: {self._colors["surface"]};
+                border-top: 1px solid {self._colors["border"]};
+                border-bottom-left-radius: 14px;
+                border-bottom-right-radius: 14px;
+            }}
+            QLabel#dialogMessage {{ color: {self._colors["text"]}; background: transparent; font-size: 9pt; }}
+            QLabel#dialogHint {{ color: {self._colors["muted"]}; background: transparent; font-size: 8.25pt; }}
+            QLabel#shortcutCategory {{
+                color: {self._accent};
+                background: transparent;
+                font-size: 8.25pt;
+                font-weight: 800;
+                padding-top: 5px;
+            }}
+            QLabel#shortcutName {{ color: {self._colors["text"]}; background: transparent; font-size: 9pt; }}
+            QLabel#shortcutDescription {{ color: {self._colors["muted"]}; background: transparent; font-size: 7.5pt; }}
+            QLabel#shortcutKey {{
+                color: {self._colors["text"]};
+                background: {self._colors["panel"]};
+                border: 1px solid {self._colors["border"]};
+                border-bottom: 2px solid {self._colors["border"]};
+                border-radius: 5px;
+                padding: 4px 7px;
+                min-width: 18px;
+                font-size: 7.5pt;
+                font-weight: 750;
+            }}
+            QPushButton#dialogPrimaryButton {{
+                background: {self._accent}; color: #ffffff;
+                border: 1px solid {self._accent}; border-radius: 8px;
+                min-height: 34px; padding: 0 18px; font-weight: 750;
+            }}
+            QPushButton#dialogPrimaryButton:hover {{ background: #236b9b; }}
+            QPushButton#dialogSecondaryButton {{
+                background: {self._colors["panel"]}; color: {self._colors["text"]};
+                border: 1px solid {self._colors["border"]}; border-radius: 8px;
+                min-height: 34px; padding: 0 16px; font-weight: 650;
+            }}
+            QPushButton#dialogSecondaryButton:hover {{ background: {self._colors["hover"]}; }}
+            QScrollArea#dialogScroll {{ background: transparent; border: none; }}
+            QScrollArea#dialogScroll QWidget {{ background: transparent; }}
+            QCheckBox#dontAskAgain {{ color: {self._colors["text"]}; background: transparent; spacing: 8px; font-size: 8.25pt; }}
+            QCheckBox#dontAskAgain::indicator {{ width: 16px; height: 16px; border: 1px solid {self._colors["border"]}; border-radius: 4px; background: {self._colors["panel"]}; }}
+            QCheckBox#dontAskAgain::indicator:checked {{ background: {self._accent}; border-color: {self._accent}; }}
+            QFrame#shortcutCapturePanel {{
+                background: {self._colors["panel"]};
+                border: 1px solid {self._colors["border"]};
+                border-radius: 12px;
+            }}
+            QLabel#shortcutCaptureBadge {{
+                color: {self._accent};
+                background: transparent;
+                font-size: 8.5pt;
+                font-weight: 850;
+                letter-spacing: 1px;
+            }}
+            QLabel#shortcutCaptureValue {{
+                color: {self._colors["text"]};
+                background: transparent;
+                font-size: 17pt;
+                font-weight: 800;
+                padding: 8px;
+            }}
+            QLabel#shortcutCaptureHint {{
+                color: {self._colors["muted"]};
+                background: transparent;
+                font-size: 8.5pt;
+            }}
+        """)
+
+    def add_footer_spacer(self):
+        self.footer_layout.addStretch(1)
+
+    def add_button(self, text: str, *, primary: bool, callback):
+        button = QPushButton(text, self.footer)
+        button.setObjectName("dialogPrimaryButton" if primary else "dialogSecondaryButton")
+        button.clicked.connect(callback)
+        if primary:
+            button.setDefault(True)
+            button.setAutoDefault(True)
+        self.footer_layout.addWidget(button)
+        return button
+
+    def _screen_for_position(self, position: QPoint):
+        rect = QRect(position, self.size())
+        screen = QGuiApplication.screenAt(rect.center())
+        if screen is not None:
+            return screen
+        parent = self.parentWidget()
+        handle = parent.windowHandle() if parent is not None else None
+        if handle is not None and handle.screen() is not None:
+            return handle.screen()
+        return QGuiApplication.primaryScreen()
+
+    def _remember_preferred_size(self) -> None:
+        """Capture the design size before fitting to a smaller secondary display."""
+        self._preferred_size = QSize(self.size())
+        self._base_min_size = QSize(self.minimumSize())
+        self._base_max_size = QSize(self.maximumSize())
+
+    def _restore_size_limits(self) -> None:
+        self.setMinimumSize(self._base_min_size)
+        self.setMaximumSize(self._base_max_size)
+
+    def clamp_to_screen(self, position: QPoint) -> QPoint:
+        """Keep the dialog visible without permanently changing its design size."""
+        screen = self._screen_for_position(position)
+        if screen is None:
+            return position
+        area = screen.availableGeometry()
+        preferred = self._preferred_size or QSize(self.size())
+        width = min(preferred.width(), area.width())
+        height = min(preferred.height(), area.height())
+
+        # Only relax min/max constraints when a display is physically smaller
+        # than the dialog. The original constraints and preferred dimensions
+        # are restored when it moves back to a larger monitor.
+        if width != preferred.width() or height != preferred.height():
+            min_width = min(self._base_min_size.width(), area.width())
+            min_height = min(self._base_min_size.height(), area.height())
+            self.setMinimumSize(min_width, min_height)
+            self.setMaximumSize(area.width(), area.height())
+            if self.size() != QSize(width, height):
+                self.resize(width, height)
+        else:
+            self._restore_size_limits()
+            if self.size() != preferred:
+                self.resize(preferred)
+
+        x = min(max(position.x(), area.left()), area.right() - width + 1)
+        y = min(max(position.y(), area.top()), area.bottom() - height + 1)
+        return QPoint(x, y)
+
+    def _connect_screen_dpi_signal(self, screen) -> None:
+        if screen is self._screen_dpi_connected:
+            return
+        previous = self._screen_dpi_connected
+        if previous is not None:
+            try:
+                previous.logicalDotsPerInchChanged.disconnect(self._on_screen_dpi_changed)
+            except (RuntimeError, TypeError):
+                pass
+        self._screen_dpi_connected = screen
+        if screen is not None:
+            try:
+                screen.logicalDotsPerInchChanged.connect(self._on_screen_dpi_changed)
+            except (AttributeError, RuntimeError):
+                self._screen_dpi_connected = None
+
+    def _connect_screen_change_signal(self) -> None:
+        handle = self.windowHandle()
+        if handle is None:
+            return
+        if not self._screen_change_connected:
+            handle.screenChanged.connect(self._on_screen_changed)
+            self._screen_change_connected = True
+        self._active_screen = handle.screen()
+        self._connect_screen_dpi_signal(self._active_screen)
+
+    def _on_screen_changed(self, screen) -> None:
+        self._active_screen = screen
+        self._connect_screen_dpi_signal(screen)
+        # Windows completes its per-monitor DPI transition shortly after
+        # QWindow.screenChanged. Refresh after the native geometry has settled.
+        QTimer.singleShot(120, self._refresh_for_screen_change)
+        QTimer.singleShot(320, self._refresh_for_screen_change)
+
+    def _on_screen_dpi_changed(self, _dpi) -> None:
+        QTimer.singleShot(120, self._refresh_for_screen_change)
+        QTimer.singleShot(320, self._refresh_for_screen_change)
+
+    def _refresh_for_screen_change(self) -> None:
+        """Re-polish and lay out the dialog after a per-monitor DPI transition."""
+        handle = self.windowHandle()
+        screen = self._active_screen or (handle.screen() if handle is not None else None)
+        if screen is None:
+            screen = self._screen_for_position(self.pos())
+        if screen is None:
+            return
+
+        area = screen.availableGeometry()
+        preferred = self._preferred_size or QSize(self.size())
+        self._restore_size_limits()
+        width = min(preferred.width(), area.width())
+        height = min(preferred.height(), area.height())
+        if width != preferred.width() or height != preferred.height():
+            self.setMinimumSize(
+                min(self._base_min_size.width(), area.width()),
+                min(self._base_min_size.height(), area.height()),
+            )
+            self.setMaximumSize(area.width(), area.height())
+        self.resize(width, height)
+
+        # Point-based QSS font sizes allow Qt to recalculate type metrics for
+        # the destination screen's DPI; re-polishing refreshes descendant layouts.
+        stylesheet = self.styleSheet()
+        self.setStyleSheet("")
+        self.setStyleSheet(stylesheet)
+        for widget in self.findChildren(QWidget):
+            widget.updateGeometry()
+            widget.update()
+        # Keep its drag destination instead of centering it back over the owner.
+        self._place_on_screen(center_on_parent=False)
+
+    def _place_on_screen(self, *, center_on_parent: bool = False):
+        if center_on_parent and self.parentWidget() is not None and self.parentWidget().isVisible():
+            center = self.parentWidget().mapToGlobal(self.parentWidget().rect().center())
+            target = center - self.rect().center()
+        else:
+            handle = self.windowHandle()
+            screen = handle.screen() if handle is not None else None
+            if screen is None:
+                screen = self._screen_for_position(self.pos()) if self.isVisible() else QGuiApplication.primaryScreen()
+            if screen is None:
+                return
+            target = QPoint(self.pos()) if self.isVisible() else screen.availableGeometry().center() - self.rect().center()
+        self.move(self.clamp_to_screen(target))
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._connect_screen_change_signal()
+        # Qt may finalize the dialog size after showEvent; position again on
+        # the next loop turn using the actual geometry.
+        if self._preferred_size is None:
+            self._remember_preferred_size()
+        self._place_on_screen(center_on_parent=True)
+        QTimer.singleShot(0, self._connect_screen_change_signal)
+        QTimer.singleShot(0, lambda: self._place_on_screen(center_on_parent=True))
+
+
+class MessageDialog(_FramelessDialog):
+    """A consistent, themed replacement for QMessageBox."""
+
+    _LEVELS = {
+        "info": ("fa6s.circle-info", "#287db5"),
+        "warning": ("fa6s.triangle-exclamation", "#d97706"),
+        "critical": ("fa6s.circle-xmark", "#dc3545"),
+        "question": ("fa6s.circle-question", "#287db5"),
+    }
+
+    def __init__(
+        self,
+        parent,
+        title,
+        message,
+        *,
+        level="info",
+        question=False,
+        default_button=StandardButton.No,
+    ):
+        icon_name, accent = self._LEVELS.get(level, self._LEVELS["info"])
+        super().__init__(parent, str(title), icon_name, accent, width=460)
+        self.choice = StandardButton.No if question else StandardButton.Ok
+        self._question = question
+        self._default_button = default_button
+
+        message_label = QLabel(str(message), self.body_host)
+        message_label.setObjectName("dialogMessage")
+        message_label.setWordWrap(True)
+        message_label.setTextFormat(Qt.TextFormat.PlainText)
+        message_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        message_label.setMinimumWidth(0)
+        message_label.setMaximumWidth(620)
+        if len(str(message)) > 420:
+            scroll = QScrollArea(self.body_host)
+            scroll.setObjectName("dialogScroll")
+            scroll.setWidgetResizable(True)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            scroll.setMaximumHeight(260)
+            content = QWidget(scroll)
+            content_layout = QVBoxLayout(content)
+            content_layout.setContentsMargins(0, 0, 0, 0)
+            content_layout.addWidget(message_label)
+            scroll.setWidget(content)
+            self.body_layout.addWidget(scroll)
+        else:
+            self.body_layout.addWidget(message_label)
+
+        self._message_text = str(message)
+        if question:
+            self.add_footer_spacer()
+            no_button = self.add_button("No", primary=False, callback=self._choose_no)
+            yes_button = self.add_button("Yes", primary=True, callback=self._choose_yes)
+            if default_button == StandardButton.No:
+                no_button.setDefault(True)
+                no_button.setFocus()
+                yes_button.setAutoDefault(False)
+            else:
+                yes_button.setDefault(True)
+                yes_button.setFocus()
+                no_button.setAutoDefault(False)
+            self.setMinimumHeight(170)
+        else:
+            self.add_footer_spacer()
+            self.copy_button = self.add_button("Copy text", primary=False, callback=self._copy_message)
+            self.copy_button.setIcon(qta.icon("fa6s.copy", color=self._colors["text"]))
+            self.copy_button.setToolTip("Copy the complete message to the clipboard")
+            self.add_button("Got it", primary=True, callback=self.accept)
+            self.setMinimumHeight(150)
+
+        self.adjustSize()
+        self._remember_preferred_size()
+
+    def _copy_message(self):
+        """Copy the exact displayed plain-text message and give brief feedback."""
+        QApplication.clipboard().setText(self._message_text)
+        self.copy_button.setText("Copied")
+        self.copy_button.setIcon(qta.icon("fa6s.check", color=self._colors["text"]))
+        if not hasattr(self, "_copy_feedback_timer"):
+            self._copy_feedback_timer = QTimer(self)
+            self._copy_feedback_timer.setSingleShot(True)
+            self._copy_feedback_timer.timeout.connect(self._restore_copy_button)
+        self._copy_feedback_timer.start(1400)
+
+    def _restore_copy_button(self):
+        if not hasattr(self, "copy_button"):
+            return
+        self.copy_button.setText("Copy text")
+        self.copy_button.setIcon(qta.icon("fa6s.copy", color=self._colors["text"]))
+
+    def _choose_yes(self):
+        self.choice = StandardButton.Yes
+        self.accept()
+
+    def _choose_no(self):
+        self.choice = StandardButton.No
+        self.reject()
+
+    def reject(self):
+        if self._question:
+            self.choice = StandardButton.No
+        super().reject()
+
+
+
+class ExitConfirmDialog(MessageDialog):
+    """Custom exit confirmation with a persistent do-not-ask-again option."""
+
+    def __init__(self, parent=None):
+        super().__init__(
+            parent,
+            "Exit TorProxy",
+            "Exit TorProxy now? Active Tor and proxy services will be stopped.",
+            level="question",
+            question=True,
+            default_button=StandardButton.No,
+        )
+        self.dont_ask_checkbox = QCheckBox("Don't ask me again", self.body_host)
+        self.dont_ask_checkbox.setObjectName("dontAskAgain")
+        self.dont_ask_checkbox.setToolTip(
+            "Save this choice. You can turn the exit confirmation back on in Settings."
+        )
+        self.body_layout.addWidget(self.dont_ask_checkbox)
+        self.adjustSize()
+        self._remember_preferred_size()
+
+
+
+class ShortcutCaptureDialog(_FramelessDialog):
+    """Game-style capture flow for rebinding a global shortcut."""
+
+    _MODIFIER_KEYS = {
+        Qt.Key.Key_Control,
+        Qt.Key.Key_Shift,
+        Qt.Key.Key_Alt,
+        Qt.Key.Key_Meta,
+        Qt.Key.Key_AltGr,
+    }
+    _MODIFIER_LABELS = {
+        Qt.Key.Key_Control: "Ctrl",
+        Qt.Key.Key_Shift: "Shift",
+        Qt.Key.Key_Alt: "Alt",
+        Qt.Key.Key_Meta: "Win",
+        Qt.Key.Key_AltGr: "AltGr",
+    }
+
+    def __init__(self, parent=None, current_shortcut="Ctrl+Alt+P"):
+        super().__init__(
+            parent,
+            "Change global shortcut",
+            "fa6s.keyboard",
+            "#287db5",
+            width=520,
+        )
+        self.shortcut: str | None = None
+        self._captured_shortcut: str | None = None
+        self._pending_shortcut: str | None = None
+        self._pending_key: int | None = None
+        self._held_modifiers: dict[int, str] = {}
+        self._listening = True
+
+        intro = QLabel(
+            "Press the key combination you want to use. The preview updates while you press and hold keys; release the main key, then press Enter to save.",
+            self.body_host,
+        )
+        intro.setObjectName("dialogMessage")
+        intro.setWordWrap(True)
+        self.body_layout.addWidget(intro)
+
+        current = QLabel(f"CURRENT  ·  {current_shortcut}", self.body_host)
+        current.setObjectName("shortcutCaptureHint")
+        self.body_layout.addWidget(current)
+
+        panel = QFrame(self.body_host)
+        panel.setObjectName("shortcutCapturePanel")
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(16, 15, 16, 15)
+        panel_layout.setSpacing(7)
+
+        self.badge = QLabel("●  LISTENING FOR INPUT", panel)
+        self.badge.setObjectName("shortcutCaptureBadge")
+        self.badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        panel_layout.addWidget(self.badge)
+
+        self.capture_value = QLabel("Press a modifier and a key…", panel)
+        self.capture_value.setObjectName("shortcutCaptureValue")
+        self.capture_value.setWordWrap(True)
+        self.capture_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        panel_layout.addWidget(self.capture_value)
+
+        self.capture_hint = QLabel(
+            "Enter  Apply     ·     Backspace  Listen again     ·     Esc  Cancel",
+            panel,
+        )
+        self.capture_hint.setObjectName("shortcutCaptureHint")
+        self.capture_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.capture_hint.setWordWrap(True)
+        panel_layout.addWidget(self.capture_hint)
+        self.body_layout.addWidget(panel)
+
+        self._listening_note = QLabel(
+            "Global shortcuts need at least one modifier, such as Ctrl, Alt, Shift, or Win.",
+            self.body_host,
+        )
+        self._listening_note.setObjectName("dialogHint")
+        self._listening_note.setWordWrap(True)
+        self.body_layout.addWidget(self._listening_note)
+
+        self.retry_button = self.add_button(
+            "Listen again", primary=False, callback=self._begin_listening
+        )
+        self.retry_button.setIcon(qta.icon("fa6s.rotate", color=self._colors["text"]))
+        self.add_footer_spacer()
+        self.cancel_button = self.add_button("Cancel", primary=False, callback=self.reject)
+        self.apply_button = self.add_button(
+            "Apply shortcut", primary=True, callback=self._apply_captured
+        )
+        self.apply_button.setEnabled(False)
+        # Let Qt resolve the true content/minimum height instead of requesting
+        # 370px when the composed layouts require a little more (375px+).
+        self.adjustSize()
+        self.resize(540, max(self.minimumHeight(), self.sizeHint().height()))
+        self._remember_preferred_size()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self._begin_listening)
+
+    def _begin_listening(self):
+        self._captured_shortcut = None
+        self._pending_shortcut = None
+        self._pending_key = None
+        self._held_modifiers.clear()
+        self._listening = True
+        self.capture_value.setText("Press a modifier and a key…")
+        self.badge.setText("●  LISTENING FOR INPUT")
+        self._listening_note.setText(
+            "Waiting for a new combination. Modifier keys alone are not saved."
+        )
+        self.apply_button.setEnabled(False)
+        if self.isVisible():
+            self.activateWindow()
+            self.raise_()
+            self.grabKeyboard()
+
+    @staticmethod
+    def _modifier_value(modifiers):
+        value = getattr(modifiers, "value", None)
+        return int(value if value is not None else modifiers)
+
+    def event(self, event):
+        # Qt can dispatch events while QDialog.__init__ is still running,
+        # before subclass fields such as _listening have been initialized.
+        # getattr avoids raising inside the virtual event callback during setup.
+        # Once capture is active, eat ShortcutOverride before QAction/QShortcut
+        # processing; the owning page suspends the global HotkeyManager as well.
+        if getattr(self, "_listening", False) and event.type() == QEvent.Type.ShortcutOverride:
+            event.accept()
+            return True
+        return super().event(event)
+
+    def _modifier_names(self, modifiers=0):
+        modifier_value = self._modifier_value(modifiers)
+        pairs = (
+            (Qt.KeyboardModifier.ControlModifier, Qt.Key.Key_Control, "Ctrl"),
+            (Qt.KeyboardModifier.AltModifier, Qt.Key.Key_Alt, "Alt"),
+            (Qt.KeyboardModifier.ShiftModifier, Qt.Key.Key_Shift, "Shift"),
+            (Qt.KeyboardModifier.MetaModifier, Qt.Key.Key_Meta, "Win"),
+        )
+        names = [
+            label for flag, key, label in pairs
+            if modifier_value & int(flag.value) or key in self._held_modifiers
+        ]
+        if Qt.Key.Key_AltGr in self._held_modifiers:
+            names.append("AltGr")
+        return names
+
+    def _live_chord(self, key=None, modifiers=0):
+        parts = self._modifier_names(modifiers)
+        if key is not None and key not in self._MODIFIER_KEYS:
+            key_text = QKeySequence(int(key)).toString(QKeySequence.SequenceFormat.PortableText)
+            parts.append(key_text or str(key))
+        return " + ".join(parts) if parts else "Press a modifier and a key…"
+
+    def _finish_capture(self, normalized):
+        self._captured_shortcut = normalized
+        self._pending_shortcut = None
+        self._pending_key = None
+        self._listening = False
+        self.capture_value.setText(normalized)
+        self.badge.setText("✓  COMBINATION CAPTURED")
+        self._listening_note.setText(
+            "Press Enter or Apply shortcut to save. Use Listen again or Backspace to record another combination."
+        )
+        self.apply_button.setEnabled(True)
+        if self.keyboardGrabber() is self:
+            self.releaseKeyboard()
+
+    def keyPressEvent(self, event):
+        key = event.key()
+        modifiers = self._modifier_value(event.modifiers())
+        no_modifiers = modifiers == int(Qt.KeyboardModifier.NoModifier.value)
+        if key == Qt.Key.Key_Escape and no_modifiers:
+            self.reject()
+            event.accept()
+            return
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and no_modifiers:
+            if self._captured_shortcut:
+                self._apply_captured()
+            else:
+                self._listening_note.setText(
+                    "Nothing captured yet. Press a modifier plus a key first."
+                )
+            event.accept()
+            return
+        if key == Qt.Key.Key_Backspace and no_modifiers:
+            self._begin_listening()
+            event.accept()
+            return
+        if event.isAutoRepeat():
+            event.accept()
+            return
+        if not self._listening:
+            event.accept()
+            return
+        if key in self._MODIFIER_KEYS:
+            self._held_modifiers[key] = self._MODIFIER_LABELS[key]
+            self._pending_shortcut = None
+            self._pending_key = None
+            self._captured_shortcut = None
+            self.capture_value.setText(self._live_chord(modifiers=modifiers))
+            self.badge.setText("●  KEYS HELD")
+            self._listening_note.setText("Modifier detected. Keep it held and press the main key.")
+            self.apply_button.setEnabled(False)
+            event.accept()
+            return
+        if key == Qt.Key.Key_unknown:
+            self._pending_shortcut = None
+            self._pending_key = key
+            self._captured_shortcut = None
+            self.capture_value.setText(self._live_chord(key, modifiers))
+            self.badge.setText("●  TRY ANOTHER KEY")
+            self._listening_note.setText(
+                "That key cannot be represented. Try a letter, number, function key, or navigation key."
+            )
+            self.apply_button.setEnabled(False)
+            event.accept()
+            return
+
+        self._pending_key = key
+        self._captured_shortcut = None
+        try:
+            combined = modifiers | int(key)
+            sequence = QKeySequence(combined).toString(
+                QKeySequence.SequenceFormat.PortableText
+            )
+            normalized = parse_hotkey(sequence).text
+        except (TypeError, ValueError, RuntimeError) as exc:
+            self._pending_shortcut = None
+            self.capture_value.setText(self._live_chord(key, modifiers))
+            self.badge.setText("●  INPUT PREVIEW")
+            self._listening_note.setText(str(exc))
+            self.apply_button.setEnabled(False)
+            event.accept()
+            return
+
+        # Show the chord on key-down, but don't finalize it until key-up. This
+        # keeps the preview live while the user is physically holding the keys.
+        self._pending_shortcut = normalized
+        self.capture_value.setText(normalized)
+        self.badge.setText("●  COMBINATION HELD")
+        self._listening_note.setText(
+            "Live preview — release the main key to finish capturing, then press Enter or Apply shortcut."
+        )
+        self.apply_button.setEnabled(False)
+        event.accept()
+
+    def keyReleaseEvent(self, event):
+        if not self._listening:
+            super().keyReleaseEvent(event)
+            return
+        if event.isAutoRepeat():
+            event.accept()
+            return
+
+        key = event.key()
+        if key in self._MODIFIER_KEYS:
+            self._held_modifiers.pop(key, None)
+            if not self._pending_shortcut:
+                self.capture_value.setText(self._live_chord())
+                if self._held_modifiers:
+                    self.badge.setText("●  KEYS HELD")
+                else:
+                    self.badge.setText("●  LISTENING FOR INPUT")
+            event.accept()
+            return
+
+        if key == self._pending_key:
+            normalized = self._pending_shortcut
+            self._pending_key = None
+            self._pending_shortcut = None
+            if normalized:
+                self._finish_capture(normalized)
+            else:
+                self._captured_shortcut = None
+                self.capture_value.setText(self._live_chord())
+                self.badge.setText("●  LISTENING FOR INPUT")
+                self._listening_note.setText(
+                    "Add Ctrl, Alt, Shift, or Win to create a valid global shortcut."
+                )
+            event.accept()
+            return
+        super().keyReleaseEvent(event)
+
+    def _apply_captured(self):
+        if not self._captured_shortcut:
+            self._begin_listening()
+            return
+        self.shortcut = self._captured_shortcut
+        if self.keyboardGrabber() is self:
+            self.releaseKeyboard()
+        self.accept()
+
+    def reject(self):
+        if self.keyboardGrabber() is self:
+            self.releaseKeyboard()
+        self._listening = False
+        super().reject()

@@ -1,15 +1,14 @@
 """Tor Expert Bundle discovery and fail-closed signed installation."""
 from __future__ import annotations
 
-import glob
+import json
 import logging
 import os
 import platform
 import re
 import shutil
-import subprocess
 from pathlib import Path
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import unquote, urljoin, urlsplit
 
 import requests
 from bs4 import BeautifulSoup
@@ -17,15 +16,52 @@ from bs4 import BeautifulSoup
 from config import ARCHITECTURE, BUNDLE_DIR, OS_NAME, TOR_BUNDLE_BASE_URL
 from torproxy.bundle import (
     ALLOWED_DISTRIBUTION_HOSTS,
+    BundleProgress,
     BundleVerificationError,
     download_verified_bundle,
+    sha256_file,
     verify_tor_signature,
 )
 from utils import resource_path
 
 logger = logging.getLogger(__name__)
 REQUEST_TIMEOUT = (8.0, 20.0)
-STABLE_VERSION = re.compile(r"^\d+\.\d+\.\d+$")
+
+# Tor currently publishes stable versions as X.Y.Z and alpha releases as X.YaN.
+# A future naming convention must be added deliberately rather than accepted generically.
+STABLE_VERSION = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+ALPHA_VERSION = re.compile(
+    r"^(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\.(0|[1-9]\d*))?a(0|[1-9]\d*)$"
+)
+
+
+def parse_tor_version(version: str) -> tuple[int, int, int, str, int]:
+    """Validate a supported release name and return sortable numeric components.
+
+    Sort policy: stable channel first; prereleases are shown separately afterwards.
+    Within each channel, numeric components are sorted descending by callers.
+    """
+    value = str(version).strip().strip("/")
+    stable = STABLE_VERSION.fullmatch(value)
+    if stable:
+        major, minor, patch = (int(part) for part in stable.groups())
+        return major, minor, patch, "stable", 0
+    alpha = ALPHA_VERSION.fullmatch(value)
+    if alpha:
+        major, minor, patch, alpha_number = alpha.groups()
+        return int(major), int(minor), int(patch or 0), "alpha", int(alpha_number)
+    raise ValueError("Unsupported Tor release version: {!r}".format(value))
+
+
+def tor_version_sort_key(version: str) -> tuple[int, int, int, int, int]:
+    """Natural numeric sort key with stable releases ranked before all alphas."""
+    major, minor, patch, channel, prerelease = parse_tor_version(version)
+    return (1 if channel == "stable" else 0, major, minor, patch, prerelease)
+
+
+def tor_version_channel(version: str) -> str:
+    """Return the validated UI channel label for a release."""
+    return "Stable" if parse_tor_version(version)[3] == "stable" else "Alpha · prerelease"
 
 
 def bundle_path(filename: str) -> Path:
@@ -58,19 +94,42 @@ def _fetch_listing(url: str) -> BeautifulSoup:
 
 
 def get_tor_versions(url: str = TOR_BUNDLE_BASE_URL) -> list[str]:
-    """Return stable numeric release directory names; never download side files as a side effect."""
+    """Return every recognized release directory, sorted stables first then alphas.
+
+    Artifact availability is checked lazily when a user selects a release. This
+    avoids firing one network request for every historical release at startup.
+    """
     try:
         soup = _fetch_listing(url)
-        versions = set()
+        versions: set[str] = set()
         for link in soup.find_all("a", href=True):
-            name = link.get("href", "").strip("/")
-            if STABLE_VERSION.fullmatch(name):
-                versions.add(name)
-        # Keep UI discovery bounded: checking every historical release can require hundreds of requests.
-        return [version + "/" for version in sorted(versions, key=lambda v: tuple(map(int, v.split("."))), reverse=True)[:12]]
-    except (requests.RequestException, BundleVerificationError, ValueError):
+            href = unquote(str(link.get("href", "")).strip())
+            if not href or href.startswith(("../", "#")):
+                continue
+            parsed = urlsplit(href)
+            if parsed.scheme or parsed.netloc:
+                continue
+            path = parsed.path.strip("/")
+            if not path or "/" in path:
+                continue
+            try:
+                parse_tor_version(path)
+            except ValueError:
+                continue
+            versions.add(path)
+        if not versions:
+            raise BundleVerificationError(
+                "The official Tor listing returned no recognizable stable or supported alpha release directories."
+            )
+        return [version + "/" for version in sorted(versions, key=tor_version_sort_key, reverse=True)]
+    except BundleVerificationError:
+        logger.exception("Tor release discovery rejected the listing.")
+        raise
+    except (requests.RequestException, ValueError) as exc:
         logger.exception("Could not retrieve the official Tor Expert Bundle release list.")
-        return []
+        raise BundleVerificationError(
+            "Could not retrieve or parse the official Tor release list. Check the network connection and retry."
+        ) from exc
 
 
 def _platform_name() -> str:
@@ -78,7 +137,7 @@ def _platform_name() -> str:
         return "windows"
     if OS_NAME == "Linux":
         return "linux"
-    raise BundleVerificationError(f"Tor bundle downloads are not configured for {OS_NAME}.")
+    raise BundleVerificationError("Tor bundle downloads are not configured for {}.".format(OS_NAME))
 
 
 def _architecture_name() -> str:
@@ -87,50 +146,118 @@ def _architecture_name() -> str:
         return "x86_64"
     if machine in {"i386", "i486", "i586", "i686", "x86"} and ARCHITECTURE == 32:
         return "i686"
-    # Python may be a 32-bit process on a 64-bit machine.
-    if ARCHITECTURE == 32:
+    # A 32-bit Python process can run on a 64-bit x86 OS.
+    if ARCHITECTURE == 32 and machine in {"x86_64", "amd64", "i386", "i486", "i586", "i686", "x86"}:
         return "i686"
-    raise BundleVerificationError(f"Unsupported CPU architecture for an Expert Bundle: {machine}.")
+    raise BundleVerificationError("Unsupported CPU architecture for an Expert Bundle: {}.".format(machine))
 
 
-def get_bundle_links(version: str, base_url: str = TOR_BUNDLE_BASE_URL) -> list[str]:
+def get_bundle_links(
+    version: str,
+    base_url: str = TOR_BUNDLE_BASE_URL,
+    *,
+    require_signature: bool = True,
+) -> list[str]:
+    """Return the exact platform artifact, requiring .asc only when signature checks are enabled."""
     release = str(version).strip().strip("/")
-    if not STABLE_VERSION.fullmatch(release):
-        return []
+    parse_tor_version(release)
+    platform_name = _platform_name()
+    architecture = _architecture_name()
+    listing_url = urljoin(base_url.rstrip("/") + "/", release + "/")
     try:
-        soup = _fetch_listing(urljoin(base_url.rstrip("/") + "/", release + "/"))
-        prefix = f"tor-expert-bundle-{_platform_name()}-{_architecture_name()}-{release}.tar.gz"
-        return [link["href"] for link in soup.find_all("a", href=True)
-                if link.get("href", "") == prefix]
-    except (requests.RequestException, BundleVerificationError, ValueError):
-        logger.exception("Could not list Tor bundles for release %s.", release)
-        return []
-
+        soup = _fetch_listing(listing_url)
+    except BundleVerificationError:
+        raise
+    except requests.RequestException as exc:
+        logger.exception("Could not list signed Tor bundles for release %s.", release)
+        raise BundleVerificationError(
+            f"Could not check artifact availability for Tor release {release}. "
+            "Check the network connection and retry."
+        ) from exc
+    anchors = soup.find_all("a", href=True)
+    if not anchors:
+        raise BundleVerificationError(
+            f"The Tor release listing for {release} was empty or malformed."
+        )
+    expected = f"tor-expert-bundle-{platform_name}-{architecture}-{release}.tar.gz"
+    names = {
+        Path(urlsplit(str(link.get("href", ""))).path).name
+        for link in anchors
+    }
+    if expected in names and (not require_signature or expected + ".asc" in names):
+        return [expected]
+    return []
 
 def get_version_by_bundle(filename: str, with_slash: bool = False) -> str:
     name = Path(filename).name
-    match = re.search(r"-(\d+\.\d+\.\d+)\.tar\.gz$", name)
+    match = re.fullmatch(r"tor-expert-bundle-(?:windows|linux)-(?:x86_64|i686)-((?:\d+\.\d+\.\d+)|(?:\d+\.\d+(?:\.\d+)?a\d+))\.tar\.gz", name)
     if not match:
-        raise ValueError(f"Not a stable Tor Expert Bundle filename: {name}")
+        raise ValueError("Not a supported Tor Expert Bundle filename: {}".format(name))
     version = match.group(1)
+    parse_tor_version(version)
     return version + "/" if with_slash else version
 
 
-def download_file(filename: str, version: str, base_url: str = TOR_BUNDLE_BASE_URL) -> Path:
-    """Download only the current-OS/CPU bundle and require its detached signature."""
+def download_file(
+    filename: str,
+    version: str,
+    base_url: str = TOR_BUNDLE_BASE_URL,
+    progress_callback=None,
+    cancel_event=None,
+    verify_signature: bool = True,
+) -> Path:
+    """Download the exact current-platform Expert Bundle, optionally checking its OpenPGP signature."""
     release = str(version).strip().strip("/")
-    if not STABLE_VERSION.fullmatch(release):
-        raise BundleVerificationError("Only stable numeric Tor versions can be downloaded.")
-    expected = f"tor-expert-bundle-{_platform_name()}-{_architecture_name()}-{release}.tar.gz"
+    try:
+        parse_tor_version(release)
+    except ValueError as exc:
+        raise BundleVerificationError(str(exc)) from exc
+    expected = "tor-expert-bundle-{}-{}-{}.tar.gz".format(
+        _platform_name(), _architecture_name(), release
+    )
     if Path(filename).name != expected:
-        raise BundleVerificationError(f"Bundle name does not match the selected platform/version: {expected}")
+        raise BundleVerificationError("Bundle name does not match the selected platform/version: {}".format(expected))
     create_bundle_dir()
     archive = bundle_path(expected)
-    if archive.exists() and check_hash(archive):
+    signature = archive.with_name(archive.name + ".asc")
+    if verify_signature and archive.is_file() and signature.is_file():
+        if progress_callback:
+            progress_callback(BundleProgress(
+                version=release, operation="verify", stage="verifying_signature",
+                message="Checking the cached archive signature before reuse.",
+            ))
+        try:
+            verify_tor_signature(
+                archive, signature, progress_callback=progress_callback,
+                cancel_event=cancel_event, version=release,
+            )
+        except BundleVerificationError as exc:
+            message = str(exc).lower()
+            if cancel_event is not None and cancel_event.is_set():
+                raise
+            if any(term in message for term in ("gnupg", "timed out", "download failed", "could not be retrieved")):
+                raise
+            logger.warning("Cached Tor archive failed signature verification; re-downloading it.")
+        else:
+            if progress_callback:
+                progress_callback(BundleProgress(
+                    version=release, operation="install", stage="already_verified",
+                    message="Existing archive signature verified; safe extraction is still required.",
+                ))
+            return archive
+    elif not verify_signature and archive.is_file():
+        logger.warning("Reusing cached Tor Expert Bundle %s without OpenPGP signature verification (disabled in Settings).", expected)
         return archive
     archive.parent.mkdir(parents=True, exist_ok=True)
-    result = download_verified_bundle(release, _platform_name(), _architecture_name(), archive, base_url)
-    logger.info("Downloaded and signature-verified Tor Expert Bundle %s.", expected)
+    result = download_verified_bundle(
+        release, _platform_name(), _architecture_name(), archive, base_url,
+        progress_callback=progress_callback, cancel_event=cancel_event,
+        verify_signature=verify_signature,
+    )
+    if verify_signature:
+        logger.info("Downloaded and signature-verified Tor Expert Bundle %s.", expected)
+    else:
+        logger.warning("Downloaded Tor Expert Bundle %s via HTTPS without authenticating its OpenPGP signature.", expected)
     return result
 
 
@@ -160,10 +287,12 @@ def check_hash(filename, base_url: str = TOR_BUNDLE_BASE_URL, go_online: bool = 
     if not signature.is_file() and go_online:
         try:
             version = get_version_by_bundle(path.name)
-            expected = f"tor-expert-bundle-{_platform_name()}-{_architecture_name()}-{version}.tar.gz"
+            expected = "tor-expert-bundle-{}-{}-{}.tar.gz".format(
+                _platform_name(), _architecture_name(), version
+            )
             if path.name != expected:
                 return False
-            sig_url = urljoin(TOR_BUNDLE_BASE_URL.rstrip("/") + "/", f"{version}/{path.name}.asc")
+            sig_url = urljoin(TOR_BUNDLE_BASE_URL.rstrip("/") + "/", "{}/{}.asc".format(version, path.name))
             with requests.get(sig_url, timeout=REQUEST_TIMEOUT, allow_redirects=False) as response:
                 if 300 <= response.status_code < 400:
                     return False
@@ -196,15 +325,22 @@ def _verification_marker(bundle_dir: Path) -> Path:
 
 
 def check_bundle_compatibility(filename: str) -> bool:
-    """Only verified extracted bundles qualify as managed/default bundles."""
+    """Accept intact managed installs only when explicitly signed or marked HTTPS-only."""
     path = Path(filename).resolve()
     name = path.name
     if not path.is_dir() or not name.startswith("tor-expert-bundle-"):
         return False
     try:
-        marker = _verification_marker(path)
-        metadata = __import__("json").loads(marker.read_text(encoding="utf-8"))
-        if metadata.get("signature_verified") is not True:
+        metadata = json.loads(_verification_marker(path).read_text(encoding="utf-8"))
+        signature_verified = (
+            metadata.get("signature_verified") is True
+            and metadata.get("verification_method", "openpgp") == "openpgp"
+        )
+        https_only = (
+            metadata.get("signature_verified") is False
+            and metadata.get("verification_method") == "https_only"
+        )
+        if not (signature_verified or https_only):
             return False
         expected_digest = metadata.get("archive_sha256", "")
         if not re.fullmatch(r"[a-f0-9]{64}", expected_digest):
@@ -212,7 +348,7 @@ def check_bundle_compatibility(filename: str) -> bool:
         archive = path.with_name(path.name + ".tar.gz")
         if not archive.is_file() or sha256_file(archive) != expected_digest:
             return False
-        if not archive.with_name(archive.name + ".asc").is_file():
+        if signature_verified and not archive.with_name(archive.name + ".asc").is_file():
             return False
     except (OSError, ValueError, AttributeError):
         return False
@@ -221,7 +357,7 @@ def check_bundle_compatibility(filename: str) -> bool:
         arch = _architecture_name()
     except BundleVerificationError:
         return False
-    if not name.startswith(f"tor-expert-bundle-{platform_name}-{arch}-"):
+    if not name.startswith("tor-expert-bundle-{}-{}-".format(platform_name, arch)):
         return False
     executable = path / "tor" / ("tor.exe" if platform_name == "windows" else "tor")
     if not executable.is_file():
@@ -233,8 +369,10 @@ def get_own_bundles() -> list[str]:
     root = Path(resource_path(BUNDLE_DIR))
     if not root.is_dir():
         return []
-    return [str(path) for path in sorted(root.glob("tor-expert-bundle-*"))
-            if path.is_dir() and check_bundle_compatibility(str(path))]
+    return [
+        str(path) for path in sorted(root.glob("tor-expert-bundle-*"))
+        if path.is_dir() and check_bundle_compatibility(str(path))
+    ]
 
 
 def delete_bundle(name: str) -> None:

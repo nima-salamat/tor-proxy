@@ -11,7 +11,7 @@ The most security-sensitive changes target unsafe network exposure, false-positi
 | Severity | Finding in the baseline | Redesign response |
 |---|---|---|
 | Critical | The HTTP proxy listener could bind to a non-loopback/all-interface address. | The server constructor now rejects non-loopback binds; the GUI creates it on `127.0.0.1`. |
-| Critical | The old updater could accept a missing checksum in some paths. | Download/install uses a detached OpenPGP signature and pinned signing-key fingerprint; missing/invalid signatures fail closed. |
+| Critical | The old updater could accept a missing checksum in some paths. | When OpenPGP is enabled, download/install uses a detached signature and pinned signing-key fingerprint; invalid signatures fail closed. Safe extraction and explicit trust-method markers apply in both modes. |
 | High | IP checking could make a direct request while labelling the result as Tor's IP. | Explicit HTTP/HTTPS proxy settings, no redirects, timeouts, IP validation, and no direct retry. |
 | High | System proxy changes used shell commands and clearing did not preserve prior settings. | Windows registry/GNOME adapters, saved snapshots, argv-based subprocess calls, explicit opt-in, conditional restoration. |
 | High | Tor status was inferred from log text; subprocess pipes could remain undrained. | Supervised process, file-backed subprocess output, configuration validation, authenticated Stem control, bootstrap-phase parsing. |
@@ -47,6 +47,12 @@ The most security-sensitive changes target unsafe network exposure, false-positi
 Test modules cover host rules, configuration and migration, user paths, proxy-required IP checks, Tor configuration and bridge validation, tar extraction, loopback-only proxy binding, HTTP forwarding through a local fake SOCKS5 relay, and mocked Windows proxy restoration.
 
 GitHub Actions is configured for Windows/Ubuntu and Python 3.10–3.13. A green result must be confirmed from the actual workflow after the branch is pushed. CI fakes do not prove successful connection to the live Tor network or validate every GUI/platform-specific behavior.
+
+## UI/updater follow-up in progress
+
+The follow-up branch `feature/modern-ui-and-updater-repair` restores the custom title bar, improves multi-monitor movement and scaling, highlights the active top-menu page, preserves the large circular Home connect control, and adds the notification bell and named Settings sections. OpenPGP signature verification is an opt-in setting (off by default); when enabled, compatible artifact discovery requires the detached signature and GnuPG is checked before transfer. With verification off, the exact platform archive is downloaded from the approved Tor HTTPS host, safely extracted, and clearly labeled `HTTPS ONLY · UNSIGNED`.
+
+Managed bundle auto-discovery now consults the existing verified-bundle inventory instead of trusting every matching folder name. Qt layout construction was corrected in the main shell, settings, overview, blocked-host and bypass-host views. Regression tests were added for version parsing, listing/artifact filtering, progress semantics, pinned-key/signature failure paths, missing-verifier preflight, managed executable selection, and atomic installation cleanup. An opt-in live-download/signature test is registered and documented; it is not part of normal offline CI. These changes remain subject to the branch's actual CI results and manual platform checks; they are not evidence of a completed live Windows signature-verification session.
 
 ## Known limitations and remaining work
 

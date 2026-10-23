@@ -1,6 +1,7 @@
 """TorProxy desktop entry point."""
 from __future__ import annotations
 
+import faulthandler
 import logging
 import signal
 import sys
@@ -14,18 +15,46 @@ if SRC_ROOT.is_dir() and str(SRC_ROOT) not in sys.path:
 
 import portalocker
 import qdarkstyle
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication
 from qdarkstyle.dark.palette import DarkPalette
 from qdarkstyle.light.palette import LightPalette
 
-from config import CONFIG, IS_WINDOWS
+from ui_.window.dialogs import QMessageBox
+from config import CONFIG
 from torproxy.paths import user_directories
 from ui import Window
 from utils import resource_path
 
 LOGGER = logging.getLogger(__name__)
+_CRASH_LOG_HANDLE = None
+
+
+def enable_crash_reporting() -> None:
+    """Keep a faulthandler file open so native crashes leave a diagnostic trace."""
+    global _CRASH_LOG_HANDLE
+    if _CRASH_LOG_HANDLE is not None:
+        return
+    try:
+        directories = user_directories().ensure()
+        handle = (directories.logs / "torproxy-crash.log").open("ab", buffering=0)
+        faulthandler.enable(file=handle, all_threads=True)
+        _CRASH_LOG_HANDLE = handle
+    except Exception:
+        # Crash reporting must never prevent TorProxy from starting.
+        sys.stderr.write("TorProxy: could not enable native crash diagnostics.\n")
+
+
+def _log_uncaught_exception(exc_type, exc_value, exc_traceback) -> None:
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+    LOGGER.critical(
+        "Uncaught exception on the main thread.",
+        exc_info=(exc_type, exc_value, exc_traceback),
+    )
+    sys.__excepthook__(exc_type, exc_value, exc_traceback)
 
 
 def configure_logging() -> None:
@@ -34,6 +63,7 @@ def configure_logging() -> None:
     level = getattr(logging, level_name, logging.INFO)
     root = logging.getLogger()
     root.setLevel(level)
+    sys.excepthook = _log_uncaught_exception
     if root.handlers:
         return
     formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -48,6 +78,11 @@ def configure_logging() -> None:
 
 
 def main() -> int:
+    enable_crash_reporting()
+    # Preserve each display's actual DPI ratio when moving between monitors.
+    QApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+    )
     app = QApplication(sys.argv)
     try:
         CONFIG.load()
@@ -68,15 +103,9 @@ def main() -> int:
                 app.setStyleSheet(qdarkstyle.load_stylesheet(palette=DarkPalette()))
             app.setWindowIcon(QIcon(resource_path("assets/icon.png")))
             win = Window()
-            if IS_WINDOWS:
-                try:
-                    import ctypes
-                    from ctypes import wintypes
-                    ctypes.windll.user32.SetWindowDisplayAffinity.argtypes = [wintypes.HWND, wintypes.DWORD]
-                    ctypes.windll.user32.SetWindowDisplayAffinity.restype = wintypes.BOOL
-                    ctypes.windll.user32.SetWindowDisplayAffinity(int(win.winId()), 1)
-                except (AttributeError, OSError):
-                    LOGGER.debug("Window display affinity could not be enabled.")
+            # Keep the normal Windows DWM presentation path. Display-affinity
+            # restrictions are not needed for Tor operation and can interfere
+            # with capture/restore behavior for frameless Qt windows.
             win.show()
             signal.signal(signal.SIGINT, lambda *_: QTimer.singleShot(0, app.quit))
             try:
