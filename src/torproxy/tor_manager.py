@@ -9,18 +9,19 @@ import socket
 import subprocess
 import tempfile
 import threading
-
-import psutil
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-_ACTIVE_DATA_DIRECTORIES: set[str] = set()
-_ACTIVE_DATA_DIRECTORIES_LOCK = threading.Lock()
-from collections.abc import Callable
+import psutil
 
 from .paths import user_directories
+
+
+_ACTIVE_DATA_DIRECTORIES: set[str] = set()
+_ACTIVE_DATA_DIRECTORIES_LOCK = threading.Lock()
 
 LOGGER = logging.getLogger(__name__)
 BootstrapCallback = Callable[["TorState", int | None, str], None]
