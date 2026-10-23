@@ -12,6 +12,7 @@ from PySide6.QtCore import QPoint, Qt
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
+    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -273,6 +274,9 @@ class _FramelessDialog(QDialog):
             QPushButton#dialogSecondaryButton:hover {{ background: {self._colors["hover"]}; }}
             QScrollArea#dialogScroll {{ background: transparent; border: none; }}
             QScrollArea#dialogScroll QWidget {{ background: transparent; }}
+            QCheckBox#dontAskAgain {{ color: {self._colors["text"]}; background: transparent; spacing: 8px; font-size: 11px; }}
+            QCheckBox#dontAskAgain::indicator {{ width: 16px; height: 16px; border: 1px solid {self._colors["border"]}; border-radius: 4px; background: {self._colors["panel"]}; }}
+            QCheckBox#dontAskAgain::indicator:checked {{ background: {self._accent}; border-color: {self._accent}; }}
         """)
 
     def add_footer_spacer(self):
@@ -380,3 +384,25 @@ class MessageDialog(_FramelessDialog):
         if self._question:
             self.choice = StandardButton.No
         super().reject()
+
+
+
+class ExitConfirmDialog(MessageDialog):
+    """Custom exit confirmation with a persistent do-not-ask-again option."""
+
+    def __init__(self, parent=None):
+        super().__init__(
+            parent,
+            "Exit TorProxy",
+            "Exit TorProxy now? Active Tor and proxy services will be stopped.",
+            level="question",
+            question=True,
+            default_button=StandardButton.No,
+        )
+        self.dont_ask_checkbox = QCheckBox("Don't ask me again", self.body_host)
+        self.dont_ask_checkbox.setObjectName("dontAskAgain")
+        self.dont_ask_checkbox.setToolTip(
+            "Save this choice. You can turn the exit confirmation back on in Settings."
+        )
+        self.body_layout.addWidget(self.dont_ask_checkbox)
+        self.adjustSize()
