@@ -50,7 +50,7 @@ class LogWindow(QWidget):
 
         self.btn_clear = QPushButton(qta.icon("fa6s.trash"), "")
         self.btn_clear.setObjectName("logIconButton")
-        self.btn_clear.setToolTip("Clear logs")
+        self.btn_clear.setToolTip("Clear the visible event list (does not clear tor.log)")
         self.btn_clear.setFixedSize(30, 30)
         self.btn_clear.clicked.connect(self._clear_logs)
         header.addWidget(self.btn_clear)
