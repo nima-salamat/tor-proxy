@@ -167,6 +167,7 @@ class ProxyWindow(QWidget):
         self.thread_pool = QThreadPool(self)
         self.tor.log_message.connect(self.logs_widget.update_log)
         self.tor.service_failed.connect(self._on_tor_failed)
+        self.tor.bridges_updated.connect(self._sync_bridge_editor)
         self.logs_widget.apply_theme(CONFIG["mode"])
         self._apply_home_theme()
         self._update_proxy_buttons()
@@ -180,6 +181,22 @@ class ProxyWindow(QWidget):
         self.timer_data_usage = QTimer()
         self.timer_data_usage.setInterval(1000)
         self.timer_data_usage.timeout.connect(self.change_data_usage)
+
+    def _sync_bridge_editor(self, bridge_text: str):
+        """Reflect automatically pruned bridge records in the Settings editor."""
+        owner = self._parent
+        if owner is None:
+            return
+        editor = owner.findChild(QWidget, "bridgeRecordsInput")
+        if editor is None or not hasattr(editor, "setPlainText"):
+            return
+        if editor.toPlainText() == bridge_text:
+            return
+        was_blocked = editor.blockSignals(True)
+        try:
+            editor.setPlainText(bridge_text)
+        finally:
+            editor.blockSignals(was_blocked)
 
     def change_data_usage(self):
         self.lbl_data_usage.setText(f"Proxy traffic (both directions): {CONFIG['data_usage']/1024**2:.2f} MiB")
