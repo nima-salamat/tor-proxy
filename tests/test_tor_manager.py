@@ -44,6 +44,26 @@ def test_tor_manager_splits_inline_records_using_the_shared_parser():
     ]
 
 
+def test_active_bridge_state_requires_ready_control_port_and_built_first_hop(tmp_path):
+    from types import SimpleNamespace
+
+    fingerprint = "A1B2C3D4E5F60718293A4B5C6D7E8F9012345678"
+    manager = TorManager(TorSettings(
+        executable=tmp_path / "tor",
+        data_directory=tmp_path / "state",
+        bridges_enabled=True,
+        bridges=f"webtunnel 192.0.2.10:443 {fingerprint} url=https://bridge.example/ ver=0.0.1",
+    ))
+    assert manager.get_active_bridge_fingerprints() == frozenset()
+
+    manager.state = TorState.READY
+    manager._controller = SimpleNamespace(get_circuits=lambda: [
+        SimpleNamespace(status="BUILT", path=[(f"${fingerprint}~Bridge", "Bridge")]),
+        SimpleNamespace(status="LAUNCHED", path=[("B" * 40, "Other")]),
+    ])
+    assert manager.get_active_bridge_fingerprints() == frozenset({fingerprint})
+
+
 def test_bridge_torrc_infers_missing_webtunnel_label_from_url_and_ver(tmp_path):
     executable = tmp_path / "tor" / "tor.exe"
     executable.parent.mkdir(parents=True)
