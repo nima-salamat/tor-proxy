@@ -481,6 +481,13 @@ class TorRunner(QObject):
             if self._stopping.is_set():
                 raise
 
+            # The first attempt has failed, but do not surface a terminal
+            # Failed state while a guarded bridge-recovery attempt is running.
+            self.state = "BOOTSTRAPPING"
+            self.last_error = None
+            self._publish_bridge_usage(manager)
+            if self.app_window is not None:
+                self.app_window.data.value = "Rechecking bridges…"
             self.log_message.emit(
                 "Tor did not complete bootstrap. Rechecking configured bridges independently before deciding "
                 "whether any record can safely be removed; the original list is preserved unless an alternative "
