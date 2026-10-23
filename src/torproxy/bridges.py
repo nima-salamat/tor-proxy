@@ -32,6 +32,36 @@ _COMMENT_OR_HEADER = re.compile(
 )
 
 
+def normalize_sni_hostname(value: str) -> str:
+    """Normalize a user-supplied SNI hostname without accepting a URL or IP literal."""
+    if not isinstance(value, str):
+        raise ValueError("SNI must be a DNS hostname, not a URL.")
+    raw = value.strip().rstrip(".")
+    if not raw:
+        return ""
+    if any(char in raw for char in (":", "/", "\\", "@", "?", "#", ",", "\\r", "\\n", "\\t", " ")):
+        raise ValueError("SNI must be a hostname only (for example, www.example.com).")
+    try:
+        ipaddress.ip_address(raw.strip("[]"))
+    except ValueError:
+        pass
+    else:
+        raise ValueError("SNI imitation must be a DNS hostname, not an IP address.")
+    try:
+        hostname = raw.encode("idna").decode("ascii").lower()
+    except UnicodeError as exc:
+        raise ValueError("SNI hostname contains an invalid internationalized domain name.") from exc
+    if len(hostname) > 253:
+        raise ValueError("SNI hostname is too long.")
+    labels = hostname.split(".")
+    if len(labels) < 2 or any(
+        not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+        for label in labels
+    ):
+        raise ValueError("SNI must be a valid fully qualified DNS hostname (for example, www.example.com).")
+    return hostname
+
+
 @dataclass(frozen=True)
 class BridgeTextParseResult:
     """Canonical bridge records and chunks that could not be interpreted safely."""
@@ -189,6 +219,12 @@ def normalize_bridge_record(value: str) -> str:
                 raise ValueError(
                     "The fingerprint= bridge option must contain exactly 40 hexadecimal characters."
                 )
+        if token.casefold().startswith("sni-imitation="):
+            supplied_sni = token.split("=", 1)[1]
+            normalized_sni = normalize_sni_hostname(supplied_sni)
+            if not normalized_sni:
+                raise ValueError("The sni-imitation= bridge option cannot be empty.")
+            token = "sni-imitation=" + normalized_sni
         extra_authority = _canonical_authority(token)
         if extra_authority is not None:
             # A duplicate endpoint is common when bridge text has been copied
