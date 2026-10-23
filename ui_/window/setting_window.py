@@ -951,6 +951,48 @@ class SettingWindow(QWidget):
                 f"{len(parsed.records)} bridge(s) saved in TorProxy format — one complete record per line."
             )
 
+    def save_webtunnel_sni_imitation(self):
+        """Save the optional custom SNI hostname; blank/default means no override."""
+        combo = getattr(self, "cmb_webtunnel_sni", None)
+        if combo is None:
+            return False
+
+        current_index = combo.currentIndex()
+        current_text = combo.currentText().strip()
+        if current_index >= 0 and current_text == combo.itemText(current_index):
+            value = str(combo.itemData(current_index) or "").strip()
+        else:
+            value = current_text
+
+        try:
+            value = normalize_sni_hostname(value)
+        except (TypeError, ValueError) as exc:
+            self.webtunnel_sni_status.setText(str(exc))
+            logger.warning("Rejected invalid WebTunnel SNI hostname: %s", exc)
+            return False
+
+        try:
+            CONFIG["webtunnel_sni_imitation"] = value
+        except (TypeError, ValueError, OSError, KeyError) as exc:
+            self.webtunnel_sni_status.setText("SNI setting could not be saved. The previous setting remains active.")
+            logger.exception("Could not save the WebTunnel SNI preference.")
+            return False
+
+        proxy = getattr(self._parent, "proxyWidget", None)
+        tor_runner = getattr(proxy, "tor", None)
+        if tor_runner is not None:
+            tor_runner.webtunnel_sni_imitation = value
+
+        if value:
+            self.webtunnel_sni_status.setText(
+                f"Saved SNI override: {value}. Applies to WebTunnel bridges on the next Tor start."
+            )
+        else:
+            self.webtunnel_sni_status.setText(
+                "SNI override disabled. Lyrebird will use each WebTunnel bridge's url= hostname."
+            )
+        return True
+
     def bridge_state_changed(self, state):
         checked = bool(state)
         try:
