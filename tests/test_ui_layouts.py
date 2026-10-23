@@ -404,3 +404,43 @@ def test_theme_switch_changes_its_mode_and_emits_the_new_mode(qt_app):
     assert switch.mode == "dark"
     switch._animation.stop()
     switch.deleteLater()
+
+
+
+def test_custom_dialog_keeps_rounded_corners_transparent_and_clamps_to_screen(qt_app):
+    from PySide6.QtCore import Qt, QPoint
+    from PySide6.QtGui import QGuiApplication
+    from ui_.window.dialogs import MessageDialog
+
+    dialog = MessageDialog(None, "Bounds", "A short message", level="info")
+    assert dialog.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+
+    screen = QGuiApplication.primaryScreen()
+    assert screen is not None
+    position = dialog.clamp_to_screen(QPoint(-100000, -100000))
+    area = screen.availableGeometry()
+    assert position.x() >= area.left()
+    assert position.y() >= area.top()
+    assert position.x() + dialog.width() <= area.right() + 1
+    assert position.y() + dialog.height() <= area.bottom() + 1
+    dialog.deleteLater()
+    qt_app.processEvents()
+
+
+def test_tray_menu_is_custom_anchored_above_tray_icon():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui.py").read_text(encoding="utf-8")
+    assert "self.tray_icon.activated.connect(self._on_tray_activated)" in source
+    assert "QSystemTrayIcon.ActivationReason.Context" in source
+    assert "y = anchor.y() - size.height() - 12" in source
+    assert "self.tray_menu.exec(QPoint(x, y))" in source
+    assert "setContextMenu(self.tray_menu)" not in source
+
+
+def test_theme_switch_uses_centered_dpi_aware_icon_painting():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/btn/theme_switch.py").read_text(encoding="utf-8")
+    assert "QVariantAnimation(self)" in source
+    assert "round(x + (diameter - icon_size) / 2)" in source
+    assert "round(y + (diameter - icon_size) / 2)" in source
+    assert "icon.paint(painter, icon_rect, Qt.AlignmentFlag.AlignCenter)" in source
