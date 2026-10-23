@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 
+import torproxy.bridge_health as bridge_health_module
 from torproxy.bridge_health import BridgeProbeOutcome, check_bridges
 from torproxy.tor_manager import TorSettings
 
@@ -115,6 +116,59 @@ def test_transport_executable_launch_failure_is_not_a_dead_bridge(tmp_path):
     assert result.retained == BRIDGES
     assert result.should_prune is False
     assert result.issues == ("transport_launch_failed",)
+
+
+def _probe_with_fake_tor_log(monkeypatch, tmp_path, diagnostic):
+    class FakeManager:
+        def __init__(self, _settings):
+            self.diagnostic = diagnostic
+
+        def start(self, on_status=None):
+            raise RuntimeError("Tor did not become ready within 30s")
+
+        def _recent_tor_log_detail(self, max_lines=20):
+            return self.diagnostic
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(bridge_health_module, "TorManager", FakeManager)
+    return bridge_health_module._probe_single_bridge(
+        _settings(tmp_path),
+        BRIDGES[0],
+        1.0,
+        set(),
+        set(),
+        threading.Lock(),
+        None,
+    )
+
+
+def test_unsupported_tls_curve_is_a_global_transport_issue_not_dead_bridge(monkeypatch, tmp_path):
+    outcome = _probe_with_fake_tor_log(
+        monkeypatch,
+        tmp_path,
+        "Managed proxy: Error dialing: tls: CurvePreferences includes unsupported curve",
+    )
+    assert outcome == BridgeProbeOutcome(None, "transport_runtime_incompatible")
+
+
+def test_explicit_webtunnel_dial_timeout_is_classified_as_bridge_specific(monkeypatch, tmp_path):
+    outcome = _probe_with_fake_tor_log(
+        monkeypatch,
+        tmp_path,
+        "Managed proxy: Error dialing: read tcp local:5512->198.51.100.8:443: i/o timeout",
+    )
+    assert outcome is False
+
+
+def test_missing_guard_descriptor_is_inconclusive_not_a_dead_bridge(monkeypatch, tmp_path):
+    outcome = _probe_with_fake_tor_log(
+        monkeypatch,
+        tmp_path,
+        "Failed to find node for hop #1 of our path. Discarding this circuit.",
+    )
+    assert outcome is None
 
 
 def test_cancelled_check_preserves_original_bridge_list_and_does_not_probe(tmp_path):
