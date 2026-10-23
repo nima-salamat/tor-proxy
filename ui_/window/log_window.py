@@ -105,7 +105,7 @@ class LogWindow(QWidget):
 
         text = str(message).strip()
         prefix = re.match(
-            r"^(?:\[[^]]+\]\s*)?(DEBUG|INFO|NOTICE|WARN(?:ING)?|ERR(?:OR)?|CRITICAL|FATAL)\b",
+            r"^(?:\[[^]]+\]\s*)?\[?(DEBUG|INFO|NOTICE|WARN(?:ING)?|ERR(?:OR)?|CRITICAL|FATAL)\]?\b",
             text,
             re.I,
         )
@@ -122,13 +122,13 @@ class LogWindow(QWidget):
             return "info"
 
         lowered = text.lower()
-        if any(token in lowered for token in (
-            "critical", "traceback", "exception:", "fatal error", "failed:", "failure:", "could not"
-        )):
-            return "critical" if "critical" in lowered or "fatal" in lowered else "error"
-        if any(token in lowered for token in (
-            "warning", "retrying", "rate-limit", "rate limit", "not accepted", "not ready"
-        )):
+        if re.search(r"\b(critical|fatal)\b", lowered):
+            return "critical"
+        if re.search(r"\b(error|err|failed|failure|exception|traceback)\b", lowered) or "could not" in lowered:
+            return "error"
+        if re.search(r"\b(warning|warn|retrying|retry|rate-limit|rate limit)\b", lowered) or any(
+            token in lowered for token in ("not accepted", "not ready")
+        ):
             return "warning"
         if any(token in lowered for token in (
             "connected", "connection established", "bootstrap completed", "started successfully",
