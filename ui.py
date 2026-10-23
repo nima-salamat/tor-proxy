@@ -1,3 +1,5 @@
+from contextlib import contextmanager
+
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -198,6 +200,35 @@ class Window(QMainWindow):
         if hasattr(self, "tray_icon") and not self.tray_icon.isVisible():
             self.tray_icon.show()
         logger.debug("TorProxy window hidden to the system tray.")
+
+    @contextmanager
+    def shortcut_capture_scope(self):
+        """Suspend every registered shortcut while a key-binding dialog listens.
+
+        Global bindings are unregistered by HotkeyManager and the QActions
+        attached to this main window are disabled temporarily. New navigation
+        or application shortcuts can use these same registries without being
+        triggered by keys being recorded in the capture dialog.
+        """
+        actions = [
+            action for action in self.actions()
+            if not action.shortcut().isEmpty()
+        ]
+        action_states = [(action, action.isEnabled()) for action in actions]
+        manager = getattr(self, "hotkey_manager", None)
+        suspended = False
+        try:
+            if manager is not None:
+                manager.suspend()
+                suspended = True
+            for action, _was_enabled in action_states:
+                action.setEnabled(False)
+            yield
+        finally:
+            for action, was_enabled in action_states:
+                action.setEnabled(was_enabled)
+            if suspended:
+                manager.resume()
 
     def _set_global_shortcut(self, shortcut):
         """Apply and persist a global shortcut as one transaction."""
