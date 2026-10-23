@@ -166,8 +166,10 @@ class TorManager:
                     matching.append(process)
             except (psutil.NoSuchProcess, psutil.ZombieProcess):
                 continue
-            except (OSError, ValueError, TypeError):
+            except psutil.Error:
                 logger.debug("Could not inspect a running process while checking TorProxy's torrc.", exc_info=True)
+            except (OSError, ValueError, TypeError):
+                logger.debug("Could not normalize a process command line while checking TorProxy's torrc.", exc_info=True)
 
         if not matching:
             return

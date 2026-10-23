@@ -1,5 +1,6 @@
 import pytest
 
+import torproxy.tor_manager as tor_manager_module
 from torproxy.tor_manager import TorManager, TorManagerError, TorSettings, TorState
 
 
@@ -110,3 +111,52 @@ def test_data_directory_lock_reports_other_process_and_cleans_up_after_stop(tmp_
     another = TorManager(manager.settings)
     another._acquire_data_directory_lock()
     another._release_data_directory_lock()
+
+
+
+def test_stale_tor_cleanup_targets_only_process_using_exact_managed_torrc(tmp_path, monkeypatch):
+    manager = TorManager(
+        TorSettings(
+            executable=tmp_path / "bundles" / "tor.exe",
+            socks_port=19350,
+            control_port=19351,
+            data_directory=tmp_path / "managed" / "tor-state",
+        )
+    )
+
+    class FakeProcess:
+        def __init__(self, pid, name, cmdline):
+            self.pid = pid
+            self.info = {"pid": pid, "name": name, "cmdline": cmdline}
+            self.terminated = False
+            self.killed = False
+
+        def terminate(self):
+            self.terminated = True
+
+        def kill(self):
+            self.killed = True
+
+    stale = FakeProcess(
+        4567,
+        "tor.exe",
+        [str(manager.settings.executable), "-f", str(manager.torrc_path)],
+    )
+    unrelated = FakeProcess(
+        4568,
+        "tor.exe",
+        [str(manager.settings.executable), "-f", str(tmp_path / "other-torrc")],
+    )
+    monkeypatch.setattr(tor_manager_module.psutil, "process_iter", lambda _attrs: [stale, unrelated])
+    monkeypatch.setattr(
+        tor_manager_module.psutil,
+        "wait_procs",
+        lambda processes, timeout: (list(processes), []),
+    )
+
+    manager._stop_stale_managed_tor_processes()
+
+    assert stale.terminated is True
+    assert stale.killed is False
+    assert unrelated.terminated is False
+    assert unrelated.killed is False

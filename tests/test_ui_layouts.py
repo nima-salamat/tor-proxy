@@ -293,3 +293,19 @@ def test_menu_actions_use_fontawesome_and_window_restore_reactivates_layouts():
     assert "hostSearchBox" in exclude_source and "fa6s.route" in exclude_source
     assert "def _acquire_data_directory_lock" in manager_source
     assert "def _release_data_directory_lock" in manager_source
+
+
+
+def test_host_rule_pages_have_searchable_lists_and_theme_refresh_hooks():
+    repository = Path(__file__).resolve().parents[1]
+    block_source = (repository / "ui_/window/block_host_window.py").read_text(encoding="utf-8")
+    exclude_source = (repository / "ui_/window/exclude_host_window.py").read_text(encoding="utf-8")
+    settings_source = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
+    assert "def apply_theme(self, mode)" in block_source
+    assert "def apply_theme(self, mode)" in exclude_source
+    assert "def _filter_rules(self, query)" in block_source
+    assert "def _filter_rules(self, query)" in exclude_source
+    assert "QMenu" in block_source and "fa6s.trash" in block_source
+    assert "QMenu" in exclude_source and "fa6s.trash" in exclude_source
+    assert '"fa6s.link"' in settings_source
+    assert "NewCircuitPeriod" in settings_source
