@@ -242,6 +242,51 @@ class TorManager:
         return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
     @staticmethod
+    def _transport_exec_path(path: Path) -> str:
+        """Return the PT executable path without quotes that Tor passes to CreateProcess.
+
+        Tor's ClientTransportPlugin parser forwards this token to its managed
+        proxy launcher. Torrc quoting escapes used for DataDirectory/CookieAuthFile
+        are therefore not valid here: on Windows they can reach CreateProcessA
+        as literal quote characters, producing the doubled-quote launch failure.
+        """
+        value = str(path)
+        if any(character.isspace() for character in value):
+            if os.name == "nt":
+                # Windows short paths avoid literal quotes in Tor's PT command.
+                try:
+                    import ctypes
+                    from ctypes import wintypes
+
+                    get_short_path = ctypes.windll.kernel32.GetShortPathNameW
+                    get_short_path.argtypes = (wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD)
+                    get_short_path.restype = wintypes.DWORD
+                    buffer = ctypes.create_unicode_buffer(32768)
+                    length = get_short_path(value, buffer, len(buffer))
+                    if length and length < len(buffer):
+                        short_value = buffer.value
+                        if not any(character.isspace() for character in short_value):
+                            value = short_value
+                        else:
+                            raise OSError("Windows did not provide a space-free short path.")
+                    else:
+                        raise OSError("Windows could not resolve a short path.")
+                except (AttributeError, OSError) as exc:
+                    raise TorManagerError(
+                        "The path to the Tor bridge transport contains spaces and Windows could not "
+                        "resolve a short path. Move the Tor Expert Bundle to a directory without "
+                        "spaces and select it again."
+                    ) from exc
+            else:
+                raise TorManagerError(
+                    "The path to the Tor bridge transport contains spaces. Move the Tor Expert Bundle "
+                    "to a directory without spaces and select it again."
+                )
+        if '"' in value or "\n" in value or "\r" in value:
+            raise TorManagerError("The Tor bridge transport path contains unsupported characters.")
+        return value
+
+    @staticmethod
     def _parse_bridges(text: str) -> list[tuple[str, str]]:
         """Use the same strict bridge parser as Settings and QR imports."""
         result = parse_bridge_text(text)
@@ -296,9 +341,10 @@ class TorManager:
             # all supported PT names from the same managed executable, as in the
             # Tor Expert Bundle documentation. Individual repeated declarations
             # can leave a transport name unregistered with some bundle versions.
+            transport_exec = self._transport_exec_path(transport)
             lines.append(
                 "ClientTransportPlugin meek_lite,obfs4,snowflake,webtunnel exec "
-                + self._torrc_quote(transport)
+                + transport_exec
             )
             lines.extend("Bridge " + record for _, record in bridge_records)
         elif settings.bridges.strip():
