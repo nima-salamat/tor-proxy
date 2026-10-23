@@ -94,6 +94,39 @@ def test_startup_timeout_rechecks_bridges_and_retries_once_if_cleanup_succeeds(m
     assert any("Retrying Tor startup once" in message for message in logs)
 
 
+def test_early_exit_with_explicit_bridge_dial_failure_rechecks_bridges(monkeypatch, tmp_path):
+    from torproxy.tor_manager import TorManagerError
+
+    bridge_text = "\n".join(BRIDGES)
+    runner, _config = _runner(monkeypatch, tmp_path, bridge_text)
+    manager = SimpleNamespace(
+        _recent_tor_log_detail=lambda max_lines=30: (
+            'Managed proxy "C:\\\\TorProxy\\\\lyrebird.exe": Error dialing: '
+            "dial tcp 198.51.100.8:443: connectex: connection refused"
+        )
+    )
+
+    assert runner._should_recheck_bridges_after_start_failure(
+        manager,
+        TorManagerError("Tor exited unexpectedly during startup (exit code 1)."),
+    )
+
+
+def test_early_exit_without_bridge_specific_dial_failure_skips_recheck(monkeypatch, tmp_path):
+    from torproxy.tor_manager import TorManagerError
+
+    bridge_text = "\n".join(BRIDGES)
+    runner, _config = _runner(monkeypatch, tmp_path, bridge_text)
+    manager = SimpleNamespace(
+        _recent_tor_log_detail=lambda max_lines=30: "Tor exited due to an invalid local configuration."
+    )
+
+    assert not runner._should_recheck_bridges_after_start_failure(
+        manager,
+        TorManagerError("Tor exited unexpectedly during startup (exit code 1)."),
+    )
+
+
 def test_global_tls_runtime_error_does_not_trigger_bridge_cleanup_retry(monkeypatch, tmp_path):
     from torproxy.tor_manager import TorManagerError
 
