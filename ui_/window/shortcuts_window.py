@@ -8,11 +8,14 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QScrollArea,
+    QPushButton,
+    QDialog,
     QVBoxLayout,
     QWidget,
 )
 
-from config import CONFIG, IS_WINDOWS
+from config import CONFIG
+from ui_.window.dialogs import QMessageBox, ShortcutCaptureDialog
 
 
 class ShortcutsWindow(QWidget):
@@ -94,13 +97,17 @@ class ShortcutsWindow(QWidget):
                 ("Exit TorProxy", "Confirm and close the application", ("Ctrl", "Q"), "fa6s.right-from-bracket"),
             ],
         )
-        if IS_WINDOWS:
-            self._add_category(
-                "GLOBAL",
-                [
-                    ("Show / hide TorProxy", "Toggle the main window from anywhere", tuple(str(CONFIG["global_shortcut"]).split("+")), "fa6s.eye"),
-                ],
-            )
+        self._add_category(
+            "GLOBAL",
+            [
+                (
+                    "Show / hide TorProxy",
+                    "Toggle the main window from anywhere. This shortcut is configurable.",
+                    tuple(str(CONFIG["global_shortcut"]).split("+")),
+                    "fa6s.eye",
+                ),
+            ],
+        )
         self.content_layout.addStretch(1)
         scroll.setWidget(content)
         root.addWidget(scroll, 1)
@@ -165,8 +172,44 @@ class ShortcutsWindow(QWidget):
                 self._global_shortcut_row = row
                 self._global_shortcut_key_layout = key_layout
                 self._global_shortcut_key_caps = key_caps
+                self.change_shortcut_button = QPushButton("Change", row)
+                self.change_shortcut_button.setObjectName("changeGlobalShortcut")
+                self.change_shortcut_button.setIcon(
+                    qta.icon("fa6s.keyboard", color="#287db5")
+                )
+                self.change_shortcut_button.setToolTip(
+                    "Record a new global shortcut (Enter applies, Esc cancels)"
+                )
+                self.change_shortcut_button.clicked.connect(self.change_global_shortcut)
+                layout.addWidget(self.change_shortcut_button, 0, Qt.AlignmentFlag.AlignVCenter)
             self.content_layout.addWidget(row)
             self._shortcut_rows.append((row, key_caps))
+
+    def change_global_shortcut(self):
+        """Open the game-style recorder and apply the new system-wide binding."""
+        owner = self._parent
+        dialog = ShortcutCaptureDialog(
+            owner if owner is not None else self,
+            str(CONFIG["global_shortcut"]),
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted or not dialog.shortcut:
+            return
+
+        try:
+            if owner is not None and hasattr(owner, "_set_global_shortcut"):
+                normalized = owner._set_global_shortcut(dialog.shortcut)
+            else:
+                from torproxy.hotkeys import parse_hotkey
+
+                normalized = parse_hotkey(dialog.shortcut).text
+                CONFIG["global_shortcut"] = normalized
+            self.update_global_shortcut(normalized)
+        except Exception as exc:
+            QMessageBox.warning(
+                owner if owner is not None else self,
+                "Shortcut could not be applied",
+                str(exc),
+            )
 
     def update_global_shortcut(self, shortcut):
         """Keep the help page in sync with the setting's live global shortcut."""
@@ -222,6 +265,8 @@ class ShortcutsWindow(QWidget):
             QLabel#shortcutsRowTitle {{ color: {text}; background: transparent; font-size: 12px; font-weight: 700; }}
             QLabel#shortcutsRowDescription {{ color: {muted}; background: transparent; font-size: 10px; }}
             QLabel#shortcutsKeycap {{ color: {text}; background: {panel}; border: 1px solid {border}; border-bottom: 2px solid {border}; border-radius: 5px; padding: 4px 7px; min-width: 18px; font-size: 10px; font-weight: 800; }}
+            QPushButton#changeGlobalShortcut {{ min-height: 32px; padding: 0 10px; spacing: 5px; border-radius: 7px; border: 1px solid {border}; background: {panel}; color: {text}; font-weight: 700; }}
+            QPushButton#changeGlobalShortcut:hover {{ background: {hover}; border-color: {accent}; }}
             QLabel#shortcutsPlus {{ color: {muted}; background: transparent; font-size: 10px; }}
             QLabel#shortcutsFooter {{ color: {muted}; background: transparent; font-size: 10px; padding-top: 3px; }}
         """)
