@@ -66,6 +66,13 @@ def test_spaced_fingerprint_is_normalized_to_one_digest():
     )
 
 
+def test_short_fingerprint_option_is_rejected():
+    with pytest.raises(ValueError, match="fingerprint= bridge option must contain exactly 40 hexadecimal characters"):
+        normalize_bridge_record(
+            f"snowflake 192.0.2.10:443 {''}fingerprint=abc url=https://bridge.example/"
+        )
+
+
 def test_parser_returns_indexed_reason_for_invalid_fingerprint():
     result = parse_bridge_text(f"webtunnel {IPV6} ABCDEF url=https://bridge.example/ ver=0.0.1")
     assert result.records == ()
