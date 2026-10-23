@@ -173,6 +173,8 @@ class _FramelessDialog(QDialog):
         self.setAutoFillBackground(False)
         self.setMinimumWidth(width)
         self.setMaximumWidth(680)
+        self._base_min_width = width
+        self._base_min_height = 0
 
         root = QVBoxLayout(self)
         root.setContentsMargins(1, 1, 1, 1)
@@ -306,8 +308,21 @@ class _FramelessDialog(QDialog):
         if screen is None:
             return position
         area = screen.availableGeometry()
+        if self._base_min_height <= 0:
+            self._base_min_height = self.minimumHeight()
+
+        # Adapt size limits to the display currently containing the dialog.
+        # This also handles unusually short or narrow displays without leaving
+        # a hard-coded minimum larger than the available work area.
+        self.setMaximumSize(min(680, area.width()), area.height())
+        self.setMinimumSize(
+            min(self._base_min_width, area.width()),
+            min(self._base_min_height, area.height()),
+        )
         width = min(self.width(), area.width())
         height = min(self.height(), area.height())
+        if self.width() != width or self.height() != height:
+            self.resize(width, height)
         x = min(max(position.x(), area.left()), area.right() - width + 1)
         y = min(max(position.y(), area.top()), area.bottom() - height + 1)
         return QPoint(x, y)
@@ -362,7 +377,7 @@ class MessageDialog(_FramelessDialog):
         message_label.setWordWrap(True)
         message_label.setTextFormat(Qt.TextFormat.PlainText)
         message_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        message_label.setMinimumWidth(390)
+        message_label.setMinimumWidth(0)
         message_label.setMaximumWidth(620)
         if len(str(message)) > 420:
             scroll = QScrollArea(self.body_host)
