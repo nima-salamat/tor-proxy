@@ -561,7 +561,7 @@ def test_exit_ip_check_is_guarded_logged_and_never_uses_direct_fallback():
     assert "self.thread_pool.start(worker)" in home_source
     assert "worker.signals.error.connect(self._on_exit_ip_failed)" in home_source
     assert "def _finish_exit_ip_check(self):" in home_source
-    assert "finally:\\n            self._finish_exit_ip_check()" in home_source
+    assert "finally:\n            self._finish_exit_ip_check()" in home_source
     assert "logger.exception(\"Background task failed (%s).\", task_name)" in worker_source
     assert "direct requests are disabled" in ip_source
     assert "session.trust_env = False" in ip_source
