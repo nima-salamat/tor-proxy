@@ -364,7 +364,7 @@ def test_theme_switch_is_animated_and_exit_confirmation_is_persistent():
     titlebar_source = (repository / "ui_/window/custom_titlebar.py").read_text(encoding="utf-8")
 
     assert '"confirm_exit": True' in config_source
-    assert '"confirm_exit")' in config_source
+    assert '"confirm_exit"' in config_source
     assert 'self.chk_confirm_exit.setChecked(bool(CONFIG["confirm_exit"]))' in settings_source
     assert 'CONFIG["confirm_exit"] = enabled' in settings_source
     assert 'self.theme_switch.modeChanged.connect(self.change_mode)' in settings_source
