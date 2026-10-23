@@ -173,11 +173,17 @@ def _probe_single_bridge(
                         None,
                         "transport_runtime_incompatible",
                     )
+                # Do not classify the log as a local transport failure just
+                # because Tor prefixes bridge dial errors with the lyrebird.exe
+                # path. Match actual transport setup/runtime diagnostics only.
                 if any(marker in diagnostic for marker in (
                     "unknown pluggable transport",
                     "could not launch transport",
+                    "failed to launch pluggable transport",
                     "clienttransportplugin",
-                    "lyrebird",
+                    "managed proxy failed at launch",
+                    "managed proxy terminated",
+                    "could not start managed proxy",
                 )):
                     return BridgeProbeOutcome(
                         None,
@@ -197,12 +203,19 @@ def _probe_single_bridge(
                         "actively refused",
                         "timed out",
                         "timeout",
+                        "i/o timeout",
                         "no connection could be made",
-                        "network is unreachable",
-                        "host is down",
                         "failed to respond",
                         "period of time",
                         "wsarecv",
+                        "connection reset by peer",
+                        "forcibly closed by the remote host",
+                        "forcibly closed by remote host",
+                        "no such host",
+                        "server misbehaving",
+                        "name or service not known",
+                        "unexpected eof",
+                        "eof",
                     ))
                 )
                 if explicit_dial_failure or any(marker in diagnostic for marker in (
