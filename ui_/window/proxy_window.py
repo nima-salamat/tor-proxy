@@ -185,20 +185,27 @@ class ProxyWindow(QWidget):
         self.timer_data_usage.timeout.connect(self.change_data_usage)
 
     def _sync_bridge_editor(self, bridge_text: str):
-        """Reflect automatically pruned bridge records in the Settings editor."""
+        """Reflect automatically pruned bridge records in the editor and its cards."""
         owner = self._parent
         if owner is None:
             return
         editor = owner.findChild(QWidget, "bridgeRecordsInput")
-        if editor is None or not hasattr(editor, "setPlainText"):
-            return
-        if editor.toPlainText() == bridge_text:
-            return
-        was_blocked = editor.blockSignals(True)
-        try:
-            editor.setPlainText(bridge_text)
-        finally:
-            editor.blockSignals(was_blocked)
+        if editor is not None and hasattr(editor, "setPlainText"):
+            if editor.toPlainText() != bridge_text:
+                was_blocked = editor.blockSignals(True)
+                try:
+                    editor.setPlainText(bridge_text)
+                finally:
+                    editor.blockSignals(was_blocked)
+
+        # The editor was changed with signals blocked to avoid an intermediate
+        # write of stale/partial text. Now run the Settings transaction once so
+        # its saved-record snapshot, copy/remove cards and status labels match
+        # the bridge list that TorRunner actually retained.
+        settings_page = getattr(owner, "settingWidget", None)
+        refresh = getattr(settings_page, "set_bridges", None)
+        if callable(refresh):
+            refresh()
 
     def open_tor_log_dialog(self):
         """Open a live, paginated view of the actual managed Tor log file."""
