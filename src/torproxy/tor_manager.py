@@ -13,6 +13,9 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+
+_ACTIVE_DATA_DIRECTORIES: set[str] = set()
+_ACTIVE_DATA_DIRECTORIES_LOCK = threading.Lock()
 from collections.abc import Callable
 
 from .paths import user_directories
@@ -89,6 +92,74 @@ class TorManager:
         self.data_directory = Path(settings.data_directory or (dirs.data / "tor"))
         self.torrc_path = self.data_directory / "torrc"
         self.log_path = dirs.logs / "tor.log"
+        self._data_directory_lock_path = self.data_directory / ".torproxy-data-directory.lock"
+        self._data_directory_lock_handle = None
+        self._locked_data_directory: str | None = None
+
+    def _acquire_data_directory_lock(self) -> None:
+        """Exclusively claim the configured data directory before touching Tor state."""
+        self.data_directory.mkdir(parents=True, exist_ok=True)
+        canonical = os.path.normcase(str(self.data_directory.resolve()))
+        with _ACTIVE_DATA_DIRECTORIES_LOCK:
+            if canonical in _ACTIVE_DATA_DIRECTORIES:
+                raise TorManagerError(
+                    f"Another managed Tor instance already owns data directory {self.data_directory}. "
+                    "Stop the existing connection before starting another."
+                )
+            _ACTIVE_DATA_DIRECTORIES.add(canonical)
+
+        handle = None
+        try:
+            handle = self._data_directory_lock_path.open("a+b")
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"0")
+                handle.flush()
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self._data_directory_lock_handle = handle
+            self._locked_data_directory = canonical
+        except OSError as exc:
+            if handle is not None:
+                handle.close()
+            with _ACTIVE_DATA_DIRECTORIES_LOCK:
+                _ACTIVE_DATA_DIRECTORIES.discard(canonical)
+            raise TorManagerError(
+                f"Tor data directory is already locked by another process: {self.data_directory}. "
+                "Close the existing Tor/TorProxy process, then retry. TorProxy will not terminate "
+                "a process it does not own."
+            ) from exc
+        except Exception:
+            if handle is not None:
+                handle.close()
+            with _ACTIVE_DATA_DIRECTORIES_LOCK:
+                _ACTIVE_DATA_DIRECTORIES.discard(canonical)
+            raise
+
+    def _release_data_directory_lock(self) -> None:
+        handle, self._data_directory_lock_handle = self._data_directory_lock_handle, None
+        canonical, self._locked_data_directory = self._locked_data_directory, None
+        if handle is not None:
+            try:
+                handle.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                LOGGER.debug("Could not explicitly release Tor data-directory lock.", exc_info=True)
+            finally:
+                handle.close()
+        if canonical is not None:
+            with _ACTIVE_DATA_DIRECTORIES_LOCK:
+                _ACTIVE_DATA_DIRECTORIES.discard(canonical)
 
     @staticmethod
     def _torrc_quote(value: str | Path) -> str:
@@ -258,6 +329,7 @@ class TorManager:
                 raise TorManagerError(f"Tor executable is not executable: {executable}")
 
             self.data_directory.mkdir(parents=True, exist_ok=True)
+            self._acquire_data_directory_lock()
             self.log_path.parent.mkdir(parents=True, exist_ok=True)
             if os.name != "nt":
                 self.data_directory.chmod(0o700)
@@ -315,6 +387,12 @@ class TorManager:
                 if proc is None or proc.poll() is not None:
                     code = None if proc is None else proc.returncode
                     detail = self._recent_tor_log_detail()
+                    if "another Tor process is running with the same data directory" in detail.lower():
+                        raise TorManagerError(
+                            f"Another Tor process is already using data directory {self.data_directory}. "
+                            "Stop that process before retrying; TorProxy will not terminate an unmanaged process. "
+                            + detail
+                        )
                     raise TorManagerError(
                         f"Tor exited unexpectedly during startup (exit code {code}). {detail}"
                     )
@@ -360,6 +438,7 @@ class TorManager:
             self.last_error = str(exc)
             was_stopped = self._stop_requested.is_set()
             self._terminate_process()
+            self._release_data_directory_lock()
             self._emit(on_status, TorState.STOPPED if was_stopped else TorState.FAILED, None, self.last_error)
             if isinstance(exc, TorManagerError):
                 raise
@@ -416,4 +495,5 @@ class TorManager:
         self._stop_requested.set()
         self._emit(None, TorState.STOPPING, None, "Stopping the managed Tor process.")
         self._terminate_process()
+        self._release_data_directory_lock()
         self._emit(None, TorState.STOPPED, None, "Tor stopped.")
