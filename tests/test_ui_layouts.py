@@ -566,6 +566,8 @@ def test_automatic_bridge_cleanup_is_opt_in_and_conservative():
     assert 'return self.original' in checker_source
     assert 'bool(self.working and self.failed)' in checker_source
     assert 'self.tor.bridges_updated.connect(self._sync_bridge_editor)' in home_source
+    assert 'refresh = getattr(settings_page, "set_bridges", None)' in home_source
+    assert "if callable(refresh):" in home_source
 
 
 
