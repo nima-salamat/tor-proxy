@@ -198,6 +198,7 @@ class TorRunner(QObject):
             geoip6_path=Path(self.geoip6_path) if self.geoip6_path else None,
             bridges_enabled=bool(self.bridge),
             bridges=str(self.bridges or ""),
+            webtunnel_sni_imitation=str(CONFIG["webtunnel_sni_imitation"] or ""),
             max_circuit_dirtiness_seconds=max(10, min(86400, int(self.MaxCircuitDirtiness))),
             new_circuit_period_seconds=max(10, min(86400, int(self.NewCircuitPeriod))),
         ))
