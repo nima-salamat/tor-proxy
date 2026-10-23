@@ -20,7 +20,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from qdarkstyle.dark.palette import DarkPalette
 from qdarkstyle.light.palette import LightPalette
 
-from config import CONFIG, IS_WINDOWS
+from config import CONFIG
 from torproxy.paths import user_directories
 from ui import Window
 from utils import resource_path
@@ -72,15 +72,9 @@ def main() -> int:
                 app.setStyleSheet(qdarkstyle.load_stylesheet(palette=DarkPalette()))
             app.setWindowIcon(QIcon(resource_path("assets/icon.png")))
             win = Window()
-            if IS_WINDOWS:
-                try:
-                    import ctypes
-                    from ctypes import wintypes
-                    ctypes.windll.user32.SetWindowDisplayAffinity.argtypes = [wintypes.HWND, wintypes.DWORD]
-                    ctypes.windll.user32.SetWindowDisplayAffinity.restype = wintypes.BOOL
-                    ctypes.windll.user32.SetWindowDisplayAffinity(int(win.winId()), 1)
-                except (AttributeError, OSError):
-                    LOGGER.debug("Window display affinity could not be enabled.")
+            # Keep the normal Windows DWM presentation path. Display-affinity
+            # restrictions are not needed for Tor operation and can interfere
+            # with capture/restore behavior for frameless Qt windows.
             win.show()
             signal.signal(signal.SIGINT, lambda *_: QTimer.singleShot(0, app.quit))
             try:

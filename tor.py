@@ -237,11 +237,19 @@ class TorRunner(QObject):
                 if process is None or process.poll() is not None:
                     if not self._stopping.is_set():
                         self.proc = None
-                        message = "The managed Tor process exited unexpectedly. Check the Tor log for details."
+                        detail = self.manager._recent_tor_log_detail() if self.manager is not None else ""
+                        message = "The managed Tor process exited unexpectedly."
+                        if detail:
+                            message += " " + detail
                         self.state = "FAILED"
                         self.last_error = message
                         self.log_message.emit(message)
                         self.service_failed.emit(message)
+                    if self.manager is not None:
+                        # Do not retain an app-level data-directory lock after
+                        # Tor exits outside the startup path.
+                        self.manager._terminate_process()
+                        self.manager._release_data_directory_lock()
                     return
         except Exception as exc:
             if not self._stopping.is_set():
