@@ -95,6 +95,7 @@ class SettingWindow(QWidget):
         self.settings_nav_buttons[0].setChecked(True)
         initial_bridges = parse_bridge_text(str(CONFIG["bridges"] or ""))
         self._saved_bridge_records = initial_bridges.records
+        self._bridge_input_invalid = False
         self._bridge_normalizing = False
         self._bridge_normalize_timer = QTimer(self)
         self._bridge_normalize_timer.setSingleShot(True)
@@ -765,20 +766,27 @@ class SettingWindow(QWidget):
                 "webtunnel records with an IPv4:port or bracketed IPv6:port. "
                 "The last valid saved bridge list remains active until this text is fixed."
             )
-            self._refresh_bridge_cards(self._saved_bridge_records, removable=False)
+            if not self._bridge_input_invalid:
+                self._refresh_bridge_cards(self._saved_bridge_records, removable=False)
+            self._bridge_input_invalid = True
             return
 
         normalized = "\n".join(parsed.records)
+        records_changed = parsed.records != self._saved_bridge_records
+        was_invalid = self._bridge_input_invalid
         try:
             if str(CONFIG["bridges"] or "") != normalized:
                 CONFIG["bridges"] = normalized
         except (ValueError, OSError, KeyError) as exc:
             logger.warning("Could not save bridge records: %s", exc)
             self.bridge_status_label.setText("Bridge records could not be saved. Your previous settings were preserved.")
-            self._refresh_bridge_cards(self._saved_bridge_records, removable=False)
+            if not self._bridge_input_invalid:
+                self._refresh_bridge_cards(self._saved_bridge_records, removable=False)
+            self._bridge_input_invalid = True
             return
 
         self._saved_bridge_records = parsed.records
+        self._bridge_input_invalid = False
         try:
             proxy = getattr(self._parent, "proxyWidget", None)
             if proxy is not None and hasattr(proxy, "tor"):
@@ -786,7 +794,8 @@ class SettingWindow(QWidget):
         except Exception:
             logger.debug("Could not update the live Tor adapter's bridge list.", exc_info=True)
 
-        self._refresh_bridge_cards(self._saved_bridge_records, removable=True)
+        if records_changed or was_invalid:
+            self._refresh_bridge_cards(self._saved_bridge_records, removable=True)
         if normalized != text and not self._bridge_normalizing:
             self._bridge_normalize_timer.start()
             self.bridge_status_label.setText(
