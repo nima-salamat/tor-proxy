@@ -532,6 +532,24 @@ def test_bridge_settings_normalize_paste_and_render_individual_cards():
     assert "from .bridges import SUPPORTED_BRIDGE_TRANSPORTS, parse_bridge_text" in manager_source
 
 
+def test_bridge_cards_show_only_control_port_verified_active_bridge():
+    repository = Path(__file__).resolve().parents[1]
+    settings_source = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
+    runner_source = (repository / "tor.py").read_text(encoding="utf-8")
+    manager_source = (repository / "src/torproxy/tor_manager.py").read_text(encoding="utf-8")
+    bridge_source = (repository / "src/torproxy/bridges.py").read_text(encoding="utf-8")
+
+    assert "bridge_usage_changed = Signal(object)" in runner_source
+    assert "get_active_bridge_fingerprints()" in runner_source
+    assert "def get_active_bridge_fingerprints(self)" in manager_source
+    assert 'self._controller.get_circuits()' in manager_source
+    assert 'bridge_identity_fingerprint(record)' in settings_source
+    assert "✓ Connected · observed as the first hop of a built circuit" in settings_source
+    assert 'QLabel#bridgeUsageStatus[usageState="active"]' in settings_source
+    assert "def bridge_identity_fingerprint(record: str) -> str | None:" in bridge_source
+    assert "fingerprint=" in bridge_source
+
+
 def test_automatic_bridge_cleanup_is_opt_in_and_conservative():
     repository = Path(__file__).resolve().parents[1]
     config_source = (repository / "config.py").read_text(encoding="utf-8")
