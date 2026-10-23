@@ -234,6 +234,8 @@ class ProxyWindow(QWidget):
         accent = "#47a3f2" if dark else "#1876bf"
         self.home_content.setStyleSheet(f"""
             QWidget#homeContent {{ background: transparent; }}
+            QPushButton#connectPulseButton {{ background: transparent; border: none; padding: 0; margin: 0; }}
+            QPushButton#connectPulseButton:hover, QPushButton#connectPulseButton:pressed, QPushButton#connectPulseButton:focus {{ background: transparent; border: none; }}
             QLabel#connectionStatus {{ color: palette(text); background: transparent; border: none; padding: 4px; font-size: 12px; font-weight: 700; }}
             QLabel#connectionStatus[connectionState="connected"] {{ color: #2eae69; }}
             QLabel#connectionStatus[connectionState="connecting"] {{ color: {accent}; }}
