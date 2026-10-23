@@ -686,6 +686,7 @@ class TorManager:
                 self.process = self._popen_factory([str(executable), "-f", str(self.torrc_path)], **kwargs)
             deadline = time.monotonic() + self.settings.startup_timeout_seconds
             last_detail = "Waiting for Tor ControlPort."
+            curve_warning_reported = False
             while time.monotonic() < deadline:
                 if self._stop_requested.is_set():
                     raise TorManagerError("Tor startup was cancelled.")
@@ -737,10 +738,12 @@ class TorManager:
                                 "to be an alpha/prerelease; try a verified stable Tor Expert Bundle in the updater. "
                                 "Live Tor log details: " + diagnostic
                             )
-                        LOGGER.warning(
-                            "Lyrebird reported an unsupported TLS curve, but a direct-bridge alternative exists; "
-                            "continuing bootstrap rather than aborting on one transport error."
-                        )
+                        if not curve_warning_reported:
+                            LOGGER.warning(
+                                "Lyrebird reported an unsupported TLS curve, but a direct-bridge alternative exists; "
+                                "continuing bootstrap rather than aborting on one transport error."
+                            )
+                            curve_warning_reported = True
                     if "no configured transport called" in lowered_diagnostic:
                         transport_match = re.search(
                             r'no configured transport called\s+["\']([^"\']+)["\']',
@@ -792,6 +795,16 @@ class TorManager:
                         self._controller = None
                     LOGGER.debug("%s", last_detail)
                 time.sleep(0.5)
+            if self.settings.bridges_enabled:
+                diagnostic = self._recent_tor_log_detail(max_lines=20)
+                if "tls: curvepreferences includes unsupported curve" in diagnostic.lower():
+                    raise TorManagerError(
+                        f"Tor did not become ready within {self.settings.startup_timeout_seconds:.0f}s. "
+                        "Lyrebird also reported 'tls: CurvePreferences includes unsupported curve'. "
+                        "Any direct-bridge alternatives were allowed to continue, but no ready Tor connection was "
+                        "verified. The original bridge list remains intact. Live Tor log details: "
+                        + diagnostic
+                    )
             raise TorManagerError(f"Tor did not become ready within {self.settings.startup_timeout_seconds:.0f}s. Last status: {last_detail}")
         except Exception as exc:
             self.last_error = str(exc)
