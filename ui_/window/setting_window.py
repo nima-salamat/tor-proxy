@@ -575,7 +575,7 @@ class SettingWindow(QWidget):
         if mode not in {"dark", "light"}:
             return
         if hasattr(self, "theme_switch"):
-            self.theme_switch.set_mode(mode)
+            self.theme_switch.set_mode(mode, animate=True)
         if hasattr(self, "theme_mode_label"):
             self.theme_mode_label.setText("Light" if mode == "light" else "Dark")
 
