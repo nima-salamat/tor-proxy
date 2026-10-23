@@ -707,9 +707,12 @@ class ShortcutCaptureDialog(_FramelessDialog):
         return int(value if value is not None else modifiers)
 
     def event(self, event):
-        # Eat ShortcutOverride before QAction/QShortcut processing. The global
-        # HotkeyManager is suspended by the owning page for this dialog's life.
-        if self._listening and event.type() == QEvent.Type.ShortcutOverride:
+        # Qt can dispatch events while QDialog.__init__ is still running,
+        # before subclass fields such as _listening have been initialized.
+        # getattr avoids raising inside the virtual event callback during setup.
+        # Once capture is active, eat ShortcutOverride before QAction/QShortcut
+        # processing; the owning page suspends the global HotkeyManager as well.
+        if getattr(self, "_listening", False) and event.type() == QEvent.Type.ShortcutOverride:
             event.accept()
             return True
         return super().event(event)
