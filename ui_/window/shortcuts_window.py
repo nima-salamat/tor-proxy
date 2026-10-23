@@ -23,6 +23,9 @@ class ShortcutsWindow(QWidget):
         self._parent = parent
         self._shortcut_rows = []
         self._icon_specs = []
+        self._global_shortcut_row = None
+        self._global_shortcut_key_layout = None
+        self._global_shortcut_key_caps = []
 
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 22)
@@ -95,7 +98,7 @@ class ShortcutsWindow(QWidget):
             self._add_category(
                 "GLOBAL",
                 [
-                    ("Show / hide TorProxy", "Toggle the main window from anywhere", ("Ctrl", "Alt", "P"), "fa6s.eye"),
+                    ("Show / hide TorProxy", "Toggle the main window from anywhere", tuple(str(CONFIG["global_shortcut"]).split("+")), "fa6s.eye"),
                 ],
             )
         self.content_layout.addStretch(1)
@@ -103,7 +106,9 @@ class ShortcutsWindow(QWidget):
         root.addWidget(scroll, 1)
 
         self.footer_label = QLabel(
-            "Navigation shortcuts work while TorProxy is focused.  Ctrl + Alt + P is global on Windows.",
+            "Navigation shortcuts work while TorProxy is focused.  {} is global on Windows.".format(
+                CONFIG["global_shortcut"]
+            ),
             self,
         )
         self.footer_label.setObjectName("shortcutsFooter")
@@ -156,8 +161,43 @@ class ShortcutsWindow(QWidget):
                 key_layout.addWidget(key_cap)
                 key_caps.append(key_cap)
             layout.addLayout(key_layout)
+            if title == "Show / hide TorProxy":
+                self._global_shortcut_row = row
+                self._global_shortcut_key_layout = key_layout
+                self._global_shortcut_key_caps = key_caps
             self.content_layout.addWidget(row)
             self._shortcut_rows.append((row, key_caps))
+
+    def update_global_shortcut(self, shortcut):
+        """Keep the help page in sync with the setting's live global shortcut."""
+        keys = tuple(part for part in str(shortcut).split("+") if part)
+        key_layout = self._global_shortcut_key_layout
+        row = self._global_shortcut_row
+        if key_layout is None or row is None:
+            return
+        while key_layout.count():
+            item = key_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        key_caps = []
+        for index, key in enumerate(keys):
+            if index:
+                plus = QLabel("+", row)
+                plus.setObjectName("shortcutsPlus")
+                key_layout.addWidget(plus)
+            key_cap = QLabel(key, row)
+            key_cap.setObjectName("shortcutsKeycap")
+            key_cap.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            key_layout.addWidget(key_cap)
+            key_caps.append(key_cap)
+        self._global_shortcut_key_caps = key_caps
+        self.footer_label.setText(
+            "Navigation shortcuts work while TorProxy is focused.  {} is global on Windows.".format(
+                shortcut
+            )
+        )
+        self.updateGeometry()
 
     def apply_theme(self, mode):
         dark = mode == "dark"
