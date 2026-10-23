@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QPushButton,
     QCheckBox,
+    QComboBox,
     QTextEdit,
     QLineEdit,
     QStackedWidget,
@@ -28,7 +29,12 @@ from functools import partial
 logger = logging.getLogger(__name__)
 
 from config import CONFIG
-from torproxy.bridges import SUPPORTED_BRIDGE_TRANSPORTS, bridge_identity_fingerprint, parse_bridge_text
+from torproxy.bridges import (
+    SUPPORTED_BRIDGE_TRANSPORTS,
+    bridge_identity_fingerprint,
+    normalize_sni_hostname,
+    parse_bridge_text,
+)
 from ui_.window.dialogs import QMessageBox
 from ui_.worker.worker import Worker
 from ui_.window.qrcode_widget import QrCodeFloatingWindow
@@ -350,6 +356,61 @@ class SettingWindow(QWidget):
             "Each saved bridge appears as its own card so you can copy or remove it separately."
         )
         self.bridges_page_layout.addWidget(description)
+
+        sni_row = QFrame(self)
+        sni_row.setObjectName("settingsRowCard")
+        sni_layout = QVBoxLayout(sni_row)
+        sni_layout.setContentsMargins(14, 10, 14, 10)
+        sni_layout.setSpacing(6)
+        sni_title = QLabel("WebTunnel SNI imitation (optional)", sni_row)
+        sni_title.setObjectName("settingsFieldLabel")
+        sni_layout.addWidget(sni_title)
+        self.cmb_webtunnel_sni = QComboBox(sni_row)
+        self.cmb_webtunnel_sni.setObjectName("webtunnelSniInput")
+        self.cmb_webtunnel_sni.setEditable(True)
+        self.cmb_webtunnel_sni.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.cmb_webtunnel_sni.setToolTip(
+            "No override is sent by default. Select a suggested hostname or enter your own DNS hostname. "
+            "This adds sni-imitation= to WebTunnel bridge lines in torrc; it does not change the original url= host."
+        )
+        self.cmb_webtunnel_sni.addItem("Use the hostname in url= (default; no override)", "")
+        for hostname in (
+            "www.google.com",
+            "www.microsoft.com",
+            "www.cloudflare.com",
+            "www.wikipedia.org",
+            "www.apple.com",
+        ):
+            self.cmb_webtunnel_sni.addItem(hostname, hostname)
+        saved_sni = normalize_sni_hostname(str(CONFIG["webtunnel_sni_imitation"] or ""))
+        if saved_sni:
+            selected_sni_index = self.cmb_webtunnel_sni.findData(saved_sni)
+            if selected_sni_index >= 0:
+                self.cmb_webtunnel_sni.setCurrentIndex(selected_sni_index)
+            else:
+                self.cmb_webtunnel_sni.setCurrentIndex(-1)
+                self.cmb_webtunnel_sni.setEditText(saved_sni)
+        else:
+            self.cmb_webtunnel_sni.setCurrentIndex(0)
+        self.cmb_webtunnel_sni.activated.connect(
+            lambda _index: self.save_webtunnel_sni_imitation()
+        )
+        self.cmb_webtunnel_sni.lineEdit().editingFinished.connect(
+            self.save_webtunnel_sni_imitation
+        )
+        sni_layout.addWidget(self.cmb_webtunnel_sni)
+        sni_note = self._description(
+            "Default: off — Lyrebird uses the hostname from each bridge's url=. Custom SNI is added as "
+            "sni-imitation= only for WebTunnel bridges and applies on the next Tor start. Not every bridge or "
+            "Lyrebird bundle supports SNI imitation; if it fails, return to the default option."
+        )
+        sni_layout.addWidget(sni_note)
+        self.webtunnel_sni_status = QLabel("Default: no SNI override.", sni_row)
+        self.webtunnel_sni_status.setObjectName("bridgeInputStatus")
+        self.webtunnel_sni_status.setWordWrap(True)
+        sni_layout.addWidget(self.webtunnel_sni_status)
+        self.bridges_page_layout.addWidget(sni_row)
+
         self.btn_bridge = QCheckBox("Use Tor bridges", self)
         self.btn_bridge.setChecked(bool(CONFIG["bridge"]))
         self.btn_bridge.stateChanged.connect(self.bridge_state_changed)
