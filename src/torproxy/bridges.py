@@ -16,7 +16,7 @@ _TRANSPORT_PATTERN = "|".join(re.escape(name) for name in SUPPORTED_BRIDGE_TRANS
 # a new record even when a clipboard source has collapsed all lines into one.
 _BRIDGE_START = re.compile(
     rf"(?i)(?<!\S)(?:Bridge\s+)?(?:{_TRANSPORT_PATTERN})\s+"
-    r"(?=(?:\[[0-9a-f:.]+\]|(?:\d{1,3}\.){3}\d{1,3}):\d{1,5}(?:\s|$))"
+    r"(?=(?:[\"']?(?:\[[0-9a-f:.]+\]|(?:\d{1,3}\.){3}\d{1,3}):\d{1,5}[\"']?)(?:\s|$))"
 )
 _IPV4_AUTHORITY = re.compile(r"^(?P<host>[^:\s]+):(?P<port>\d{1,5})$")
 _IPV6_AUTHORITY = re.compile(r"^\[(?P<host>[^\]]+)\]:(?P<port>\d{1,5})$")
@@ -37,6 +37,10 @@ class BridgeTextParseResult:
 def normalize_bridge_record(value: str) -> str:
     """Validate and canonicalize one complete supported bridge record."""
     line = " ".join(str(value or "").strip().split())
+    # Some clipboard exports surround IPv6 authorities with quotes. Tor's
+    # Bridge grammar expects [IPv6]:port as a bare token; retaining quotes can
+    # make Tor parse the endpoint as a transport k=v argument.
+    line = line.strip().strip("\"'")
     line = re.sub(r"(?i)^Bridge\s+", "", line).strip()
     if not line or "\x00" in line or "\n" in line or "\r" in line:
         raise ValueError("A bridge must be a single non-empty record.")
@@ -48,7 +52,7 @@ def normalize_bridge_record(value: str) -> str:
     if transport not in SUPPORTED_BRIDGE_TRANSPORTS:
         raise ValueError("Supported bridge transports are obfs4, snowflake, webtunnel and meek_lite.")
 
-    authority = fields[1]
+    authority = fields[1].strip("\"'")
     ipv6_match = _IPV6_AUTHORITY.fullmatch(authority)
     if ipv6_match:
         try:
@@ -71,6 +75,9 @@ def normalize_bridge_record(value: str) -> str:
         raise ValueError("Bridge ports must be between 1 and 65535.")
 
     remainder = " ".join(fields[2:])
+    # Keep key=value parameters intact, while removing accidental quoting
+    # around whole standalone tokens copied from a browser or chat window.
+    remainder = re.sub(r'(?<![=\S])(["\'])([^"\']+)\1(?=\s|$)', r"\2", remainder)
     return f"{transport} {host}:{port}" + (f" {remainder}" if remainder else "")
 
 
