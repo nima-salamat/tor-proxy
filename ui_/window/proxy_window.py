@@ -711,13 +711,16 @@ class ProxyWindow(QWidget):
         self.proxy_set = True
         self._system_proxy_is_cleared = False
         self._system_proxy_clear_failed = False
-        self.proxy_status_label.setText(f"System proxy active at 127.0.0.1:{self.proxy.port}")
-        self.logs_widget.update_log(f"System proxy explicitly enabled at 127.0.0.1:{self.proxy.port}")
         if not self.running or not self.connected or CONFIG["system_proxy_mode"] != "set":
             # The setting changed while the OS call was in flight. Restore the
             # pre-existing system state rather than leave a dead local endpoint.
+            self.logs_widget.update_log(
+                "Tor disconnected while the system proxy was being applied; restoring prior settings."
+            )
             self.clear_proxy_clicked()
             return
+        self.proxy_status_label.setText(f"System proxy active at 127.0.0.1:{self.proxy.port}")
+        self.logs_widget.update_log(f"System proxy enabled at 127.0.0.1:{self.proxy.port}")
         self._update_proxy_buttons()
 
     def _on_set_proxy_error(self, err):

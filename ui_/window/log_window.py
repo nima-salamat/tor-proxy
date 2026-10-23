@@ -8,7 +8,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QSizePolicy,
 )
-from PySide6.QtCore import Qt
 import qtawesome as qta
 
 

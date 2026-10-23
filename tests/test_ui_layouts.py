@@ -197,6 +197,9 @@ def test_home_uses_circular_animation_proxy_policies_and_left_log_drawer():
     assert 'if action not in {"set", "clear", "disable"}' in proxy_manager_source
     assert "def disable_windows_proxy(self)" in proxy_manager_source
     assert "def disable_linux_proxy(self)" in proxy_manager_source
+    assert "self._system_proxy_is_cleared = True" in home_source
+    assert "Could not clear the system proxy; it may still be enabled." in home_source
+    assert "QTimer.singleShot(0, self._clear_system_proxy_mode)" in home_source
 
 
 def test_theme_sync_and_titlebar_use_fontawesome_icons_and_consistent_corner_background():
@@ -212,3 +215,28 @@ def test_theme_sync_and_titlebar_use_fontawesome_icons_and_consistent_corner_bac
     assert 'qta.icon("fa6s.window-minimize"' in titlebar_source
     assert 'qta.icon("fa6s.window-maximize"' in titlebar_source
     assert 'qta.icon("fa6s.xmark"' in titlebar_source
+
+
+
+def test_manage_proxy_disable_dispatches_explicit_clear_to_the_current_platform(monkeypatch):
+    import set_proxy
+
+    windows_calls = []
+    monkeypatch.setattr(set_proxy, "get_os_name", lambda: set_proxy.Os.Windows)
+    monkeypatch.setattr(
+        set_proxy.Handler,
+        "disable_windows_proxy",
+        lambda self: windows_calls.append((self.host, self.port)) or True,
+    )
+    assert set_proxy.manage_proxy("127.0.0.1", 9150, "disable")
+    assert windows_calls == [("127.0.0.1", 9150)]
+
+    linux_calls = []
+    monkeypatch.setattr(set_proxy, "get_os_name", lambda: set_proxy.Os.Linux)
+    monkeypatch.setattr(
+        set_proxy.Handler,
+        "disable_linux_proxy",
+        lambda self: linux_calls.append((self.host, self.port)) or True,
+    )
+    assert set_proxy.manage_proxy("127.0.0.1", 9151, "disable")
+    assert linux_calls == [("127.0.0.1", 9151)]
