@@ -44,6 +44,57 @@ def test_tor_manager_splits_inline_records_using_the_shared_parser():
     ]
 
 
+def test_bridge_torrc_registers_lyrebird_transports_in_one_directive(tmp_path):
+    executable = tmp_path / "tor" / "tor.exe"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("fake tor", encoding="utf-8")
+    transport_dir = executable.parent / "pluggable_transports"
+    transport_dir.mkdir()
+    (transport_dir / "lyrebird.exe").write_text("fake transport", encoding="utf-8")
+    manager = TorManager(
+        TorSettings(
+            executable=executable,
+            socks_port=19650,
+            control_port=19651,
+            bridges_enabled=True,
+            bridges="webtunnel 192.0.2.10:443 ABCDEF url=https://bridge.example/ ver=0.0.1",
+            data_directory=tmp_path / "state",
+        )
+    )
+    torrc = manager.render_torrc()
+    plugin_lines = [line for line in torrc.splitlines() if line.startswith("ClientTransportPlugin ")]
+    assert plugin_lines == [
+        'ClientTransportPlugin meek_lite,obfs4,snowflake,webtunnel exec "'
+        + str(transport_dir / "lyrebird.exe") + '"'
+    ]
+    assert 'Bridge webtunnel 192.0.2.10:443 ABCDEF url=https://bridge.example/ ver=0.0.1' in torrc
+
+
+def test_bootstrap_progress_parser_reads_tor_log_notice_formats():
+    assert TorManager._parse_bootstrap_log_line(
+        "[notice] Bootstrapped 0% (starting): Starting"
+    ) == (0, "Starting")
+    assert TorManager._parse_bootstrap_log_line(
+        '[notice] Bootstrapped 10% (conn_done): Connected to a relay'
+    ) == (10, "Connected to a relay")
+    assert TorManager._parse_bootstrap_log_line(
+        'NOTICE BOOTSTRAP PROGRESS=12 TAG=conn_done SUMMARY="Connected to a relay"'
+    ) == (12, "Connected to a relay")
+    assert TorManager._parse_bootstrap_log_line("[warn] Bridge connection failed") is None
+
+
+def test_bridge_settings_can_override_tor_log_path(tmp_path):
+    log_path = tmp_path / "probe.log"
+    manager = TorManager(
+        TorSettings(
+            executable=tmp_path / "tor",
+            data_directory=tmp_path / "state",
+            log_path=log_path,
+        )
+    )
+    assert manager.log_path == log_path
+
+
 def test_stop_without_owned_process_is_idempotent():
     manager = TorManager(TorSettings(executable="/missing/tor", data_directory="/tmp/torproxy-test-state"))
     manager.stop()
