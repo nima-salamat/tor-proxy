@@ -8,7 +8,7 @@ from __future__ import annotations
 from enum import IntFlag
 
 import qtawesome as qta
-from PySide6.QtCore import QPoint, QRect, Qt, QTimer
+from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QApplication,
@@ -175,6 +175,11 @@ class _FramelessDialog(QDialog):
         self.setMaximumWidth(680)
         self._base_min_width = width
         self._base_min_height = 0
+        self._base_min_size = QSize(width, 0)
+        self._base_max_size = QSize(680, 16777215)
+        self._preferred_size: QSize | None = None
+        self._screen_change_connected = False
+        self._active_screen = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(1, 1, 1, 1)
@@ -219,7 +224,7 @@ class _FramelessDialog(QDialog):
             }}
             QLabel#dialogTitle {{
                 color: {self._colors["text"]};
-                font-size: 14px;
+                font-size: 10.5pt;
                 font-weight: 750;
                 background: transparent;
             }}
@@ -237,8 +242,8 @@ class _FramelessDialog(QDialog):
                 border-bottom-left-radius: 14px;
                 border-bottom-right-radius: 14px;
             }}
-            QLabel#dialogMessage {{ color: {self._colors["text"]}; background: transparent; font-size: 12px; }}
-            QLabel#dialogHint {{ color: {self._colors["muted"]}; background: transparent; font-size: 11px; }}
+            QLabel#dialogMessage {{ color: {self._colors["text"]}; background: transparent; font-size: 9pt; }}
+            QLabel#dialogHint {{ color: {self._colors["muted"]}; background: transparent; font-size: 8.25pt; }}
             QLabel#shortcutCategory {{
                 color: {self._accent};
                 background: transparent;
@@ -247,7 +252,7 @@ class _FramelessDialog(QDialog):
                 padding-top: 5px;
             }}
             QLabel#shortcutName {{ color: {self._colors["text"]}; background: transparent; font-size: 12px; }}
-            QLabel#shortcutDescription {{ color: {self._colors["muted"]}; background: transparent; font-size: 10px; }}
+            QLabel#shortcutDescription {{ color: {self._colors["muted"]}; background: transparent; font-size: 7.5pt; }}
             QLabel#shortcutKey {{
                 color: {self._colors["text"]};
                 background: {self._colors["panel"]};
@@ -302,37 +307,98 @@ class _FramelessDialog(QDialog):
             return handle.screen()
         return QGuiApplication.primaryScreen()
 
+    def _remember_preferred_size(self) -> None:
+        """Capture the design size before fitting to a smaller secondary display."""
+        self._preferred_size = QSize(self.size())
+        self._base_min_size = QSize(self.minimumSize())
+        self._base_max_size = QSize(self.maximumSize())
+
+    def _restore_size_limits(self) -> None:
+        self.setMinimumSize(self._base_min_size)
+        self.setMaximumSize(self._base_max_size)
+
     def clamp_to_screen(self, position: QPoint) -> QPoint:
-        """Keep the full dialog inside a display's usable work area."""
+        """Keep the dialog visible without permanently changing its design size."""
         screen = self._screen_for_position(position)
         if screen is None:
             return position
         area = screen.availableGeometry()
-        if self._base_min_height <= 0:
-            self._base_min_height = self.minimumHeight()
+        preferred = self._preferred_size or QSize(self.size())
+        width = min(preferred.width(), area.width())
+        height = min(preferred.height(), area.height())
 
-        # Adapt size limits to the display currently containing the dialog.
-        # This also handles unusually short or narrow displays without leaving
-        # a hard-coded minimum larger than the available work area.
-        self.setMaximumSize(min(680, area.width()), area.height())
-        self.setMinimumSize(
-            min(self._base_min_width, area.width()),
-            min(self._base_min_height, area.height()),
-        )
-        width = min(self.width(), area.width())
-        height = min(self.height(), area.height())
-        if self.width() != width or self.height() != height:
-            self.resize(width, height)
+        # Only relax min/max constraints when a display is physically smaller
+        # than the dialog. The original constraints and preferred dimensions
+        # are restored when it moves back to a larger monitor.
+        if width != preferred.width() or height != preferred.height():
+            min_width = min(self._base_min_size.width(), area.width())
+            min_height = min(self._base_min_size.height(), area.height())
+            self.setMinimumSize(min_width, min_height)
+            self.setMaximumSize(area.width(), area.height())
+            if self.size() != QSize(width, height):
+                self.resize(width, height)
+        else:
+            self._restore_size_limits()
+            if self.size() != preferred:
+                self.resize(preferred)
+
         x = min(max(position.x(), area.left()), area.right() - width + 1)
         y = min(max(position.y(), area.top()), area.bottom() - height + 1)
         return QPoint(x, y)
+
+    def _connect_screen_change_signal(self) -> None:
+        handle = self.windowHandle()
+        if handle is None or self._screen_change_connected:
+            return
+        handle.screenChanged.connect(self._on_screen_changed)
+        self._screen_change_connected = True
+        self._active_screen = handle.screen()
+
+    def _on_screen_changed(self, screen) -> None:
+        self._active_screen = screen
+        # Qt completes the native window/DPI transition after this signal.
+        QTimer.singleShot(0, self._refresh_for_screen_change)
+
+    def _refresh_for_screen_change(self) -> None:
+        """Re-polish and lay out the dialog after a per-monitor DPI transition."""
+        screen = self._active_screen
+        if screen is None:
+            handle = self.windowHandle()
+            screen = handle.screen() if handle is not None else None
+        if screen is None:
+            screen = self._screen_for_position(self.pos())
+        if screen is None:
+            return
+
+        area = screen.availableGeometry()
+        preferred = self._preferred_size or QSize(self.size())
+        self._restore_size_limits()
+        width = min(preferred.width(), area.width())
+        height = min(preferred.height(), area.height())
+        if width != preferred.width() or height != preferred.height():
+            self.setMinimumSize(
+                min(self._base_min_size.width(), area.width()),
+                min(self._base_min_size.height(), area.height()),
+            )
+            self.setMaximumSize(area.width(), area.height())
+        self.resize(width, height)
+
+        # Point-based QSS font sizes allow Qt to recalculate type metrics for
+        # the destination screen's DPI; re-polishing refreshes descendant layouts.
+        stylesheet = self.styleSheet()
+        self.setStyleSheet("")
+        self.setStyleSheet(stylesheet)
+        for widget in self.findChildren(QWidget):
+            widget.updateGeometry()
+            widget.update()
+        self._place_on_screen()
 
     def _place_on_screen(self):
         if self.parentWidget() is not None and self.parentWidget().isVisible():
             center = self.parentWidget().mapToGlobal(self.parentWidget().rect().center())
             target = center - self.rect().center()
         else:
-            screen = QGuiApplication.primaryScreen()
+            screen = self._screen_for_position(self.pos()) if self.isVisible() else QGuiApplication.primaryScreen()
             if screen is None:
                 return
             target = screen.availableGeometry().center() - self.rect().center()
@@ -340,9 +406,13 @@ class _FramelessDialog(QDialog):
 
     def showEvent(self, event):
         super().showEvent(event)
+        self._connect_screen_change_signal()
         # Qt may finalize the dialog size after showEvent; position again on
-        # the next loop turn using the actual geometry, never off-screen.
+        # the next loop turn using the actual geometry.
+        if self._preferred_size is None:
+            self._remember_preferred_size()
         self._place_on_screen()
+        QTimer.singleShot(0, self._connect_screen_change_signal)
         QTimer.singleShot(0, self._place_on_screen)
 
 
@@ -413,6 +483,7 @@ class MessageDialog(_FramelessDialog):
             self.setMinimumHeight(150)
 
         self.adjustSize()
+        self._remember_preferred_size()
 
     def _choose_yes(self):
         self.choice = StandardButton.Yes
@@ -448,3 +519,4 @@ class ExitConfirmDialog(MessageDialog):
         )
         self.body_layout.addWidget(self.dont_ask_checkbox)
         self.adjustSize()
+        self._remember_preferred_size()
