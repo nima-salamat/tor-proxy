@@ -51,12 +51,12 @@ class TorSettings:
     geoip6_path: Path | None = None
     bridges_enabled: bool = False
     bridges: str = ""
-    webtunnel_sni_imitation: str = ""
     max_circuit_dirtiness_seconds: int = 600
     new_circuit_period_seconds: int = 60
     startup_timeout_seconds: float = 180.0
     shutdown_timeout_seconds: float = 5.0
     log_path: Path | None = None
+    webtunnel_sni_imitation: str = ""
 
     def __post_init__(self) -> None:
         ports = [self.socks_port, self.control_port]
