@@ -558,3 +558,70 @@ def test_shortcut_capture_dialog_captures_confirms_and_allows_retry(qt_app):
     assert dialog.result() == QDialog.DialogCode.Accepted
     dialog.deleteLater()
     qt_app.processEvents()
+
+
+
+def test_custom_message_dialog_can_copy_the_exact_displayed_text(qt_app):
+    from PySide6.QtWidgets import QApplication
+    from ui_.window.dialogs import MessageDialog
+
+    message = "A custom notification message that should be copied exactly."
+    dialog = MessageDialog(None, "Notification details", message, level="warning")
+    assert dialog.copy_button.text() == "Copy text"
+    dialog.copy_button.click()
+    assert QApplication.clipboard().text() == message
+    assert dialog.copy_button.text() == "Copied"
+    dialog.deleteLater()
+    qt_app.processEvents()
+
+
+def test_shortcut_capture_displays_chord_and_suppresses_qt_shortcut_override(qt_app):
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QKeyEvent
+    from ui_.window.dialogs import ShortcutCaptureDialog
+
+    dialog = ShortcutCaptureDialog(None, "Ctrl+Alt+P")
+    dialog._begin_listening()
+    override = QEvent(QEvent.Type.ShortcutOverride)
+    assert dialog.event(override) is True
+    assert override.isAccepted()
+
+    chord = QKeyEvent(
+        QEvent.Type.KeyPress,
+        Qt.Key.Key_K,
+        Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier,
+    )
+    dialog.keyPressEvent(chord)
+    assert dialog.capture_value.text() == "Ctrl+Shift+K"
+    assert dialog._captured_shortcut == "Ctrl+Shift+K"
+    assert dialog.apply_button.isEnabled()
+    assert dialog.height() >= dialog.minimumHeight()
+    dialog.reject()
+    dialog.deleteLater()
+    qt_app.processEvents()
+
+
+def test_shortcut_capture_uses_shared_scope_to_pause_global_and_local_shortcuts():
+    repository = Path(__file__).resolve().parents[1]
+    ui_source = (repository / "ui.py").read_text(encoding="utf-8")
+    page_source = (repository / "ui_/window/shortcuts_window.py").read_text(encoding="utf-8")
+    hotkeys_source = (repository / "src/torproxy/hotkeys.py").read_text(encoding="utf-8")
+    dialogs_source = (repository / "ui_/window/dialogs.py").read_text(encoding="utf-8")
+
+    assert "def shortcut_capture_scope(self)" in ui_source
+    assert "action.setEnabled(False)" in ui_source
+    assert "manager.suspend()" in ui_source and "manager.resume()" in ui_source
+    assert "with capture_scope:" in page_source
+    assert "def suspend(self)" in hotkeys_source and "def resume(self)" in hotkeys_source
+    assert "QKeySequence(combined)" in dialogs_source
+    assert "from PySide6.QtGui import QGuiApplication, QKeySequence" in dialogs_source
+
+
+def test_custom_message_font_and_screen_change_refresh_are_dpi_aware():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/dialogs.py").read_text(encoding="utf-8")
+    assert "handle.screenChanged.connect(self._on_screen_changed)" in source
+    assert "screen.logicalDotsPerInchChanged.connect(self._on_screen_dpi_changed)" in source
+    assert "QTimer.singleShot(120, self._refresh_for_screen_change)" in source
+    assert "font-size: 9pt;" in source
+    assert "self.adjustSize()" in source
