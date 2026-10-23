@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QScrollArea
 )
 from PySide6.QtCore import Qt, QThreadPool
-from PySide6.QtGui import QPalette
+from PySide6.QtGui import QColor, QPalette
 import qtawesome as qta
 
 import qdarkstyle
@@ -160,10 +160,10 @@ class SettingWindow(QWidget):
         # placeholder palette role explicitly so both light and dark remain legible.
         for widget in self.findChildren(QLineEdit) + self.findChildren(QTextEdit):
             palette = widget.palette()
-            palette.setColor(QPalette.ColorRole.Text, __import__("PySide6.QtGui", fromlist=["QColor"]).QColor(text))
-            palette.setColor(QPalette.ColorRole.Base, __import__("PySide6.QtGui", fromlist=["QColor"]).QColor(field))
-            palette.setColor(QPalette.ColorRole.PlaceholderText, __import__("PySide6.QtGui", fromlist=["QColor"]).QColor(placeholder))
-            palette.setColor(QPalette.ColorRole.Disabled, QPalette.ColorRole.Text, __import__("PySide6.QtGui", fromlist=["QColor"]).QColor(disabled))
+            palette.setColor(QPalette.ColorRole.Text, QColor(text))
+            palette.setColor(QPalette.ColorRole.Base, QColor(field))
+            palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(placeholder))
+            palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor(disabled))
             widget.setPalette(palette)
         for button, icon_name in zip(self.settings_nav_buttons, self.settings_nav_icon_names):
             button.setIcon(qta.icon(icon_name, color="#ffffff" if button.isChecked() else icon_color))
