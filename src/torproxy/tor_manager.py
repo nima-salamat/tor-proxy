@@ -17,7 +17,7 @@ from pathlib import Path
 import psutil
 
 from .paths import user_directories
-from .bridges import SUPPORTED_BRIDGE_TRANSPORTS, parse_bridge_text
+from .bridges import SUPPORTED_BRIDGE_TRANSPORTS, normalize_sni_hostname, parse_bridge_text
 
 
 _ACTIVE_DATA_DIRECTORIES: set[str] = set()
@@ -51,6 +51,7 @@ class TorSettings:
     geoip6_path: Path | None = None
     bridges_enabled: bool = False
     bridges: str = ""
+    webtunnel_sni_imitation: str = ""
     max_circuit_dirtiness_seconds: int = 600
     new_circuit_period_seconds: int = 60
     startup_timeout_seconds: float = 180.0
@@ -69,6 +70,10 @@ class TorSettings:
             raise TorManagerError("MaxCircuitDirtiness must be between 10 and 86400 seconds.")
         if not 10 <= self.new_circuit_period_seconds <= 86400:
             raise TorManagerError("NewCircuitPeriod must be between 10 and 86400 seconds.")
+        try:
+            normalize_sni_hostname(self.webtunnel_sni_imitation or "")
+        except (TypeError, ValueError) as exc:
+            raise TorManagerError(f"Invalid WebTunnel SNI imitation hostname: {exc}") from exc
         if self.startup_timeout_seconds <= 0 or self.shutdown_timeout_seconds <= 0:
             raise TorManagerError("Startup and shutdown timeouts must be positive.")
 
@@ -407,7 +412,16 @@ class TorManager:
                     "ClientTransportPlugin meek_lite,obfs4,snowflake,webtunnel exec "
                     + transport_exec
                 )
-            lines.extend("Bridge " + record for _, record in bridge_records)
+            sni_imitation = normalize_sni_hostname(settings.webtunnel_sni_imitation or "")
+            for bridge_transport, record in bridge_records:
+                if bridge_transport.casefold() == "webtunnel" and sni_imitation:
+                    has_explicit_sni = any(
+                        token.casefold().startswith("sni-imitation=")
+                        for token in record.split()[2:]
+                    )
+                    if not has_explicit_sni:
+                        record += " sni-imitation=" + sni_imitation
+                lines.append("Bridge " + record)
         elif settings.bridges.strip():
             LOGGER.warning("Bridge records are configured but bridge mode is disabled.")
         return "\n".join(lines) + "\n"
