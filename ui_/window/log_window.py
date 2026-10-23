@@ -84,6 +84,7 @@ class LogWindow(QWidget):
         """)
         self.btn_clear.setIcon(qta.icon("fa6s.trash", color=text))
         self.btn_close.setIcon(qta.icon("fa6s.xmark", color=text))
+        self._recolor_existing_logs()
 
     @staticmethod
     def _message_level(message, level=None):
@@ -152,11 +153,7 @@ class LogWindow(QWidget):
         category = self._message_level(text, level)
         color = self._log_palette().get(category, self._log_palette()["info"])
 
-        fmt = QTextCharFormat()
-        fmt.setForeground(QColor(color))
-        if category in {"error", "critical", "warning", "success"}:
-            fmt.setFontWeight(700 if category != "warning" else 600)
-
+        fmt = self._format_for_category(category)
         cursor = self.text_edit.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         if not cursor.atStart():
@@ -164,6 +161,25 @@ class LogWindow(QWidget):
         cursor.insertText(text, fmt)
         self.text_edit.setTextCursor(cursor)
         self.text_edit.ensureCursorVisible()
+
+    def _format_for_category(self, category):
+        color = self._log_palette().get(category, self._log_palette()["info"])
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(color))
+        if category in {"error", "critical", "warning", "success"}:
+            fmt.setFontWeight(700 if category != "warning" else 600)
+        return fmt
+
+    def _recolor_existing_logs(self):
+        """Reapply severity colors after light/dark theme changes."""
+        block = self.text_edit.document().begin()
+        while block.isValid():
+            text = block.text()
+            if text:
+                cursor = QTextCursor(block)
+                cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+                cursor.mergeCharFormat(self._format_for_category(self._message_level(text)))
+            block = block.next()
 
     def _log_palette(self):
         dark = getattr(self, "_dark_mode", True)
