@@ -153,11 +153,21 @@ def test_unsupported_tls_curve_is_a_global_transport_issue_not_dead_bridge(monke
     assert outcome == BridgeProbeOutcome(None, "transport_runtime_incompatible")
 
 
-def test_explicit_webtunnel_dial_timeout_is_classified_as_bridge_specific(monkeypatch, tmp_path):
+def test_single_webtunnel_dial_timeout_is_inconclusive(monkeypatch, tmp_path):
     outcome = _probe_with_fake_tor_log(
         monkeypatch,
         tmp_path,
         "Managed proxy: Error dialing: read tcp local:5512->198.51.100.8:443: i/o timeout",
+    )
+    assert outcome is None
+
+
+def test_repeated_webtunnel_dial_timeouts_are_classified_as_bridge_specific(monkeypatch, tmp_path):
+    outcome = _probe_with_fake_tor_log(
+        monkeypatch,
+        tmp_path,
+        "Managed proxy: Error dialing: read tcp local:5512->198.51.100.8:443: i/o timeout\\n"
+        "Managed proxy: Error dialing: read tcp local:5513->198.51.100.8:443: wsarecv timeout",
     )
     assert outcome is False
 
