@@ -14,6 +14,8 @@ from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
+    QPlainTextEdit,
+    QPushButton,
     QLabel,
     QSizePolicy,
     QVBoxLayout,
@@ -254,10 +256,14 @@ class _ScanOverlay(QWidget):
     def stop_animation(self):
         self._timer.stop()
 
+    def set_source_size(self, source_size):
+        self._source_size = tuple(source_size) if source_size else (1, 1)
+        self.update()
+
     def set_detected(self, corners, source_size):
         self._timer.stop()
         self._detected_corners = list(corners or [])
-        self._source_size = tuple(source_size) if source_size else (1, 1)
+        self.set_source_size(source_size)
         self.update()
 
     def clear_detection(self):
@@ -463,16 +469,48 @@ class QrCodeFloatingWindow(_FramelessDialog):
         self.details_label.setWordWrap(True)
         self.body_layout.addWidget(self.details_label)
 
+        # A compact disclosure row keeps the main scan flow clean. The chevron
+        # opens the exact bridge lines that were recognized in the frozen frame.
+        self.results_toggle = QPushButton("Detected bridges")
+        self.results_toggle.setObjectName("qrResultsToggle")
+        self.results_toggle.setIcon(qta.icon("fa6s.chevron-down", color="#53d9c5"))
+        self.results_toggle.setCheckable(True)
+        self.results_toggle.setToolButtonStyle if hasattr(self.results_toggle, "setToolButtonStyle") else None
+        self.results_toggle.clicked.connect(self._toggle_detected_results)
+        self.results_toggle.hide()
+        self.body_layout.addWidget(self.results_toggle)
+
+        self.results_panel = QFrame(self.body_host)
+        self.results_panel.setObjectName("qrResultsPanel")
+        results_layout = QVBoxLayout(self.results_panel)
+        results_layout.setContentsMargins(10, 8, 10, 8)
+        results_layout.setSpacing(4)
+        self.results_summary = QLabel("Recognized bridge lines")
+        self.results_summary.setObjectName("qrResultsSummary")
+        results_layout.addWidget(self.results_summary)
+        self.results_text = QPlainTextEdit(self.results_panel)
+        self.results_text.setObjectName("qrResultsText")
+        self.results_text.setReadOnly(True)
+        self.results_text.setMaximumHeight(92)
+        results_layout.addWidget(self.results_text)
+        self.results_panel.hide()
+        self.body_layout.addWidget(self.results_panel)
+
         self.setStyleSheet(self.styleSheet() + f"""
             QLabel#qrIntro {{ color: {self._colors["muted"]}; background: transparent; font-size: 9pt; }}
             QLabel#qrCameraIcon {{ background: rgba(83, 217, 197, 0.11); border: 1px solid {self._colors["border"]}; border-radius: 8px; }}
             QLabel#qrEyebrow {{ color: {self._colors["muted"]}; background: transparent; font-size: 8pt; font-weight: 850; letter-spacing: 1px; }}
             QLabel#qrBadge {{ color: #53d9c5; background: rgba(83, 217, 197, 0.11); border: 1px solid rgba(83, 217, 197, 0.3); border-radius: 9px; padding: 4px 8px; font-size: 7.5pt; font-weight: 850; }}
             QFrame#qrPreviewPanel {{ background: #090f18; border: 1px solid {self._colors["border"]}; border-radius: 13px; }}
-            QLabel#qrPreviewImage {{ background: #090f18; color: #a5b4c7; border-radius: 12px; font-size: 10pt; padding: 12px; }}
+            QLabel#qrPreviewImage {{ background: #090f18; color: #a5b4c7; border-radius: 12px; font-size: 10pt; padding: 0; }}
             QLabel#qrStatusDot {{ background: #f4b860; border-radius: 4px; }}
             QLabel#qrStatusText {{ color: {self._colors["text"]}; background: transparent; font-size: 9pt; font-weight: 650; }}
             QLabel#qrDetails {{ color: {self._colors["muted"]}; background: transparent; font-size: 8pt; }}
+            QPushButton#qrResultsToggle {{ color: #53d9c5; background: transparent; border: none; text-align: left; padding: 5px 2px; font-size: 8.5pt; font-weight: 750; }}
+            QPushButton#qrResultsToggle:hover {{ color: #9bf0e3; background: rgba(83, 217, 197, 0.07); border-radius: 6px; }}
+            QFrame#qrResultsPanel {{ background: {self._colors["panel"]}; border: 1px solid {self._colors["border"]}; border-radius: 9px; }}
+            QLabel#qrResultsSummary {{ color: {self._colors["muted"]}; background: transparent; font-size: 7.5pt; font-weight: 750; }}
+            QPlainTextEdit#qrResultsText {{ color: {self._colors["text"]}; background: {self._colors["surface"]}; border: 1px solid {self._colors["border"]}; border-radius: 6px; padding: 5px; font-size: 8pt; }}
         """)
 
         self.add_footer_spacer()
@@ -490,8 +528,20 @@ class QrCodeFloatingWindow(_FramelessDialog):
         self.import_button = self.add_button(
             "Import bridges", primary=True, callback=self.import_bridges
         )
-        self.import_button.setIcon(qta.icon("fa6s.check", color="#ffffff"))
+        self.import_button.setIcon(qta.icon("fa6s.file-import", color="#ffffff"))
         self.import_button.hide()
+
+        self.replace_button = self.add_button(
+            "Replace", primary=False, callback=self.replace_bridges
+        )
+        self.replace_button.setIcon(qta.icon("fa6s.arrow-rotate-left", color=self._colors["text"]))
+        self.replace_button.hide()
+
+        self.add_bridges_button = self.add_button(
+            "Add", primary=True, callback=self.add_bridges
+        )
+        self.add_bridges_button.setIcon(qta.icon("fa6s.plus", color="#ffffff"))
+        self.add_bridges_button.hide()
 
         self._resize_preview_overlay()
         self._set_status("Starting camera…", level="working")
@@ -506,6 +556,62 @@ class QrCodeFloatingWindow(_FramelessDialog):
             self.camera_label.setGeometry(self.preview_panel.contentsRect())
             self.scan_overlay.setGeometry(self.preview_panel.contentsRect())
             self.scan_overlay.raise_()
+
+    def _toggle_detected_results(self, expanded: bool):
+        self.results_panel.setVisible(bool(expanded))
+        icon = "fa6s.chevron-up" if expanded else "fa6s.chevron-down"
+        self.results_toggle.setIcon(qta.icon(icon, color="#53d9c5"))
+        if expanded:
+            # The result drawer should not push the dialog below the monitor's
+            # work area when a long bridge payload is recognized.
+            self.adjustSize()
+            self._remember_preferred_size()
+            self.move(self.clamp_to_screen(self.pos()))
+
+    def _configure_import_actions(self):
+        settings = self.parent_
+        editor = getattr(settings, "inp_bridges", None)
+        existing = editor.toPlainText().strip() if editor is not None else ""
+        if existing:
+            self.import_button.hide()
+            self.replace_button.show()
+            self.add_bridges_button.show()
+        else:
+            self.import_button.show()
+            self.replace_button.hide()
+            self.add_bridges_button.hide()
+
+    def _apply_detected_bridges(self, mode: str):
+        if not self._detected_bridges:
+            return
+        settings = self.parent_
+        editor = getattr(settings, "inp_bridges", None)
+        if editor is None:
+            self._set_status("The bridge settings field is no longer available.", level="error")
+            return
+
+        imported = list(self._detected_bridges)
+        if mode == "add":
+            existing = [line.strip() for line in editor.toPlainText().splitlines() if line.strip()]
+            seen = {line.casefold() for line in existing}
+            merged = list(existing)
+            for line in imported:
+                if line.casefold() not in seen:
+                    merged.append(line)
+                    seen.add(line.casefold())
+            imported = merged
+
+        editor.setPlainText("\n".join(imported))
+        enable_checkbox = getattr(settings, "btn_bridge", None)
+        if enable_checkbox is not None and not enable_checkbox.isChecked():
+            enable_checkbox.setChecked(True)
+        if mode == "add":
+            self._set_status(f"Added bridge lines. {len(imported)} line(s) now in Settings.", level="success")
+        elif mode == "replace":
+            self._set_status(f"Replaced the bridge list with {len(imported)} detected line(s).", level="success")
+        else:
+            self._set_status(f"Imported {len(imported)} bridge line(s) into Settings.", level="success")
+        self.accept()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -538,7 +644,13 @@ class QrCodeFloatingWindow(_FramelessDialog):
                 self._scanner.wait()
         self._detected_bridges = []
         self._finishing = False
+        self.scan_overlay.clear_detection()
+        self.results_toggle.setChecked(False)
+        self.results_toggle.hide()
+        self.results_panel.hide()
         self.import_button.hide()
+        self.replace_button.hide()
+        self.add_bridges_button.hide()
         self.retry_button.hide()
         self.details_label.setText(
             "Your QR data is checked locally. TorProxy only imports recognized bridge lines."
@@ -575,6 +687,7 @@ class QrCodeFloatingWindow(_FramelessDialog):
         self._resize_preview_overlay()
 
     def _show_frame(self, image: QImage):
+        self.scan_overlay.set_source_size((image.width(), image.height()))
         self.camera_label.setText("")
         self.camera_label.setPixmap(
             QPixmap.fromImage(image).scaled(
@@ -584,10 +697,14 @@ class QrCodeFloatingWindow(_FramelessDialog):
             )
         )
 
-    def _qr_detected(self, payload: str):
+    def _qr_detected(self, payload: str, image: QImage, corners):
         bridges = parse_bridge_payload(payload)
-        self.scan_overlay.stop_animation()
-        self.scan_overlay.hide()
+        self.scan_overlay.set_detected(
+            corners, (image.width(), image.height())
+        )
+        self._show_frame(image)
+        self.scan_overlay.show()
+        self.scan_overlay.raise_()
         self._detected_bridges = bridges
         if not bridges:
             self._set_status(
@@ -597,6 +714,11 @@ class QrCodeFloatingWindow(_FramelessDialog):
             self.details_label.setText(
                 "Only bridge payloads are imported. Nothing has been changed in your settings."
             )
+            self.results_toggle.hide()
+            self.results_panel.hide()
+            self.import_button.hide()
+            self.replace_button.hide()
+            self.add_bridges_button.hide()
             self.retry_button.show()
             return
 
@@ -606,29 +728,26 @@ class QrCodeFloatingWindow(_FramelessDialog):
             level="success",
         )
         self.details_label.setText(
-            "Bridge details stay on this computer. Choose Import bridges to add them to Settings."
+            "The detected frame is frozen. Open the details below to review the bridge lines before importing."
         )
-        self.camera_label.setText(
-            f"QR code recognized\n\n{count} bridge line{'s' if count != 1 else ''} ready to import"
-        )
-        self.camera_label.setPixmap(QPixmap())
-        self.import_button.show()
+        self.results_text.setPlainText("\n".join(bridges))
+        self.results_summary.setText(f"{count} verified bridge line(s)")
+        self.results_toggle.setText(f"Detected bridges · {count}")
+        self.results_toggle.setChecked(False)
+        self.results_toggle.setIcon(qta.icon("fa6s.chevron-down", color="#53d9c5"))
+        self.results_toggle.show()
+        self.results_panel.hide()
+        self._configure_import_actions()
         self.retry_button.show()
 
     def import_bridges(self):
-        if not self._detected_bridges:
-            return
-        settings = self.parent_
-        editor = getattr(settings, "inp_bridges", None)
-        if editor is None:
-            self._set_status("The bridge settings field is no longer available.", level="error")
-            return
-        editor.setPlainText("\n".join(self._detected_bridges))
-        enable_checkbox = getattr(settings, "btn_bridge", None)
-        if enable_checkbox is not None and not enable_checkbox.isChecked():
-            enable_checkbox.setChecked(True)
-        self._set_status("Bridge lines imported into Settings.", level="success")
-        self.accept()
+        self._apply_detected_bridges("import")
+
+    def replace_bridges(self):
+        self._apply_detected_bridges("replace")
+
+    def add_bridges(self):
+        self._apply_detected_bridges("add")
 
     def _stop_scanner(self):
         scanner = self._scanner
