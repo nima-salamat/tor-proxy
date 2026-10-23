@@ -358,7 +358,7 @@ class TorManager:
             progress = int(match.group(1))
             if not 0 <= progress <= 100:
                 return None
-            summary = re.search(r"\bSUMMARY=(?:"([^"]*)"|(.*?))(?:\s+\w+=|$)", line, re.IGNORECASE)
+            summary = re.search(r'\bSUMMARY=(?:"([^"]*)"|(.*?))(?:\s+\w+=|$)', line, re.IGNORECASE)
             tag = re.search(r"\bTAG=([A-Za-z0-9_-]+)", line, re.IGNORECASE)
             detail = (summary.group(1) or summary.group(2) or "").strip() if summary else ""
             if not detail:
