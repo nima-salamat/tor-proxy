@@ -333,6 +333,12 @@ class TorRunner(QObject):
                     "The original bridge list was preserved. Check that the selected Tor Expert Bundle contains "
                     "tor/pluggable_transports/lyrebird.exe and retry after selecting the correct bundle."
                 )
+            elif issue == "transport_runtime_incompatible":
+                detail = (
+                    "The bundled Lyrebird transport reported 'tls: CurvePreferences includes unsupported curve'. "
+                    "This is a transport/runtime compatibility error, not evidence that any bridge is dead. "
+                    "No bridge was removed. Update or select a compatible Tor Expert Bundle and retry."
+                )
             elif issue.startswith("missing_transport:"):
                 transport_name = issue.split(":", 1)[1]
                 detail = (
