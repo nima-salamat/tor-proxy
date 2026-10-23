@@ -10,7 +10,7 @@ from typing import Iterable
 import cv2
 import qtawesome as qta
 from PySide6.QtCore import QThread, QTimer, Qt, Signal, QRectF, QPointF
-from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap, QPolygonF
+from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -248,22 +248,25 @@ class _QrScannerThread(QThread):
 
 
 class _ScanOverlay(QWidget):
-    """Full-preview scan beam and a persistent polygon around a detected QR."""
+    """One canvas for the camera frame, scan animation and detected QR marker."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         self._phase = 0.0
         self._direction = 1.0
         self._detected_corners: list[tuple[float, float]] = []
         self._source_size = (1, 1)
+        self._frame: QImage | None = None
+        self._placeholder = "Opening camera…"
+        self._has_detection = False
         self._timer = QTimer(self)
         self._timer.setInterval(28)
         self._timer.timeout.connect(self._advance)
 
     def start_animation(self):
         self._detected_corners = []
+        self._has_detection = False
         self._phase = 0.0
         self._direction = 1.0
         if not self._timer.isActive():
@@ -273,6 +276,20 @@ class _ScanOverlay(QWidget):
     def stop_animation(self):
         self._timer.stop()
 
+    def set_frame(self, image: QImage):
+        self._frame = image.copy()
+        self._source_size = (image.width(), image.height())
+        self._placeholder = ""
+        self.update()
+
+    def set_placeholder(self, message: str):
+        self._frame = None
+        self._placeholder = message
+        self._source_size = (1, 1)
+        self._detected_corners = []
+        self._has_detection = False
+        self.update()
+
     def set_source_size(self, source_size):
         self._source_size = tuple(source_size) if source_size else (1, 1)
         self.update()
@@ -280,30 +297,29 @@ class _ScanOverlay(QWidget):
     def set_detected(self, corners, source_size):
         self._timer.stop()
         self._detected_corners = list(corners or [])
+        self._has_detection = True
         self.set_source_size(source_size)
         self.update()
 
     def clear_detection(self):
         self._detected_corners = []
+        self._has_detection = False
         self.update()
 
     def _advance(self):
         self._phase += self._direction * 1.7
         if self._phase >= 100:
-            self._phase = 100
-            self._direction = -1.0
+            self._phase, self._direction = 100, -1.0
         elif self._phase <= 0:
-            self._phase = 0
-            self._direction = 1.0
+            self._phase, self._direction = 0, 1.0
         self.update()
 
     def _image_rect(self) -> QRectF:
         source_width, source_height = self._source_size
         if source_width <= 1 or source_height <= 1:
-            return QRectF(0, 0, self.width(), self.height())
+            return QRectF(self.rect())
         scale = min(self.width() / source_width, self.height() / source_height)
-        width = source_width * scale
-        height = source_height * scale
+        width, height = source_width * scale, source_height * scale
         return QRectF(
             (self.width() - width) / 2,
             (self.height() - height) / 2,
@@ -318,17 +334,13 @@ class _ScanOverlay(QWidget):
             return QPolygonF()
         scale_x = image_rect.width() / source_width
         scale_y = image_rect.height() / source_height
-        # The preview is mirrored like a selfie camera, so flip the detection X
-        # coordinates as well to keep the marker exactly over the frozen QR.
-        return QPolygonF(
-            [
-                QPointF(
-                    image_rect.left() + (source_width - 1 - x) * scale_x,
-                    image_rect.top() + y * scale_y,
-                )
-                for x, y in self._detected_corners
-            ]
-        )
+        return QPolygonF([
+            QPointF(
+                image_rect.left() + (source_width - 1 - x) * scale_x,
+                image_rect.top() + y * scale_y,
+            )
+            for x, y in self._detected_corners
+        ])
 
     def paintEvent(self, event):
         del event
@@ -336,39 +348,57 @@ class _ScanOverlay(QWidget):
             return
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        image_rect = self._image_rect()
-
-        if self._detected_corners:
-            polygon = self._mapped_polygon()
-            if len(polygon) >= 3:
-                # Soft halo first, then a crisp contour, matching the scanner accent.
-                halo = QPen(QColor(83, 217, 197, 75), 9, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
-                painter.setPen(halo)
-                painter.setBrush(Qt.BrushStyle.NoBrush)
-                painter.drawPolygon(polygon)
-
-                painter.setPen(QPen(QColor("#53d9c5"), 3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-                painter.setBrush(QColor(83, 217, 197, 24))
-                painter.drawPolygon(polygon)
-
-                bounds = polygon.boundingRect()
-                tag_width = 98
-                tag_height = 27
-                tag_x = min(max(bounds.left(), image_rect.left() + 6), image_rect.right() - tag_width - 6)
-                tag_y = bounds.top() - tag_height - 7
-                if tag_y < image_rect.top() + 4:
-                    tag_y = min(bounds.bottom() + 7, image_rect.bottom() - tag_height - 4)
-                tag_rect = QRectF(tag_x, tag_y, tag_width, tag_height)
-                painter.setPen(QPen(QColor("#53d9c5"), 1))
-                painter.setBrush(QColor(7, 24, 29, 230))
-                painter.drawRoundedRect(tag_rect, 8, 8)
-                painter.setPen(QColor("#baf8ee"))
-                painter.drawText(tag_rect, Qt.AlignmentFlag.AlignCenter, "✓  QR FOUND")
+        if self._frame is None or self._frame.isNull():
+            painter.fillRect(self.rect(), QColor("#090f18"))
+            painter.setPen(QColor("#a5b4c7"))
+            painter.drawText(
+                self.rect().adjusted(18, 18, -18, -18),
+                Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
+                self._placeholder,
+            )
             painter.end()
             return
 
-        # A gentle veil makes the moving beam visible without drawing a finder
-        # square; the scan now traverses the complete camera viewport.
+        image_rect = self._image_rect()
+        painter.fillRect(self.rect(), QColor("#090f18"))
+        painter.drawImage(image_rect, self._frame)
+
+        if self._has_detection:
+            polygon = self._mapped_polygon()
+            if len(polygon) >= 3:
+                painter.setPen(QPen(
+                    QColor(83, 217, 197, 75), 9,
+                    Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin,
+                ))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawPolygon(polygon)
+                painter.setPen(QPen(
+                    QColor("#53d9c5"), 3,
+                    Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin,
+                ))
+                painter.setBrush(QColor(83, 217, 197, 24))
+                painter.drawPolygon(polygon)
+                bounds = polygon.boundingRect()
+                tag_width, tag_height = 98, 27
+                tag_x = min(
+                    max(bounds.left(), image_rect.left() + 6),
+                    image_rect.right() - tag_width - 6,
+                )
+                tag_y = bounds.top() - tag_height - 7
+                if tag_y < image_rect.top() + 4:
+                    tag_y = min(bounds.bottom() + 7, image_rect.bottom() - tag_height - 4)
+            else:
+                tag_width, tag_height = 98, 27
+                tag_x, tag_y = image_rect.right() - tag_width - 10, image_rect.top() + 10
+            tag = QRectF(tag_x, tag_y, tag_width, tag_height)
+            painter.setPen(QPen(QColor("#53d9c5"), 1))
+            painter.setBrush(QColor(7, 24, 29, 230))
+            painter.drawRoundedRect(tag, 8, 8)
+            painter.setPen(QColor("#baf8ee"))
+            painter.drawText(tag, Qt.AlignmentFlag.AlignCenter, "✓  QR FOUND")
+            painter.end()
+            return
+
         painter.fillRect(image_rect, QColor(4, 10, 18, 17))
         band_height = max(20, int(image_rect.height() * 0.055))
         beam_y = image_rect.top() + (image_rect.height() - band_height) * self._phase / 100
@@ -405,7 +435,6 @@ class QrCodeFloatingWindow(_FramelessDialog):
         self.parent_ = parent
         self._scanner: _QrScannerThread | None = None
         self._detected_bridges: list[str] = []
-        self._camera_label_text = "Preparing camera…"
         self._finishing = False
 
         self.setObjectName("qrScannerDialog")
@@ -450,18 +479,15 @@ class QrCodeFloatingWindow(_FramelessDialog):
         preview_layout.setContentsMargins(0, 0, 0, 0)
         preview_layout.setSpacing(0)
 
-        self.camera_label = QLabel(self._camera_label_text, self.preview_panel)
-        self.camera_label.setObjectName("qrPreviewImage")
-        self.camera_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.camera_label.setMinimumSize(0, 0)
-        self.camera_label.setSizePolicy(
+        # Image and QR marker share one canvas, removing independent geometry drift.
+        self.scan_overlay = _ScanOverlay(self.preview_panel)
+        self.scan_overlay.setObjectName("qrPreviewCanvas")
+        self.scan_overlay.setMinimumSize(0, 0)
+        self.scan_overlay.setSizePolicy(
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Expanding,
         )
-        preview_layout.addWidget(self.camera_label)
-        self.scan_overlay = _ScanOverlay(self.preview_panel)
-        self.scan_overlay.raise_()
-        self.scan_overlay.hide()
+        preview_layout.addWidget(self.scan_overlay)
         self.body_layout.addWidget(self.preview_panel, 1)
 
         status_row = QHBoxLayout()
@@ -492,7 +518,7 @@ class QrCodeFloatingWindow(_FramelessDialog):
         self.results_toggle.setObjectName("qrResultsToggle")
         self.results_toggle.setIcon(qta.icon("fa6s.chevron-down", color="#53d9c5"))
         self.results_toggle.setCheckable(True)
-                self.results_toggle.clicked.connect(self._toggle_detected_results)
+        self.results_toggle.clicked.connect(self._toggle_detected_results)
         self.results_toggle.hide()
         self.body_layout.addWidget(self.results_toggle)
 
@@ -518,7 +544,7 @@ class QrCodeFloatingWindow(_FramelessDialog):
             QLabel#qrEyebrow {{ color: {self._colors["muted"]}; background: transparent; font-size: 8pt; font-weight: 850; letter-spacing: 1px; }}
             QLabel#qrBadge {{ color: #53d9c5; background: rgba(83, 217, 197, 0.11); border: 1px solid rgba(83, 217, 197, 0.3); border-radius: 9px; padding: 4px 8px; font-size: 7.5pt; font-weight: 850; }}
             QFrame#qrPreviewPanel {{ background: #090f18; border: 1px solid {self._colors["border"]}; border-radius: 13px; }}
-            QLabel#qrPreviewImage {{ background: #090f18; color: #a5b4c7; border-radius: 12px; font-size: 10pt; padding: 0; }}
+            QWidget#qrPreviewCanvas {{ background: #090f18; border: none; border-radius: 12px; }}
             QLabel#qrStatusDot {{ background: #f4b860; border-radius: 4px; }}
             QLabel#qrStatusText {{ color: {self._colors["text"]}; background: transparent; font-size: 9pt; font-weight: 650; }}
             QLabel#qrDetails {{ color: {self._colors["muted"]}; background: transparent; font-size: 8pt; }}
@@ -559,19 +585,13 @@ class QrCodeFloatingWindow(_FramelessDialog):
         self.add_bridges_button.setIcon(qta.icon("fa6s.plus", color="#ffffff"))
         self.add_bridges_button.hide()
 
-        self._resize_preview_overlay()
         self._set_status("Starting camera…", level="working")
         self._remember_preferred_size()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self._resize_preview_overlay()
-
-    def _resize_preview_overlay(self):
-        if hasattr(self, "scan_overlay") and hasattr(self, "camera_label"):
-            self.camera_label.setGeometry(self.preview_panel.contentsRect())
-            self.scan_overlay.setGeometry(self.preview_panel.contentsRect())
-            self.scan_overlay.raise_()
+        if hasattr(self, "scan_overlay"):
+            self.scan_overlay.update()
 
     def _toggle_detected_results(self, expanded: bool):
         self.results_panel.setVisible(bool(expanded))
@@ -660,9 +680,8 @@ class QrCodeFloatingWindow(_FramelessDialog):
         self.details_label.setText(
             "Your QR data is checked locally. TorProxy only imports recognized bridge lines."
         )
-        self.camera_label.setPixmap(QPixmap())
-        self.camera_label.setText("Opening camera…")
-        self.scan_overlay.hide()
+        self.scan_overlay.clear_detection()
+        self.scan_overlay.set_placeholder("Opening camera…")
         self._set_status("Connecting to your camera…", level="working")
 
         self._scanner = _QrScannerThread(0, self)
@@ -675,41 +694,28 @@ class QrCodeFloatingWindow(_FramelessDialog):
     def _camera_started(self, backend_name: str):
         self.scan_overlay.start_animation()
         self._set_status(f"{backend_name}. Center the QR code in the frame.", level="scanning")
-        self.scan_overlay.show()
-        self.scan_overlay.raise_()
 
     def _camera_failed(self, message: str):
         self.scan_overlay.stop_animation()
         logger.warning("QR camera unavailable: %s", message)
-        self.scan_overlay.hide()
-        self.camera_label.setPixmap(QPixmap())
-        self.camera_label.setText("Camera unavailable\n\nCheck camera access and try again.")
+        self.scan_overlay.set_placeholder(
+            "Camera unavailable\n\nCheck camera access and try again."
+        )
         self._set_status(message, level="error")
         self.details_label.setText(
             "If another app is using your camera, close it and select Scan again."
         )
         self.retry_button.show()
-        self._resize_preview_overlay()
 
     def _show_frame(self, image: QImage):
-        self.scan_overlay.set_source_size((image.width(), image.height()))
-        self.camera_label.setText("")
-        self.camera_label.setPixmap(
-            QPixmap.fromImage(image).scaled(
-                self.camera_label.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-        )
+        self.scan_overlay.set_frame(image)
 
     def _qr_detected(self, payload: str, image: QImage, corners):
         bridges = parse_bridge_payload(payload)
+        self.scan_overlay.set_frame(image)
         self.scan_overlay.set_detected(
             corners, (image.width(), image.height())
         )
-        self._show_frame(image)
-        self.scan_overlay.show()
-        self.scan_overlay.raise_()
         self._detected_bridges = bridges
         if not bridges:
             self._set_status(
@@ -729,7 +735,7 @@ class QrCodeFloatingWindow(_FramelessDialog):
 
         count = len(bridges)
         self._set_status(
-            f"Found {count} Tor bridge line{'s' if count != 1 else ''}. Review and import them when ready.",
+            f"Found {count} Tor bridge line{'s' if count != 1 else ''}. Review the result below.",
             level="success",
         )
         self.details_label.setText(
@@ -744,15 +750,6 @@ class QrCodeFloatingWindow(_FramelessDialog):
         self.results_panel.hide()
         self._configure_import_actions()
         self.retry_button.show()
-
-    def import_bridges(self):
-        self._apply_detected_bridges("import")
-
-    def replace_bridges(self):
-        self._apply_detected_bridges("replace")
-
-    def add_bridges(self):
-        self._apply_detected_bridges("add")
 
     def _stop_scanner(self):
         scanner = self._scanner
