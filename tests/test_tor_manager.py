@@ -251,6 +251,42 @@ def test_tor_config_validation_errors_keep_multiple_output_lines(tmp_path):
 
 
 
+def test_bridge_config_validation_error_does_not_raise_name_error(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    executable = tmp_path / "tor" / "tor.exe"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("fake tor", encoding="utf-8")
+    transport_dir = executable.parent / "pluggable_transports"
+    transport_dir.mkdir()
+    (transport_dir / "lyrebird.exe").write_text("fake transport", encoding="utf-8")
+
+    manager = TorManager(
+        TorSettings(
+            executable=executable,
+            socks_port=19750,
+            control_port=19751,
+            bridges_enabled=True,
+            bridges="webtunnel 192.0.2.10:443 ABCDEF url=https://bridge.example/ ver=0.0.1",
+            data_directory=tmp_path / "state",
+            log_path=tmp_path / "logs" / "tor.log",
+        ),
+        run_factory=lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1,
+            stdout=(
+                '[warn] "[2001:db8::10]:443" is not a k=v value.\\n'
+                "[warn] Bridge line did not parse.\\n"
+            ),
+        ),
+    )
+    monkeypatch.setattr(manager, "_stop_stale_managed_tor_processes", lambda: None)
+
+    with pytest.raises(TorManagerError, match="IPv6 endpoints must be written"):
+        manager.start()
+
+    assert "NameError" not in (manager.last_error or "")
+
+
 def test_data_directory_lock_prevents_two_managers_from_claiming_same_directory(tmp_path):
     data_directory = tmp_path / "tor-state"
     settings = TorSettings(
