@@ -120,6 +120,7 @@ class TorRunner(QObject):
     """Bridge the old GUI contract to the new supervised TorManager."""
     log_message = Signal(str)
     service_failed = Signal(str)
+    bridges_updated = Signal(str)
 
     def __init__(self, socks_port: int, contorl_port: int, dns_port: int):
         super().__init__()
@@ -234,8 +235,88 @@ class TorRunner(QObject):
         if self.app_window is not None and progress is not None:
             self.app_window.data.value = f"{progress}%"
 
+    def _auto_prune_bridges_before_start(self, manager: TorManager) -> TorManager:
+        """Verify a multi-bridge list without deleting anything on ambiguous outcomes."""
+        if not self.bridge or not bool(CONFIG["auto_prune_bridges"]) or self._stopping.is_set():
+            return manager
+
+        try:
+            parsed = TorManager._parse_bridges(self.bridges)
+        except Exception:
+            # Keep ordinary Tor configuration validation as the authority.
+            # Malformed records must not be rewritten by the health checker.
+            self.log_message.emit("Automatic bridge checks skipped because the bridge list needs validation.")
+            return manager
+        if len({record for _kind, record in parsed}) < 2:
+            return manager
+
+        self.log_message.emit("Checking configured bridges independently before connecting. Bridge addresses are hidden from the event log.")
+        from torproxy.bridge_health import check_bridges
+
+        reserved_ports = [self.socks_port, self.control_port, self.dns_port]
+        proxy = getattr(self.app_window, "proxy", None)
+        if proxy is not None:
+            reserved_ports.append(getattr(proxy, "port", None))
+
+        def report_progress(completed, total, _record, status):
+            if status == "working":
+                label = "reachable"
+            elif status == "failed":
+                label = "did not complete bootstrap"
+            else:
+                label = "inconclusive; keeping it"
+            self.log_message.emit(f"Bridge check {completed}/{total}: {label}.")
+
+        try:
+            result = check_bridges(
+                manager.settings,
+                timeout_seconds=30.0,
+                max_workers=4,
+                excluded_ports=(port for port in reserved_ports if port),
+                cancel_event=self._stopping,
+                on_result=report_progress,
+            )
+        except Exception as exc:
+            logger.warning("Automatic bridge checks could not be completed (%s); keeping the original list.", type(exc).__name__)
+            self.log_message.emit("Automatic bridge checks could not be completed; the original bridge list was preserved.")
+            return manager
+
+        if self._stopping.is_set():
+            return manager
+        if not result.working:
+            self.log_message.emit("No bridge was confirmed working; the original list was preserved and Tor will try it normally.")
+            return manager
+        if not result.should_prune:
+            self.log_message.emit("Bridge check complete. No confirmed-unusable bridges needed removal.")
+            return manager
+
+        retained = result.retained
+        updated_bridges = "\n".join(retained)
+        if not updated_bridges.strip():
+            self.log_message.emit("Bridge cleanup was skipped because it produced an empty list.")
+            return manager
+        try:
+            CONFIG["bridges"] = updated_bridges
+        except Exception as exc:
+            logger.warning("Could not persist cleaned bridge list (%s); keeping it unchanged.", type(exc).__name__)
+            self.log_message.emit("Bridge cleanup was not saved; the configured list remains unchanged.")
+            return manager
+
+        removed_count = max(0, len(result.original) - len(retained))
+        self.bridges = updated_bridges
+        self.bridges_updated.emit(updated_bridges)
+        self.log_message.emit(
+            f"Automatic bridge cleanup removed {removed_count} unresponsive bridge record(s); {len(retained)} were retained."
+        )
+        return self._make_manager()
+
     def _run(self):
         try:
+            manager = self.manager or self._make_manager()
+            manager = self._auto_prune_bridges_before_start(manager)
+            if self._stopping.is_set():
+                return
+            self.manager = manager
             self.manager.start(on_status=self._on_status)
             self.proc = self.manager.process
             while not self._stopping.wait(0.5):
