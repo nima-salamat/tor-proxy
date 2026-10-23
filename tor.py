@@ -301,7 +301,14 @@ class TorRunner(QObject):
             return manager
         if result.issues:
             issue = result.issues[0]
-            if issue.startswith("missing_transport:"):
+            if issue == "transport_launch_failed":
+                detail = (
+                    "Tor could not launch the bundled pluggable-transport executable. "
+                    "This is a local executable path/startup problem, not evidence that the configured bridges are dead. "
+                    "The original bridge list was preserved. Check that the selected Tor Expert Bundle contains "
+                    "tor/pluggable_transports/lyrebird.exe and retry after selecting the correct bundle."
+                )
+            elif issue.startswith("missing_transport:"):
                 transport_name = issue.split(":", 1)[1]
                 detail = (
                     f"The selected Tor bundle did not register the '{transport_name}' pluggable transport. "
