@@ -10,6 +10,8 @@ from threading import Event
 
 from PySide6.QtCore import Qt, QThreadPool, Signal, QUrl
 from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QPalette
+import qtawesome as qta
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -63,18 +65,26 @@ class UpdaterWindow(QWidget):
         self._missing_bundle_notified = False
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(16, 10, 16, 12)
-        root.setSpacing(12)
+        root.setContentsMargins(12, 7, 12, 8)
+        root.setSpacing(7)
 
-        # Keep a single page title but drop the redundant two-line subtitle.
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(2, 0, 2, 0)
+        title_row.setSpacing(9)
+        title_icon = QLabel()
+        title_icon.setObjectName("bundlePageIcon")
+        title_icon.setFixedSize(26, 26)
+        title_row.addWidget(title_icon)
         title = QLabel("Tor Bundles & Updates")
         title.setObjectName("pageTitle")
-        root.addWidget(title)
+        title_row.addWidget(title, 1)
+        root.addLayout(title_row)
+        self._title_icon = title_icon
 
         platform_card = QFrame()
         platform_card.setObjectName("infoCard")
         platform_row = QHBoxLayout(platform_card)
-        platform_row.setContentsMargins(16, 11, 16, 11)
+        platform_row.setContentsMargins(12, 7, 12, 7)
         self.lbl_platform = QLabel(self._platform_summary())
         self.lbl_platform.setObjectName("metadataLabel")
         self.lbl_install_state = QLabel()
@@ -85,25 +95,27 @@ class UpdaterWindow(QWidget):
         root.addWidget(platform_card)
 
         columns = QHBoxLayout()
-        columns.setSpacing(16)
+        columns.setSpacing(10)
         root.addLayout(columns, 1)
 
         available_card = QFrame()
         available_card.setObjectName("contentCard")
         available_layout = QVBoxLayout(available_card)
-        available_layout.setContentsMargins(16, 16, 16, 16)
-        available_layout.setSpacing(10)
+        available_layout.setContentsMargins(12, 10, 12, 10)
+        available_layout.setSpacing(6)
         heading_row = QHBoxLayout()
         section_title = QLabel("Available releases")
         section_title.setObjectName("sectionTitle")
         heading_row.addWidget(section_title, 1)
         self.btn_get_versions = QPushButton("Refresh")
         self.btn_get_versions.setObjectName("primaryButton")
+        self.btn_get_versions.setIcon(qta.icon("fa6s.arrows-rotate", color="#ffffff"))
         self.btn_get_versions.clicked.connect(self.get_available_versions)
         heading_row.addWidget(self.btn_get_versions)
         available_layout.addLayout(heading_row)
         self.search_versions = QLineEdit()
-        self.search_versions.setPlaceholderText("Search version, e.g. 15.0.26 or 16.0a14")
+        self.search_versions.setPlaceholderText("Search versions…")
+        self.search_versions.setClearButtonEnabled(True)
         self.search_versions.textChanged.connect(self._filter_versions)
         available_layout.addWidget(self.search_versions)
         self.chk_prereleases = QCheckBox("Include alpha prereleases")
@@ -113,45 +125,51 @@ class UpdaterWindow(QWidget):
         self.updates_list = QListWidget()
         self.updates_list.setObjectName("releaseList")
         self.updates_list.setUniformItemSizes(True)
-        self.updates_list.setMinimumHeight(180)
+        self.updates_list.setMinimumHeight(250)
         self.updates_list.setSelectionMode(QListWidget.SingleSelection)
         self.updates_list.itemClicked.connect(self.selected_version)
         available_layout.addWidget(self.updates_list, 1)
         self.lbl_discovery = QLabel("Refresh to retrieve the official Tor release directories.")
         self.lbl_discovery.setObjectName("mutedText")
-        self.lbl_discovery.setWordWrap(True)
+        self.lbl_discovery.setWordWrap(False)
+        self.lbl_discovery.setMaximumHeight(18)
+        self.lbl_discovery.setToolTip("Refresh to retrieve official Tor release directories. Stable releases are sorted before alpha prereleases.")
         available_layout.addWidget(self.lbl_discovery)
         columns.addWidget(available_card, 3)
 
         installed_card = QFrame()
         installed_card.setObjectName("contentCard")
         installed_layout = QVBoxLayout(installed_card)
-        installed_layout.setContentsMargins(16, 16, 16, 16)
-        installed_layout.setSpacing(10)
+        installed_layout.setContentsMargins(12, 10, 12, 10)
+        installed_layout.setSpacing(6)
         local_heading = QHBoxLayout()
         local_title = QLabel("Installed bundles")
         local_title.setObjectName("sectionTitle")
         local_heading.addWidget(local_title, 1)
         self.btn_refresh_version = QPushButton("Rescan")
+        self.btn_refresh_version.setIcon(qta.icon("fa6s.rotate", color="#dce8f4"))
         self.btn_refresh_version.clicked.connect(self.refresh_version)
         local_heading.addWidget(self.btn_refresh_version)
         installed_layout.addLayout(local_heading)
         self.list_tor_versions = QListWidget()
         self.list_tor_versions.setObjectName("releaseList")
-        self.list_tor_versions.setMinimumHeight(180)
+        self.list_tor_versions.setMinimumHeight(250)
         self.list_tor_versions.setSelectionMode(QListWidget.SingleSelection)
         self.list_tor_versions.setToolTip("Only signed, structurally validated bundles are listed here.")
         installed_layout.addWidget(self.list_tor_versions, 1)
         self.lbl_default = QLabel()
         self.lbl_default.setObjectName("mutedText")
-        self.lbl_default.setWordWrap(True)
+        self.lbl_default.setWordWrap(False)
+        self.lbl_default.setMaximumHeight(18)
         installed_layout.addWidget(self.lbl_default)
         action_row = QHBoxLayout()
         self.btn_set_default_version = QPushButton("Use as default")
         self.btn_set_default_version.setObjectName("primaryButton")
+        self.btn_set_default_version.setIcon(qta.icon("fa6s.check", color="#ffffff"))
         self.btn_set_default_version.clicked.connect(self.set_default_version)
         self.btn_delete_version = QPushButton("Delete")
         self.btn_delete_version.setObjectName("dangerButton")
+        self.btn_delete_version.setIcon(qta.icon("fa6s.trash", color="#d94c4c"))
         self.btn_delete_version.clicked.connect(self.delete_version)
         action_row.addWidget(self.btn_set_default_version, 1)
         action_row.addWidget(self.btn_delete_version)
@@ -161,25 +179,29 @@ class UpdaterWindow(QWidget):
         progress_card = QFrame()
         progress_card.setObjectName("contentCard")
         progress_layout = QVBoxLayout(progress_card)
-        progress_layout.setContentsMargins(16, 14, 16, 14)
-        progress_layout.setSpacing(8)
+        progress_layout.setContentsMargins(12, 5, 12, 5)
+        progress_layout.setSpacing(3)
         status_row = QHBoxLayout()
         self.lbl_status = QLabel("Ready. Select a release to check whether a signed bundle is available.")
         self.lbl_status.setObjectName("statusMessage")
-        self.lbl_status.setWordWrap(True)
+        self.lbl_status.setWordWrap(False)
+        self.lbl_status.setMaximumHeight(21)
         status_row.addWidget(self.lbl_status, 1)
         self.btn_cancel = QPushButton("Cancel")
         self.btn_cancel.setObjectName("quietButton")
+        self.btn_cancel.setIcon(qta.icon("fa6s.xmark", color="#dce8f4"))
         self.btn_cancel.clicked.connect(self.cancel_operation)
         self.btn_cancel.hide()
         status_row.addWidget(self.btn_cancel)
         self.btn_retry = QPushButton("Retry")
         self.btn_retry.setObjectName("primaryButton")
+        self.btn_retry.setIcon(qta.icon("fa6s.rotate-right", color="#ffffff"))
         self.btn_retry.clicked.connect(self._retry_last_download)
         self.btn_retry.hide()
         status_row.addWidget(self.btn_retry)
         self.btn_gpg_help = QPushButton("Get GnuPG")
         self.btn_gpg_help.setObjectName("quietButton")
+        self.btn_gpg_help.setIcon(qta.icon("fa6s.download", color="#dce8f4"))
         self.btn_gpg_help.setToolTip("Open the official GnuPG download page.")
         self.btn_gpg_help.clicked.connect(self._open_gpg_setup)
         self.btn_gpg_help.hide()
@@ -189,12 +211,15 @@ class UpdaterWindow(QWidget):
         self.progress_bar.setObjectName("bundleProgress")
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
-        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setFixedHeight(7)
         self.progress_bar.setFormat("Idle")
         progress_layout.addWidget(self.progress_bar)
         self.lbl_progress_details = QLabel("")
         self.lbl_progress_details.setObjectName("mutedText")
-        self.lbl_progress_details.setWordWrap(True)
+        self.lbl_progress_details.setWordWrap(False)
+        self.lbl_progress_details.setMaximumHeight(18)
+        self.lbl_progress_details.setToolTip("Transfer details, speed and estimated time remain available here during an operation.")
         progress_layout.addWidget(self.lbl_progress_details)
         root.addWidget(progress_card)
 
@@ -211,32 +236,57 @@ class UpdaterWindow(QWidget):
         return "This device: {} · {} · signed Expert Bundles only".format(os_name, machine)
 
     def _apply_local_styles(self) -> None:
-        """Apply the same restrained design tokens in either application theme."""
-        if CONFIG["mode"] == "dark":
-            accent, border, surface = "#3daee9", "#414a56", "#20252b"
-            text, muted = "#eff1f4", "#a6afb9"
-        else:
-            accent, border, surface = "#287db5", "#d5dbe2", "#ffffff"
-            text, muted = "#202832", "#647080"
-        self.setStyleSheet("""
-            QWidget#pageTitle { color: %s; font-size: 22px; font-weight: 700; }
-            QLabel#pageSubtitle { color: %s; font-size: 12px; }
-            QFrame#infoCard, QFrame#contentCard { border: 1px solid %s; border-radius: 10px; }
-            QLabel#sectionTitle { color: %s; font-size: 14px; font-weight: 650; }
-            QLabel#metadataLabel, QLabel#stateLabel { color: %s; font-size: 12px; }
-            QLabel#mutedText { color: %s; font-size: 11px; }
-            QLabel#statusMessage { color: %s; font-size: 12px; }
-            QListWidget#releaseList { background: %s; border: 1px solid %s; border-radius: 7px; padding: 4px; color: %s; }
-            QListWidget#releaseList::item { min-height: 34px; padding: 6px 8px; border-radius: 5px; }
-            QListWidget#releaseList::item:selected { background: %s; color: #ffffff; }
-            QPushButton { min-height: 30px; padding: 0 12px; border-radius: 6px; }
-            QPushButton#primaryButton { font-weight: 600; }
-            QPushButton#dangerButton { color: #d94c4c; }
-            QPushButton#quietButton { min-height: 26px; }
-            QLineEdit { min-height: 32px; padding: 0 9px; border: 1px solid %s; border-radius: 6px; color: %s; }
-            QProgressBar { min-height: 18px; border: 1px solid %s; border-radius: 5px; color: %s; text-align: center; }
-            QProgressBar::chunk { background: %s; border-radius: 4px; }
-        """ % (text, muted, border, text, text, muted, text, surface, border, text, accent, border, text, border, text, accent))
+        """Compact bundle-manager styles with high-contrast controls in both themes."""
+        dark = CONFIG["mode"] == "dark"
+        accent = "#3daee9" if dark else "#287db5"
+        border = "#414a56" if dark else "#d5dbe2"
+        surface = "#20252b" if dark else "#ffffff"
+        field = "#171c23" if dark else "#f8fafc"
+        text = "#eff1f4" if dark else "#202832"
+        muted = "#a6afb9" if dark else "#647080"
+        placeholder = "#8593a5" if dark else "#758295"
+        icon_color = "#dce8f4" if dark else "#334155"
+        self.setStyleSheet(f"""
+            QLabel#pageTitle {{ color: {text}; font-size: 20px; font-weight: 750; background: transparent; }}
+            QLabel#bundlePageIcon {{ background: transparent; border: none; }}
+            QFrame#infoCard, QFrame#contentCard {{ background: {surface}; border: 1px solid {border}; border-radius: 9px; }}
+            QLabel#sectionTitle {{ color: {text}; font-size: 13px; font-weight: 700; background: transparent; }}
+            QLabel#metadataLabel, QLabel#stateLabel {{ color: {muted}; font-size: 11px; background: transparent; }}
+            QLabel#mutedText {{ color: {muted}; font-size: 10px; background: transparent; }}
+            QLabel#statusMessage {{ color: {text}; font-size: 11px; background: transparent; }}
+            QListWidget#releaseList {{ background: {field}; border: 1px solid {border}; border-radius: 7px; padding: 4px; color: {text}; }}
+            QListWidget#releaseList::item {{ min-height: 34px; padding: 6px 8px; border-radius: 5px; }}
+            QListWidget#releaseList::item:hover {{ background: rgba(61, 174, 233, 0.10); }}
+            QListWidget#releaseList::item:selected {{ background: {accent}; color: #ffffff; }}
+            QPushButton {{ min-height: 28px; padding: 0 9px; border-radius: 6px; }}
+            QPushButton#primaryButton {{ font-weight: 650; }}
+            QPushButton#dangerButton {{ color: #d94c4c; }}
+            QPushButton#quietButton {{ min-height: 25px; }}
+            QLineEdit {{
+                min-height: 29px; padding: 0 9px; border: 1px solid {border};
+                border-radius: 6px; color: {text}; background: {field};
+                selection-background-color: {accent}; selection-color: #ffffff;
+            }}
+            QCheckBox {{ color: {text}; background: transparent; spacing: 6px; font-size: 11px; }}
+            QProgressBar {{ min-height: 7px; max-height: 7px; border: none; border-radius: 4px; background: {border}; }}
+            QProgressBar::chunk {{ background: {accent}; border: none; border-radius: 4px; }}
+            QFrame#contentCard QLabel {{ background: transparent; }}
+        """)
+        for widget in self.findChildren(QLineEdit):
+            palette = widget.palette()
+            from PySide6.QtGui import QColor
+            palette.setColor(QPalette.ColorRole.Text, QColor(text))
+            palette.setColor(QPalette.ColorRole.Base, QColor(field))
+            palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(placeholder))
+            widget.setPalette(palette)
+        self._title_icon.setPixmap(qta.icon("fa6s.boxes-stacked", color=accent).pixmap(22, 22))
+        self.btn_get_versions.setIcon(qta.icon("fa6s.arrows-rotate", color="#ffffff" if dark else "#ffffff"))
+        self.btn_refresh_version.setIcon(qta.icon("fa6s.rotate", color=icon_color))
+        self.btn_set_default_version.setIcon(qta.icon("fa6s.check", color="#ffffff"))
+        self.btn_delete_version.setIcon(qta.icon("fa6s.trash", color="#d94c4c"))
+        self.btn_cancel.setIcon(qta.icon("fa6s.xmark", color=icon_color))
+        self.btn_retry.setIcon(qta.icon("fa6s.rotate-right", color="#ffffff"))
+        self.btn_gpg_help.setIcon(qta.icon("fa6s.download", color=icon_color))
 
     def _parse_result(self, data, expected_type):
         try:

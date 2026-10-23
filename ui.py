@@ -287,10 +287,17 @@ class Window(QMainWindow):
             QWidget#pageSurface {{ background: {surface}; }}
             QMenuBar#topMenuBar, QWidget#menuBarCorner {{ background-color: {menu_surface}; }}
             QMenuBar#topMenuBar {{ border: none; border-bottom: 1px solid {border}; padding: 3px 8px; }}
-            QMenuBar#topMenuBar::item {{ padding: 7px 10px; margin: 0 2px; border-radius: 7px; color: {text}; background: transparent; }}
-            QMenuBar#topMenuBar::item {{ spacing: 6px; }}
-            QMenuBar#topMenuBar::item:selected {{ background: {hover}; }}
-            QMenuBar#topMenuBar::item:checked {{ background: {accent}; color: #ffffff; }}
+            QMenuBar#topMenuBar::item {{
+                padding: 7px 11px; margin: 0 2px; border: 1px solid transparent;
+                border-bottom: 2px solid transparent; border-radius: 7px;
+                color: {text}; background: transparent; spacing: 6px;
+            }}
+            QMenuBar#topMenuBar::item:selected {{ background: {hover}; border-color: {border}; }}
+            QMenuBar#topMenuBar::item:checked {{
+                background: {accent}; color: #ffffff; border: 1px solid {accent};
+                border-bottom: 2px solid #9bd8ff; font-weight: 700;
+            }}
+            QMenuBar#topMenuBar::item:checked:!selected {{ background: {accent}; color: #ffffff; }}
             QWidget#menuBarCorner {{ border-bottom: 1px solid {border}; }}
             QWidget#menuBarCorner QLabel {{ background: transparent; color: {text}; border: none; padding: 0 4px; }}
             QPushButton#globalState {{ background: transparent; color: {text}; border: none; border-radius: 7px; padding: 0 4px; font-size: 10px; }}
@@ -312,7 +319,7 @@ class Window(QMainWindow):
         """)
         icon_color = text
         for action, icon_name in zip(self.page_actions, self.page_icon_names):
-            action.setIcon(qta.icon(icon_name, color=icon_color))
+            action.setIcon(qta.icon(icon_name, color="#ffffff" if action.isChecked() else icon_color))
         self.help_action.setIcon(qta.icon("fa6s.circle-question", color=icon_color))
         self.exit_action.setIcon(qta.icon("fa6s.right-from-bracket", color=icon_color))
         self.toggle_btn.setIcon(qta.icon("fa6s.sun" if dark else "fa6s.moon", color=icon_color))

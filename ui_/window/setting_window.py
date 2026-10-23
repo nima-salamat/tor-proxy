@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QScrollArea
 )
 from PySide6.QtCore import Qt, QThreadPool
+from PySide6.QtGui import QPalette
 import qtawesome as qta
 
 import qdarkstyle
@@ -38,11 +39,12 @@ class SettingWindow(QWidget):
         super().__init__(parent)
         self._parent = parent
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(12, 10, 12, 10)
-        main_layout.setSpacing(12)
+        main_layout.setContentsMargins(10, 8, 10, 8)
+        main_layout.setSpacing(8)
 
         navigation = QHBoxLayout()
-        navigation.setSpacing(8)
+        navigation.setContentsMargins(0, 0, 0, 2)
+        navigation.setSpacing(6)
         self.settings_nav_group = QButtonGroup(self)
         self.settings_nav_group.setExclusive(True)
         self.settings_nav_buttons = []
@@ -87,8 +89,8 @@ class SettingWindow(QWidget):
         content = QWidget()
         content.setObjectName("settingsPageContent")
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(18, 16, 18, 18)
-        layout.setSpacing(14)
+        layout.setContentsMargins(14, 10, 14, 12)
+        layout.setSpacing(10)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         scroll = QScrollArea(self.page_setting)
         scroll.setObjectName("settingsScrollArea")
@@ -108,42 +110,63 @@ class SettingWindow(QWidget):
 
     def apply_theme(self, mode):
         dark = mode == "dark"
-        border = "#3b4552" if dark else "#d7dee7"
+        border = "#3b4552" if dark else "#d9e0e8"
         accent = "#287db5"
-        hover = "rgba(71, 163, 242, 0.14)" if dark else "rgba(24, 118, 191, 0.10)"
-        icon_color = "#eff1f4" if dark else "#202832"
+        hover = "rgba(71, 163, 242, 0.14)" if dark else "rgba(24, 118, 191, 0.08)"
+        icon_color = "#f3f6fa" if dark else "#243143"
+        panel = "#202630" if dark else "#ffffff"
+        field = "#171c23" if dark else "#f8fafc"
+        text = "#f0f3f7" if dark else "#263344"
+        muted = "#aab5c4" if dark else "#667487"
+        placeholder = "#8996a8" if dark else "#7b8797"
+        disabled = "#768294" if dark else "#9aa5b2"
         self.setStyleSheet(f"""
+            QWidget#settingsPageContent {{ background: transparent; }}
+            QLabel {{ color: {text}; background: transparent; border: none; }}
+            QLabel#settingsSectionTitle {{ font-size: 14px; font-weight: 750; color: {text}; padding: 1px 0; }}
+            QLabel#settingsDescription {{ color: {muted}; font-size: 11px; padding: 0; }}
+            QLabel#settingsFieldLabel {{ color: {text}; font-weight: 650; }}
+            QLabel#signatureVerificationDetails {{ color: {muted}; background: transparent; padding: 3px 0; }}
             QPushButton#settingsNavButton {{
-                min-height: 36px; padding: 0 13px; spacing: 8px;
-                border: 1px solid transparent; border-radius: 8px;
-                font-weight: 650; text-align: left;
+                min-height: 34px; padding: 0 11px; spacing: 7px;
+                border: 1px solid transparent; border-radius: 7px;
+                background: transparent; color: {text}; font-weight: 650;
             }}
             QPushButton#settingsNavButton:hover {{ background: {hover}; border-color: {border}; }}
-            QPushButton#settingsNavButton:checked {{ background: {accent}; color: #ffffff; border-color: {accent}; }}
+            QPushButton#settingsNavButton:checked {{
+                background: {accent}; color: #ffffff; border-color: {accent}; font-weight: 750;
+            }}
             QStackedWidget#settingsPages {{ border: none; background: transparent; }}
             QScrollArea#settingsScrollArea {{ background: transparent; border: none; }}
-            QWidget#settingsPageContent {{ background: transparent; }}
-            QLabel#settingsSectionTitle {{ font-size: 15px; font-weight: 750; color: palette(text); background: transparent; }}
-            QLabel#settingsDescription {{ color: palette(mid); background: transparent; }}
-            QLabel#settingsFieldLabel {{ color: palette(text); font-weight: 650; background: transparent; }}
-            QFrame#settingsRowCard {{ background: palette(base); border: 1px solid {border}; border-radius: 10px; }}
+            QFrame#settingsRowCard {{
+                background: transparent; border: none; border-bottom: 1px solid {border}; border-radius: 0;
+            }}
             QLineEdit, QTextEdit {{
-                background: palette(base); color: palette(text);
-                border: 1px solid {border}; border-radius: 8px; padding: 8px 10px;
-                selection-background-color: {accent};
+                background: {field}; color: {text};
+                border: 1px solid {border}; border-radius: 7px; padding: 6px 9px;
+                selection-background-color: {accent}; selection-color: #ffffff;
             }}
             QLineEdit:focus, QTextEdit:focus {{ border: 1px solid {accent}; }}
-            QLineEdit:disabled {{ color: palette(mid); background: palette(alternate-base); }}
+            QLineEdit:disabled, QTextEdit:disabled {{ color: {disabled}; background: {panel}; }}
             QPushButton#settingsActionButton {{
-                min-height: 36px; padding: 0 13px; border: 1px solid {border};
-                border-radius: 8px; background: transparent; color: palette(text); font-weight: 650;
+                min-height: 32px; padding: 0 11px; border: 1px solid {border};
+                border-radius: 7px; background: transparent; color: {text}; font-weight: 650;
             }}
             QPushButton#settingsActionButton:hover {{ background: {hover}; border-color: {accent}; }}
-            QCheckBox {{ spacing: 8px; color: palette(text); background: transparent; }}
-            QLabel#signatureVerificationDetails {{ color: palette(text); background: transparent; padding: 8px 0; }}
+            QCheckBox, QRadioButton {{ spacing: 7px; color: {text}; background: transparent; }}
+            QCheckBox:disabled, QRadioButton:disabled {{ color: {disabled}; }}
         """)
+        # Qt stylesheets don't expose a portable ::placeholder selector. Set the
+        # placeholder palette role explicitly so both light and dark remain legible.
+        for widget in self.findChildren(QLineEdit) + self.findChildren(QTextEdit):
+            palette = widget.palette()
+            palette.setColor(QPalette.ColorRole.Text, __import__("PySide6.QtGui", fromlist=["QColor"]).QColor(text))
+            palette.setColor(QPalette.ColorRole.Base, __import__("PySide6.QtGui", fromlist=["QColor"]).QColor(field))
+            palette.setColor(QPalette.ColorRole.PlaceholderText, __import__("PySide6.QtGui", fromlist=["QColor"]).QColor(placeholder))
+            palette.setColor(QPalette.ColorRole.Disabled, QPalette.ColorRole.Text, __import__("PySide6.QtGui", fromlist=["QColor"]).QColor(disabled))
+            widget.setPalette(palette)
         for button, icon_name in zip(self.settings_nav_buttons, self.settings_nav_icon_names):
-            button.setIcon(qta.icon(icon_name, color=icon_color))
+            button.setIcon(qta.icon(icon_name, color="#ffffff" if button.isChecked() else icon_color))
         if hasattr(self, "btn_qrcode"):
             self.btn_qrcode.setIcon(qta.icon("fa6s.qrcode", color=icon_color))
 
