@@ -168,7 +168,7 @@ class TorLogDialog(_FramelessDialog):
         )
         # The user should see the most recent entries as soon as the popup opens.
         self._trim_visible()
-        self._render_all()
+        self._render_all(scroll_to_end=True)
         self._update_pagination_state()
         if self.path.exists():
             self.status_label.setText(
@@ -223,24 +223,59 @@ class TorLogDialog(_FramelessDialog):
             fmt.setFontWeight(700 if category != "warning" else 600)
         return fmt
 
+    def _restore_scroll_position(
+        self,
+        vertical_value: int,
+        horizontal_value: int,
+        *,
+        follow_bottom: bool = False,
+    ):
+        """Restore the reader's viewport only after Qt has laid out inserted blocks."""
+        def restore():
+            vertical = self.log_view.verticalScrollBar()
+            horizontal = self.log_view.horizontalScrollBar()
+            vertical.setValue(vertical.maximum() if follow_bottom else min(vertical_value, vertical.maximum()))
+            horizontal.setValue(min(horizontal_value, horizontal.maximum()))
+
+        QTimer.singleShot(0, restore)
+
     def _append_line_widget(self, text: str):
-        cursor = self.log_view.textCursor()
+        # Use a document cursor, not the QTextEdit's live cursor. setTextCursor()
+        # at the end was moving both scroll bars every poll even if the user was
+        # reading an older line in the middle of the file.
+        cursor = QTextCursor(self.log_view.document())
         cursor.movePosition(QTextCursor.MoveOperation.End)
         if not cursor.atStart():
             cursor.insertBlock()
         cursor.insertText(text, self._format_for_line(text))
-        self.log_view.setTextCursor(cursor)
 
-    def _render_all(self):
+    def _render_all(
+        self,
+        *,
+        vertical_value: int | None = None,
+        horizontal_value: int | None = None,
+        scroll_to_end: bool = False,
+        restore_scroll: bool = True,
+    ):
+        if vertical_value is None:
+            vertical_value = self.log_view.verticalScrollBar().value()
+        if horizontal_value is None:
+            horizontal_value = self.log_view.horizontalScrollBar().value()
+
         self.log_view.clear()
-        cursor = self.log_view.textCursor()
+        cursor = QTextCursor(self.log_view.document())
         cursor.movePosition(QTextCursor.MoveOperation.Start)
         for index, (_offset, text) in enumerate(self._visible_lines):
             if index:
                 cursor.insertBlock()
             cursor.insertText(text, self._format_for_line(text))
-        self.log_view.setTextCursor(cursor)
-        self.log_view.ensureCursorVisible()
+
+        if restore_scroll:
+            self._restore_scroll_position(
+                vertical_value,
+                horizontal_value,
+                follow_bottom=scroll_to_end,
+            )
 
     def _trim_visible(self):
         if len(self._visible_lines) <= self.max_visible_lines:
@@ -286,12 +321,18 @@ class TorLogDialog(_FramelessDialog):
 
         if file_size < self._stream_offset:
             # The active log was cleared or truncated while this dialog was open.
+            old_vertical = self.log_view.verticalScrollBar().value()
+            old_horizontal = self.log_view.horizontalScrollBar().value()
             self._visible_lines = []
             self._pending_bytes = b""
             self._pending_start_offset = 0
             self._older_offset = 0
             self._stream_offset = 0
-            self._render_all()
+            self._render_all(
+                vertical_value=old_vertical,
+                horizontal_value=old_horizontal,
+                scroll_to_end=False,
+            )
 
         try:
             with self.path.open("rb") as handle:
@@ -318,18 +359,33 @@ class TorLogDialog(_FramelessDialog):
         self._stream_offset = new_offset
 
         if new_lines:
-            scrollbar = self.log_view.verticalScrollBar()
-            was_at_bottom = scrollbar.value() >= scrollbar.maximum() - 2
+            vertical = self.log_view.verticalScrollBar()
+            horizontal = self.log_view.horizontalScrollBar()
+            old_vertical = vertical.value()
+            old_horizontal = horizontal.value()
+            old_maximum = vertical.maximum()
+            was_at_bottom = old_vertical >= old_maximum - 2
+
             self._visible_lines.extend(new_lines)
             before_trim = len(self._visible_lines)
             self._trim_visible()
-            if before_trim > len(self._visible_lines):
-                self._render_all()
+            removed_lines = before_trim - len(self._visible_lines)
+            if removed_lines:
+                line_height = max(1, self.log_view.fontMetrics().lineSpacing())
+                preserved_vertical = max(0, old_vertical - removed_lines * line_height)
+                self._render_all(
+                    vertical_value=preserved_vertical,
+                    horizontal_value=old_horizontal,
+                    scroll_to_end=was_at_bottom,
+                )
             else:
                 for _line_offset, text in new_lines:
                     self._append_line_widget(text)
-            if was_at_bottom:
-                scrollbar.setValue(scrollbar.maximum())
+                self._restore_scroll_position(
+                    old_vertical,
+                    old_horizontal,
+                    follow_bottom=was_at_bottom,
+                )
         self._update_status()
 
     def load_older(self):
@@ -349,13 +405,23 @@ class TorLogDialog(_FramelessDialog):
                 self.status_label.setText("No older log entries are available.")
                 return
             scrollbar = self.log_view.verticalScrollBar()
+            horizontal = self.log_view.horizontalScrollBar()
             old_value = scrollbar.value()
             old_maximum = scrollbar.maximum()
+            old_horizontal = horizontal.value()
             self._visible_lines = older + self._visible_lines
             self._older_offset = start_offset
             self._trim_visible()
-            self._render_all()
-            scrollbar.setValue(old_value + (scrollbar.maximum() - old_maximum))
+            self._render_all(restore_scroll=False)
+            def preserve_reading_position():
+                new_scrollbar = self.log_view.verticalScrollBar()
+                new_scrollbar.setValue(
+                    min(old_value + (new_scrollbar.maximum() - old_maximum), new_scrollbar.maximum())
+                )
+                self.log_view.horizontalScrollBar().setValue(
+                    min(old_horizontal, self.log_view.horizontalScrollBar().maximum())
+                )
+            QTimer.singleShot(0, preserve_reading_position)
             self._update_status("Loaded older entries · streaming")
         finally:
             self._loading_older = False
@@ -366,8 +432,7 @@ class TorLogDialog(_FramelessDialog):
         )
         self._pending_bytes = b""
         self._pending_start_offset = self._stream_offset
-        self._render_all()
-        self.log_view.verticalScrollBar().setValue(self.log_view.verticalScrollBar().maximum())
+        self._render_all(scroll_to_end=True)
         self._update_status()
 
     def toggle_stream(self):
@@ -423,7 +488,7 @@ class TorLogDialog(_FramelessDialog):
         except OSError:
             self._stream_offset = 0
         self._older_offset = 0
-        self._render_all()
+        self._render_all(vertical_value=0, horizontal_value=0)
         self._update_status("Tor log history cleared · streaming")
         self._update_pagination_state()
 
