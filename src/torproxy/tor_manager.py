@@ -422,6 +422,46 @@ class TorManager:
         controller.authenticate()
         return controller
 
+    def get_active_bridge_fingerprints(self) -> frozenset[str]:
+        """Return bridge identities observed as the first hop of a built Tor circuit.
+
+        A configured bridge is not reported as active merely because it was
+        pasted or passed a reachability check. We require Tor's authenticated
+        ControlPort to report a currently BUILT circuit and match its first hop
+        to a fingerprint explicitly present in the bridge record.
+        """
+        if (
+            not self.settings.bridges_enabled
+            or self.state is not TorState.READY
+            or self._controller is None
+        ):
+            return frozenset()
+
+        try:
+            with self._lock:
+                circuits = self._controller.get_circuits()
+        except Exception:
+            LOGGER.debug("Could not read active Tor circuits for bridge status.", exc_info=True)
+            return frozenset()
+
+        active: set[str] = set()
+        for circuit in circuits:
+            status_value = getattr(circuit, "status", "")
+            status = str(getattr(status_value, "value", status_value)).upper().split(".")[-1]
+            if status != "BUILT":
+                continue
+            path = getattr(circuit, "path", ()) or ()
+            if not path:
+                continue
+            try:
+                first_hop = str(path[0][0]).upper()
+            except (IndexError, TypeError):
+                continue
+            match = re.search(r"[0-9A-F]{40}", first_hop)
+            if match:
+                active.add(match.group(0))
+        return frozenset(active)
+
     @staticmethod
     def _port_ready(port: int, timeout: float = 0.2) -> bool:
         try:
