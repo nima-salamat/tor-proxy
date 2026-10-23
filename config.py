@@ -43,6 +43,7 @@ DEFAULT_DATA: dict[str, Any] = {
     "tor_path": None,
     "data_usage": 0,
     "MaxCircuitDirtiness": 600,
+    "NewCircuitPeriod": 60,
     "newnym_interval": 0,
     "system_proxy_auto": False,
     "system_proxy_mode": "unchanged",
@@ -119,6 +120,9 @@ class Config:
         interval = data.get("newnym_interval", 0)
         if type(interval) is not int or not 0 <= interval <= 86400000:
             raise ConfigError("newnym_interval must be a duration in milliseconds between 0 and 86400000.")
+        new_circuit_period = data.get("NewCircuitPeriod", 60)
+        if type(new_circuit_period) is not int or not 10 <= new_circuit_period <= 86400:
+            raise ConfigError("NewCircuitPeriod must be an integer between 10 and 86400 seconds.")
 
     def _save_data(self, data: dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
