@@ -12,6 +12,8 @@
 
 Check the system clock, connectivity, and whether Tor is blocked on the current network. If bridges are required, enable bridge mode and provide a current bridge record for a supported transport. A transport executable must exist in the selected bundle. Do not include bridge secrets or private network details in a public bug report.
 
+Automatic bridge cleanup is an opt-in preflight in Settings → Bridges. It checks records independently before the normal connection starts, so it may delay startup. It never removes a bridge when the result is inconclusive, and keeps the full original list if no bridge is confirmed working. If several bridges are removed, recheck the network and transport executable before concluding the bridges themselves are invalid.
+
 ## Tor says ready but a website does not load
 
 Bootstrap completion does not guarantee every destination is reachable. Confirm the local HTTP proxy endpoint is correct, the app uses HTTP proxy for HTTP and HTTPS proxy/CONNECT for TLS destinations, the host is not blocked, and the configured SOCKS listener matches the managed Tor instance. A failed Tor route must not fall back to a direct route.
