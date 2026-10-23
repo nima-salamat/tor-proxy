@@ -2,10 +2,40 @@ from __future__ import annotations
 
 import pytest
 
-from torproxy.bridges import bridge_identity_fingerprint, normalize_bridge_record, parse_bridge_text
+from torproxy.bridges import (
+    bridge_identity_fingerprint,
+    normalize_bridge_record,
+    normalize_sni_hostname,
+    parse_bridge_text,
+)
 
 
 IPV6 = "[2001:db8:fe46:edd5:2139:2d5b:b732:854a]:443"
+
+
+def test_custom_sni_hostname_is_normalized_and_validated():
+    assert normalize_sni_hostname("WWW.Example.COM.") == "www.example.com"
+    assert normalize_sni_hostname("  ") == ""
+    with pytest.raises(ValueError, match="hostname only"):
+        normalize_sni_hostname("https://www.example.com/path")
+    with pytest.raises(ValueError, match="not an IP address"):
+        normalize_sni_hostname("192.0.2.10")
+    with pytest.raises(ValueError, match="valid fully qualified"):
+        normalize_sni_hostname("-invalid.example.com")
+
+
+def test_webtunnel_sni_imitation_option_is_validated_and_canonicalized():
+    fingerprint = "A1B2C3D4E5F60718293A4B5C6D7E8F9012345678"
+    record = (
+        f"webtunnel 192.0.2.10:443 {fingerprint} url=https://bridge.example/ "
+        "ver=0.0.1 sni-imitation=WWW.Example.COM"
+    )
+    assert normalize_bridge_record(record).endswith("sni-imitation=www.example.com")
+    with pytest.raises(ValueError, match="sni-imitation= bridge option cannot be empty"):
+        normalize_bridge_record(
+            f"webtunnel 192.0.2.10:443 {fingerprint} url=https://bridge.example/ "
+            "ver=0.0.1 sni-imitation="
+        )
 
 
 def test_quoted_ipv6_endpoint_is_unquoted_and_canonicalized():
