@@ -8,6 +8,10 @@
 4. The app validates torrc before launch. Invalid directives, duplicate ports, missing bridge transport binaries, or invalid bridge records should fail early.
 5. Check that another application is not occupying configured listener ports. TorProxy does not kill unrelated Tor processes.
 
+## Tor rejects a bridge fingerprint or says its key digest has the wrong length
+
+Tor bridge lines may contain a 40-character hexadecimal identity fingerprint. For WebTunnel and obfs4, the fingerprint is a bare token after the endpoint; some Snowflake lines also include a `fingerprint=...` transport option. Do not use a nickname, partial fingerprint, or the hashed fingerprint shown in Tor Relay Search in place of the bridge fingerprint. Copy the full bridge line from the Tor Project bridge source. TorProxy now rejects malformed fingerprints before launching Tor, can normalize fingerprints that are split into whitespace-separated hex groups, and reports item-specific reasons in Settings. If Tor still rejects the list, the error includes a secret-safe summary of token lengths and option names; it never prints bridge addresses, fingerprints, or WebTunnel secret paths in that summary.
+
 ## Bootstrap stays at 0% or appears frozen
 
 Open **Event Log → Live Tor log** to see the actual `tor.log` file while Tor is running. This view follows new file writes, colors Tor notice/warning/error lines, caps the visible buffer, and can load older entries in pages. The progress indicator now also reads Tor's `Bootstrapped N%` log notices if the ControlPort status is not yet available. A reported 100% is not treated as connected until the authenticated ControlPort and SOCKS listener are verified.
