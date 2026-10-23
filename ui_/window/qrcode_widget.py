@@ -416,17 +416,17 @@ class QrCodeFloatingWindow(_FramelessDialog):
 
     def _set_status(self, message: str, *, level: str = "working"):
         palette = {
-            "working": ("#f4b860", "CONNECTING"),
-            "scanning": ("#53d9c5", "SCANNING"),
-            "success": ("#53d9c5", "QR FOUND"),
-            "error": ("#f07178", "CAMERA ISSUE"),
-            "invalid": ("#f4b860", "NOT A BRIDGE"),
+            "working": ("#f4b860", "CONNECTING", "rgba(244, 184, 96, 0.10)", "rgba(244, 184, 96, 0.35)"),
+            "scanning": ("#53d9c5", "SCANNING", "rgba(83, 217, 197, 0.10)", "rgba(83, 217, 197, 0.35)"),
+            "success": ("#53d9c5", "QR FOUND", "rgba(83, 217, 197, 0.10)", "rgba(83, 217, 197, 0.35)"),
+            "error": ("#f07178", "CAMERA ISSUE", "rgba(240, 113, 120, 0.10)", "rgba(240, 113, 120, 0.35)"),
+            "invalid": ("#f4b860", "NOT A BRIDGE", "rgba(244, 184, 96, 0.10)", "rgba(244, 184, 96, 0.35)"),
         }
-        color, badge = palette.get(level, palette["working"])
+        color, badge, badge_background, badge_border = palette.get(level, palette["working"])
         self.status_dot.setStyleSheet(f"background: {color}; border-radius: 4px;")
         self.live_badge.setText(badge)
         self.live_badge.setStyleSheet(
-            f"color: {color}; background: {color}18; border: 1px solid {color}66; "
+            f"color: {color}; background: {badge_background}; border: 1px solid {badge_border}; "
             "border-radius: 9px; padding: 4px 8px; font-size: 7.5pt; font-weight: 850;"
         )
         self.status_label.setText(message)
@@ -436,7 +436,9 @@ class QrCodeFloatingWindow(_FramelessDialog):
             return
         if self._scanner is not None and self._scanner.isRunning():
             self._scanner.stop_camera()
-            self._scanner.wait(1600)
+            if not self._scanner.wait(1600):
+                logger.warning("Waiting for the previous camera scan to stop before retrying.")
+                self._scanner.wait()
         self._detected_bridges = []
         self._finishing = False
         self.import_button.hide()
