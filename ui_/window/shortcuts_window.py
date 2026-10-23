@@ -1,6 +1,8 @@
 """Dedicated in-app keyboard-shortcuts page."""
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 import qtawesome as qta
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -186,13 +188,30 @@ class ShortcutsWindow(QWidget):
             self._shortcut_rows.append((row, key_caps))
 
     def change_global_shortcut(self):
-        """Open the game-style recorder and apply the new system-wide binding."""
+        """Capture a new binding without firing any existing shortcut actions."""
         owner = self._parent
         dialog = ShortcutCaptureDialog(
             owner if owner is not None else self,
             str(CONFIG["global_shortcut"]),
         )
-        if dialog.exec() != QDialog.DialogCode.Accepted or not dialog.shortcut:
+
+        capture_scope = (
+            owner.shortcut_capture_scope()
+            if owner is not None and hasattr(owner, "shortcut_capture_scope")
+            else nullcontext()
+        )
+        try:
+            with capture_scope:
+                result = dialog.exec()
+        except Exception as exc:
+            QMessageBox.warning(
+                owner if owner is not None else self,
+                "Shortcut capture could not be started",
+                str(exc),
+            )
+            return
+
+        if result != QDialog.DialogCode.Accepted or not dialog.shortcut:
             return
 
         try:
