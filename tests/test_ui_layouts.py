@@ -457,6 +457,15 @@ def test_tray_menu_is_custom_anchored_above_tray_icon():
     assert "self.tray_menu.exec(QPoint(x, y))" in source
     assert "setContextMenu(self.tray_menu)" not in source
 
+    # The Windows hidden-icons menu exposes the same three policies as Home.
+    assert 'self.tray_system_proxy_menu = self.tray_menu.addMenu("System Proxy")' in source
+    assert '("set", "Set system proxy"' in source
+    assert '("unchanged", "Do not change system proxy"' in source
+    assert '("clear", "Clear system proxy"' in source
+    assert "self._set_tray_system_proxy_mode(selected_mode)" in source
+    assert "def _sync_tray_system_proxy_actions(self, *_args)" in source
+    assert "proxy_mode_combo.currentIndexChanged.connect(self._sync_tray_system_proxy_actions)" in source
+
 
 def test_theme_switch_uses_centered_dpi_aware_icon_painting():
     repository = Path(__file__).resolve().parents[1]
