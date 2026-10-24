@@ -101,7 +101,6 @@ class Window(QMainWindow):
 
         # Keep the three tray choices wired to the same policy combo and
         # handler used by Home; never change OS proxy settings through a second path.
-        self.tray_system_proxy_menu = self.tray_menu.addMenu("System Proxy")
         self.tray_system_proxy_action_group = QActionGroup(self)
         self.tray_system_proxy_action_group.setExclusive(True)
         self.tray_system_proxy_mode_actions = {}
@@ -120,7 +119,9 @@ class Window(QMainWindow):
                     self._set_tray_system_proxy_mode(selected_mode)
             )
             self.tray_system_proxy_action_group.addAction(action)
-            self.tray_system_proxy_menu.addAction(action)
+            # Put each checkable policy directly in the tray menu. QActionGroup
+            # keeps exactly one active choice checked without another submenu.
+            self.tray_menu.addAction(action)
             self.tray_system_proxy_mode_actions[mode] = action
 
         self.tray_menu.addSeparator()
