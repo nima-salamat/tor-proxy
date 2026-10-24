@@ -28,8 +28,8 @@ class LogWindow(QWidget):
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 14, 12, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(14, 16, 14, 14)
+        layout.setSpacing(12)
         header = QHBoxLayout()
 
         title = QLabel("EVENT LOG")
@@ -84,16 +84,16 @@ class LogWindow(QWidget):
     def apply_theme(self, mode):
         dark = mode == "dark"
         self._dark_mode = dark
-        surface = "#202630" if dark else "#f7f9fc"
+        surface = "#252c36" if dark else "#f2f5f9"
         border = "#394352" if dark else "#dce3eb"
         text = "#e8edf3" if dark else "#253041"
         muted = "#9ba7b5" if dark else "#657386"
         editor = "#171c23" if dark else "#ffffff"
         self.setStyleSheet(f"""
             QWidget#logsDrawer {{ background: {surface}; border-right: 1px solid {border}; }}
-            QLabel#logTitle {{ background: transparent; color: {text}; font-size: 11px; font-weight: 800; letter-spacing: 1px; }}
+            QLabel#logTitle {{ background: transparent; color: {text}; font-size: 12px; font-weight: 800; letter-spacing: 1px; }}
             QLabel#logSubtitle {{ background: transparent; color: {muted}; font-size: 10px; }}
-            QTextEdit#logText {{ background: {editor}; color: {text}; border: 1px solid {border}; border-radius: 8px; padding: 8px; font-family: Consolas, 'Cascadia Mono', monospace; font-size: 10px; }}
+            QTextEdit#logText {{ background: {editor}; color: {text}; border: 1px solid {border}; border-radius: 10px; padding: 10px; font-family: Consolas, 'Cascadia Mono', monospace; font-size: 10pt; selection-background-color: #287db5; }}
             QPushButton#logIconButton {{ background: transparent; border: 1px solid {border}; border-radius: 7px; }}
             QPushButton#logIconButton:hover {{ background: rgba(71, 163, 242, 0.14); border-color: #47a3f2; }}
         """)

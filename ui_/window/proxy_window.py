@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 class ProxyWindow(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("proxyHomeRoot")
         self.data = Data()
         self.running = False
         self.connected = False
@@ -310,10 +311,11 @@ class ProxyWindow(QWidget):
         border = "#3b4552" if dark else "#d7dee7"
         muted = "#aab4c1" if dark else "#667386"
         accent = "#47a3f2" if dark else "#1876bf"
-        surface = "#202630" if dark else "#ffffff"
+        surface = "#272c33" if dark else "#ffffff"
         text = "#e8edf3" if dark else "#253041"
+        self.setStyleSheet(f"QWidget#proxyHomeRoot {{ background: {surface}; border: none; }}")
         self.home_content.setStyleSheet(f"""
-            QWidget#homeContent {{ background: transparent; }}
+            QWidget#homeContent {{ background: {surface}; border: none; }}
             QPushButton#connectPulseButton {{ background: transparent; border: none; padding: 0; margin: 0; }}
             QPushButton#connectPulseButton:hover, QPushButton#connectPulseButton:pressed, QPushButton#connectPulseButton:focus {{ background: transparent; border: none; }}
             QLabel#connectionStatus {{ color: {text}; background: transparent; border: none; padding: 4px; font-size: 12px; font-weight: 700; }}

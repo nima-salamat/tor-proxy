@@ -335,7 +335,7 @@ class Window(QMainWindow):
             ("Settings", "Settings", "Ctrl+S", "fa6s.gear", self._show_setting),
             ("Block Host", "Blocked host rules", "Ctrl+B", "fa6s.shield-halved", self._show_block_host),
             ("Exclude Host", "Bypass rules", "Ctrl+E", "fa6s.route", self._show_exclude_host),
-            ("Bundles", "Tor bundles and updates", "Ctrl+U", "fa6s.boxes-stacked", self._show_updater),
+            ("Downloads", "Download and manage Tor bundles", "Ctrl+U", "fa6s.download", self._show_updater),
             ("Help", "Keyboard shortcuts", "F1", "fa6s.circle-question", self._show_help),
         ]
         self.page_action_group = QActionGroup(self)
@@ -591,7 +591,7 @@ class Window(QMainWindow):
         self.global_state.setText("●  {}".format(status))
         self.global_state.setToolTip(
             getattr(tor, "last_error", None)
-            or ("No Tor bundle is configured. Open Bundles or review the notification bell. "
+            or ("No Tor bundle is configured. Open Downloads or review the notification bell. "
                 if tor is not None and not getattr(tor, "path_set", False) else "")
             + "State is derived from TorRunner lifecycle and bootstrap/control-port checks. "
             "A running local HTTP proxy alone is not shown as Tor-ready."

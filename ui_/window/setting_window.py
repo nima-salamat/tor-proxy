@@ -58,14 +58,15 @@ class _BridgeTextEdit(QTextEdit):
 class SettingWindow(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("settingsPage")
         self._parent = parent
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(10, 8, 10, 8)
-        main_layout.setSpacing(8)
+        main_layout.setContentsMargins(18, 14, 18, 16)
+        main_layout.setSpacing(12)
 
         navigation = QHBoxLayout()
-        navigation.setContentsMargins(0, 0, 0, 2)
-        navigation.setSpacing(6)
+        navigation.setContentsMargins(0, 0, 0, 4)
+        navigation.setSpacing(8)
         self.settings_nav_group = QButtonGroup(self)
         self.settings_nav_group.setExclusive(True)
         self.settings_nav_buttons = []
@@ -133,8 +134,8 @@ class SettingWindow(QWidget):
         content = QWidget()
         content.setObjectName("settingsPageContent")
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(14, 10, 14, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(18, 14, 18, 16)
+        layout.setSpacing(12)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         scroll = QScrollArea(self.page_setting)
         scroll.setObjectName("settingsScrollArea")
@@ -158,14 +159,17 @@ class SettingWindow(QWidget):
         accent = "#287db5"
         hover = "rgba(71, 163, 242, 0.14)" if dark else "rgba(24, 118, 191, 0.08)"
         icon_color = "#f3f6fa" if dark else "#243143"
+        page_surface = "#272c33" if dark else "#ffffff"
         panel = "#202630" if dark else "#ffffff"
+        card_surface = "#202630" if dark else "#f7f9fc"
         field = "#171c23" if dark else "#f8fafc"
         text = "#f0f3f7" if dark else "#263344"
         muted = "#aab5c4" if dark else "#667487"
         placeholder = "#8996a8" if dark else "#7b8797"
         disabled = "#768294" if dark else "#9aa5b2"
         self.setStyleSheet(f"""
-            QWidget#settingsPageContent {{ background: transparent; }}
+            QWidget#settingsPage {{ background: {page_surface}; }}
+            QWidget#settingsPageContent {{ background: {page_surface}; }}
             QLabel {{ color: {text}; background: transparent; border: none; }}
             QLabel#settingsSectionTitle {{ font-size: 14px; font-weight: 750; color: {text}; padding: 1px 0; }}
             QLabel#settingsDescription {{ color: {muted}; font-size: 11px; padding: 0; }}
@@ -175,7 +179,7 @@ class SettingWindow(QWidget):
             QLabel#bridgeInputStatus {{ color: {muted}; background: transparent; font-size: 10px; padding: 2px 1px; }}
             QLabel#bridgeCountLabel {{ color: {accent}; background: transparent; font-size: 10px; font-weight: 750; }}
             QLabel#bridgeEmptyState {{ color: {muted}; background: {panel}; border: 1px dashed {border}; border-radius: 8px; padding: 13px; font-size: 10px; }}
-            QFrame#bridgeCard {{ background: {panel}; border: 1px solid {border}; border-radius: 9px; }}
+            QFrame#bridgeCard {{ background: {card_surface}; border: 1px solid {border}; border-radius: 12px; }}
             QFrame#bridgeCard:hover {{ border-color: {accent}; }}
             QLabel#bridgeTransportBadge {{ color: {accent}; background: {hover}; border: 1px solid {border}; border-radius: 5px; padding: 3px 7px; font-size: 8px; font-weight: 800; }}
             QLabel#bridgeEndpoint {{ color: {text}; background: transparent; font-family: Consolas, monospace; font-size: 10pt; font-weight: 700; }}
@@ -192,29 +196,29 @@ class SettingWindow(QWidget):
             QWidget#themeSwitch {{ background: transparent; border: none; }}
             QCheckBox#confirmExitPreference {{ color: {text}; background: transparent; spacing: 8px; font-weight: 650; }}
             QPushButton#settingsNavButton {{
-                min-height: 34px; padding: 0 11px; spacing: 7px;
-                border: 1px solid transparent; border-radius: 7px;
+                min-height: 38px; padding: 0 14px; spacing: 8px;
+                border: 1px solid transparent; border-radius: 9px;
                 background: transparent; color: {text}; font-weight: 650;
             }}
             QPushButton#settingsNavButton:hover {{ background: {hover}; border-color: {border}; }}
             QPushButton#settingsNavButton:checked {{
                 background: {accent}; color: #ffffff; border-color: {accent}; font-weight: 750;
             }}
-            QStackedWidget#settingsPages {{ border: none; background: transparent; }}
-            QScrollArea#settingsScrollArea {{ background: transparent; border: none; }}
+            QStackedWidget#settingsPages {{ border: none; background: {page_surface}; }}
+            QScrollArea#settingsScrollArea {{ background: {page_surface}; border: none; }}
             QFrame#settingsRowCard {{
-                background: transparent; border: none; border-bottom: 1px solid {border}; border-radius: 0;
+                background: {card_surface}; border: 1px solid {border}; border-radius: 10px;
             }}
             QLineEdit, QTextEdit {{
                 background: {field}; color: {text};
-                border: 1px solid {border}; border-radius: 7px; padding: 6px 9px;
+                min-height: 30px; border: 1px solid {border}; border-radius: 9px; padding: 7px 10px;
                 selection-background-color: {accent}; selection-color: #ffffff;
             }}
             QLineEdit:focus, QTextEdit:focus {{ border: 1px solid {accent}; }}
             QLineEdit:disabled, QTextEdit:disabled {{ color: {disabled}; background: {panel}; }}
             QPushButton#settingsActionButton {{
-                min-height: 32px; padding: 0 11px; border: 1px solid {border};
-                border-radius: 7px; background: transparent; color: {text}; font-weight: 650;
+                min-height: 36px; padding: 0 13px; border: 1px solid {border};
+                border-radius: 9px; background: transparent; color: {text}; font-weight: 700;
             }}
             QPushButton#settingsActionButton:hover {{ background: {hover}; border-color: {accent}; }}
             QCheckBox {{ spacing: 7px; color: {text}; background: transparent; }}

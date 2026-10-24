@@ -52,6 +52,7 @@ class UpdaterWindow(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("bundleManagerPage")
         self.parent_ = parent
         self.thread_pool = QThreadPool(self)
         self.worker = None
@@ -65,17 +66,17 @@ class UpdaterWindow(QWidget):
         self._missing_bundle_notified = False
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(12, 7, 12, 8)
-        root.setSpacing(7)
+        root.setContentsMargins(18, 14, 18, 16)
+        root.setSpacing(12)
 
         title_row = QHBoxLayout()
-        title_row.setContentsMargins(2, 0, 2, 0)
-        title_row.setSpacing(9)
+        title_row.setContentsMargins(2, 2, 2, 4)
+        title_row.setSpacing(12)
         title_icon = QLabel()
         title_icon.setObjectName("bundlePageIcon")
-        title_icon.setFixedSize(26, 26)
+        title_icon.setFixedSize(38, 38)
         title_row.addWidget(title_icon)
-        title = QLabel("Tor Bundles & Updates")
+        title = QLabel("Downloads & Tor Bundles")
         title.setObjectName("pageTitle")
         title_row.addWidget(title, 1)
         root.addLayout(title_row)
@@ -95,13 +96,13 @@ class UpdaterWindow(QWidget):
         root.addWidget(platform_card)
 
         columns = QHBoxLayout()
-        columns.setSpacing(10)
+        columns.setSpacing(14)
         root.addLayout(columns, 1)
 
         available_card = QFrame()
         available_card.setObjectName("contentCard")
         available_layout = QVBoxLayout(available_card)
-        available_layout.setContentsMargins(12, 10, 12, 10)
+        available_layout.setContentsMargins(16, 14, 16, 14)
         available_layout.setSpacing(6)
         heading_row = QHBoxLayout()
         section_title = QLabel("Available releases")
@@ -140,7 +141,7 @@ class UpdaterWindow(QWidget):
         installed_card = QFrame()
         installed_card.setObjectName("contentCard")
         installed_layout = QVBoxLayout(installed_card)
-        installed_layout.setContentsMargins(12, 10, 12, 10)
+        installed_layout.setContentsMargins(16, 14, 16, 14)
         installed_layout.setSpacing(6)
         local_heading = QHBoxLayout()
         local_title = QLabel("Installed bundles")
@@ -179,7 +180,7 @@ class UpdaterWindow(QWidget):
         progress_card = QFrame()
         progress_card.setObjectName("contentCard")
         progress_layout = QVBoxLayout(progress_card)
-        progress_layout.setContentsMargins(12, 5, 12, 5)
+        progress_layout.setContentsMargins(14, 10, 14, 10)
         progress_layout.setSpacing(3)
         status_row = QHBoxLayout()
         self.lbl_status = QLabel("Ready. Select a release to check whether a signed bundle is available.")
@@ -239,7 +240,10 @@ class UpdaterWindow(QWidget):
         """Compact bundle-manager styles with high-contrast controls in both themes."""
         dark = CONFIG["mode"] == "dark"
         accent = "#3daee9" if dark else "#287db5"
+        accent_hover = "#3298ce" if dark else "#236b9b"
         border = "#414a56" if dark else "#d5dbe2"
+        page_surface = "#272c33" if dark else "#ffffff"
+        info_surface = "#2d3540" if dark else "#f4f7fb"
         surface = "#20252b" if dark else "#ffffff"
         field = "#171c23" if dark else "#f8fafc"
         text = "#eff1f4" if dark else "#202832"
@@ -247,28 +251,34 @@ class UpdaterWindow(QWidget):
         placeholder = "#8593a5" if dark else "#758295"
         icon_color = "#dce8f4" if dark else "#334155"
         self.setStyleSheet(f"""
-            QLabel#pageTitle {{ color: {text}; font-size: 20px; font-weight: 750; background: transparent; }}
-            QLabel#bundlePageIcon {{ background: transparent; border: none; }}
-            QFrame#infoCard, QFrame#contentCard {{ background: {surface}; border: 1px solid {border}; border-radius: 9px; }}
-            QLabel#sectionTitle {{ color: {text}; font-size: 13px; font-weight: 700; background: transparent; }}
+            QWidget#bundleManagerPage {{ background: {page_surface}; }}
+            QLabel#pageTitle {{ color: {text}; font-size: 22px; font-weight: 800; background: transparent; }}
+            QLabel#bundlePageIcon {{ background: rgba(61, 174, 233, 0.12); border: 1px solid {border}; border-radius: 11px; }}
+            QFrame#infoCard {{ background: {info_surface}; border: 1px solid {border}; border-radius: 12px; }}
+            QFrame#contentCard {{ background: {surface}; border: 1px solid {border}; border-radius: 12px; }}
+            QLabel#sectionTitle {{ color: {text}; font-size: 14px; font-weight: 750; background: transparent; }}
             QLabel#metadataLabel, QLabel#stateLabel {{ color: {muted}; font-size: 11px; background: transparent; }}
             QLabel#mutedText {{ color: {muted}; font-size: 10px; background: transparent; }}
             QLabel#statusMessage {{ color: {text}; font-size: 11px; background: transparent; }}
-            QListWidget#releaseList {{ background: {field}; border: 1px solid {border}; border-radius: 7px; padding: 4px; color: {text}; }}
-            QListWidget#releaseList::item {{ min-height: 34px; padding: 6px 8px; border-radius: 5px; }}
+            QListWidget#releaseList {{ background: {field}; border: 1px solid {border}; border-radius: 9px; padding: 6px; color: {text}; outline: none; }}
+            QListWidget#releaseList::item {{ min-height: 36px; padding: 8px 10px; border-radius: 7px; }}
             QListWidget#releaseList::item:hover {{ background: rgba(61, 174, 233, 0.10); }}
             QListWidget#releaseList::item:selected {{ background: {accent}; color: #ffffff; }}
-            QPushButton {{ min-height: 28px; padding: 0 9px; border-radius: 6px; }}
-            QPushButton#primaryButton {{ font-weight: 650; }}
-            QPushButton#dangerButton {{ color: #d94c4c; }}
-            QPushButton#quietButton {{ min-height: 25px; }}
+            QPushButton {{ min-height: 32px; padding: 0 12px; border-radius: 8px; font-weight: 650; }}
+            QPushButton#primaryButton {{ background: {accent}; color: #ffffff; border: 1px solid {accent}; font-weight: 750; }}
+            QPushButton#primaryButton:hover {{ background: {accent_hover}; border-color: {accent_hover}; }}
+            QPushButton#primaryButton:disabled {{ color: {muted}; background: {field}; border-color: {border}; }}
+            QPushButton#dangerButton {{ color: #d94c4c; background: transparent; border: 1px solid {border}; }}
+            QPushButton#dangerButton:hover {{ background: rgba(217, 76, 76, 0.11); border-color: #d94c4c; }}
+            QPushButton#quietButton {{ min-height: 30px; background: {info_surface}; color: {text}; border: 1px solid {border}; }}
+            QPushButton#quietButton:hover {{ border-color: {accent}; background: rgba(61, 174, 233, 0.10); }}
             QLineEdit {{
-                min-height: 29px; padding: 0 9px; border: 1px solid {border};
-                border-radius: 6px; color: {text}; background: {field};
+                min-height: 34px; padding: 0 11px; border: 1px solid {border};
+                border-radius: 8px; color: {text}; background: {field};
                 selection-background-color: {accent}; selection-color: #ffffff;
             }}
-            QCheckBox {{ color: {text}; background: transparent; spacing: 6px; font-size: 11px; }}
-            QProgressBar {{ min-height: 7px; max-height: 7px; border: none; border-radius: 4px; background: {border}; }}
+            QCheckBox {{ color: {text}; background: transparent; spacing: 8px; font-size: 11px; }}
+            QProgressBar {{ min-height: 8px; max-height: 8px; border: none; border-radius: 4px; background: {border}; }}
             QProgressBar::chunk {{ background: {accent}; border: none; border-radius: 4px; }}
             QFrame#contentCard QLabel {{ background: transparent; }}
         """)
