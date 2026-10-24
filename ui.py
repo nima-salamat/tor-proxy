@@ -105,15 +105,14 @@ class Window(QMainWindow):
         self.tray_system_proxy_action_group.setExclusive(True)
         self.tray_system_proxy_mode_actions = {}
         tray_proxy_modes = (
-            ("set", "Set system proxy", "fa6s.globe", "#2eae69"),
-            ("unchanged", "Do not change system proxy", "fa6s.circle-minus", "#718096"),
-            ("clear", "Clear system proxy", "fa6s.eraser", "#d9534f"),
+            ("set", "Set system proxy"),
+            ("unchanged", "Do not change system proxy"),
+            ("clear", "Clear system proxy"),
         )
-        for mode, label, icon_name, icon_color in tray_proxy_modes:
+        for mode, label in tray_proxy_modes:
             action = QAction(label, self)
             action.setCheckable(True)
             action.setData(mode)
-            action.setIcon(qta.icon(icon_name, color=icon_color))
             action.triggered.connect(
                 lambda _checked=False, selected_mode=mode:
                     self._set_tray_system_proxy_mode(selected_mode)
