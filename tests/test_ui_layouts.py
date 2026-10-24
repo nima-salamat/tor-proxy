@@ -854,3 +854,29 @@ def test_qr_scan_canvas_paints_frame_and_marker_in_shared_geometry():
     assert "QPixmap" not in source
     assert "def set_detected(self, corners, source_size)" in source
     assert "self._timer.stop()" in source
+
+
+
+def test_home_download_history_and_settings_use_coordinated_modern_surfaces():
+    repository = Path(__file__).resolve().parents[1]
+    ui_source = (repository / "ui.py").read_text(encoding="utf-8")
+    home_source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+    settings_source = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
+    downloads_source = (repository / "ui_/window/updater_window.py").read_text(encoding="utf-8")
+    history_source = (repository / "ui_/window/log_window.py").read_text(encoding="utf-8")
+    live_history_source = (repository / "ui_/window/tor_log_dialog.py").read_text(encoding="utf-8")
+
+    assert 'self.setObjectName("proxyHomeRoot")' in home_source
+    assert 'surface = "#272c33" if dark else "#ffffff"' in home_source
+    assert 'QWidget#proxyHomeRoot {{ background: {surface}; border: none; }}' in home_source
+    assert 'QWidget#homeContent {{ background: {surface}; border: none; }}' in home_source
+
+    assert '("Downloads", "Download and manage Tor bundles"' in ui_source
+    assert 'QWidget#bundleManagerPage {{ background: {page_surface}; }}' in downloads_source
+    assert 'QFrame#contentCard {{ background: {surface}; border: 1px solid {border}; border-radius: 12px; }}' in downloads_source
+    assert 'QPushButton#primaryButton:hover {{ background: {accent_hover}; border-color: {accent_hover}; }}' in downloads_source
+
+    assert 'QWidget#settingsPage {{ background: {page_surface}; }}' in settings_source
+    assert 'QFrame#settingsRowCard {{\n                background: {card_surface}; border: 1px solid {border}; border-radius: 10px;' in settings_source
+    assert 'surface = "#252c36" if dark else "#f2f5f9"' in history_source
+    assert 'log_surface = "#151c25" if self._dark else "#fbfcfe"' in live_history_source

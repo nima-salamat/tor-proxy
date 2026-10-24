@@ -126,6 +126,7 @@ class TorLogDialog(_FramelessDialog):
         self.clear_button.setIcon(qta.icon("fa6s.trash-can", color=self._colors["text"]))
         self.close_button = self.add_button("Close", primary=True, callback=self.accept)
 
+        log_surface = "#151c25" if self._dark else "#fbfcfe"
         self.setStyleSheet(self.styleSheet() + f"""
             QLabel#torLogPath {{
                 color: {self._colors["muted"]}; background: {self._colors["panel"]};
@@ -142,8 +143,8 @@ class TorLogDialog(_FramelessDialog):
             }}
             QPushButton#torLogAction {{
                 color: {self._colors["text"]}; background: {self._colors["panel"]};
-                border: 1px solid {self._colors["border"]}; border-radius: 7px;
-                padding: 5px 9px; min-height: 28px; font-weight: 600;
+                border: 1px solid {self._colors["border"]}; border-radius: 9px;
+                padding: 6px 10px; min-height: 30px; font-weight: 650;
             }}
             QPushButton#torLogAction:hover {{
                 background: {self._colors["hover"]}; border-color: {self._accent};
@@ -152,7 +153,7 @@ class TorLogDialog(_FramelessDialog):
                 color: {self._colors["muted"]}; background: transparent;
             }}
             QTextEdit#torLogText {{
-                color: {self._colors["text"]}; background: #111820;
+                color: {self._colors["text"]}; background: {log_surface};
                 border: 1px solid {self._colors["border"]}; border-radius: 9px;
                 padding: 8px; font-family: Consolas, 'Cascadia Mono', monospace; font-size: 9pt;
                 selection-background-color: {self._accent};
