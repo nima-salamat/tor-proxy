@@ -98,10 +98,42 @@ class Window(QMainWindow):
         self.tray_toggle_action.triggered.connect(self._toggle_visibility)
         self.tray_menu.addAction(self.tray_toggle_action)
         self.tray_menu.addSeparator()
+
+        # Keep the three tray choices wired to the same policy combo and
+        # handler used by Home; never change OS proxy settings through a second path.
+        self.tray_system_proxy_menu = self.tray_menu.addMenu("System Proxy")
+        self.tray_system_proxy_action_group = QActionGroup(self)
+        self.tray_system_proxy_action_group.setExclusive(True)
+        self.tray_system_proxy_mode_actions = {}
+        tray_proxy_modes = (
+            ("set", "Set system proxy", "fa6s.globe", "#2eae69"),
+            ("unchanged", "Do not change system proxy", "fa6s.circle-minus", "#718096"),
+            ("clear", "Clear system proxy", "fa6s.eraser", "#d9534f"),
+        )
+        for mode, label, icon_name, icon_color in tray_proxy_modes:
+            action = QAction(label, self)
+            action.setCheckable(True)
+            action.setData(mode)
+            action.setIcon(qta.icon(icon_name, color=icon_color))
+            action.triggered.connect(
+                lambda _checked=False, selected_mode=mode:
+                    self._set_tray_system_proxy_mode(selected_mode)
+            )
+            self.tray_system_proxy_action_group.addAction(action)
+            self.tray_system_proxy_menu.addAction(action)
+            self.tray_system_proxy_mode_actions[mode] = action
+
+        self.tray_menu.addSeparator()
         self.tray_exit_action = QAction("Exit TorProxy", self)
         self.tray_exit_action.setIcon(qta.icon("fa6s.right-from-bracket", color="#d9534f"))
         self.tray_exit_action.triggered.connect(self.ask_close)
         self.tray_menu.addAction(self.tray_exit_action)
+
+        proxy_mode_combo = getattr(self.proxyWidget, "system_proxy_mode", None)
+        if proxy_mode_combo is not None:
+            proxy_mode_combo.currentIndexChanged.connect(self._sync_tray_system_proxy_actions)
+        self._sync_tray_system_proxy_actions()
+
         # Do not give the menu to the shell: Windows chooses its own anchor and
         # may open it downward over the tray icon. Position our menu explicitly.
         self.tray_icon.activated.connect(self._on_tray_activated)
@@ -292,6 +324,35 @@ class Window(QMainWindow):
     def show_window(self, reason):
         # Retain the old signal-handler name for integrations and tests.
         self._on_tray_activated(reason)
+
+    def _set_tray_system_proxy_mode(self, mode):
+        """Route tray choices through Home's existing system-proxy policy control."""
+        combo = getattr(getattr(self, "proxyWidget", None), "system_proxy_mode", None)
+        if combo is None:
+            logger.warning("System proxy tray action is unavailable because the Home policy control is missing.")
+            return
+
+        index = combo.findData(mode)
+        if index < 0:
+            logger.warning("Unknown system proxy mode selected from the tray: %r", mode)
+            self._sync_tray_system_proxy_actions()
+            return
+
+        if combo.currentIndex() == index:
+            # Re-selecting the current tray option is also a useful explicit retry,
+            # for example after Tor finishes connecting or an OS action previously failed.
+            self.proxyWidget._on_system_proxy_mode_changed(index)
+        else:
+            # The currentIndexChanged signal invokes the authoritative existing handler.
+            combo.setCurrentIndex(index)
+        self._sync_tray_system_proxy_actions()
+
+    def _sync_tray_system_proxy_actions(self, *_args):
+        """Keep tray radio actions consistent with the saved Home policy."""
+        actions = getattr(self, "tray_system_proxy_mode_actions", {})
+        current_mode = CONFIG.get("system_proxy_mode", "unchanged")
+        for mode, action in actions.items():
+            action.setChecked(mode == current_mode)
 
     def _show_tray_context_menu(self):
         """Open the app menu just above its tray icon, inside the work area."""
