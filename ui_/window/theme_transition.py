@@ -9,12 +9,11 @@ from PySide6.QtCore import (
     QEasingCurve,
     QPoint,
     QPointF,
-    QRegion,
     Qt,
     QVariantAnimation,
     Signal,
 )
-from PySide6.QtGui import QPainter, QPainterPath, QPixmap
+from PySide6.QtGui import QPainter, QPainterPath, QPixmap, QRegion
 from PySide6.QtWidgets import QWidget
 
 
