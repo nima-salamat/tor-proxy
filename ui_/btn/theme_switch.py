@@ -155,8 +155,6 @@ class ThemeSwitch(QWidget):
         track = QColor("#354152" if dark else "#d8e4ef")
         border = QColor("#526175" if dark else "#c3d1df")
         thumb = QColor("#eaf0f7" if dark else "#ffffff")
-        icon_color = "#263449" if dark else "#c07a16"
-
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setPen(border)
