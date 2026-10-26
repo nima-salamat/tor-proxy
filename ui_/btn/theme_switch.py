@@ -5,8 +5,6 @@ import qtawesome as qta
 from PySide6.QtCore import (
     QAbstractAnimation,
     QEasingCurve,
-    QEvent,
-    QPointF,
     QRect,
     QRectF,
     QSize,
@@ -14,7 +12,7 @@ from PySide6.QtCore import (
     Signal,
     QVariantAnimation,
 )
-from PySide6.QtGui import QColor, QMouseEvent, QPainter
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QWidget
 
 
