@@ -41,13 +41,19 @@ Tor's SOCKS, ControlPort, DNSPort, and TorProxy's HTTP proxy are configured for 
 
 ## Host-rule files
 
-Blocked hosts and direct exclusions are maintained separately in per-user configuration storage. Accepted syntax:
+Blocked hosts and direct exclusions are maintained separately in per-user configuration storage. Both lists use the same host-rule parser and matcher.
 
-- `example.org` — root domain and subdomains.
-- `=example.org` — exactly that hostname.
-- `*.example.org` — subdomains only, not the root.
+- `example.org` — the hostname and all subdomains.
+- `=example.org` — exactly that hostname, not its subdomains.
+- `*.example.org` — all subdomains at any depth, but not the root hostname. For example, `*.ir` matches `example.ir` and `api.example.ir`.
+- `*-api.something.com` — a wildcard inside one DNS label; matches `v2-api.something.com`.
+- `api-*.something.com` — matches labels such as `api-v2.something.com`.
+- `api.*.example.com` — matches one label in that position, such as `api.eu.example.com`.
+- `*example.org` — retained as a legacy shorthand for `*.example.org`.
 
-Rules accept hostnames/IP literals, not URLs, user-info, paths, or `host:port` authorities. Unicode hostnames are normalized using IDNA. Block rules take precedence over exclusions.
+The `*` character matches zero or more characters within one DNS label; it does not match a dot. Label-glob patterns must match the same number of labels. The special `*.domain` suffix form matches subdomains across any depth. These are glob-style hostname rules, **not regular expressions**; regex syntax such as `?`, `[]`, `+`, or grouping is not supported. Wildcards inside an internationalized label must use its ASCII/IDNA form, although whole IDN labels and IDN suffixes are supported.
+
+Rules accept hostnames/IP literals, not URLs, user-info, paths, or `host:port` authorities. Unicode hostname labels are normalized using IDNA. Block rules take precedence over exclusions. Excluded hosts use a direct connection outside Tor, so only add exclusions when that privacy trade-off is intentional.
 
 ## Bridge records
 

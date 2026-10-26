@@ -137,9 +137,17 @@ The supervised Tor configuration currently supports circuit dirtiness, new-circu
 
 ## Blocked hosts and exclusions
 
-Host rules match a root domain and its subdomains by default. Prefix `=` for an exact hostname only, and `*.` for subdomains only. Rules are normalized with IDNA and IP-literal handling. Blocking is applied consistently to HTTP and HTTPS CONNECT requests.
+Blocked-host and excluded-host lists share the same validated hostname-rule engine for HTTP requests and HTTPS `CONNECT` tunnels. Supported examples:
 
-Excluded hosts are a deliberate bypass: TorProxy connects to them directly. That can reveal the destination and DNS lookup to the local network/ISP and expose your direct IP. Leave exclusions empty unless you intentionally want this behavior. Block rules take precedence over exclusions.
+- `example.org` matches the hostname and all subdomains.
+- `=example.org` matches only that exact hostname.
+- `*.example.org` matches subdomains at any depth, but not `example.org` itself. For example, `*.ir` matches `example.ir` and `api.example.ir`.
+- `*-api.something.com` matches a single DNS label such as `v2-api.something.com`; `api-*.something.com` and `api.*.something.com` are supported too.
+- `*example.org` remains a backward-compatible shorthand for `*.example.org`.
+
+A `*` wildcard inside a label matches zero or more characters but never crosses a dot. Label-glob patterns match the same number of hostname labels; the special `*.domain` form matches subdomains across any depth. This is **glob syntax, not regex syntax**. Arbitrary regular expressions, `?`, and character classes are not accepted. Hostnames are case-insensitive and Unicode labels are normalized using IDNA. Wildcards embedded within an internationalized label must use its ASCII/IDNA form.
+
+Excluded hosts intentionally connect directly rather than through Tor. Their destination DNS and traffic may be visible to the local network or ISP, and the origin IP can be exposed. Leave exclusions empty unless that bypass is intentional. Block rules take precedence over exclusions.
 
 ## System proxy settings
 

@@ -93,6 +93,27 @@ def test_block_and_bypass_rules_are_consistent_and_block_takes_precedence(monkey
     assert proxy_module._route_for_host("other.net") == "tor"
 
 
+def test_glob_patterns_apply_to_block_and_exclude_routes_with_block_precedence(monkeypatch):
+    monkeypatch.setattr(
+        proxy_module,
+        "_blocked_rules",
+        HostRules.from_values(["*-api.something.com", "*.ir"]),
+    )
+    monkeypatch.setattr(
+        proxy_module,
+        "_excluded_rules",
+        HostRules.from_values(["*.something.com", "*.x.com", "service-*.example.com"]),
+    )
+
+    assert proxy_module._route_for_host("v2-api.something.com") == "blocked"
+    assert proxy_module._route_for_host("api.example.ir") == "blocked"
+    assert proxy_module._route_for_host("deep.api.example.ir") == "blocked"
+    assert proxy_module._route_for_host("api.x.com") == "direct"
+    assert proxy_module._route_for_host("service-v2.example.com") == "direct"
+    assert proxy_module._route_for_host("x.com") == "tor"
+    assert proxy_module._route_for_host("v2-api.other.net") == "tor"
+
+
 def _receive_exact(sock, length):
     chunks = bytearray()
     while len(chunks) < length:

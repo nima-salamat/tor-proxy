@@ -15,6 +15,7 @@ class MatchMode(str, Enum):
     EXACT = "exact"
     DOMAIN_AND_SUBDOMAINS = "domain-and-subdomains"
     SUBDOMAINS_ONLY = "subdomains-only"
+    GLOB = "glob"
 
 
 def normalize_hostname(value: str) -> str:
@@ -60,6 +61,76 @@ def normalize_hostname(value: str) -> str:
     return ascii_name
 
 
+def _normalize_glob_pattern(value: str) -> str:
+    """Normalize a DNS glob while keeping '*' limited to one hostname label."""
+    raw = value.strip()
+    if not raw or len(raw) > 1024:
+        raise HostRuleError("Host pattern is empty or too long.")
+    if any(char in raw for char in ("/", "\\", "@", "?", "#", "%")):
+        raise HostRuleError("Enter a hostname pattern, not a URL or authority.")
+    if any(char.isspace() for char in raw):
+        raise HostRuleError("Host patterns cannot contain whitespace.")
+    if raw.endswith("."):
+        raw = raw[:-1]
+    if not raw or raw.endswith(".") or len(raw) > 253:
+        raise HostRuleError("Invalid hostname pattern length.")
+
+    normalized_labels: list[str] = []
+    for label in raw.split("."):
+        if not label or len(label) > 63:
+            raise HostRuleError("Host pattern contains an empty or overlong label.")
+        if "*" not in label:
+            normalized_labels.append(normalize_hostname(label))
+            continue
+
+        # Partial-label wildcarding is defined on ASCII/IDNA labels. Whole
+        # internationalized labels remain supported in the other label slots.
+        if not label.isascii():
+            raise HostRuleError(
+                "Wildcards inside an internationalized label must use its ASCII/IDNA form."
+            )
+        try:
+            normalize_hostname(label.replace("*", "a"))
+        except HostRuleError as exc:
+            raise HostRuleError(f"Invalid wildcard label: {label!r}.") from exc
+        normalized_labels.append(label.lower())
+
+    pattern = ".".join(normalized_labels)
+    if len(pattern) > 253:
+        raise HostRuleError("Host pattern exceeds the maximum hostname length.")
+    return pattern
+
+
+def _matches_glob_label(pattern: str, candidate: str) -> bool:
+    """Match one DNS label with '*' using a bounded, non-regex glob matcher."""
+    pattern_index = 0
+    candidate_index = 0
+    last_star = -1
+    retry_index = 0
+
+    while candidate_index < len(candidate):
+        if (
+            pattern_index < len(pattern)
+            and pattern[pattern_index] == candidate[candidate_index]
+        ):
+            pattern_index += 1
+            candidate_index += 1
+        elif pattern_index < len(pattern) and pattern[pattern_index] == "*":
+            last_star = pattern_index
+            pattern_index += 1
+            retry_index = candidate_index
+        elif last_star >= 0:
+            pattern_index = last_star + 1
+            retry_index += 1
+            candidate_index = retry_index
+        else:
+            return False
+
+    while pattern_index < len(pattern) and pattern[pattern_index] == "*":
+        pattern_index += 1
+    return pattern_index == len(pattern)
+
+
 @dataclass(frozen=True)
 class HostRule:
     host: str
@@ -70,16 +141,32 @@ class HostRule:
         if not isinstance(value, str):
             raise HostRuleError("Rule must be a string.")
         raw = value.strip()
+        if not raw or len(raw) > 1024:
+            raise HostRuleError("Rule is empty or too long.")
         if raw.startswith("="):
+            if "*" in raw:
+                raise HostRuleError("Exact-host rules cannot contain wildcards.")
             return cls(normalize_hostname(raw[1:]), MatchMode.EXACT)
-        if raw.startswith("*"):
-            # Both '*.example.org' and legacy '*example.org' mean subdomains only.
-            suffix = raw[1:]
-            if suffix.startswith("."):
-                suffix = suffix[1:]
+        if raw.startswith("*.") and "*" not in raw[2:]:
+            # This suffix form intentionally spans any subdomain depth.
+            suffix = raw[2:]
             if not suffix or suffix.startswith(".") or suffix.endswith("."):
                 raise HostRuleError("Wildcard rules must name exactly one valid suffix.")
             return cls(normalize_hostname(suffix), MatchMode.SUBDOMAINS_ONLY)
+        if raw.startswith("*") and "*" not in raw[1:]:
+            # Preserve the historical '*example.org' shorthand for subdomains only.
+            # If the suffix is not itself a hostname (e.g. '-api.example.org'),
+            # treat the input as a label glob instead.
+            suffix = raw[1:]
+            if suffix:
+                try:
+                    normalized_suffix = normalize_hostname(suffix)
+                except HostRuleError:
+                    pass
+                else:
+                    return cls(normalized_suffix, MatchMode.SUBDOMAINS_ONLY)
+        if "*" in raw:
+            return cls(_normalize_glob_pattern(raw), MatchMode.GLOB)
         return cls(normalize_hostname(raw), MatchMode.DOMAIN_AND_SUBDOMAINS)
 
     def matches(self, hostname: str) -> bool:
@@ -91,6 +178,13 @@ class HostRule:
             return candidate == self.host
         if self.mode is MatchMode.SUBDOMAINS_ONLY:
             return candidate.endswith("." + self.host)
+        if self.mode is MatchMode.GLOB:
+            pattern_labels = self.host.split(".")
+            candidate_labels = candidate.split(".")
+            return len(pattern_labels) == len(candidate_labels) and all(
+                _matches_glob_label(pattern, label)
+                for pattern, label in zip(pattern_labels, candidate_labels)
+            )
         return candidate == self.host or candidate.endswith("." + self.host)
 
     def __str__(self) -> str:
