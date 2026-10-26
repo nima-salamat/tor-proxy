@@ -12,12 +12,12 @@ from PySide6.QtCore import (
     QVariantAnimation,
     Signal,
 )
-from PySide6.QtGui import QColor, QPainter, QPixmap
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import QWidget
 
 
 class CircularThemeReveal(QWidget):
-    """Keep a snapshot of the old theme visible outside an expanding clear circle."""
+    """Keep old widget pixels outside a circle, revealing newly themed widgets beneath."""
 
     finished = Signal()
 
@@ -101,15 +101,21 @@ class CircularThemeReveal(QWidget):
         if not painter.isActive():
             return
 
+        # This widget is an old-frame snapshot, not a color wash. Leave a
+        # transparent circular hole in the snapshot so the actual new-themed
+        # widget tree underneath is exposed as the circle expands.
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
         painter.fillRect(self.rect(), QColor(0, 0, 0, 0))
         painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
-        painter.drawPixmap(self.rect(), self._snapshot)
 
+        old_frame_region = QPainterPath()
+        old_frame_region.addRect(self.rect())
         if self._radius > 0:
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(0, 0, 0, 0))
-            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
-            painter.drawEllipse(self._center, self._radius, self._radius)
+            reveal_region = QPainterPath()
+            reveal_region.addEllipse(self._center, self._radius, self._radius)
+            old_frame_region = old_frame_region.subtracted(reveal_region)
+
+        painter.setClipPath(old_frame_region)
+        painter.drawPixmap(self.rect(), self._snapshot)
         painter.end()

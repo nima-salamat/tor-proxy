@@ -904,6 +904,9 @@ def test_circular_theme_reveal_transparently_reveals_the_new_theme(qt_app):
     revealed_frame = transition.grab().toImage()
     revealed = revealed_frame.pixelColor(10, 12)
     assert revealed.alpha() < 10
+    assert revealed.red() < 20
+    assert revealed.green() < 20
+    assert revealed.blue() < 20
 
     transition.cancel()
     parent.close()
@@ -922,6 +925,7 @@ def test_main_window_theme_changes_use_circular_reveal_for_visible_mode_switches
     assert "self._theme_reveal_origin()" in ui_source
     assert "overlay.start()" in ui_source
     assert "QVariantAnimation" in transition_source
-    assert "CompositionMode_Clear" in transition_source
+    assert "old_frame_region.subtracted(reveal_region)" in transition_source
+    assert "actual new-themed widget tree underneath" in transition_source
     assert "WA_TransparentForMouseEvents" in transition_source
 
