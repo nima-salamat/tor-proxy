@@ -411,7 +411,7 @@ def test_primary_navigation_uses_slightly_larger_text_and_icons():
 
 
 
-def test_theme_switch_changes_mode_and_emits_only_at_mid_slide(qt_app):
+def test_theme_switch_commits_mode_after_thumb_animation_finishes(qt_app):
     pytest.importorskip("qtawesome")
     from PySide6.QtCore import QAbstractAnimation
     from ui_.btn.theme_switch import ThemeSwitch
@@ -427,13 +427,14 @@ def test_theme_switch_changes_mode_and_emits_only_at_mid_slide(qt_app):
     assert switch._thumb_progress < 0.5
 
     switch._animation.setCurrentTime(switch._animation.duration() // 2)
-    assert switch.mode == "light"
-    assert emitted == ["light"]
+    assert switch.mode == "dark"
+    assert emitted == []
     assert 0.0 < switch._thumb_progress < 1.0
     assert switch._animation.state() == QAbstractAnimation.State.Running
 
     switch._animation.setCurrentTime(switch._animation.duration())
     assert switch._thumb_progress == 1.0
+    assert switch.mode == "light"
     assert emitted == ["light"]
 
     switch.set_mode("dark")
@@ -517,7 +518,7 @@ def test_theme_switch_thumb_can_be_dragged_in_both_directions(qt_app):
     assert switch._dragging
     assert switch._thumb_progress > 0.5
     assert switch.mode == "light"
-    assert emitted == ["light"]
+    assert emitted == []
 
     move_left = QMouseEvent(
         QEvent.Type.MouseMove,
@@ -529,7 +530,7 @@ def test_theme_switch_thumb_can_be_dragged_in_both_directions(qt_app):
     switch.mouseMoveEvent(move_left)
     assert switch._thumb_progress < 0.5
     assert switch.mode == "dark"
-    assert emitted == ["light", "dark"]
+    assert emitted == []
 
     move_right_again = QMouseEvent(
         QEvent.Type.MouseMove,
@@ -548,10 +549,11 @@ def test_theme_switch_thumb_can_be_dragged_in_both_directions(qt_app):
     )
     switch.mouseReleaseEvent(release)
     assert switch.mode == "light"
-    assert emitted == ["light", "dark", "light"]
+    assert emitted == []
     assert switch.is_animating
     switch._animation.setCurrentTime(switch._animation.duration())
     assert switch._thumb_progress == 1.0
+    assert emitted == ["light"]
 
     switch.deleteLater()
     qt_app.processEvents()
@@ -580,7 +582,8 @@ def test_theme_reveal_keeps_the_settings_switch_live_during_the_transition():
         repository / "ui_/window/theme_transition.py"
     ).read_text(encoding="utf-8")
 
-    assert "self._animation.currentTime() >= self._animation.duration() / 2" in switch_source
+    assert "self._animation.currentTime() >= self._animation.duration() / 2" not in switch_source
+    assert "self._emit_mode_after_settle" in switch_source
     assert "self.modeChanged.emit(mode)" in switch_source
     assert "live_widgets=live_widgets" in theme_source
     assert "widget.render(" in transition_source

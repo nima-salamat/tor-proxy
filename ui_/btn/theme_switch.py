@@ -40,6 +40,8 @@ class ThemeSwitch(QWidget):
         self._drag_offset_x = 0.0
         self._pressed_thumb = False
         self._dragging = False
+        self._drag_start_mode = None
+        self._emit_mode_after_settle = False
         self._animation = QVariantAnimation(self)
         self._animation.setDuration(220)
         self._animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
@@ -86,24 +88,30 @@ class ThemeSwitch(QWidget):
         return max(0.0, min(1.0, (float(x) - center_at_left) / span))
 
     def _set_progress_from_drag(self, progress: float) -> None:
+        """Track the pointer without applying the expensive application theme mid-drag."""
         self._thumb_progress = max(0.0, min(1.0, float(progress)))
         target_mode = "light" if self._thumb_progress >= 0.5 else "dark"
-        self.update()
         if target_mode != self._mode:
+            # The switch previews the selected mode, but waits until the pointer
+            # is released and its settling animation ends before notifying Window.
             self._mode = target_mode
             self._deferred_mode = None
             self.setAccessibleDescription("Dark theme" if target_mode == "dark" else "Light theme")
-            self.update()
-            # Emit only when the pointer crosses the middle of the track.
-            self.modeChanged.emit(target_mode)
+        self.update()
 
     def _settle_after_drag(self) -> None:
         target = 1.0 if self._mode == "light" else 0.0
         self._deferred_mode = None
         self._animation.stop()
+        self._emit_mode_after_settle = (
+            self._drag_start_mode is not None and self._mode != self._drag_start_mode
+        )
         if abs(self._thumb_progress - target) <= 0.005:
             self._thumb_progress = target
             self.update()
+            if self._emit_mode_after_settle:
+                self._emit_mode_after_settle = False
+                self.modeChanged.emit(self._mode)
             return
         self._animation.setStartValue(self._thumb_progress)
         self._animation.setEndValue(target)
@@ -115,12 +123,13 @@ class ThemeSwitch(QWidget):
             return
         changed = mode != self._mode
         if not changed:
-            # During a click-driven transition the owner sends this same mode
-            # back from the mid-slide signal. Keep the running thumb animation.
+            # Keep the current thumb animation when the owner confirms the mode
+            # after the switch reaches its destination.
             return
 
         self._animation.stop()
         self._deferred_mode = None
+        self._emit_mode_after_settle = False
         self._mode = mode
         self.setAccessibleDescription("Dark theme" if mode == "dark" else "Light theme")
         target = 1.0 if mode == "light" else 0.0
@@ -133,33 +142,27 @@ class ThemeSwitch(QWidget):
             self.update()
 
     def _on_animation_value(self, value) -> None:
+        # Keep every valueChanged callback paint-only. Applying the application
+        # theme here would synchronously re-polish the widget tree and stall the
+        # thumb exactly at the midpoint.
         self._thumb_progress = float(value)
         self.update()
-
-        if (
-            self._deferred_mode is not None
-            and self._deferred_mode != self._mode
-            and self._animation.currentTime() >= self._animation.duration() / 2
-        ):
-            # Change the icon/theme semantic at the visual midpoint. Emitting
-            # here starts the circular reveal while the thumb keeps sliding.
-            mode = self._deferred_mode
-            self._deferred_mode = None
-            self._mode = mode
-            self.setAccessibleDescription("Dark theme" if mode == "dark" else "Light theme")
-            self.update()
-            self.modeChanged.emit(mode)
 
     def _finish_animation(self) -> None:
         end_value = self._animation.endValue()
         if end_value is not None:
             self._thumb_progress = float(end_value)
+
         if self._deferred_mode is not None and self._deferred_mode != self._mode:
             mode = self._deferred_mode
             self._deferred_mode = None
             self._mode = mode
             self.setAccessibleDescription("Dark theme" if mode == "dark" else "Light theme")
             self.modeChanged.emit(mode)
+
+        if self._emit_mode_after_settle:
+            self._emit_mode_after_settle = False
+            self.modeChanged.emit(self._mode)
         self.update()
 
     def _set_thumb_progress(self, value) -> None:
@@ -177,6 +180,7 @@ class ThemeSwitch(QWidget):
         )
         new_mode = "light" if base_mode == "dark" else "dark"
         self._animation.stop()
+        self._emit_mode_after_settle = False
 
         target = 1.0 if new_mode == "light" else 0.0
         self._deferred_mode = new_mode if new_mode != self._mode else None
@@ -199,6 +203,7 @@ class ThemeSwitch(QWidget):
             self._press_position = event.position()
             thumb_rect = self._thumb_rect()
             self._pressed_thumb = thumb_rect.contains(event.position())
+            self._drag_start_mode = self._mode
             self._drag_offset_x = (
                 event.position().x() - thumb_rect.center().x()
                 if self._pressed_thumb
@@ -243,6 +248,7 @@ class ThemeSwitch(QWidget):
             self._drag_offset_x = 0.0
             self._pressed_thumb = False
             self._dragging = False
+            self._drag_start_mode = None
             event.accept()
             return
         super().mouseReleaseEvent(event)
