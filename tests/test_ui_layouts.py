@@ -869,7 +869,7 @@ def test_qr_scan_canvas_paints_frame_and_marker_in_shared_geometry():
     assert "self._timer.stop()" in source
 
 
-def test_circular_theme_reveal_transparently_reveals_the_new_theme(qt_app):
+def test_circular_theme_reveal_transitions_between_opaque_widget_frames(qt_app):
     from PySide6.QtCore import QPoint, Qt
     from PySide6.QtGui import QColor, QPixmap
     from PySide6.QtWidgets import QWidget
@@ -878,13 +878,14 @@ def test_circular_theme_reveal_transparently_reveals_the_new_theme(qt_app):
 
     parent = QWidget()
     parent.resize(120, 80)
-    parent.setStyleSheet("background-color: rgb(0, 0, 255);")
     parent.show()
 
-    snapshot = QPixmap(parent.size())
-    snapshot.fill(QColor("red"))
+    old_snapshot = QPixmap(parent.size())
+    old_snapshot.fill(QColor("red"))
+    new_snapshot = QPixmap(parent.size())
+    new_snapshot.fill(QColor("blue"))
     transition = CircularThemeReveal(
-        parent, snapshot, QPoint(10, 12), duration_ms=400
+        parent, old_snapshot, new_snapshot, QPoint(10, 12), duration_ms=400
     )
     transition.setGeometry(parent.rect())
     transition.show()
@@ -892,6 +893,7 @@ def test_circular_theme_reveal_transparently_reveals_the_new_theme(qt_app):
     qt_app.processEvents()
 
     assert transition.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+    assert not transition.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
     assert transition._animation.duration() == 400
     old_frame = transition.grab().toImage()
     outside = old_frame.pixelColor(100, 60)
@@ -899,14 +901,24 @@ def test_circular_theme_reveal_transparently_reveals_the_new_theme(qt_app):
     assert outside.red() > 240
     assert outside.blue() < 20
 
+    transition._set_radius(8)
+    qt_app.processEvents()
+    mixed_frame = transition.grab().toImage()
+    revealed = mixed_frame.pixelColor(10, 12)
+    outside_during_animation = mixed_frame.pixelColor(100, 60)
+    assert revealed.alpha() > 240
+    assert revealed.blue() > 240
+    assert revealed.red() < 20
+    assert outside_during_animation.red() > 240
+    assert outside_during_animation.blue() < 20
+
     transition._set_radius(1000)
     qt_app.processEvents()
-    revealed_frame = transition.grab().toImage()
-    revealed = revealed_frame.pixelColor(10, 12)
-    assert revealed.alpha() < 10
-    assert revealed.red() < 20
-    assert revealed.green() < 20
-    assert revealed.blue() < 20
+    new_frame = transition.grab().toImage()
+    fully_revealed = new_frame.pixelColor(100, 60)
+    assert fully_revealed.alpha() > 240
+    assert fully_revealed.blue() > 240
+    assert fully_revealed.red() < 20
 
     transition.cancel()
     parent.close()
@@ -927,6 +939,8 @@ def test_main_window_theme_changes_use_circular_reveal_for_visible_mode_switches
     assert "QVariantAnimation" in transition_source
     assert "old_frame_region.subtracted(reveal_region)" in transition_source
     assert "painter.setClipPath(old_frame_region)" in transition_source
-    assert "painter.drawPixmap(self.rect(), self._snapshot)" in transition_source
+    assert "painter.drawPixmap(self.rect(), self._new_snapshot)" in transition_source
+    assert "painter.drawPixmap(self.rect(), self._old_snapshot)" in transition_source
+    assert "does not rely on translucent child-window composition" in transition_source
     assert "WA_TransparentForMouseEvents" in transition_source
 

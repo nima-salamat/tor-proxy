@@ -683,7 +683,6 @@ class Window(QMainWindow):
         if mode not in {"dark", "light"}:
             return
 
-        overlay = None
         app = QApplication.instance()
         should_animate = (
             app is not None
@@ -692,22 +691,13 @@ class Window(QMainWindow):
             and self.height() > 0
             and CONFIG.get("mode") != mode
         )
+        old_snapshot = None
+        reveal_origin = None
         if should_animate:
-            # Remove an in-flight reveal before taking the next snapshot. This
-            # makes rapid theme toggles restart from the currently applied theme.
+            # Hide any previous reveal before sampling the live old-theme UI.
             self._cancel_theme_reveal()
-            snapshot = self.grab()
-            if not snapshot.isNull():
-                overlay = CircularThemeReveal(
-                    self, snapshot, self._theme_reveal_origin(), duration_ms=460
-                )
-                overlay.setGeometry(self.rect())
-                overlay.finished.connect(
-                    lambda current=overlay: self._finish_theme_reveal(current)
-                )
-                self._theme_reveal = overlay
-                overlay.show()
-                overlay.raise_()
+            old_snapshot = self.grab()
+            reveal_origin = self._theme_reveal_origin()
 
         CONFIG["mode"] = mode
         palette = DarkPalette() if mode == "dark" else LightPalette()
@@ -729,8 +719,28 @@ class Window(QMainWindow):
             if callable(apply_theme):
                 apply_theme(mode)
         self._apply_shell_styles()
-        if overlay is not None:
-            overlay.start()
+
+        # Capture the actual widgets after the new palette and all page-local
+        # styles have been applied. The reveal composes two opaque UI frames,
+        # so it never depends on transparent-window behavior or a black fill.
+        if should_animate and old_snapshot is not None and not old_snapshot.isNull():
+            new_snapshot = self.grab()
+            if not new_snapshot.isNull():
+                overlay = CircularThemeReveal(
+                    self,
+                    old_snapshot,
+                    new_snapshot,
+                    reveal_origin,
+                    duration_ms=460,
+                )
+                overlay.setGeometry(self.rect())
+                overlay.finished.connect(
+                    lambda current=overlay: self._finish_theme_reveal(current)
+                )
+                self._theme_reveal = overlay
+                overlay.show()
+                overlay.raise_()
+                overlay.start()
 
     def _toggle_theme(self):
         self._set_theme("light" if CONFIG["mode"] == "dark" else "dark")

@@ -1,4 +1,4 @@
-"""Circular reveal transition used when switching the application color theme."""
+"""Opaque two-frame circular reveal for the application's color-theme transition."""
 from __future__ import annotations
 
 import math
@@ -12,35 +12,41 @@ from PySide6.QtCore import (
     QVariantAnimation,
     Signal,
 )
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPixmap
+from PySide6.QtGui import QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import QWidget
 
 
 class CircularThemeReveal(QWidget):
-    """Keep old widget pixels outside a circle, revealing newly themed widgets beneath."""
+    """Reveal a new widget snapshot inside a growing circle over the old snapshot.
+
+    Both frames are opaque pixmaps captured from the real widget tree. Drawing the
+    new frame underneath and clipping the old frame outside the circle makes the
+    individual widgets themselves change as the circular reveal passes over them.
+    It does not rely on translucent child-window composition.
+    """
 
     finished = Signal()
 
     def __init__(
         self,
         parent: QWidget,
-        snapshot: QPixmap,
+        old_snapshot: QPixmap,
+        new_snapshot: QPixmap,
         center,
         duration_ms: int = 460,
     ) -> None:
         super().__init__(parent)
-        self._snapshot = snapshot
+        self._old_snapshot = old_snapshot
+        self._new_snapshot = new_snapshot
         self._center = QPointF(center)
         self._radius = 0.0
         self._duration_ms = max(1, int(duration_ms))
 
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
         self.setAutoFillBackground(False)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.setStyleSheet("background-color: transparent; border: none;")
+        self.setStyleSheet("border: none;")
         self.setGeometry(parent.rect())
         parent.installEventFilter(self)
 
@@ -101,13 +107,10 @@ class CircularThemeReveal(QWidget):
         if not painter.isActive():
             return
 
-        # This widget is an old-frame snapshot, not a color wash. Leave a
-        # transparent circular hole in the snapshot so the actual new-themed
-        # widget tree underneath is exposed as the circle expands.
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
-        painter.fillRect(self.rect(), QColor(0, 0, 0, 0))
-        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+        # The base layer is always the actual new-theme UI frame and is fully
+        # opaque. The old frame is drawn over it only outside the reveal circle.
+        painter.drawPixmap(self.rect(), self._new_snapshot)
 
         old_frame_region = QPainterPath()
         old_frame_region.addRect(self.rect())
@@ -117,5 +120,5 @@ class CircularThemeReveal(QWidget):
             old_frame_region = old_frame_region.subtracted(reveal_region)
 
         painter.setClipPath(old_frame_region)
-        painter.drawPixmap(self.rect(), self._snapshot)
+        painter.drawPixmap(self.rect(), self._old_snapshot)
         painter.end()
