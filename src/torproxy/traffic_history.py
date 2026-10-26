@@ -7,8 +7,8 @@ import os
 import sqlite3
 import threading
 import time
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Mapping
 
 from torproxy.paths import user_directories
 
