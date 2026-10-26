@@ -20,6 +20,7 @@ from qdarkstyle.dark.palette import DarkPalette
 from qdarkstyle.light.palette import LightPalette
 from PySide6.QtCore import QEvent, QTimer, Qt, Signal, QSize, QPoint
 import qtawesome as qta
+from ui_.window.theme_transition import CircularThemeReveal
 from utils import resource_path
 import logging
 from config import CONFIG, IS_WINDOWS
@@ -658,13 +659,60 @@ class Window(QMainWindow):
             "A running local HTTP proxy alone is not shown as Tor-ready."
         )
 
+    def _theme_reveal_origin(self):
+        """Choose the pointer position as the reveal origin, with a safe fallback."""
+        pointer = self.mapFromGlobal(QCursor.pos())
+        if self.rect().contains(pointer):
+            return pointer
+        toggle = getattr(self, "toggle_btn", None)
+        if toggle is not None:
+            return toggle.mapTo(self, toggle.rect().center())
+        return self.rect().center()
+
+    def _cancel_theme_reveal(self):
+        overlay = getattr(self, "_theme_reveal", None)
+        self._theme_reveal = None
+        if overlay is not None:
+            overlay.cancel()
+
+    def _finish_theme_reveal(self, overlay):
+        if getattr(self, "_theme_reveal", None) is overlay:
+            self._theme_reveal = None
+
     def _set_theme(self, mode):
         if mode not in {"dark", "light"}:
             return
-        CONFIG["mode"] = mode
+
+        overlay = None
         app = QApplication.instance()
+        should_animate = (
+            app is not None
+            and self.isVisible()
+            and self.width() > 0
+            and self.height() > 0
+            and CONFIG.get("mode") != mode
+        )
+        if should_animate:
+            # Remove an in-flight reveal before taking the next snapshot. This
+            # makes rapid theme toggles restart from the currently applied theme.
+            self._cancel_theme_reveal()
+            snapshot = self.grab()
+            if not snapshot.isNull():
+                overlay = CircularThemeReveal(
+                    self, snapshot, self._theme_reveal_origin(), duration_ms=460
+                )
+                overlay.setGeometry(self.rect())
+                overlay.finished.connect(
+                    lambda current=overlay: self._finish_theme_reveal(current)
+                )
+                self._theme_reveal = overlay
+                overlay.show()
+                overlay.raise_()
+
+        CONFIG["mode"] = mode
         palette = DarkPalette() if mode == "dark" else LightPalette()
-        app.setStyleSheet(qdarkstyle.load_stylesheet(palette=palette))
+        if app is not None:
+            app.setStyleSheet(qdarkstyle.load_stylesheet(palette=palette))
         if hasattr(self, "settingWidget"):
             sync_theme = getattr(self.settingWidget, "set_theme_mode", None)
             if callable(sync_theme):
@@ -681,6 +729,8 @@ class Window(QMainWindow):
             if callable(apply_theme):
                 apply_theme(mode)
         self._apply_shell_styles()
+        if overlay is not None:
+            overlay.start()
 
     def _toggle_theme(self):
         self._set_theme("light" if CONFIG["mode"] == "dark" else "dark")

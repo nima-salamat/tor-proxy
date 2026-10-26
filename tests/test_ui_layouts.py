@@ -867,3 +867,61 @@ def test_qr_scan_canvas_paints_frame_and_marker_in_shared_geometry():
     assert "QPixmap" not in source
     assert "def set_detected(self, corners, source_size)" in source
     assert "self._timer.stop()" in source
+
+
+def test_circular_theme_reveal_transparently_reveals_the_new_theme(qt_app):
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtGui import QColor, QPixmap
+    from PySide6.QtWidgets import QWidget
+
+    from ui_.window.theme_transition import CircularThemeReveal
+
+    parent = QWidget()
+    parent.resize(120, 80)
+    parent.setStyleSheet("background-color: rgb(0, 0, 255);")
+    parent.show()
+
+    snapshot = QPixmap(parent.size())
+    snapshot.fill(QColor("red"))
+    transition = CircularThemeReveal(
+        parent, snapshot, QPoint(10, 12), duration_ms=400
+    )
+    transition.setGeometry(parent.rect())
+    transition.show()
+    transition._set_radius(0)
+    qt_app.processEvents()
+
+    assert transition.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+    assert transition._animation.duration() == 400
+    old_frame = transition.grab().toImage()
+    outside = old_frame.pixelColor(100, 60)
+    assert outside.alpha() > 240
+    assert outside.red() > 240
+    assert outside.blue() < 20
+
+    transition._set_radius(1000)
+    qt_app.processEvents()
+    revealed_frame = transition.grab().toImage()
+    revealed = revealed_frame.pixelColor(10, 12)
+    assert revealed.alpha() < 10
+
+    transition.cancel()
+    parent.close()
+    parent.deleteLater()
+    qt_app.processEvents()
+
+
+def test_main_window_theme_changes_use_circular_reveal_for_visible_mode_switches():
+    repository = Path(__file__).resolve().parents[1]
+    ui_source = (repository / "ui.py").read_text(encoding="utf-8")
+    transition_source = (
+        repository / "ui_/window/theme_transition.py"
+    ).read_text(encoding="utf-8")
+
+    assert "CircularThemeReveal(" in ui_source
+    assert "self._theme_reveal_origin()" in ui_source
+    assert "overlay.start()" in ui_source
+    assert "QVariantAnimation" in transition_source
+    assert "CompositionMode_Clear" in transition_source
+    assert "WA_TransparentForMouseEvents" in transition_source
+
