@@ -283,8 +283,8 @@ class StatisticsWindow(QWidget):
         metric_specs = (
             ("lifetime", "TOTAL TRAFFIC", "All-time total · persisted"),
             ("session", "THIS RUN", "Since this app started"),
-            ("upload", "UPLOADED", "All-time total · saved in SQLite"),
-            ("download", "DOWNLOADED", "All-time total · saved in SQLite"),
+            ("upload", "UPLOADED", "Tracked since history was enabled"),
+            ("download", "DOWNLOADED", "Tracked since history was enabled"),
             ("current", "CURRENT RATE", "Approximate · 1-second samples"),
             ("peak", "PEAK RATE", "Highest observed this run"),
         )
@@ -344,8 +344,9 @@ class StatisticsWindow(QWidget):
         root.addLayout(charts, 1)
 
         self.data_note = QLabel(
-            "All-time total and directional totals are persisted in SQLite. Minute-level history is kept "
-            "for up to 180 days; live rate and peak reset each launch. This is not a system-wide network meter."
+            "The legacy all-time total is preserved; directional totals and minute history start with this version. "
+            "Minute-level history is kept for up to 180 days; live rate and peak reset each launch. "
+            "This is not a system-wide network meter."
         )
         self.data_note.setObjectName("statisticsNote")
         self.data_note.setWordWrap(True)
