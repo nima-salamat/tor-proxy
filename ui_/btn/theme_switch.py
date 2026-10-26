@@ -37,6 +37,7 @@ class ThemeSwitch(QWidget):
             for mode, icon in self._icons.items()
         }
         self._press_position = None
+        self._drag_offset_x = 0.0
         self._pressed_thumb = False
         self._dragging = False
         self._animation = QVariantAnimation(self)
@@ -196,7 +197,13 @@ class ThemeSwitch(QWidget):
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             self._press_position = event.position()
-            self._pressed_thumb = self._thumb_rect().contains(event.position())
+            thumb_rect = self._thumb_rect()
+            self._pressed_thumb = thumb_rect.contains(event.position())
+            self._drag_offset_x = (
+                event.position().x() - thumb_rect.center().x()
+                if self._pressed_thumb
+                else 0.0
+            )
             self._dragging = False
             if self._pressed_thumb:
                 # Stop the current settle animation so the pointer owns the thumb.
@@ -213,7 +220,9 @@ class ThemeSwitch(QWidget):
             if not self._dragging and (abs(delta.x()) >= 3 or abs(delta.y()) >= 3):
                 self._dragging = True
             if self._dragging:
-                self._set_progress_from_drag(self._progress_from_pointer(position.x()))
+                self._set_progress_from_drag(
+                    self._progress_from_pointer(position.x() - self._drag_offset_x)
+                )
                 event.accept()
                 return
         super().mouseMoveEvent(event)
@@ -223,12 +232,15 @@ class ThemeSwitch(QWidget):
             was_dragging = self._dragging
             was_thumb_press = self._pressed_thumb
             if was_dragging:
-                self._set_progress_from_drag(self._progress_from_pointer(event.position().x()))
+                self._set_progress_from_drag(
+                    self._progress_from_pointer(event.position().x() - self._drag_offset_x)
+                )
                 self._settle_after_drag()
             else:
                 # A short press on the thumb or track remains an ordinary toggle.
                 self.toggle()
             self._press_position = None
+            self._drag_offset_x = 0.0
             self._pressed_thumb = False
             self._dragging = False
             event.accept()
