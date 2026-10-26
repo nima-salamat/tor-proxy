@@ -235,9 +235,9 @@ class UpdaterWindow(QWidget):
         machine = platform.machine() or "unknown CPU"
         return "This device: {} · {} · signed Expert Bundles only".format(os_name, machine)
 
-    def _apply_local_styles(self) -> None:
+    def _apply_local_styles(self, mode: str | None = None) -> None:
         """Compact bundle-manager styles with high-contrast controls in both themes."""
-        dark = CONFIG["mode"] == "dark"
+        dark = (mode or CONFIG["mode"]) == "dark"
         accent = "#3daee9" if dark else "#287db5"
         border = "#414a56" if dark else "#d5dbe2"
         surface = "#20252b" if dark else "#ffffff"

@@ -5,13 +5,16 @@ import qtawesome as qta
 from PySide6.QtCore import (
     QAbstractAnimation,
     QEasingCurve,
+    QEvent,
+    QPointF,
     QRect,
     QRectF,
+    QSize,
     Qt,
     Signal,
     QVariantAnimation,
 )
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtGui import QColor, QMouseEvent, QPainter
 from PySide6.QtWidgets import QWidget
 
 
@@ -29,6 +32,15 @@ class ThemeSwitch(QWidget):
             "dark": qta.icon("fa6s.moon", color="#263449"),
             "light": qta.icon("fa6s.sun", color="#c07a16"),
         }
+        # Force QtAwesome's first SVG/icon-engine render during widget setup.
+        # Otherwise the first animated frame may pay the lazy-rendering cost.
+        self._warm_icon_pixmaps = {
+            mode: icon.pixmap(QSize(18, 18))
+            for mode, icon in self._icons.items()
+        }
+        self._press_position = None
+        self._pressed_thumb = False
+        self._dragging = False
         self._animation = QVariantAnimation(self)
         self._animation.setDuration(220)
         self._animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
@@ -49,6 +61,54 @@ class ThemeSwitch(QWidget):
     @property
     def is_animating(self) -> bool:
         return self._animation.state() == QAbstractAnimation.State.Running
+
+    @property
+    def is_interacting(self) -> bool:
+        """True while the thumb is sliding or being dragged by the pointer."""
+        return self.is_animating or self._dragging or self._pressed_thumb
+
+    def _thumb_geometry(self):
+        diameter = 30
+        left = 5
+        right = self.width() - diameter - 5
+        y = (self.height() - diameter) / 2
+        return diameter, left, right, y
+
+    def _thumb_rect(self) -> QRectF:
+        diameter, left, right, y = self._thumb_geometry()
+        x = left + (right - left) * self._thumb_progress
+        return QRectF(x, y, diameter, diameter)
+
+    def _progress_from_pointer(self, x: float) -> float:
+        diameter, left, right, _y = self._thumb_geometry()
+        center_at_left = left + diameter / 2
+        center_at_right = right + diameter / 2
+        span = max(1.0, center_at_right - center_at_left)
+        return max(0.0, min(1.0, (float(x) - center_at_left) / span))
+
+    def _set_progress_from_drag(self, progress: float) -> None:
+        self._thumb_progress = max(0.0, min(1.0, float(progress)))
+        target_mode = "light" if self._thumb_progress >= 0.5 else "dark"
+        self.update()
+        if target_mode != self._mode:
+            self._mode = target_mode
+            self._deferred_mode = None
+            self.setAccessibleDescription("Dark theme" if target_mode == "dark" else "Light theme")
+            self.update()
+            # Emit only when the pointer crosses the middle of the track.
+            self.modeChanged.emit(target_mode)
+
+    def _settle_after_drag(self) -> None:
+        target = 1.0 if self._mode == "light" else 0.0
+        self._deferred_mode = None
+        self._animation.stop()
+        if abs(self._thumb_progress - target) <= 0.005:
+            self._thumb_progress = target
+            self.update()
+            return
+        self._animation.setStartValue(self._thumb_progress)
+        self._animation.setEndValue(target)
+        self._animation.start()
 
     def set_mode(self, mode: str, *, animate: bool = False) -> None:
         """Synchronize a mode chosen elsewhere; clicked changes commit at mid-slide."""
@@ -137,10 +197,45 @@ class ThemeSwitch(QWidget):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            self.toggle()
+            self._press_position = event.position()
+            self._pressed_thumb = self._thumb_rect().contains(event.position())
+            self._dragging = False
+            if self._pressed_thumb:
+                # Stop the current settle animation so the pointer owns the thumb.
+                self._animation.stop()
+                self._deferred_mode = None
             event.accept()
             return
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._pressed_thumb and self._press_position is not None:
+            position = event.position()
+            delta = position - self._press_position
+            if not self._dragging and (abs(delta.x()) >= 3 or abs(delta.y()) >= 3):
+                self._dragging = True
+            if self._dragging:
+                self._set_progress_from_drag(self._progress_from_pointer(position.x()))
+                event.accept()
+                return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._press_position is not None:
+            was_dragging = self._dragging
+            was_thumb_press = self._pressed_thumb
+            if was_dragging:
+                self._set_progress_from_drag(self._progress_from_pointer(event.position().x()))
+                self._settle_after_drag()
+            else:
+                # A short press on the thumb or track remains an ordinary toggle.
+                self.toggle()
+            self._press_position = None
+            self._pressed_thumb = False
+            self._dragging = False
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter):
@@ -159,15 +254,17 @@ class ThemeSwitch(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setPen(border)
         painter.setBrush(track)
-        # A rounded-rectangle track rather than a full ellipse keeps the
-        # contemporary soft-capsule look while preserving clear end stops.
-        painter.drawRoundedRect(QRectF(1, 1, self.width() - 2, self.height() - 2), 13, 13)
+        # Match each end cap's radius to half the track height for a true
+        # pill track. The thumb's end positions align with the cap centers.
+        track_radius = (self.height() - 2) / 2
+        painter.drawRoundedRect(
+            QRectF(1, 1, self.width() - 2, self.height() - 2),
+            track_radius,
+            track_radius,
+        )
 
-        diameter = 30
-        left = 5
-        right = self.width() - diameter - 5
+        diameter, left, right, y = self._thumb_geometry()
         x = left + (right - left) * self._thumb_progress
-        y = (self.height() - diameter) / 2
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(thumb)
         painter.drawEllipse(QRectF(x, y, diameter, diameter))

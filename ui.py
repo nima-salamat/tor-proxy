@@ -102,9 +102,9 @@ class Window(QMainWindow):
         self._state_timer.start()
         self._update_global_state()
         self._set_theme(CONFIG["mode"])
-        # Prepare the other palette before the user reaches the theme switch.
-        # This keeps QDarkStyle's first stylesheet generation out of the click path.
-        QTimer.singleShot(0, self._prewarm_theme_stylesheets)
+        # Warm the alternate look while the top-level window is still hidden.
+        # This moves lazy QSS parsing and child-widget repolishing out of the first click.
+        self._prewarm_theme_stylesheets()
 
         self._exit_authorized = False
         self.tray_icon = QSystemTrayIcon(self)
@@ -548,8 +548,8 @@ class Window(QMainWindow):
         empty = self.notifications_menu.addAction("No notifications")
         empty.setEnabled(False)
 
-    def _apply_shell_styles(self):
-        dark = CONFIG["mode"] == "dark"
+    def _apply_shell_styles(self, mode=None):
+        dark = (mode or CONFIG["mode"]) == "dark"
         border = "#3b4552" if dark else "#d7dee7"
         surface = "#272c33" if dark else "#ffffff"
         menu_surface = "#202630" if dark else "#edf1f6"
@@ -676,8 +676,38 @@ class Window(QMainWindow):
         )
 
     def _prewarm_theme_stylesheets(self):
-        for mode in ("dark", "light"):
-            _theme_stylesheet(mode)
+        """Prime both theme styles against the hidden widget tree before first use."""
+        app = QApplication.instance()
+        if app is None:
+            return
+
+        active_mode = CONFIG.get("mode", "dark")
+        alternate_mode = "light" if active_mode == "dark" else "dark"
+        _theme_stylesheet(active_mode)
+        _theme_stylesheet(alternate_mode)
+
+        try:
+            app.setStyleSheet(_theme_stylesheet(alternate_mode))
+            self._apply_local_theme_styles(alternate_mode)
+        except Exception:
+            logger.debug("Could not prewarm the alternate theme.", exc_info=True)
+        finally:
+            app.setStyleSheet(_theme_stylesheet(active_mode))
+            self._apply_local_theme_styles(active_mode)
+
+    def _apply_local_theme_styles(self, mode):
+        if hasattr(self, "updater_window"):
+            self.updater_window._apply_local_styles(mode)
+        for page in (
+            getattr(self, "settingWidget", None),
+            getattr(self, "block_host_window", None),
+            getattr(self, "exclude_host_window", None),
+            getattr(self, "shortcutsWidget", None),
+        ):
+            apply_theme = getattr(page, "apply_theme", None)
+            if callable(apply_theme):
+                apply_theme(mode)
+        self._apply_shell_styles(mode)
 
     def _theme_reveal_origin(self):
         """Choose the pointer position as the reveal origin, with a safe fallback."""
@@ -726,18 +756,7 @@ class Window(QMainWindow):
             sync_theme = getattr(self.settingWidget, "set_theme_mode", None)
             if callable(sync_theme):
                 sync_theme(mode)
-        if hasattr(self, "updater_window"):
-            self.updater_window._apply_local_styles()
-        for page in (
-            getattr(self, "settingWidget", None),
-            getattr(self, "block_host_window", None),
-            getattr(self, "exclude_host_window", None),
-            getattr(self, "shortcutsWidget", None),
-        ):
-            apply_theme = getattr(page, "apply_theme", None)
-            if callable(apply_theme):
-                apply_theme(mode)
-        self._apply_shell_styles()
+        self._apply_local_theme_styles(mode)
 
         # Capture the actual widgets after the new palette and all page-local
         # styles have been applied. Keep the Settings switch live above the frozen
@@ -748,7 +767,7 @@ class Window(QMainWindow):
                 setting_switch = getattr(self.settingWidget, "theme_switch", None)
                 live_widgets = (
                     (setting_switch,)
-                    if setting_switch is not None and setting_switch.is_animating
+                    if setting_switch is not None and setting_switch.is_interacting
                     else ()
                 )
                 overlay = CircularThemeReveal(

@@ -486,6 +486,92 @@ def test_tray_menu_is_custom_anchored_above_tray_icon():
     assert "proxy_mode_combo.currentIndexChanged.connect(self._sync_tray_system_proxy_actions)" in source
 
 
+def test_theme_switch_thumb_can_be_dragged_in_both_directions(qt_app):
+    pytest.importorskip("qtawesome")
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+    from ui_.btn.theme_switch import ThemeSwitch
+
+    switch = ThemeSwitch("dark")
+    emitted = []
+    switch.modeChanged.connect(emitted.append)
+
+    press = QMouseEvent(
+        QEvent.Type.MouseButtonPress,
+        QPointF(20, 20),
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    switch.mousePressEvent(press)
+    assert switch._pressed_thumb
+
+    move_right = QMouseEvent(
+        QEvent.Type.MouseMove,
+        QPointF(55, 20),
+        Qt.MouseButton.NoButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    switch.mouseMoveEvent(move_right)
+    assert switch._dragging
+    assert switch._thumb_progress > 0.5
+    assert switch.mode == "light"
+    assert emitted == ["light"]
+
+    move_left = QMouseEvent(
+        QEvent.Type.MouseMove,
+        QPointF(25, 20),
+        Qt.MouseButton.NoButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    switch.mouseMoveEvent(move_left)
+    assert switch._thumb_progress < 0.5
+    assert switch.mode == "dark"
+    assert emitted == ["light", "dark"]
+
+    move_right_again = QMouseEvent(
+        QEvent.Type.MouseMove,
+        QPointF(70, 20),
+        Qt.MouseButton.NoButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    switch.mouseMoveEvent(move_right_again)
+    release = QMouseEvent(
+        QEvent.Type.MouseButtonRelease,
+        QPointF(70, 20),
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    switch.mouseReleaseEvent(release)
+    assert switch.mode == "light"
+    assert emitted == ["light", "dark", "light"]
+    assert switch.is_animating
+    switch._animation.setCurrentTime(switch._animation.duration())
+    assert switch._thumb_progress == 1.0
+
+    switch.deleteLater()
+    qt_app.processEvents()
+
+
+def test_theme_switch_track_is_a_full_capsule_and_prewarms_the_alternate_theme():
+    repository = Path(__file__).resolve().parents[1]
+    switch_source = (repository / "ui_/btn/theme_switch.py").read_text(encoding="utf-8")
+    ui_source = (repository / "ui.py").read_text(encoding="utf-8")
+
+    assert "track_radius = (self.height() - 2) / 2" in switch_source
+    assert "self._progress_from_pointer(position.x())" in switch_source
+    assert "def mouseMoveEvent(self, event)" in switch_source
+    assert "def mouseReleaseEvent(self, event)" in switch_source
+    assert "self._warm_icon_pixmaps" in switch_source
+    assert "self._prewarm_theme_stylesheets()" in ui_source
+    assert "self._apply_local_theme_styles(alternate_mode)" in ui_source
+    assert "QTimer.singleShot(0, self._prewarm_theme_stylesheets)" not in ui_source
+
+
 def test_theme_reveal_keeps_the_settings_switch_live_during_the_transition():
     repository = Path(__file__).resolve().parents[1]
     switch_source = (repository / "ui_/btn/theme_switch.py").read_text(encoding="utf-8")
@@ -499,6 +585,7 @@ def test_theme_reveal_keeps_the_settings_switch_live_during_the_transition():
     assert "live_widgets=live_widgets" in theme_source
     assert "widget.render(" in transition_source
     assert "self._live_widgets" in transition_source
+    assert "setting_switch.is_interacting" in theme_source
 
 
 def test_theme_switch_uses_centered_dpi_aware_icon_painting():
