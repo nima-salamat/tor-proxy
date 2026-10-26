@@ -1077,8 +1077,8 @@ def test_main_window_theme_changes_use_circular_reveal_for_visible_mode_switches
     assert "painter.drawPixmap(self.rect(), self._new_snapshot)" in transition_source
     assert "painter.drawPixmap(self.rect(), self._old_snapshot)" in transition_source
     assert "old_frame_region.subtracted(reveal_region)" not in transition_source
-    assert "def _prewarm_theme_stylesheets(self)" in theme_source
-    assert "_THEME_STYLESHEET_CACHE" in theme_source
+    assert "def _prewarm_theme_stylesheets(self)" in ui_source
+    assert "_THEME_STYLESHEET_CACHE" in ui_source
     assert "does not rely on translucent child-window composition" in transition_source
     assert "WA_TransparentForMouseEvents" in transition_source
 
