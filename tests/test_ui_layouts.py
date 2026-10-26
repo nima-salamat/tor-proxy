@@ -926,6 +926,7 @@ def test_main_window_theme_changes_use_circular_reveal_for_visible_mode_switches
     assert "overlay.start()" in ui_source
     assert "QVariantAnimation" in transition_source
     assert "old_frame_region.subtracted(reveal_region)" in transition_source
-    assert "actual new-themed widget tree underneath" in transition_source
+    assert "painter.setClipPath(old_frame_region)" in transition_source
+    assert "painter.drawPixmap(self.rect(), self._snapshot)" in transition_source
     assert "WA_TransparentForMouseEvents" in transition_source
 
