@@ -7,7 +7,9 @@ from PySide6.QtCore import (
     QAbstractAnimation,
     QEvent,
     QEasingCurve,
+    QPoint,
     QPointF,
+    QRegion,
     Qt,
     QVariantAnimation,
     Signal,
@@ -34,6 +36,7 @@ class CircularThemeReveal(QWidget):
         new_snapshot: QPixmap,
         center,
         duration_ms: int = 460,
+        live_widgets=(),
     ) -> None:
         super().__init__(parent)
         self._old_snapshot = old_snapshot
@@ -41,6 +44,7 @@ class CircularThemeReveal(QWidget):
         self._center = QPointF(center)
         self._radius = 0.0
         self._duration_ms = max(1, int(duration_ms))
+        self._live_widgets = tuple(widget for widget in live_widgets if widget is not None)
 
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
@@ -121,4 +125,19 @@ class CircularThemeReveal(QWidget):
 
         painter.setClipPath(old_frame_region)
         painter.drawPixmap(self.rect(), self._old_snapshot)
+        painter.setClipping(False)
+
+        # Keep interactive animated controls live above the two frozen window
+        # snapshots. This lets the Settings thumb continue moving while the
+        # circular theme reveal passes behind it.
+        for widget in self._live_widgets:
+            if not widget.isVisible():
+                continue
+            offset = widget.mapTo(self.parentWidget(), QPoint(0, 0))
+            widget.render(
+                painter,
+                offset,
+                QRegion(),
+                QWidget.RenderFlag.DrawWindowBackground | QWidget.RenderFlag.DrawChildren,
+            )
         painter.end()

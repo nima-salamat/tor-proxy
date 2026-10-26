@@ -368,7 +368,7 @@ def test_theme_switch_is_animated_and_exit_confirmation_is_persistent():
     assert 'self.chk_confirm_exit.setChecked(bool(CONFIG["confirm_exit"]))' in settings_source
     assert 'CONFIG["confirm_exit"] = enabled' in settings_source
     assert 'self.theme_switch.modeChanged.connect(self.change_mode)' in settings_source
-    assert 'self._animation.setDuration(180)' in switch_source
+    assert 'self._animation.setDuration(220)' in switch_source
     assert 'qta.icon(icon_name, color=icon_color)' in switch_source
     assert 'class ExitConfirmDialog(MessageDialog)' in dialog_source
     assert '"Don\'t ask me again"' in dialog_source
@@ -409,8 +409,9 @@ def test_primary_navigation_uses_slightly_larger_text_and_icons():
 
 
 
-def test_theme_switch_changes_its_mode_and_emits_the_new_mode(qt_app):
+def test_theme_switch_changes_mode_and_emits_only_at_mid_slide(qt_app):
     pytest.importorskip("qtawesome")
+    from PySide6.QtCore import QAbstractAnimation
     from ui_.btn.theme_switch import ThemeSwitch
 
     switch = ThemeSwitch("dark")
@@ -418,7 +419,19 @@ def test_theme_switch_changes_its_mode_and_emits_the_new_mode(qt_app):
     switch.modeChanged.connect(emitted.append)
 
     switch.toggle()
+    assert switch.mode == "dark"
+    assert emitted == []
+    assert switch.is_animating
+    assert switch._thumb_progress < 0.5
+
+    switch._animation.setCurrentTime(switch._animation.duration() // 2)
     assert switch.mode == "light"
+    assert emitted == ["light"]
+    assert 0.0 < switch._thumb_progress < 1.0
+    assert switch._animation.state() == QAbstractAnimation.State.Running
+
+    switch._animation.setCurrentTime(switch._animation.duration())
+    assert switch._thumb_progress == 1.0
     assert emitted == ["light"]
 
     switch.set_mode("dark")
@@ -469,6 +482,21 @@ def test_tray_menu_is_custom_anchored_above_tray_icon():
     assert "self._set_tray_system_proxy_mode(selected_mode)" in source
     assert "def _sync_tray_system_proxy_actions(self, *_args)" in source
     assert "proxy_mode_combo.currentIndexChanged.connect(self._sync_tray_system_proxy_actions)" in source
+
+
+def test_theme_reveal_keeps_the_settings_switch_live_during_the_transition():
+    repository = Path(__file__).resolve().parents[1]
+    switch_source = (repository / "ui_/btn/theme_switch.py").read_text(encoding="utf-8")
+    theme_source = (repository / "ui.py").read_text(encoding="utf-8")
+    transition_source = (
+        repository / "ui_/window/theme_transition.py"
+    ).read_text(encoding="utf-8")
+
+    assert "self._animation.currentTime() >= self._animation.duration() / 2" in switch_source
+    assert "self.modeChanged.emit(mode)" in switch_source
+    assert "live_widgets=live_widgets" in theme_source
+    assert "widget.render(" in transition_source
+    assert "self._live_widgets" in transition_source
 
 
 def test_theme_switch_uses_centered_dpi_aware_icon_painting():
@@ -879,13 +907,22 @@ def test_circular_theme_reveal_transitions_between_opaque_widget_frames(qt_app):
     parent = QWidget()
     parent.resize(120, 80)
     parent.show()
+    live_widget = QWidget(parent)
+    live_widget.setGeometry(70, 30, 30, 24)
+    live_widget.setStyleSheet("background-color: rgb(0, 255, 0);")
+    live_widget.show()
 
     old_snapshot = QPixmap(parent.size())
     old_snapshot.fill(QColor("red"))
     new_snapshot = QPixmap(parent.size())
     new_snapshot.fill(QColor("blue"))
     transition = CircularThemeReveal(
-        parent, old_snapshot, new_snapshot, QPoint(10, 12), duration_ms=400
+        parent,
+        old_snapshot,
+        new_snapshot,
+        QPoint(10, 12),
+        duration_ms=400,
+        live_widgets=(live_widget,),
     )
     transition.setGeometry(parent.rect())
     transition.show()
@@ -900,6 +937,9 @@ def test_circular_theme_reveal_transitions_between_opaque_widget_frames(qt_app):
     assert outside.alpha() > 240
     assert outside.red() > 240
     assert outside.blue() < 20
+    live_pixel = old_frame.pixelColor(80, 40)
+    assert live_pixel.green() > 240
+    assert live_pixel.red() < 20
 
     transition._set_radius(8)
     qt_app.processEvents()
@@ -911,6 +951,13 @@ def test_circular_theme_reveal_transitions_between_opaque_widget_frames(qt_app):
     assert revealed.red() < 20
     assert outside_during_animation.red() > 240
     assert outside_during_animation.blue() < 20
+    live_widget.setStyleSheet("background-color: rgb(255, 255, 0);")
+    qt_app.processEvents()
+    live_frame = transition.grab().toImage()
+    updated_live_pixel = live_frame.pixelColor(80, 40)
+    assert updated_live_pixel.red() > 240
+    assert updated_live_pixel.green() > 240
+    assert updated_live_pixel.blue() < 20
 
     transition._set_radius(1000)
     qt_app.processEvents()

@@ -721,17 +721,24 @@ class Window(QMainWindow):
         self._apply_shell_styles()
 
         # Capture the actual widgets after the new palette and all page-local
-        # styles have been applied. The reveal composes two opaque UI frames,
-        # so it never depends on transparent-window behavior or a black fill.
+        # styles have been applied. Keep the Settings switch live above the frozen
+        # snapshots when its thumb is still animating at the midpoint trigger.
         if should_animate and old_snapshot is not None and not old_snapshot.isNull():
             new_snapshot = self.grab()
             if not new_snapshot.isNull():
+                setting_switch = getattr(self.settingWidget, "theme_switch", None)
+                live_widgets = (
+                    (setting_switch,)
+                    if setting_switch is not None and setting_switch.is_animating
+                    else ()
+                )
                 overlay = CircularThemeReveal(
                     self,
                     old_snapshot,
                     new_snapshot,
                     reveal_origin,
                     duration_ms=460,
+                    live_widgets=live_widgets,
                 )
                 overlay.setGeometry(self.rect())
                 overlay.finished.connect(
