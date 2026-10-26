@@ -369,7 +369,9 @@ def test_theme_switch_is_animated_and_exit_confirmation_is_persistent():
     assert 'CONFIG["confirm_exit"] = enabled' in settings_source
     assert 'self.theme_switch.modeChanged.connect(self.change_mode)' in settings_source
     assert 'self._animation.setDuration(220)' in switch_source
-    assert 'qta.icon(icon_name, color=icon_color)' in switch_source
+    assert 'self._icons = {' in switch_source
+    assert 'icon = self._icons[self._mode]' in switch_source
+    assert 'qta.icon(icon_name, color=icon_color)' not in switch_source
     assert 'class ExitConfirmDialog(MessageDialog)' in dialog_source
     assert '"Don\'t ask me again"' in dialog_source
     assert 'self._exit_authorized = True' in ui_source
@@ -984,10 +986,12 @@ def test_main_window_theme_changes_use_circular_reveal_for_visible_mode_switches
     assert "self._theme_reveal_origin()" in ui_source
     assert "overlay.start()" in ui_source
     assert "QVariantAnimation" in transition_source
-    assert "old_frame_region.subtracted(reveal_region)" in transition_source
-    assert "painter.setClipPath(old_frame_region)" in transition_source
+    assert "painter.setClipPath(reveal_region)" in transition_source
     assert "painter.drawPixmap(self.rect(), self._new_snapshot)" in transition_source
     assert "painter.drawPixmap(self.rect(), self._old_snapshot)" in transition_source
+    assert "old_frame_region.subtracted(reveal_region)" not in transition_source
+    assert "def _prewarm_theme_stylesheets(self)" in theme_source
+    assert "_THEME_STYLESHEET_CACHE" in theme_source
     assert "does not rely on translucent child-window composition" in transition_source
     assert "WA_TransparentForMouseEvents" in transition_source
 

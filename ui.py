@@ -36,6 +36,19 @@ from ui_.window.dialogs import QMessageBox, ExitConfirmDialog
 from ui_.window.shortcuts_window import ShortcutsWindow
 logger = logging.getLogger(__name__)
 
+_THEME_STYLESHEET_CACHE = {}
+
+
+def _theme_stylesheet(mode):
+    """Build each QDarkStyle stylesheet once, outside the first theme interaction."""
+    cached = _THEME_STYLESHEET_CACHE.get(mode)
+    if cached is None:
+        palette = DarkPalette() if mode == "dark" else LightPalette()
+        cached = qdarkstyle.load_stylesheet(palette=palette)
+        _THEME_STYLESHEET_CACHE[mode] = cached
+    return cached
+
+
 class Window(QMainWindow):
     toggle_visibility_signal = Signal()
     hotkey_error_signal = Signal(str)
@@ -89,6 +102,9 @@ class Window(QMainWindow):
         self._state_timer.start()
         self._update_global_state()
         self._set_theme(CONFIG["mode"])
+        # Prepare the other palette before the user reaches the theme switch.
+        # This keeps QDarkStyle's first stylesheet generation out of the click path.
+        QTimer.singleShot(0, self._prewarm_theme_stylesheets)
 
         self._exit_authorized = False
         self.tray_icon = QSystemTrayIcon(self)
@@ -659,6 +675,10 @@ class Window(QMainWindow):
             "A running local HTTP proxy alone is not shown as Tor-ready."
         )
 
+    def _prewarm_theme_stylesheets(self):
+        for mode in ("dark", "light"):
+            _theme_stylesheet(mode)
+
     def _theme_reveal_origin(self):
         """Choose the pointer position as the reveal origin, with a safe fallback."""
         pointer = self.mapFromGlobal(QCursor.pos())
@@ -700,9 +720,8 @@ class Window(QMainWindow):
             reveal_origin = self._theme_reveal_origin()
 
         CONFIG["mode"] = mode
-        palette = DarkPalette() if mode == "dark" else LightPalette()
         if app is not None:
-            app.setStyleSheet(qdarkstyle.load_stylesheet(palette=palette))
+            app.setStyleSheet(_theme_stylesheet(mode))
         if hasattr(self, "settingWidget"):
             sync_theme = getattr(self.settingWidget, "set_theme_mode", None)
             if callable(sync_theme):

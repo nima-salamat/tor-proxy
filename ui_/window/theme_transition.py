@@ -111,20 +111,16 @@ class CircularThemeReveal(QWidget):
             return
 
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        # The base layer is always the actual new-theme UI frame and is fully
-        # opaque. The old frame is drawn over it only outside the reveal circle.
-        painter.drawPixmap(self.rect(), self._new_snapshot)
-
-        old_frame_region = QPainterPath()
-        old_frame_region.addRect(self.rect())
+        # Draw the old UI in one pass, then reveal the new UI by clipping a
+        # single blit to the expanding circle. Avoid boolean path subtraction
+        # on every frame to keep the animation responsive on slower GPUs.
+        painter.drawPixmap(self.rect(), self._old_snapshot)
         if self._radius > 0:
             reveal_region = QPainterPath()
             reveal_region.addEllipse(self._center, self._radius, self._radius)
-            old_frame_region = old_frame_region.subtracted(reveal_region)
-
-        painter.setClipPath(old_frame_region)
-        painter.drawPixmap(self.rect(), self._old_snapshot)
-        painter.setClipping(False)
+            painter.setClipPath(reveal_region)
+            painter.drawPixmap(self.rect(), self._new_snapshot)
+            painter.setClipping(False)
 
         # Keep interactive animated controls live above the two frozen window
         # snapshots. This lets the Settings thumb continue moving while the

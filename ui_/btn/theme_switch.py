@@ -25,6 +25,10 @@ class ThemeSwitch(QWidget):
         self._mode = "light" if mode == "light" else "dark"
         self._thumb_progress = 1.0 if self._mode == "light" else 0.0
         self._deferred_mode = None
+        self._icons = {
+            "dark": qta.icon("fa6s.moon", color="#263449"),
+            "light": qta.icon("fa6s.sun", color="#c07a16"),
+        }
         self._animation = QVariantAnimation(self)
         self._animation.setDuration(220)
         self._animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
@@ -170,8 +174,9 @@ class ThemeSwitch(QWidget):
         painter.setBrush(thumb)
         painter.drawEllipse(QRectF(x, y, diameter, diameter))
 
-        icon_name = "fa6s.moon" if dark else "fa6s.sun"
-        icon = qta.icon(icon_name, color=icon_color)
+        # Icons are created once in __init__; do not build a new QIcon on
+        # every paint while the thumb animation is ticking.
+        icon = self._icons[self._mode]
         # Paint the QIcon into a fixed logical-pixel square. Drawing a raw
         # pixmap can look off-center on high-DPI displays because its physical
         # pixel size/device-pixel-ratio differs from the intended logical size.
