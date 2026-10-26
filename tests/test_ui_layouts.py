@@ -563,7 +563,7 @@ def test_theme_switch_track_is_a_full_capsule_and_prewarms_the_alternate_theme()
     ui_source = (repository / "ui.py").read_text(encoding="utf-8")
 
     assert "track_radius = (self.height() - 2) / 2" in switch_source
-    assert "self._progress_from_pointer(position.x())" in switch_source
+    assert "self._progress_from_pointer(position.x() - self._drag_offset_x)" in switch_source
     assert "def mouseMoveEvent(self, event)" in switch_source
     assert "def mouseReleaseEvent(self, event)" in switch_source
     assert "self._warm_icon_pixmaps" in switch_source
