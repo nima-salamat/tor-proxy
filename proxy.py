@@ -6,6 +6,7 @@ import json
 import os
 import logging
 import queue
+import sqlite3
 import select
 import socket
 import threading
@@ -22,6 +23,7 @@ import socks
 from config import CONFIG
 from torproxy.host_rules import HostRuleError, HostRules, normalize_hostname
 from torproxy.paths import user_directories
+from torproxy.traffic_history import TrafficHistoryStore
 from utils import resource_path
 
 SRC_ROOT = Path(__file__).resolve().parent / "src"
@@ -39,9 +41,11 @@ RELAY_IDLE_TIMEOUT_SECONDS = 120.0
 _rule_lock = threading.RLock()
 _blocked_rules = HostRules()
 _excluded_rules = HostRules()
-queue_bytes: queue.Queue[int] = queue.Queue(maxsize=8192)
+queue_bytes: queue.Queue[tuple[float, int, str | None]] = queue.Queue(maxsize=65536)
 _traffic_direction_lock = threading.Lock()
 _traffic_direction_totals = {"upload": 0, "download": 0}
+_accounting_drop_lock = threading.Lock()
+_accounting_dropped_events = 0
 
 
 def get_traffic_direction_snapshot() -> dict[str, int]:
@@ -181,42 +185,175 @@ def save_all() -> None:
 
 
 def _record_bytes(amount: int, direction: str | None = None) -> None:
-    """Record aggregate bytes and, when known, the in-memory transfer direction."""
+    """Enqueue a compact traffic event without waiting for disk or a worker lock."""
+    global _accounting_dropped_events
     if amount <= 0:
         return
-    if direction in {"upload", "download"}:
-        with _traffic_direction_lock:
-            _traffic_direction_totals[direction] += amount
+    normalized_direction = direction if direction in {"upload", "download"} else None
+    event = (time.time(), int(amount), normalized_direction)
     try:
-        queue_bytes.put_nowait(amount)
+        queue_bytes.put_nowait(event)
     except queue.Full:
-        # Preserve proxy responsiveness in an extreme burst. The limitation is
-        # observable in logs instead of blocking request threads indefinitely.
-        logger.warning("Traffic accounting queue is full; a byte counter update was dropped.")
+        # Do not let accounting pressure block socket relay threads. Log sparsely
+        # so a burst cannot turn logging itself into a hot-path bottleneck.
+        with _accounting_drop_lock:
+            _accounting_dropped_events += 1
+            dropped = _accounting_dropped_events
+        if dropped == 1 or dropped & (dropped - 1) == 0:
+            logger.warning(
+                "Traffic accounting queue is full; %s byte events have been skipped.",
+                dropped,
+            )
+        return
+    if normalized_direction is not None:
+        with _traffic_direction_lock:
+            _traffic_direction_totals[normalized_direction] += int(amount)
+
+
+def _safe_data_usage_total() -> int:
+    try:
+        return max(0, int(CONFIG["data_usage"] or 0))
+    except (KeyError, OSError, RuntimeError, TypeError, ValueError, OverflowError):
+        return 0
 
 
 def worker_data_usage_tracker(stop_event: threading.Event) -> None:
-    """Aggregate both byte directions and persist at most once per second."""
-    pending = 0
+    """Persist byte-event batches and minute history on the proxy's writer thread."""
+    pending_total = 0
+    pending_upload = 0
+    pending_download = 0
+    pending_config_total = 0
+    pending_minutes: dict[int, list[int]] = {}
     last_flush = time.monotonic()
-    while not stop_event.is_set() or not queue_bytes.empty():
+    last_config_sync = last_flush
+    config_sync_needed = False
+    final_write_failures = 0
+    history_store = None
+
+    try:
         try:
-            pending += queue_bytes.get(timeout=0.1)
-        except queue.Empty:
-            pass
-        now = time.monotonic()
-        if pending and now - last_flush >= 1.0:
+            history_store = TrafficHistoryStore(initial_total_bytes=_safe_data_usage_total())
+            persisted_total = history_store.get_totals()["total_bytes"]
+            if _safe_data_usage_total() != persisted_total:
+                try:
+                    CONFIG["data_usage"] = persisted_total
+                except (OSError, RuntimeError, TypeError, ValueError):
+                    config_sync_needed = True
+        except Exception:
+            history_store = None
+            logger.exception("Could not initialize persistent traffic history; retrying in the background.")
+
+        while (
+            not stop_event.is_set()
+            or not queue_bytes.empty()
+            or (pending_total > 0 and final_write_failures < 3)
+        ):
             try:
-                CONFIG["data_usage"] = max(0, int(CONFIG["data_usage"] or 0)) + pending
-            except (OSError, ValueError, TypeError):
-                logger.exception("Could not persist the proxy traffic counter.")
-            pending = 0
-            last_flush = now
-    if pending:
-        try:
-            CONFIG["data_usage"] = max(0, int(CONFIG["data_usage"] or 0)) + pending
-        except (OSError, ValueError, TypeError):
-            logger.exception("Could not persist the final proxy traffic counter.")
+                event = queue_bytes.get(timeout=0.1)
+            except queue.Empty:
+                event = None
+
+            if event is not None:
+                try:
+                    if isinstance(event, tuple) and len(event) == 3:
+                        event_timestamp, amount, direction = event
+                        event_timestamp = float(event_timestamp)
+                    else:
+                        # Retain compatibility with any legacy integer events already in the queue.
+                        event_timestamp, amount, direction = time.time(), event, None
+                    amount = max(0, int(amount))
+                except (TypeError, ValueError, OverflowError):
+                    logger.warning("Ignoring a malformed traffic accounting event.")
+                    amount = 0
+                    event_timestamp = time.time()
+                    direction = None
+                if amount:
+                    pending_total += amount
+                    pending_config_total += amount
+                    if direction == "upload":
+                        pending_upload += amount
+                    elif direction == "download":
+                        pending_download += amount
+                    bucket_start = max(0, int(event_timestamp // 60) * 60)
+                    bucket = pending_minutes.setdefault(bucket_start, [0, 0, 0])
+                    bucket[0] += amount
+                    if direction == "upload":
+                        bucket[1] += amount
+                    elif direction == "download":
+                        bucket[2] += amount
+
+            now_monotonic = time.monotonic()
+            if config_sync_needed and history_store is not None and now_monotonic - last_config_sync >= 2.0:
+                try:
+                    CONFIG["data_usage"] = history_store.get_totals()["total_bytes"]
+                    config_sync_needed = False
+                except (OSError, RuntimeError, TypeError, ValueError, sqlite3.Error):
+                    logger.debug("Legacy traffic counter synchronization will be retried.", exc_info=True)
+                last_config_sync = now_monotonic
+
+            should_flush = pending_total > 0 and (
+                now_monotonic - last_flush >= 1.0
+                or (stop_event.is_set() and queue_bytes.empty())
+            )
+            if not should_flush:
+                continue
+
+            try:
+                if history_store is None:
+                    history_store = TrafficHistoryStore(initial_total_bytes=_safe_data_usage_total())
+                totals = history_store.record_batch(
+                    total_delta=pending_config_total,
+                    upload_delta=pending_upload,
+                    download_delta=pending_download,
+                    minute_deltas={key: tuple(value) for key, value in pending_minutes.items()},
+                    total_floor=_safe_data_usage_total(),
+                    now=int(time.time()),
+                )
+            except Exception:
+                logger.exception(
+                    "Could not persist proxy traffic history; retaining the pending batch for retry."
+                )
+                if pending_config_total:
+                    try:
+                        # Keep the legacy all-time total useful if SQLite is temporarily
+                        # unavailable. The minute history and direction totals remain queued
+                        # in memory and will be committed when the database can be opened.
+                        CONFIG["data_usage"] = _safe_data_usage_total() + pending_config_total
+                        pending_config_total = 0
+                    except (OSError, RuntimeError, TypeError, ValueError):
+                        logger.exception("Could not update the legacy traffic counter fallback.")
+                last_flush = time.monotonic()
+                if stop_event.is_set() and queue_bytes.empty():
+                    final_write_failures += 1
+                    if final_write_failures >= 3:
+                        logger.error(
+                            "Traffic history remained unavailable during shutdown; the legacy total was preserved where possible."
+                        )
+                    else:
+                        time.sleep(0.1 * final_write_failures)
+                continue
+
+            pending_total = 0
+            pending_upload = 0
+            pending_download = 0
+            pending_config_total = 0
+            pending_minutes.clear()
+            final_write_failures = 0
+            last_flush = time.monotonic()
+            try:
+                persisted_total = totals["total_bytes"]
+                if _safe_data_usage_total() != persisted_total:
+                    CONFIG["data_usage"] = persisted_total
+                config_sync_needed = False
+            except (OSError, RuntimeError, TypeError, ValueError):
+                config_sync_needed = True
+                logger.exception("Traffic history was saved but the legacy JSON counter could not be synchronized.")
+    finally:
+        if history_store is not None:
+            try:
+                history_store.close()
+            except Exception:
+                logger.debug("Could not close the traffic history database cleanly.", exc_info=True)
 
 
 def get_free_port() -> int:

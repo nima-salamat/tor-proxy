@@ -10,6 +10,7 @@ import qtawesome as qta
 from PySide6.QtCore import Qt, QTimer, QPointF, QRectF
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
+    QComboBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from config import CONFIG
 from proxy import get_traffic_direction_snapshot
+from torproxy.traffic_history import TrafficHistoryStore
 
 
 def _safe_non_negative_int(value) -> int:
@@ -74,6 +76,8 @@ class TrafficChart(QWidget):
         super().__init__(parent)
         self.chart_kind = chart_kind
         self._samples: list[_TrafficSample] = []
+        self._history_values: list[float] | None = None
+        self._history_period_seconds = 3600
         self._dark = True
         self.setMinimumHeight(205)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -107,12 +111,19 @@ class TrafficChart(QWidget):
     def _chart_values(self, now: float) -> list[float]:
         if self.chart_kind == "rate":
             return [sample.bytes_per_second for sample in self._samples[-60:]]
+        if self._history_values is not None:
+            return list(self._history_values)
         buckets = [0.0] * 60
         for sample in self._samples:
             minutes_ago = int(max(0.0, now - sample.timestamp) // 60)
             if minutes_ago < 60:
                 buckets[59 - minutes_ago] += sample.total_bytes
         return buckets
+
+    def set_history(self, buckets: list[dict[str, int]], period_seconds: int) -> None:
+        self._history_values = [float(bucket.get("total_bytes", 0)) for bucket in buckets]
+        self._history_period_seconds = max(60, int(period_seconds))
+        self.update()
 
     def paintEvent(self, event) -> None:
         del event
@@ -195,11 +206,16 @@ class TrafficChart(QWidget):
                 )
 
         painter.setPen(text_color)
-        labels = (
-            ("60 s ago", "30 s", "now")
-            if self.chart_kind == "rate"
-            else ("60 min ago", "30 min", "now")
-        )
+        if self.chart_kind == "rate":
+            labels = ("60 s ago", "30 s", "now")
+        elif self._history_period_seconds <= 3600:
+            labels = ("60 min ago", "30 min", "now")
+        elif self._history_period_seconds <= 86400:
+            labels = ("24 h ago", "12 h", "now")
+        elif self._history_period_seconds <= 604800:
+            labels = ("7 d ago", "3.5 d", "now")
+        else:
+            labels = ("30 d ago", "15 d", "now")
         for pos, label in zip((plot.left(), plot.center().x(), plot.right()), labels):
             painter.drawText(
                 QRectF(pos - 45, plot.bottom() + 7, 90, 17),
@@ -212,10 +228,11 @@ class TrafficChart(QWidget):
 class StatisticsWindow(QWidget):
     """Statistics page for persisted aggregate traffic and live session telemetry."""
 
-    def __init__(self, proxy_widget, parent=None):
+    def __init__(self, proxy_widget, parent=None, *, history_store=None):
         super().__init__(parent)
         self.proxy_widget = proxy_widget
         self._owner = parent
+        self.history_store = history_store or TrafficHistoryStore(initialize=False)
         self.setObjectName("statisticsPage")
         self._dark = CONFIG["mode"] == "dark"
         self._started_at = time.monotonic()
@@ -247,7 +264,7 @@ class StatisticsWindow(QWidget):
         title_column.setSpacing(2)
         self.title_label = QLabel("Traffic statistics")
         self.title_label.setObjectName("statisticsTitle")
-        self.subtitle_label = QLabel("Live proxy accounting · session history and throughput")
+        self.subtitle_label = QLabel("Live throughput · persistent traffic history across restarts")
         self.subtitle_label.setObjectName("statisticsSubtle")
         title_column.addWidget(self.title_label)
         title_column.addWidget(self.subtitle_label)
@@ -264,10 +281,10 @@ class StatisticsWindow(QWidget):
         metrics_grid.setHorizontalSpacing(12)
         metrics_grid.setVerticalSpacing(10)
         metric_specs = (
-            ("lifetime", "TOTAL TRAFFIC", "Persisted across launches"),
+            ("lifetime", "TOTAL TRAFFIC", "All-time total · persisted"),
             ("session", "THIS RUN", "Since this app started"),
-            ("upload", "UPLOADED", "Client → upstream · this run"),
-            ("download", "DOWNLOADED", "Upstream → client · this run"),
+            ("upload", "UPLOADED", "All-time total · saved in SQLite"),
+            ("download", "DOWNLOADED", "All-time total · saved in SQLite"),
             ("current", "CURRENT RATE", "Approximate · 1-second samples"),
             ("peak", "PEAK RATE", "Highest observed this run"),
         )
@@ -292,6 +309,26 @@ class StatisticsWindow(QWidget):
             self.metric_values[key] = value
         root.addLayout(metrics_grid)
 
+        history_controls = QHBoxLayout()
+        history_controls.setContentsMargins(0, 0, 0, 0)
+        history_controls.setSpacing(8)
+        history_label = QLabel("TRAFFIC HISTORY")
+        history_label.setObjectName("statisticsChartTitle")
+        self.history_range_combo = QComboBox(self)
+        self.history_range_combo.setObjectName("statisticsHistoryRange")
+        for label, seconds in (
+            ("Last hour", 3600),
+            ("24 hours", 86400),
+            ("7 days", 604800),
+            ("30 days", 2592000),
+        ):
+            self.history_range_combo.addItem(label, seconds)
+        self.history_range_combo.currentIndexChanged.connect(self.refresh_persistent_history)
+        history_controls.addWidget(history_label)
+        history_controls.addWidget(self.history_range_combo)
+        history_controls.addStretch(1)
+        root.addLayout(history_controls)
+
         charts = QGridLayout()
         charts.setContentsMargins(0, 0, 0, 0)
         charts.setHorizontalSpacing(12)
@@ -302,13 +339,13 @@ class StatisticsWindow(QWidget):
             "LIVE THROUGHPUT", "Bytes transferred per second · recent 60 seconds", self.rate_chart
         ), 0, 0)
         charts.addWidget(self._make_chart_panel(
-            "TRANSFER VOLUME", "Aggregate bytes per minute · recent 60 minutes", self.volume_chart
+            "TRANSFER VOLUME", "Persistent traffic volume · selected time range", self.volume_chart
         ), 0, 1)
         root.addLayout(charts, 1)
 
         self.data_note = QLabel(
-            "All-time total is persisted. Directional totals and charts are measured in this app run; "
-            "rates are approximate and are not a system-wide network meter."
+            "All-time total and directional totals are persisted in SQLite. Minute-level history is kept "
+            "for up to 180 days; live rate and peak reset each launch. This is not a system-wide network meter."
         )
         self.data_note.setObjectName("statisticsNote")
         self.data_note.setWordWrap(True)
@@ -316,10 +353,15 @@ class StatisticsWindow(QWidget):
 
         self._apply_theme_styles()
         self._refresh_metrics()
+        self.refresh_persistent_history()
         self.timer = QTimer(self)
         self.timer.setInterval(1000)
         self.timer.timeout.connect(self.sample_once)
         self.timer.start()
+        self.history_refresh_timer = QTimer(self)
+        self.history_refresh_timer.setInterval(15000)
+        self.history_refresh_timer.timeout.connect(self._refresh_history_if_visible)
+        self.history_refresh_timer.start()
 
     def _make_chart_panel(self, title: str, description: str, chart: TrafficChart) -> QFrame:
         panel = QFrame(self)
@@ -337,12 +379,19 @@ class StatisticsWindow(QWidget):
         layout.addWidget(chart, 1)
         return panel
 
-    @staticmethod
-    def _read_total_bytes() -> int:
+    def _read_persistent_totals(self) -> dict[str, int]:
         try:
-            return _safe_non_negative_int(CONFIG["data_usage"])
+            return self.history_store.get_totals()
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return {"total_bytes": 0, "upload_bytes": 0, "download_bytes": 0, "updated_at": 0}
+
+    def _read_total_bytes(self) -> int:
+        try:
+            configured_total = _safe_non_negative_int(CONFIG["data_usage"])
         except (KeyError, OSError, RuntimeError, TypeError, ValueError):
-            return 0
+            configured_total = 0
+        persisted_total = self._read_persistent_totals().get("total_bytes", 0)
+        return max(configured_total, _safe_non_negative_int(persisted_total))
 
     @staticmethod
     def _read_directions() -> dict[str, int]:
@@ -354,6 +403,24 @@ class StatisticsWindow(QWidget):
             "upload": _safe_non_negative_int(raw.get("upload", 0)),
             "download": _safe_non_negative_int(raw.get("download", 0)),
         }
+
+    def _refresh_history_if_visible(self) -> None:
+        if self.isVisible():
+            self.refresh_persistent_history()
+
+    def refresh_persistent_history(self, *_args) -> None:
+        period_seconds = int(self.history_range_combo.currentData() or 3600)
+        end_timestamp = int(time.time())
+        end_timestamp = end_timestamp - end_timestamp % 60 + 60
+        start_timestamp = end_timestamp - period_seconds
+        try:
+            buckets = self.history_store.load_buckets(
+                start_timestamp, end_timestamp, bucket_count=60
+            )
+        except (OSError, RuntimeError, TypeError, ValueError):
+            buckets = []
+        self.volume_chart.set_history(buckets, period_seconds)
+        self._refresh_metrics()
 
     def sample_once(self, *, now: float | None = None, total_bytes: int | None = None,
                     direction_totals: dict[str, int] | None = None) -> None:
@@ -393,12 +460,19 @@ class StatisticsWindow(QWidget):
         session = self._session_upload + self._session_download
         elapsed = max(0.001, timestamp - self._started_at)
         average_rate = session / elapsed
-        self.metric_values["lifetime"].setText(format_bytes(lifetime))
+        persisted = self._read_persistent_totals()
+        self.metric_values["lifetime"].setText(format_bytes(max(lifetime, persisted["total_bytes"])))
         self.metric_values["session"].setText(format_bytes(session))
-        self.metric_values["upload"].setText(format_bytes(self._session_upload))
-        self.metric_values["download"].setText(format_bytes(self._session_download))
+        self.metric_values["upload"].setText(format_bytes(persisted["upload_bytes"]))
+        self.metric_values["download"].setText(format_bytes(persisted["download_bytes"]))
         self.metric_values["current"].setText(format_bytes(self._current_rate, per_second=True))
         self.metric_values["peak"].setText(format_bytes(self._peak_rate, per_second=True))
+        self.metric_values["upload"].setToolTip(
+            f"This run: {format_bytes(self._session_upload)}"
+        )
+        self.metric_values["download"].setToolTip(
+            f"This run: {format_bytes(self._session_download)}"
+        )
         # Keep the average available for tooltips without adding another visually noisy KPI.
         self.metric_values["session"].setToolTip(
             f"Average since launch: {format_bytes(average_rate, per_second=True)}"
@@ -454,6 +528,9 @@ class StatisticsWindow(QWidget):
             QLabel#statisticsConnectionState[connectionState="connected"] {{ color: {ok}; }}
             QLabel#statisticsConnectionState[connectionState="connecting"] {{ color: {accent}; }}
             QLabel#statisticsConnectionState[connectionState="disconnected"] {{ color: {muted}; }}
+            QComboBox#statisticsHistoryRange {{ min-height: 28px; padding: 2px 9px; border: 1px solid {border}; border-radius: 7px; background: {surface}; color: {text}; }}
+            QComboBox#statisticsHistoryRange:hover {{ border-color: {accent}; }}
+            QComboBox#statisticsHistoryRange QAbstractItemView {{ background: {surface}; color: {text}; border: 1px solid {border}; selection-background-color: {accent}; selection-color: #ffffff; }}
         """)
 
 

@@ -30,7 +30,8 @@ The HTTP proxy is an independent local service. It is loopback-only. HTTP absolu
 - Qt widgets are created and updated on the GUI thread.
 - `TorRunner` runs blocking supervisor work on a dedicated Python thread and emits Qt signals for logs and failures.
 - HTTP requests run in handler threads.
-- The traffic tracker drains a bounded byte-event queue and persists aggregate counters periodically.
+- HTTP request handlers run in threads because proxy work is predominantly socket I/O; the local listener and its lifecycle remain in a dedicated background thread.
+- The traffic tracker drains a bounded, non-blocking byte-event queue and persists totals plus minute-level upload/download history to a per-user SQLite database on its own background thread. It never writes to disk from a socket handler; old minute buckets are pruned after 180 days.
 - Network requests and bundle installation run in UI worker tasks; results/errors return through worker signals.
 
 Avoid calling widgets directly from a worker. Status and log updates should be delivered to Qt slots through signals. Some old UI helpers remain transitional and need the same review as the rest of the UI migration.

@@ -834,6 +834,9 @@ class Window(QMainWindow):
 
     def _show_statistics(self):
         self._show_page(self.stack.indexOf(self.statisticsWidget))
+        refresh_history = getattr(self.statisticsWidget, "refresh_persistent_history", None)
+        if callable(refresh_history):
+            refresh_history()
 
     def _show_home(self):
         self._show_page(0)
