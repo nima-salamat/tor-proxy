@@ -1102,7 +1102,7 @@ def test_statistics_page_is_reachable_from_proxy_traffic_and_uses_live_direction
     assert "self.stack.addWidget(self.statisticsWidget)" in ui_source
     assert "self._show_page(self.stack.indexOf(self.statisticsWidget))" in ui_source
     assert "def get_traffic_direction_snapshot()" in proxy_source
-    assert '("upload", "download")' in proxy_source
+    assert 'if direction in {"upload", "download"}' in proxy_source
     assert '("lifetime", "TOTAL TRAFFIC"' in stats_source
     assert '("upload", "UPLOADED"' in stats_source
     assert '("download", "DOWNLOADED"' in stats_source

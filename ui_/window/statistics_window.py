@@ -118,7 +118,7 @@ class TrafficChart(QWidget):
         del event
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        background, grid_color, text_color, accent, _download_color = self._colors()
+        _background, grid_color, text_color, accent, _download_color = self._colors()
         rect = self.rect()
         plot = QRectF(56, 10, max(1, rect.width() - 70), max(1, rect.height() - 49))
         if plot.width() < 80 or plot.height() < 60:
@@ -215,6 +215,7 @@ class StatisticsWindow(QWidget):
     def __init__(self, proxy_widget, parent=None):
         super().__init__(parent)
         self.proxy_widget = proxy_widget
+        self._owner = parent
         self.setObjectName("statisticsPage")
         self._dark = CONFIG["mode"] == "dark"
         self._started_at = time.monotonic()
@@ -420,8 +421,7 @@ class StatisticsWindow(QWidget):
             self.connection_state.style().polish(self.connection_state)
 
     def _back_home(self) -> None:
-        owner = self.parentWidget()
-        show_home = getattr(owner, "_show_home", None)
+        show_home = getattr(self._owner, "_show_home", None)
         if callable(show_home):
             show_home()
 
@@ -457,5 +457,4 @@ class StatisticsWindow(QWidget):
         """)
 
 
-def __all__():
-    return ("StatisticsWindow", "TrafficChart", "format_bytes")
+__all__ = ("StatisticsWindow", "TrafficChart", "format_bytes")

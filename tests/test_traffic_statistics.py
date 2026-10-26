@@ -6,6 +6,14 @@ import threading
 import pytest
 
 
+@pytest.fixture(scope="module")
+def qt_app():
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    return QApplication.instance() or QApplication([])
+
+
 def test_record_bytes_preserves_aggregate_queue_and_tracks_upload_download(monkeypatch):
     pytest.importorskip("socks")
     import proxy
