@@ -36,7 +36,14 @@ Check the system clock, connectivity, and whether Tor is blocked on the current 
 
 Automatic bridge cleanup is an opt-in preflight in Settings → Bridges. It checks records independently before the normal connection starts, so it may delay startup. It never removes a bridge when the result is inconclusive, and keeps the full original list if no bridge is confirmed working. If several bridges are removed, recheck the network and transport executable before concluding the bridges themselves are invalid.
 
-## Tor says ready but a website does not load
+## HTTP proxy reports WinError 10053 or a client disconnect
+
+A traceback at `BaseHTTPRequestHandler` while reading the first request line means the local client connection was interrupted before a complete HTTP request was received. This can happen when an application cancels a request, closes a connection abruptly, or otherwise abandons a proxy socket. It does not, by itself, indicate a failed Tor circuit.
+
+The HTTP proxy now handles expected client connection resets/aborts/broken pipes at the request boundary and closes the affected connection. Idle reads are bounded by a 30-second socket timeout so clients that connect but do not send a request cannot occupy worker threads indefinitely. These are per-read timeouts, not an absolute deadline for an entire upload.
+
+If the message coincides with failed page loads, compare the timestamp with **Event Log → Live Tor log** and `tor.log`. Verify the application is configured for the local HTTP proxy and that Tor's SOCKS listener is ready. Do not treat this exception alone as proof of a bridge, exit relay, or Tor bootstrap failure.
+
 
 Bootstrap completion does not guarantee every destination is reachable. Confirm the local HTTP proxy endpoint is correct, the app uses HTTP proxy for HTTP and HTTPS proxy/CONNECT for TLS destinations, the host is not blocked, and the configured SOCKS listener matches the managed Tor instance. A failed Tor route must not fall back to a direct route.
 

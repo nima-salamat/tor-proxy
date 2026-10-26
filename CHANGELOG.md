@@ -4,6 +4,7 @@ All notable changes are recorded here. Dates and release numbers are added only 
 
 ## Unreleased — UI, updater, and security redesign
 
+- Hardened the HTTP proxy request boundary against expected client abort/reset/broken-pipe errors, added a bounded idle-read timeout for incomplete requests, and introduced regression tests for disconnect handling and stalled request lines.
 - Hardened Check Exit IP: overlapping checks are prevented, the UI always clears the busy state on success/failure, background worker failures record tracebacks, and the request remains explicitly proxied with no direct-network fallback. Added a dedicated `torproxy-crash.log` native-fault trace and main-thread exception logging for diagnosis of previously silent exits.
 - Added an optional WebTunnel SNI imitation setting with no-override as the default, a small list of hostname suggestions, custom DNS-hostname validation, and `sni-imitation=` injection for WebTunnel records only. Explicit per-bridge SNI values take precedence, and changes apply on the next Tor start.
 

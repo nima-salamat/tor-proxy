@@ -33,6 +33,7 @@ BLOCKED_FILE = "blocked_hosts.json"
 EXCLUDE_FILE = "exclude_hosts.json"
 MAX_REQUEST_BODY_BYTES = 32 * 1024 * 1024
 SOCKET_TIMEOUT_SECONDS = 30.0
+REQUEST_READ_TIMEOUT_SECONDS = 30.0
 RELAY_IDLE_TIMEOUT_SECONDS = 120.0
 
 _rule_lock = threading.RLock()
@@ -294,6 +295,25 @@ def _connect_upstream(host: str, port: int, route: str, tor_socks_port: int) -> 
 
 class ProxyHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+
+    def setup(self) -> None:
+        # Close idle or incomplete client requests instead of pinning a worker thread.
+        self.request.settimeout(REQUEST_READ_TIMEOUT_SECONDS)
+        super().setup()
+
+    def handle_one_request(self) -> None:
+        try:
+            super().handle_one_request()
+        except ConnectionError as exc:
+            # Local clients may cancel requests or close their sockets abruptly.
+            # This is not evidence that the Tor upstream or circuit has failed.
+            self.close_connection = True
+            logger.debug(
+                "HTTP proxy client disconnected while handling a request "
+                "(client=%s, error=%s).",
+                self.client_address[0],
+                type(exc).__name__,
+            )
 
     def log_message(self, format_string: str, *args) -> None:
         # BaseHTTPRequestHandler passes request lines here; do not persist URLs,

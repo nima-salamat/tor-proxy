@@ -25,6 +25,49 @@ def test_proxy_server_rejects_non_loopback_listeners(address):
         proxy_module.ThreadedHTTPServer((address, 0), proxy_module.ProxyHandler, 9050)
 
 
+@pytest.mark.parametrize(
+    "error_type",
+    [ConnectionAbortedError, ConnectionResetError, BrokenPipeError],
+)
+def test_handler_contains_expected_client_disconnects(monkeypatch, caplog, error_type):
+    handler = object.__new__(proxy_module.ProxyHandler)
+    handler.client_address = ("127.0.0.1", 12345)
+    handler.close_connection = False
+
+    def disconnect(_handler):
+        raise error_type("simulated client disconnect")
+
+    monkeypatch.setattr(proxy_module.BaseHTTPRequestHandler, "handle_one_request", disconnect)
+    with caplog.at_level("DEBUG", logger=proxy_module.__name__):
+        handler.handle_one_request()
+
+    assert handler.close_connection is True
+    assert "client disconnected" in caplog.text
+    assert error_type.__name__ in caplog.text
+
+
+def test_incomplete_request_line_times_out_and_closes_client(monkeypatch):
+    monkeypatch.setattr(proxy_module, "REQUEST_READ_TIMEOUT_SECONDS", 0.05)
+    server = proxy_module.ThreadedHTTPServer(
+        ("127.0.0.1", 0), proxy_module.ProxyHandler, 9050
+    )
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    client = None
+    try:
+        client = socket.create_connection(
+            ("127.0.0.1", server.server_address[1]), timeout=2
+        )
+        client.settimeout(2)
+        assert client.recv(1) == b""
+    finally:
+        if client is not None:
+            client.close()
+        server.shutdown()
+        server.server_close()
+        server_thread.join(timeout=2)
+
+
 @pytest.mark.parametrize(("authority", "expected"), [
     ("example.org:443", ("example.org", 443)),
     ("[2001:db8::1]:8443", ("2001:db8::1", 8443)),
