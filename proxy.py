@@ -40,6 +40,14 @@ _rule_lock = threading.RLock()
 _blocked_rules = HostRules()
 _excluded_rules = HostRules()
 queue_bytes: queue.Queue[int] = queue.Queue(maxsize=8192)
+_traffic_direction_lock = threading.Lock()
+_traffic_direction_totals = {"upload": 0, "download": 0}
+
+
+def get_traffic_direction_snapshot() -> dict[str, int]:
+    """Return thread-safe in-process upload/download byte totals."""
+    with _traffic_direction_lock:
+        return dict(_traffic_direction_totals)
 
 
 def _rules_path(filename: str) -> Path:
@@ -172,9 +180,13 @@ def save_all() -> None:
     save_blocked()
 
 
-def _record_bytes(amount: int) -> None:
+def _record_bytes(amount: int, direction: str | None = None) -> None:
+    """Record aggregate bytes and, when known, the in-memory transfer direction."""
     if amount <= 0:
         return
+    if direction in {"upload", "download"}:
+        with _traffic_direction_lock:
+            _traffic_direction_totals[direction] += amount
     try:
         queue_bytes.put_nowait(amount)
     except queue.Full:
@@ -335,7 +347,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.send_response(200, "Connection Established")
             self.end_headers()
             self.wfile.flush()
-            self._relay(self.connection, remote)
+            self._relay(self.connection, remote, left_to_right_direction="upload")
         except (ValueError, HostRuleError):
             self.send_error(400, "Malformed CONNECT authority")
         except (OSError, socks.ProxyError, socks.GeneralProxyError):
@@ -440,17 +452,17 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 wire_headers += f"Content-Length: {body_length}\r\n"
             wire_headers += "\r\n"
             remote.sendall(wire_headers.encode("iso-8859-1", errors="strict"))
-            _record_bytes(len(wire_headers.encode("iso-8859-1", errors="strict")))
+            _record_bytes(len(wire_headers.encode("iso-8859-1", errors="strict")), "upload")
             remaining = body_length
             while remaining:
                 chunk = self.rfile.read(min(65536, remaining))
                 if not chunk:
                     raise OSError("Client disconnected during request body.")
                 remote.sendall(chunk)
-                _record_bytes(len(chunk))
+                _record_bytes(len(chunk), "upload")
                 remaining -= len(chunk)
             self.connection.settimeout(RELAY_IDLE_TIMEOUT_SECONDS)
-            self._relay(remote, self.connection)
+            self._relay(remote, self.connection, left_to_right_direction="download")
         except (ValueError, HostRuleError):
             if not self.wfile.closed:
                 self.send_error(400, "Malformed HTTP proxy request")
@@ -466,7 +478,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     pass
 
     @staticmethod
-    def _relay(left: socket.socket, right: socket.socket) -> None:
+    def _relay(
+        left: socket.socket,
+        right: socket.socket,
+        left_to_right_direction: str = "upload",
+    ) -> None:
         active = {left, right}
         peers = {left: right, right: left}
         try:
@@ -496,7 +512,12 @@ class ProxyHandler(BaseHTTPRequestHandler):
                         except OSError:
                             pass
                         continue
-                    _record_bytes(len(data))
+                    direction = (
+                        left_to_right_direction
+                        if source is left
+                        else ("download" if left_to_right_direction == "upload" else "upload")
+                    )
+                    _record_bytes(len(data), direction)
                     try:
                         destination.sendall(data)
                     except (OSError, TimeoutError):

@@ -74,6 +74,7 @@ def test_layout_source_has_one_owner_per_root_and_no_widget_parented_nested_layo
         repository / "ui_/window/proxy_window.py",
         repository / "ui_/window/block_host_window.py",
         repository / "ui_/window/exclude_host_window.py",
+        repository / "ui_/window/statistics_window.py",
     ]
     for path in paths:
         source = path.read_text(encoding="utf-8")
@@ -1085,3 +1086,25 @@ def test_main_window_theme_changes_use_circular_reveal_for_visible_mode_switches
     assert "does not rely on translucent child-window composition" in transition_source
     assert "WA_TransparentForMouseEvents" in transition_source
 
+
+
+
+def test_statistics_page_is_reachable_from_proxy_traffic_and_uses_live_directional_counters():
+    repository = Path(__file__).resolve().parents[1]
+    ui_source = (repository / "ui.py").read_text(encoding="utf-8")
+    home_source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+    stats_source = (repository / "ui_/window/statistics_window.py").read_text(encoding="utf-8")
+    proxy_source = (repository / "proxy.py").read_text(encoding="utf-8")
+
+    assert "self.btn_statistics = QPushButton(" in home_source
+    assert 'self.btn_statistics.setObjectName("statisticsLink")' in home_source
+    assert "self.btn_statistics.clicked.connect(self.open_statistics_page)" in home_source
+    assert "self.stack.addWidget(self.statisticsWidget)" in ui_source
+    assert "self._show_page(self.stack.indexOf(self.statisticsWidget))" in ui_source
+    assert "def get_traffic_direction_snapshot()" in proxy_source
+    assert '("upload", "download")' in proxy_source
+    assert '("lifetime", "TOTAL TRAFFIC"' in stats_source
+    assert '("upload", "UPLOADED"' in stats_source
+    assert '("download", "DOWNLOADED"' in stats_source
+    assert 'TrafficChart("rate"' in stats_source
+    assert 'TrafficChart("volume"' in stats_source

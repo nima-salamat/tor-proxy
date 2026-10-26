@@ -34,6 +34,7 @@ from ui_.window.exclude_host_window import ExcludeHostsWindow
 from ui_.window.updater_window import UpdaterWindow
 from ui_.window.dialogs import QMessageBox, ExitConfirmDialog
 from ui_.window.shortcuts_window import ShortcutsWindow
+from ui_.window.statistics_window import StatisticsWindow
 logger = logging.getLogger(__name__)
 
 _THEME_STYLESHEET_CACHE = {}
@@ -83,6 +84,8 @@ class Window(QMainWindow):
         self.stack.addWidget(self.updater_window)
         self.shortcutsWidget = ShortcutsWindow(self)
         self.stack.addWidget(self.shortcutsWidget)
+        self.statisticsWidget = StatisticsWindow(self.proxyWidget, self)
+        self.stack.addWidget(self.statisticsWidget)
 
         if IS_WINDOWS:
             self.title_bar = CustomTitleBar(self)
@@ -630,8 +633,16 @@ class Window(QMainWindow):
     def _show_page(self, index):
         if 0 <= index < self.stack.count():
             self.stack.setCurrentIndex(index)
-            if hasattr(self, "page_actions") and index < len(self.page_actions):
-                self.page_actions[index].setChecked(True)
+            if hasattr(self, "page_actions"):
+                if index < len(self.page_actions):
+                    self.page_actions[index].setChecked(True)
+                elif hasattr(self, "page_action_group"):
+                    # The Statistics page is opened contextually from Home, not as
+                    # another permanent top-level navigation item.
+                    self.page_action_group.setExclusive(False)
+                    for action in self.page_actions:
+                        action.setChecked(False)
+                    self.page_action_group.setExclusive(True)
             if hasattr(self, "page_nav_buttons"):
                 neutral_icon = "#eff1f4" if CONFIG["mode"] == "dark" else "#202832"
                 for page_index, button in enumerate(self.page_nav_buttons):
@@ -703,6 +714,7 @@ class Window(QMainWindow):
             getattr(self, "block_host_window", None),
             getattr(self, "exclude_host_window", None),
             getattr(self, "shortcutsWidget", None),
+            getattr(self, "statisticsWidget", None),
         ):
             apply_theme = getattr(page, "apply_theme", None)
             if callable(apply_theme):
@@ -819,7 +831,10 @@ class Window(QMainWindow):
     
     def _show_help(self):
         self._show_page(5)
-    
+
+    def _show_statistics(self):
+        self._show_page(self.stack.indexOf(self.statisticsWidget))
+
     def _show_home(self):
         self._show_page(0)
 

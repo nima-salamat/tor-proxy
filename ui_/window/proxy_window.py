@@ -110,6 +110,12 @@ class ProxyWindow(QWidget):
             f"Proxy traffic  ·  {CONFIG['data_usage'] / 1024**2:.2f} MiB"
         )
         self.lbl_data_usage.setObjectName("trafficUsage")
+        self.btn_statistics = QPushButton("Statistics", self.home_content)
+        self.btn_statistics.setObjectName("statisticsLink")
+        self.btn_statistics.setFlat(True)
+        self.btn_statistics.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_statistics.setToolTip("Open live proxy traffic statistics and charts")
+        self.btn_statistics.clicked.connect(self.open_statistics_page)
         metrics.addStretch(1)
         metrics.addWidget(self.lbl_percent)
         separator = QFrame(self.home_content)
@@ -117,6 +123,7 @@ class ProxyWindow(QWidget):
         separator.setFrameShape(QFrame.Shape.VLine)
         metrics.addWidget(separator)
         metrics.addWidget(self.lbl_data_usage)
+        metrics.addWidget(self.btn_statistics)
         metrics.addStretch(1)
         self.home_layout.addLayout(metrics)
         self.data.valueChanged.connect(self.dataValueChanged)
@@ -217,7 +224,15 @@ class ProxyWindow(QWidget):
         dialog.exec()
 
     def change_data_usage(self):
-        self.lbl_data_usage.setText(f"Proxy traffic (both directions): {CONFIG['data_usage']/1024**2:.2f} MiB")
+        self.lbl_data_usage.setText(
+            f"Proxy traffic  ·  {max(0, int(CONFIG['data_usage'] or 0)) / 1024**2:.2f} MiB"
+        )
+
+    def open_statistics_page(self):
+        owner = self._parent
+        show_statistics = getattr(owner, "_show_statistics", None)
+        if callable(show_statistics):
+            show_statistics()
 
     def whatismyip_clicked(self):
         if self._exit_ip_check_busy:
@@ -322,6 +337,8 @@ class ProxyWindow(QWidget):
             QLabel#connectionStatus[connectionState="disconnected"] {{ color: {text}; }}
             QLabel#bootstrapPercent {{ color: {accent}; background: transparent; border: none; font-size: 14px; font-weight: 700; padding: 3px; }}
             QLabel#trafficUsage, QLabel#proxyStatusLabel, QLabel#exitIpLabel {{ color: {muted}; background: transparent; border: none; font-size: 11px; padding: 2px; }}
+            QPushButton#statisticsLink {{ color: {accent}; background: transparent; border: none; padding: 2px 4px; font-size: 11px; font-weight: 700; }}
+            QPushButton#statisticsLink:hover {{ color: {text}; border-bottom: 1px solid {accent}; }}
             QLabel#systemProxyTitle {{ color: {muted}; background: transparent; border: none; font-size: 10px; font-weight: 750; letter-spacing: 1px; }}
             QFrame#homeMetricSeparator {{ color: {border}; background: {border}; max-width: 1px; }}
             QComboBox#systemProxyMode {{ min-height: 34px; padding: 0 12px; border: 1px solid {border}; border-radius: 8px; background: {surface}; color: {text}; }}
@@ -338,6 +355,7 @@ class ProxyWindow(QWidget):
         self.btn_change_identity.setIcon(qta.icon("fa6s.arrows-rotate", color=icon_color))
         self.btn_log.setIcon(qta.icon("fa6s.align-left", color=icon_color))
         self.btn_whatismyip.setIcon(qta.icon("fa6s.globe", color=icon_color))
+        self.btn_statistics.setIcon(qta.icon("fa6s.chart-line", color=accent))
 
     def _on_system_proxy_mode_changed(self, index):
         mode = self.system_proxy_mode.itemData(index)
