@@ -49,6 +49,18 @@ The new, independently testable code lives in `src/torproxy/`. Existing UI modul
 
 The matrix describes intended CI coverage, not a claim that every platform has been manually tested. Arbitrary user-supplied Tor executables may work, but are not part of the bundle downloader's supported matrix.
 
+## Prebuilt Windows and Linux builds
+
+Portable builds are published on the [GitHub Releases page](https://github.com/nima-salamat/tor-proxy/releases). They include the Python runtime and application dependencies, so a separate Python installation is not needed.
+
+- **Windows x64:** download `TorProxy-windows-x64.zip`, extract the complete `TorProxy` folder, and launch `TorProxy.exe`. Keep the `_internal` directory alongside the executable.
+- **Linux x86_64:** download `TorProxy-linux-x64.tar.gz`, extract it, and run `./TorProxy/TorProxy` from the extracted directory. The archive preserves executable permissions. It is built on Ubuntu 22.04 and targets Ubuntu 22.04 or compatible newer glibc-based distributions; other distributions may need system Qt display/runtime libraries.
+- Packages use PyInstaller's **one-directory** layout: the downloadable archive is compressed, but startup avoids one-file extraction to a temporary directory. The build uses OpenCV's headless wheel to avoid shipping an unnecessary second Qt GUI stack.
+- Tor Expert Bundle archives are **not** embedded in the application. TorProxy downloads a supported bundle on demand, keeping initial downloads smaller. GnuPG is needed only if optional OpenPGP signature verification is enabled; the ZBar decoder is optional because the built-in OpenCV QR decoder remains available.
+- Windows binaries are not Authenticode-signed by this workflow, so Windows SmartScreen may show an unrecognized-app warning.
+
+Pushing a version tag such as `v2.0.1` starts the Windows/Linux builds and publishes a GitHub Release with both archives and `SHA256SUMS.txt`. Running **Build and release → Run workflow** from Actions builds and smoke-tests the archives as workflow artifacts, without publishing a release.
+
 ## Install and run
 
 ### Prerequisites
