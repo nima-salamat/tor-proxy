@@ -31,12 +31,12 @@ A custom bridge line must match the selected transport. For example, an obfs4 re
 
 ## Build
 
-Requirements: JDK 17, Android SDK platform 37, and Gradle 9.6.0.
+Requirements: JDK 17, Android SDK platform 37.0, and Gradle 9.6.0.
 
 From the repository root:
 
 1. Open the android directory in Android Studio, or change into it in a terminal.
-2. Install Android platform 35 and build tools 36.0.0 using SDK Manager.
+2. Install Android platform 35 and build tools 37.0.0 using SDK Manager.
 3. Run: gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug
 
 The debug APK is produced at android/app/build/outputs/apk/debug/app-debug.apk.
