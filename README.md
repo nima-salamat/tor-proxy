@@ -55,6 +55,7 @@ Portable builds are published on the [GitHub Releases page](https://github.com/n
 
 - **Windows x64:** download `TorProxy-windows-x64.zip`, extract the complete `TorProxy` folder, and launch `TorProxy.exe`. Keep the `_internal` directory alongside the executable.
 - **Linux x86_64:** download `TorProxy-linux-x64.tar.gz`, extract it, and run `./TorProxy/TorProxy` from the extracted directory. The archive preserves executable permissions. It is built on Ubuntu 22.04 and targets Ubuntu 22.04 or compatible newer glibc-based distributions; other distributions may need system Qt display/runtime libraries.
+- On minimal Linux installations, Qt may need system graphics/display libraries. On Ubuntu, install them with `sudo apt-get install libegl1 libgl1 libxcb-cursor0 libxkbcommon-x11-0`.
 - Packages use PyInstaller's **one-directory** layout: the downloadable archive is compressed, but startup avoids one-file extraction to a temporary directory. The build uses OpenCV's headless wheel to avoid shipping an unnecessary second Qt GUI stack.
 - Tor Expert Bundle archives are **not** embedded in the application. TorProxy downloads a supported bundle on demand, keeping initial downloads smaller. GnuPG is needed only if optional OpenPGP signature verification is enabled; the ZBar decoder is optional because the built-in OpenCV QR decoder remains available.
 - Windows binaries are not Authenticode-signed by this workflow, so Windows SmartScreen may show an unrecognized-app warning.
