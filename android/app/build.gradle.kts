@@ -5,7 +5,11 @@ plugins {
 
 android {
     namespace = "com.nimasalamat.torproxy.android"
-    compileSdk = 37
+    compileSdk {
+        version = release(37) {
+            minorApiLevel = 0
+        }
+    }
 
     defaultConfig {
         applicationId = "com.nimasalamat.torproxy.android"
