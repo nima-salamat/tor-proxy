@@ -1362,8 +1362,6 @@ class MainActivity : Activity() {
             backgroundTintList = ColorStateList.valueOf(color)
             minHeight = dp(44)
             stateListAnimator = null
-            insetTop = 0
-            insetBottom = 0
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         }
     }
