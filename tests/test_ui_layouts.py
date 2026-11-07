@@ -1123,6 +1123,17 @@ def test_kill_switch_is_configurable_and_preflighted_before_services_start():
     assert 'self.chk_kill_switch = QCheckBox("Enable", self)' in settings_source
     assert "def kill_switch_changed(self, checked: bool)" in settings_source
     assert 'self.chk_kill_switch.setChecked(bool(CONFIG["kill_switch_enabled"]))' in settings_source
+    assert "self.kill_switch_progress.setRange(0, 0)" in settings_source
+    assert "self.kill_switch_progress.show()" in settings_source
+    assert "self.kill_switch_progress.hide()" in settings_source
+    assert "if self._kill_switch_busy:" in settings_source
+    assert "self._kill_switch_pending_state = checked if checked != requested else None" in settings_source
+    assert "The current firewall operation will finish first." in settings_source
+    kill_switch_handler = settings_source[
+        settings_source.index("def kill_switch_changed"):
+        settings_source.index("def signature_verification_changed")
+    ]
+    assert "self.chk_kill_switch.setEnabled(False)" not in kill_switch_handler
     assert "def set_kill_switch_enabled(self, enabled: bool)" in home_source
     assert "self._connect_operation_busy = True" in home_source
     assert "if self._killswitch_operation_active:" in home_source
