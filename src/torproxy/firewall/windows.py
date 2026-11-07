@@ -599,6 +599,14 @@ class WindowsFirewallBackend:
         """Restore ordinary outbound access while keeping Defender Firewall enabled."""
         self._invoke("emergency")
 
+    def recovery_state(self) -> dict[str, object]:
+        """Inspect the local snapshot without requiring UAC or querying firewall policy."""
+        return {
+            "available": True,
+            "snapshot_exists": self.snapshot_path.is_file(),
+            "verified": False,
+        }
+
     def status(self) -> dict[str, object]:
         try:
             return self._invoke("status")
