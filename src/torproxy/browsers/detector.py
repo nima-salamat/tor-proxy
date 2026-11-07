@@ -87,21 +87,21 @@ _WINDOWS_EXECUTABLES = {
     "zen": ("zen.exe",),
 }
 _WINDOWS_INSTALL_EXECUTABLES = {
-    "chrome": ("Application", "chrome.exe"),
-    "chromium": ("chrome.exe",),
-    "edge": ("Application", "msedge.exe"),
-    "brave": ("Application", "brave.exe"),
-    "vivaldi": ("vivaldi.exe",),
-    "opera": ("launcher.exe", "opera.exe"),
-    "opera_gx": ("launcher.exe", "opera.exe"),
-    "yandex": ("Application", "browser.exe"),
-    "ungoogled_chromium": ("chrome.exe",),
-    "firefox": ("firefox.exe",),
-    "firefox_esr": ("firefox.exe",),
-    "librewolf": ("librewolf.exe",),
-    "waterfox": ("waterfox.exe",),
-    "floorp": ("floorp.exe",),
-    "zen": ("zen.exe",),
+    "chrome": (("Application", "chrome.exe"),),
+    "chromium": (("chrome.exe",),),
+    "edge": (("Application", "msedge.exe"),),
+    "brave": (("Application", "brave.exe"),),
+    "vivaldi": (("vivaldi.exe",),),
+    "opera": (("launcher.exe",), ("opera.exe",)),
+    "opera_gx": (("launcher.exe",), ("opera.exe",)),
+    "yandex": (("Application", "browser.exe"),),
+    "ungoogled_chromium": (("chrome.exe",),),
+    "firefox": (("firefox.exe",),),
+    "firefox_esr": (("firefox.exe",),),
+    "librewolf": (("librewolf.exe",),),
+    "waterfox": (("waterfox.exe",),),
+    "floorp": (("floorp.exe",),),
+    "zen": (("zen.exe",),),
 }
 
 
@@ -149,18 +149,39 @@ def _desktop_exec(value: str, *, search_path: str | None = None) -> tuple[str, t
 
 
 def _windows_commandline_split(value: str) -> list[str]:
-    """Split a Windows command line using the native parser when available."""
+    """Split a Windows command line while preserving quoted executable paths."""
     command = str(value or "").strip()
     if not command:
         return []
+
     if os.name == "nt":
-        argc = ctypes.c_int()
-        argv = ctypes.windll.shell32.CommandLineToArgvW(command, ctypes.byref(argc))
-        if argv:
-            try:
-                return [str(argv[index]) for index in range(argc.value)]
-            finally:
-                ctypes.windll.kernel32.LocalFree(argv)
+        argc = ctypes.c_int(0)
+        shell32 = ctypes.windll.shell32
+        kernel32 = ctypes.windll.kernel32
+        command_line_to_argv = shell32.CommandLineToArgvW
+        local_free = kernel32.LocalFree
+        # Declare the actual pointer return type. ctypes otherwise assumes
+        # c_int, which truncates the returned argv pointer on 64-bit Windows.
+        command_line_to_argv.argtypes = (
+            ctypes.c_wchar_p,
+            ctypes.POINTER(ctypes.c_int),
+        )
+        command_line_to_argv.restype = ctypes.POINTER(ctypes.c_wchar_p)
+        local_free.argtypes = (ctypes.c_void_p,)
+        local_free.restype = ctypes.c_void_p
+
+        argv = command_line_to_argv(command, ctypes.byref(argc))
+        if not argv:
+            return []
+        try:
+            return [
+                str(argv[index])
+                for index in range(max(0, argc.value))
+                if argv[index] is not None
+            ]
+        finally:
+            local_free(ctypes.cast(argv, ctypes.c_void_p))
+
     try:
         return [token.strip('"') for token in shlex.split(command, posix=False)]
     except ValueError:
@@ -433,16 +454,15 @@ class BrowserDetector:
                         if browser_id in found:
                             continue
                         icon = _clean_windows_icon(values.get("DisplayIcon"))
+                        # DisplayIcon is metadata, not necessarily an executable.
+                        # Never launch an .ico/.dll file merely because it was
+                        # registered as the application's icon.
                         candidates: list[Path] = []
-                        if icon:
-                            candidates.append(Path(icon))
                         install_location = Path(os.path.expandvars(values.get("InstallLocation") or ""))
                         if values.get("InstallLocation"):
                             candidates.extend(
                                 install_location.joinpath(*relative)
-                                for relative in (
-                                    _WINDOWS_INSTALL_EXECUTABLES.get(browser_id, ()),
-                                )
+                                for relative in _WINDOWS_INSTALL_EXECUTABLES.get(browser_id, ())
                             )
                             candidates.extend(
                                 install_location.joinpath(*relative)
@@ -586,7 +606,7 @@ ConvertTo-Json -InputObject @($entries) -Compress -Depth 3
                         entry = parser["Desktop Entry"]
                     except (OSError, KeyError, configparser.Error):
                         continue
-                    if entry.get("Type", fallback="Application").casefold() != "application":
+                    if entry.get("Type", fallback="Application") != "Application":
                         continue
                     try:
                         hidden = entry.getboolean("Hidden", fallback=False)

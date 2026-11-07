@@ -230,6 +230,8 @@ def test_windows_standard_install_paths_find_chrome_edge_and_firefox(tmp_path, m
             "PROGRAMFILES": str(program_files),
             "PROGRAMFILES(X86)": str(tmp_path / "Program Files (x86)"),
             "LOCALAPPDATA": str(local),
+            "APPDATA": str(tmp_path / "NoUserStartMenu"),
+            "PROGRAMDATA": str(tmp_path / "NoMachineStartMenu"),
             "PATH": "",
         },
         custom_store=CustomBrowserStore(tmp_path / "custom.json"),
@@ -242,6 +244,31 @@ def test_windows_standard_install_paths_find_chrome_edge_and_firefox(tmp_path, m
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Linux desktop-entry discovery is platform-specific")
+def test_windows_commandline_split_preserves_quoted_program_files_paths():
+    from torproxy.browsers.detector import _windows_commandline_split
+
+    command = r'"C:\Program Files\Opera\launcher.exe" "%1" --profile "C:\Browser Data"'
+    assert _windows_commandline_split(command) == [
+        r"C:\Program Files\Opera\launcher.exe",
+        "%1",
+        "--profile",
+        r"C:\Browser Data",
+    ]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Exercises the native Windows CommandLineToArgvW API")
+def test_windows_native_commandline_split_uses_pointer_return_type():
+    from torproxy.browsers.detector import _windows_commandline_split
+
+    command = r'"C:\Program Files\Mozilla Firefox\firefox.exe" -osint -url "https://example.org/"'
+    assert _windows_commandline_split(command) == [
+        r"C:\Program Files\Mozilla Firefox\firefox.exe",
+        "-osint",
+        "-url",
+        "https://example.org/",
+    ]
+
+
 def test_windows_start_menu_shortcuts_find_opera_and_firefox_and_keep_their_icons(tmp_path, monkeypatch):
     from torproxy.browsers import detector as detector_module
 
@@ -295,6 +322,8 @@ def test_windows_start_menu_shortcuts_find_opera_and_firefox_and_keep_their_icon
             "PROGRAMFILES": str(tmp_path / "Program Files"),
             "PROGRAMFILES(X86)": str(tmp_path / "Program Files (x86)"),
             "LOCALAPPDATA": str(tmp_path / "Local"),
+            "APPDATA": str(tmp_path / "NoUserStartMenu"),
+            "PROGRAMDATA": str(tmp_path / "NoMachineStartMenu"),
             "PATH": "",
         },
         custom_store=CustomBrowserStore(tmp_path / "custom.json"),
