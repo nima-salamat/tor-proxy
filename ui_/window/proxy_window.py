@@ -850,10 +850,23 @@ class ProxyWindow(QWidget):
             try:
                 manager.activate(programs)
             except Exception as activation_error:
-                # Activation can fail after a restrictive policy was partially
-                # installed. Reconcile the snapshot before reporting failure.
+                # Windows writes its recovery snapshot before the first firewall
+                # mutation. Only invoke rollback when that transaction marker
+                # exists; an early preflight rejection must not be mistaken for
+                # a failed rollback (for example, a Group Policy restriction).
                 try:
-                    manager.recover()
+                    recovery_state = manager.recovery_state()
+                    if recovery_state.get("available"):
+                        if recovery_state.get("snapshot_exists"):
+                            manager.recover()
+                            logger.info("Rolled back the partial Windows Kill Switch activation.")
+                        else:
+                            logger.info(
+                                "Kill Switch activation stopped before a Windows snapshot was created; "
+                                "no TorProxy firewall changes were committed."
+                            )
+                    else:
+                        manager.recover()
                 except Exception as recovery_error:
                     raise KillSwitchError(
                         f"Firewall activation failed: {activation_error}. "
