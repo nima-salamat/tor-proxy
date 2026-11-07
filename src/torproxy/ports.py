@@ -109,8 +109,12 @@ def resolve_listener_ports(
     explicit availability-probe behavior. Production allocation uses bind(port=0)
     directly, without an unnecessary second bind to the just-released candidate.
     """
-    probe = available or can_bind_loopback
-    udp_probe = udp_available or can_bind_loopback_udp
+    # The injectable probe contract is (host, port), while the low-level
+    # socket helpers intentionally expose (port, host). Adapt explicitly;
+    # passing these directly used to send "127.0.0.1" to int(port), silently
+    # marking every candidate as unavailable.
+    probe = available or (lambda host, port: can_bind_loopback(port, host))
+    udp_probe = udp_available or (lambda host, port: can_bind_loopback_udp(port, host))
     assigned: dict[str, int] = {}
     automatic_updates: dict[str, int] = {}
     messages: list[str] = []
