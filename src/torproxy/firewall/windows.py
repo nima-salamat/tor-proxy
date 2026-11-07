@@ -81,7 +81,11 @@ function Test-SharedAccessDynamicAllowRule($rule) {
     }
     $application = Get-RuleFilter $rule 'Get-NetFirewallApplicationFilter'
     $service = Get-RuleFilter $rule 'Get-NetFirewallServiceFilter'
+    $security = Get-RuleFilter $rule 'Get-NetFirewallSecurityFilter'
     if ($null -eq $application -or $null -eq $service) { return $false }
+    # An authenticated allow-bypass rule must never be treated as contained
+    # by a normal explicit Block rule.
+    if ($null -ne $security -and [string]$security.OverrideBlockRules -eq 'True') { return $false }
     $programPath = [Environment]::ExpandEnvironmentVariables([string]$application.Program)
     $expectedPath = Join-Path $env:SystemRoot 'System32\svchost.exe'
     try {
@@ -102,8 +106,12 @@ function Assert-SharedAccessBlockRule {
     }
     $application = Get-RuleFilter $rule 'Get-NetFirewallApplicationFilter'
     $service = Get-RuleFilter $rule 'Get-NetFirewallServiceFilter'
+    $security = Get-RuleFilter $rule 'Get-NetFirewallSecurityFilter'
     if ($null -eq $application -or $null -eq $service) {
         throw 'The TorProxy Internet Connection Sharing block rule filters cannot be verified.'
+    }
+    if ($null -ne $security -and [string]$security.OverrideBlockRules -eq 'True') {
+        throw 'The TorProxy Internet Connection Sharing block rule unexpectedly permits authenticated block bypass.'
     }
     $programPath = [Environment]::ExpandEnvironmentVariables([string]$application.Program)
     $expectedPath = [System.IO.Path]::GetFullPath((Join-Path $env:SystemRoot 'System32\svchost.exe'))
@@ -120,6 +128,8 @@ function Get-UnmanagedRuleDiagnostic($rule) {
     $service = Get-RuleFilter $rule 'Get-NetFirewallServiceFilter'
     $port = Get-RuleFilter $rule 'Get-NetFirewallPortFilter'
     $address = Get-RuleFilter $rule 'Get-NetFirewallAddressFilter'
+    $security = Get-RuleFilter $rule 'Get-NetFirewallSecurityFilter'
+    $overrideBlockRules = if ($null -ne $security) { [string]$security.OverrideBlockRules } else { 'unavailable' }
     $sourceType = if ([string]$rule.PolicyStoreSourceType) { [string]$rule.PolicyStoreSourceType } else { 'unknown' }
     $source = if ([string]$rule.PolicyStoreSource) { [string]$rule.PolicyStoreSource } else { 'unavailable' }
     $description = if ([string]$rule.Description) { [string]$rule.Description } else { 'none' }
@@ -133,7 +143,7 @@ function Get-UnmanagedRuleDiagnostic($rule) {
     $remoteAddress = if ($null -ne $address) { Format-FilterValue $address.RemoteAddress } else { 'unavailable' }
     $displayName = if ([string]$rule.DisplayName) { [string]$rule.DisplayName } else { 'none' }
     $group = if ([string]$rule.Group) { [string]$rule.Group } else { 'none' }
-    $details = "Name=$([string]$rule.Name); DisplayName=$displayName; Group=$group; Description=$description; SourceType=$sourceType; Source=$source; Program=$program; Package=$package; Service=$serviceName; Protocol=$protocol; LocalPort=$localPort; RemotePort=$remotePort; LocalAddress=$localAddress; RemoteAddress=$remoteAddress"
+    $details = "Name=$([string]$rule.Name); DisplayName=$displayName; Group=$group; Description=$description; SourceType=$sourceType; Source=$source; Program=$program; Package=$package; Service=$serviceName; Protocol=$protocol; LocalPort=$localPort; RemotePort=$remotePort; LocalAddress=$localAddress; RemoteAddress=$remoteAddress; OverrideBlockRules=$overrideBlockRules"
     if ($details.Length -gt 620) { return $details.Substring(0, 617) + '...' }
     return $details
 }
