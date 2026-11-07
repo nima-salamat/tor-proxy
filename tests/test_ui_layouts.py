@@ -1129,3 +1129,15 @@ def test_kill_switch_is_configurable_and_preflighted_before_services_start():
     assert "self.killswitch_manager.activate(programs)" in home_source
     assert 'if not failures and CONFIG["kill_switch_enabled"]:' in home_source
     assert 'return "blocked" if CONFIG["kill_switch_enabled"] else "direct"' in proxy_source
+
+
+
+def test_bundle_manager_exposes_manual_import_and_tor_only_network_routing():
+    repository = Path(__file__).resolve().parents[1]
+    updater_source = (repository / "ui_/window/updater_window.py").read_text(encoding="utf-8")
+    assert "QFileDialog.getOpenFileName" in updater_source
+    assert "self.btn_import_bundle.clicked.connect(self.choose_local_bundle)" in updater_source
+    assert 'tor_socks_proxy_url("127.0.0.1", port)' in updater_source
+    assert "Allow direct bootstrap connection?" in updater_source
+    assert 'if CONFIG["kill_switch_enabled"]:' in updater_source
+    assert "LOCAL · UNSIGNED" in updater_source

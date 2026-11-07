@@ -7,7 +7,9 @@ import os
 import platform
 import re
 import shutil
+import uuid
 from pathlib import Path
+from threading import Event
 from urllib.parse import unquote, urljoin, urlsplit
 
 import requests
@@ -18,10 +20,12 @@ from torproxy.bundle import (
     ALLOWED_DISTRIBUTION_HOSTS,
     BundleProgress,
     BundleVerificationError,
+    MAX_BUNDLE_BYTES,
     download_verified_bundle,
     sha256_file,
     verify_tor_signature,
 )
+from torproxy.network import NetworkRouteError, create_session
 from utils import resource_path
 
 logger = logging.getLogger(__name__)
@@ -79,28 +83,36 @@ def create_bundle_dir() -> None:
     Path(resource_path(BUNDLE_DIR)).mkdir(parents=True, exist_ok=True)
 
 
-def _fetch_listing(url: str) -> BeautifulSoup:
+def _fetch_listing(
+    url: str, proxy_url: str | None = None, *, allow_direct: bool = False
+) -> BeautifulSoup:
     parsed = urlsplit(url)
     if parsed.scheme != "https" or parsed.hostname not in ALLOWED_DISTRIBUTION_HOSTS:
         raise BundleVerificationError("Refusing to query an untrusted Tor distribution host.")
-    with requests.get(url, timeout=REQUEST_TIMEOUT, allow_redirects=False) as response:
-        if 300 <= response.status_code < 400:
-            raise BundleVerificationError("Redirects are refused when discovering Tor releases.")
-        final = urlsplit(response.url)
-        if final.scheme != "https" or final.hostname not in ALLOWED_DISTRIBUTION_HOSTS:
-            raise BundleVerificationError("Tor distribution listing redirected to an untrusted host.")
-        response.raise_for_status()
-        return BeautifulSoup(response.text, "html.parser")
+    try:
+        with create_session(proxy_url, allow_direct=allow_direct) as session:
+            with session.get(url, timeout=REQUEST_TIMEOUT, allow_redirects=False) as response:
+                if 300 <= response.status_code < 400:
+                    raise BundleVerificationError("Redirects are refused when discovering Tor releases.")
+                final = urlsplit(response.url)
+                if final.scheme != "https" or final.hostname not in ALLOWED_DISTRIBUTION_HOSTS:
+                    raise BundleVerificationError("Tor distribution listing redirected to an untrusted host.")
+                response.raise_for_status()
+                return BeautifulSoup(response.text, "html.parser")
+    except NetworkRouteError as exc:
+        raise BundleVerificationError(str(exc)) from exc
 
 
-def get_tor_versions(url: str = TOR_BUNDLE_BASE_URL) -> list[str]:
+def get_tor_versions(
+    url: str = TOR_BUNDLE_BASE_URL, *, proxy_url: str | None = None, allow_direct: bool = False
+) -> list[str]:
     """Return every recognized release directory, sorted stables first then alphas.
 
     Artifact availability is checked lazily when a user selects a release. This
     avoids firing one network request for every historical release at startup.
     """
     try:
-        soup = _fetch_listing(url)
+        soup = _fetch_listing(url, proxy_url, allow_direct=allow_direct)
         versions: set[str] = set()
         for link in soup.find_all("a", href=True):
             href = unquote(str(link.get("href", "")).strip())
@@ -157,6 +169,8 @@ def get_bundle_links(
     base_url: str = TOR_BUNDLE_BASE_URL,
     *,
     require_signature: bool = True,
+    proxy_url: str | None = None,
+    allow_direct: bool = False,
 ) -> list[str]:
     """Return the exact platform artifact, requiring .asc only when signature checks are enabled."""
     release = str(version).strip().strip("/")
@@ -165,7 +179,7 @@ def get_bundle_links(
     architecture = _architecture_name()
     listing_url = urljoin(base_url.rstrip("/") + "/", release + "/")
     try:
-        soup = _fetch_listing(listing_url)
+        soup = _fetch_listing(listing_url, proxy_url, allow_direct=allow_direct)
     except BundleVerificationError:
         raise
     except requests.RequestException as exc:
@@ -205,8 +219,10 @@ def download_file(
     progress_callback=None,
     cancel_event=None,
     verify_signature: bool = True,
+    proxy_url: str | None = None,
+    allow_direct: bool = False,
 ) -> Path:
-    """Download the exact current-platform Expert Bundle, optionally checking its OpenPGP signature."""
+    """Download the exact current-platform Expert Bundle using an explicit network route."""
     release = str(version).strip().strip("/")
     try:
         parse_tor_version(release)
@@ -230,6 +246,7 @@ def download_file(
             verify_tor_signature(
                 archive, signature, progress_callback=progress_callback,
                 cancel_event=cancel_event, version=release,
+                proxy_url=proxy_url, allow_direct=allow_direct,
             )
         except BundleVerificationError as exc:
             message = str(exc).lower()
@@ -245,14 +262,13 @@ def download_file(
                     message="Existing archive signature verified; safe extraction is still required.",
                 ))
             return archive
-    elif not verify_signature and archive.is_file():
-        logger.warning("Reusing cached Tor Expert Bundle %s without OpenPGP signature verification (disabled in Settings).", expected)
-        return archive
+    # An unsigned cache has no authenticated publisher identity. Always fetch a
+    # fresh archive for installation when OpenPGP verification is disabled.
     archive.parent.mkdir(parents=True, exist_ok=True)
     result = download_verified_bundle(
         release, _platform_name(), _architecture_name(), archive, base_url,
         progress_callback=progress_callback, cancel_event=cancel_event,
-        verify_signature=verify_signature,
+        verify_signature=verify_signature, proxy_url=proxy_url, allow_direct=allow_direct,
     )
     if verify_signature:
         logger.info("Downloaded and signature-verified Tor Expert Bundle %s.", expected)
@@ -275,9 +291,11 @@ def get_checksum(version: str, base_url: str = TOR_BUNDLE_BASE_URL) -> None:
     )
 
 
-def check_hash(filename, base_url: str = TOR_BUNDLE_BASE_URL, go_online: bool = False) -> bool:
+def check_hash(
+    filename, base_url: str = TOR_BUNDLE_BASE_URL, go_online: bool = False, *,
+    proxy_url: str | None = None, allow_direct: bool = False,
+) -> bool:
     """Return true only when a detached signature verifies against the pinned Tor key."""
-    del base_url
     path = Path(filename)
     if not path.is_absolute():
         path = bundle_path(path)
@@ -292,26 +310,30 @@ def check_hash(filename, base_url: str = TOR_BUNDLE_BASE_URL, go_online: bool = 
             )
             if path.name != expected:
                 return False
-            sig_url = urljoin(TOR_BUNDLE_BASE_URL.rstrip("/") + "/", "{}/{}.asc".format(version, path.name))
-            with requests.get(sig_url, timeout=REQUEST_TIMEOUT, allow_redirects=False) as response:
-                if 300 <= response.status_code < 400:
-                    return False
-                final = urlsplit(response.url)
-                if final.scheme != "https" or final.hostname not in ALLOWED_DISTRIBUTION_HOSTS:
-                    return False
-                response.raise_for_status()
-                if not response.content or len(response.content) > 1024 * 1024:
-                    return False
-            signature.write_bytes(response.content)
+            parsed_base = urlsplit(base_url)
+            if parsed_base.scheme != "https" or parsed_base.hostname not in ALLOWED_DISTRIBUTION_HOSTS:
+                return False
+            sig_url = urljoin(base_url.rstrip("/") + "/", "{}/{}.asc".format(version, path.name))
+            with create_session(proxy_url, allow_direct=allow_direct) as session:
+                with session.get(sig_url, timeout=REQUEST_TIMEOUT, allow_redirects=False) as response:
+                    if 300 <= response.status_code < 400:
+                        return False
+                    final = urlsplit(response.url)
+                    if final.scheme != "https" or final.hostname not in ALLOWED_DISTRIBUTION_HOSTS:
+                        return False
+                    response.raise_for_status()
+                    if not response.content or len(response.content) > 1024 * 1024:
+                        return False
+                    signature.write_bytes(response.content)
         except Exception:
             logger.exception("Could not retrieve a detached signature for %s.", path.name)
             return False
     if not signature.is_file():
         return False
     try:
-        verify_tor_signature(path, signature)
+        verify_tor_signature(path, signature, proxy_url=proxy_url, allow_direct=allow_direct)
         return True
-    except (BundleVerificationError, OSError):
+    except (BundleVerificationError, NetworkRouteError, OSError):
         logger.warning("Tor bundle signature verification failed: %s", path.name)
         return False
 
@@ -325,7 +347,7 @@ def _verification_marker(bundle_dir: Path) -> Path:
 
 
 def check_bundle_compatibility(filename: str) -> bool:
-    """Accept intact managed installs only when explicitly signed or marked HTTPS-only."""
+    """Accept intact managed installs with signed, HTTPS-only, or local-unverified provenance."""
     path = Path(filename).resolve()
     name = path.name
     if not path.is_dir() or not name.startswith("tor-expert-bundle-"):
@@ -340,7 +362,11 @@ def check_bundle_compatibility(filename: str) -> bool:
             metadata.get("signature_verified") is False
             and metadata.get("verification_method") == "https_only"
         )
-        if not (signature_verified or https_only):
+        local_unverified = (
+            metadata.get("signature_verified") is False
+            and metadata.get("verification_method") == "local_unverified"
+        )
+        if not (signature_verified or https_only or local_unverified):
             return False
         expected_digest = metadata.get("archive_sha256", "")
         if not re.fullmatch(r"[a-f0-9]{64}", expected_digest):
@@ -392,3 +418,148 @@ def delete_bundle(name: str) -> None:
             sidecar.unlink()
         except FileNotFoundError:
             pass
+
+
+
+def _copy_limited_local_file(
+    source: Path,
+    destination: Path,
+    *,
+    max_bytes: int,
+    expected_size: int,
+    cancel_event: Event | None = None,
+) -> int:
+    """Copy a local archive/sidecar atomically into a temporary file with size and cancel checks."""
+    total = 0
+    with source.open("rb") as input_file, destination.open("xb") as output_file:
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                raise BundleVerificationError("Local Tor bundle import was cancelled.")
+            chunk = input_file.read(1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                raise BundleVerificationError("The selected local file exceeds its configured size limit.")
+            output_file.write(chunk)
+        output_file.flush()
+        os.fsync(output_file.fileno())
+    if total != expected_size:
+        raise BundleVerificationError("The selected local file changed while it was being imported.")
+    return total
+
+
+def import_local_bundle(
+    filename: str | os.PathLike[str],
+    *,
+    verify_signature: bool = True,
+    proxy_url: str | None = None,
+    allow_direct: bool = False,
+    progress_callback=None,
+    cancel_event: Event | None = None,
+) -> Path:
+    """Import a user-selected Expert Bundle into managed storage using safe extraction."""
+    from utils import extract_tar_gz_file
+
+    source = Path(filename).expanduser().resolve()
+    if not source.is_file():
+        raise BundleVerificationError("The selected local Tor bundle archive does not exist.")
+    try:
+        version = get_version_by_bundle(source.name)
+    except ValueError as exc:
+        raise BundleVerificationError(str(exc)) from exc
+    expected = "tor-expert-bundle-{}-{}-{}.tar.gz".format(
+        _platform_name(), _architecture_name(), version
+    )
+    if source.name != expected:
+        raise BundleVerificationError(
+            "The selected archive does not match this device. Expected filename: {}".format(expected)
+        )
+    size = source.stat().st_size
+    if size <= 0 or size > MAX_BUNDLE_BYTES:
+        raise BundleVerificationError(
+            "The local archive is empty or exceeds the {} MiB size limit.".format(
+                MAX_BUNDLE_BYTES // (1024 * 1024)
+            )
+        )
+
+    signature_source = source.with_name(source.name + ".asc")
+    if verify_signature and not signature_source.is_file():
+        raise BundleVerificationError(
+            "OpenPGP verification is enabled, but the matching .asc file is missing beside the archive."
+        )
+    if signature_source.is_file() and signature_source.stat().st_size > 1024 * 1024:
+        raise BundleVerificationError("The detached signature file exceeds the 1 MiB size limit.")
+
+    create_bundle_dir()
+    archive = bundle_path(expected)
+    destination = bundle_path(expected[:-len(".tar.gz")])
+    signature = archive.with_name(archive.name + ".asc")
+    if archive.exists() or destination.exists() or signature.exists():
+        raise BundleVerificationError(
+            "A bundle with this version already exists in managed storage. Rescan installed bundles first."
+        )
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    temporary_archive = archive.with_name(".{}.{}.import".format(archive.name, uuid.uuid4().hex))
+    temporary_signature = signature.with_name(".{}.{}.import".format(signature.name, uuid.uuid4().hex))
+    archive_published = False
+    signature_published = False
+    try:
+        if cancel_event is not None and cancel_event.is_set():
+            raise BundleVerificationError("Local Tor bundle import was cancelled.")
+        if progress_callback:
+            progress_callback(BundleProgress(
+                version, "import", "copying_local_archive",
+                total_bytes=size, percentage=0,
+                message="Copying the selected local archive into managed storage.",
+            ))
+        _copy_limited_local_file(
+            source, temporary_archive, max_bytes=MAX_BUNDLE_BYTES,
+            expected_size=size, cancel_event=cancel_event,
+        )
+        if signature_source.is_file():
+            _copy_limited_local_file(
+                signature_source, temporary_signature, max_bytes=1024 * 1024,
+                expected_size=signature_source.stat().st_size, cancel_event=cancel_event,
+            )
+        if cancel_event is not None and cancel_event.is_set():
+            raise BundleVerificationError("Local Tor bundle import was cancelled.")
+        os.replace(temporary_archive, archive)
+        archive_published = True
+        if temporary_signature.is_file():
+            os.replace(temporary_signature, signature)
+            signature_published = True
+        installed = extract_tar_gz_file(
+            archive,
+            destination,
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+            version=version,
+            verify_signature=verify_signature,
+            verification_method="openpgp" if verify_signature else "local_unverified",
+            proxy_url=proxy_url,
+            allow_direct=allow_direct,
+        )
+        logger.info(
+            "Imported local Tor Expert Bundle %s (OpenPGP verification=%s).",
+            expected, verify_signature,
+        )
+        return installed
+    except Exception:
+        if archive_published:
+            try:
+                archive.unlink()
+            except FileNotFoundError:
+                pass
+        if signature_published:
+            try:
+                signature.unlink()
+            except FileNotFoundError:
+                pass
+        raise
+    finally:
+        for temporary in (temporary_archive, temporary_signature):
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass

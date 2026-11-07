@@ -33,6 +33,7 @@ The HTTP proxy is an independent local service. It is loopback-only. HTTP absolu
 - HTTP request handlers run in threads because proxy work is predominantly socket I/O; the local listener and its lifecycle remain in a dedicated background thread.
 - The traffic tracker drains a bounded, non-blocking byte-event queue and persists totals plus minute-level upload/download history to a per-user SQLite database on its own background thread. It never writes to disk from a socket handler; old minute buckets are pruned after 180 days.
 - Network requests and bundle installation run in UI worker tasks; results/errors return through worker signals.
+- TorProxy-owned HTTP requests share an explicit-route client. When Tor is READY, release discovery, artifact checks, archive/signature downloads, and pinned-key retrieval use the live loopback SOCKS5H endpoint with remote DNS. Direct bootstrap is available only after a per-operation user confirmation and is blocked while the system-wide Kill Switch is enabled; a failed Tor request never falls back to direct networking.
 
 Avoid calling widgets directly from a worker. Status and log updates should be delivered to Qt slots through signals. Some old UI helpers remain transitional and need the same review as the rest of the UI migration.
 
@@ -42,7 +43,7 @@ The current Qt shell retains the existing service-facing widgets and top navigat
 
 The bundle manager performs release-directory discovery separately from artifact eligibility. It recognizes the stable `X.Y.Z` and currently supported alpha `X.YaN`/ `X.Y.ZaN` forms, orders stable releases before prereleases, and checks for the exact platform/architecture archive plus a detached signature when OpenPGP is enabled. `BundleProgress` is an immutable event model propagated through the download callback and a Qt signal; widget updates remain in a GUI-thread slot. A missing total transfer length uses indeterminate progress, and the bar does not claim installation success before extraction and installation finish.
 
-OpenPGP publisher-signature verification is optional and off by default in Settings → Advanced. When enabled, TorProxy requires the detached signature, checks the full pinned Tor signing-key fingerprint, probes GnuPG before transferring the large archive, and fails closed if verification cannot run. When disabled, the archive is restricted to approved HTTPS hosts and safe extraction still applies, but publisher identity is not authenticated. Installation markers explicitly distinguish `openpgp` from `https_only`; the project does not bundle GnuPG or provide GnuPG-independent OpenPGP verification.
+OpenPGP publisher-signature verification is enabled by default in Settings → Advanced. When enabled, TorProxy requires the detached signature, checks the full pinned Tor signing-key fingerprint, probes GnuPG before transferring the large archive, and fails closed if verification cannot run. When disabled, the archive is restricted to approved HTTPS hosts and safe extraction still applies, but publisher identity is not authenticated. Installation markers distinguish `openpgp`, `https_only`, and manually imported `local_unverified` bundles; the project does not bundle GnuPG or provide GnuPG-independent OpenPGP verification.
 
 ## Persistence and resources
 
@@ -50,7 +51,7 @@ OpenPGP publisher-signature verification is optional and off by default in Setti
 - Runtime state, logs, and downloaded bundles are stored in per-user writable paths.
 - Packaged UI assets remain read-only resources.
 - JSON settings and host-rule files use temporary files and atomic replacement.
-- A downloaded Tor bundle is considered a managed/verified installation only when its detached signature is valid, archive digest is recorded, and verification marker is written in an isolated staging directory before the directory is atomically published at its final name.
+- A bundle is selectable only after safe extraction, a matching archive SHA-256 marker, and executable/platform checks. Signed downloads/imports are marked `openpgp`; unsigned HTTPS downloads and manual imports retain distinct `https_only` and `local_unverified` trust labels.
 
 ## Identity workflow
 

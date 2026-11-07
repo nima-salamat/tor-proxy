@@ -105,3 +105,30 @@ def test_install_can_explicitly_skip_openpgp_and_records_that_choice(tmp_path, m
     assert marker["archive_sha256"] == bundle_module.sha256_file(archive)
     assert events[0].stage == "signature_verification_skipped"
     assert events[-1].stage == "extracting_archive"
+
+
+
+def test_local_import_marker_is_distinct_from_https_only(tmp_path, monkeypatch):
+    archive = _archive(tmp_path / "tor-expert-bundle-test.tar.gz")
+    archive.with_name(archive.name + ".asc").unlink()
+    destination = tmp_path / "tor-expert-bundle-test"
+    monkeypatch.setattr(
+        utils, "verify_tor_signature",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("local unsigned import must not fetch a key")),
+    )
+    installed = utils.extract_tar_gz_file(
+        archive, destination, version="15.0.26",
+        verify_signature=False, verification_method="local_unverified",
+    )
+    marker = json.loads((installed / ".torproxy-verified.json").read_text(encoding="utf-8"))
+    assert marker["signature_verified"] is False
+    assert marker["verification_method"] == "local_unverified"
+
+
+def test_unknown_verification_method_is_rejected(tmp_path):
+    archive = _archive(tmp_path / "tor-expert-bundle-test.tar.gz")
+    with pytest.raises(BundleVerificationError, match="Unknown bundle verification method"):
+        utils.extract_tar_gz_file(
+            archive, tmp_path / "out", verify_signature=False,
+            verification_method="trusted_by_filename",
+        )

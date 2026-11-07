@@ -44,11 +44,21 @@ def extract_tar_gz_file(
     cancel_event: Event | None = None,
     version: str = "",
     verify_signature: bool = True,
+    verification_method: str | None = None,
+    proxy_url: str | None = None,
+    allow_direct: bool = False,
 ):
-    """Safely extract and atomically publish a bundle, recording whether OpenPGP was checked."""
+    """Safely extract and atomically publish a bundle with an explicit trust method."""
     archive = Path(filename).expanduser().resolve()
     destination = Path(dst).expanduser().resolve()
     signature = archive.with_name(archive.name + ".asc")
+    method = verification_method or ("openpgp" if verify_signature else "https_only")
+    if method not in {"openpgp", "https_only", "local_unverified"}:
+        raise BundleVerificationError("Unknown bundle verification method.")
+    if verify_signature and method != "openpgp":
+        raise BundleVerificationError("A signature-verified bundle must use the openpgp trust marker.")
+    if not verify_signature and method == "openpgp":
+        raise BundleVerificationError("The openpgp trust marker requires a successful signature check.")
     destination.parent.mkdir(parents=True, exist_ok=True)
     staging = destination.with_name(".{}.verified-{}".format(destination.name, uuid.uuid4().hex))
     try:
@@ -69,6 +79,7 @@ def extract_tar_gz_file(
             verify_tor_signature(
                 archive, signature, progress_callback=progress_callback,
                 cancel_event=cancel_event, version=version,
+                proxy_url=proxy_url, allow_direct=allow_direct,
             )
             if progress_callback:
                 progress_callback(BundleProgress(
@@ -78,7 +89,11 @@ def extract_tar_gz_file(
         elif progress_callback:
             progress_callback(BundleProgress(
                 version, "verify", "signature_verification_skipped",
-                message="OpenPGP is disabled in Settings. Extraction safeguards and SHA-256 bookkeeping remain enabled, but the publisher signature is unauthenticated.",
+                message=(
+                    "The locally supplied archive will be marked as unverified."
+                    if method == "local_unverified" else
+                    "OpenPGP is disabled. Extraction safeguards and SHA-256 bookkeeping remain enabled, but the publisher signature is unauthenticated."
+                ),
             ))
         if cancel_event is not None and cancel_event.is_set():
             raise BundleVerificationError("Tor bundle installation was cancelled before extraction.")
@@ -88,7 +103,12 @@ def extract_tar_gz_file(
                 message=(
                     "Signature verified. Safely extracting into an isolated staging directory."
                     if verify_signature else
-                    "Safely extracting the HTTPS-downloaded archive into an isolated staging directory; signature was not checked."
+                    (
+                        "Safely extracting the manually supplied archive into an isolated staging directory; "
+                        "the publisher signature was not checked."
+                        if method == "local_unverified" else
+                        "Safely extracting the HTTPS-downloaded archive into an isolated staging directory; signature was not checked."
+                    )
                 ),
             ))
         extracted = safe_extract_tar_gz(archive, staging)
@@ -96,7 +116,7 @@ def extract_tar_gz_file(
         marker_tmp = extracted / ".torproxy-verified.json.tmp"
         metadata = {
             "signature_verified": bool(verify_signature),
-            "verification_method": "openpgp" if verify_signature else "https_only",
+            "verification_method": method,
             "signing_key_fingerprint": TOR_SIGNING_FINGERPRINT if verify_signature else None,
             "archive_sha256": sha256_file(archive),
             "verified_at_utc": datetime.now(timezone.utc).isoformat(),

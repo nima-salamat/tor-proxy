@@ -731,11 +731,12 @@ class SettingWindow(QWidget):
         self.advanced_page_layout.addWidget(self.chk_verify_tor_signatures)
 
         details = QLabel(
-            "OFF (default): TorProxy downloads the exact Expert Bundle from the official Tor HTTPS host, "
-            "checks archive structure and records its SHA-256 digest, but does not authenticate the publisher's "
-            "cryptographic signature. This is less secure if the distribution host, connection or archive is compromised.\n\n"
-            "ON: TorProxy requires the matching detached .asc signature and checks it against Tor's pinned signing "
-            "key. A working GnuPG installation is required; missing or invalid signatures stop the installation."
+            "ON (default): TorProxy requires the matching detached .asc signature and checks it against Tor's "
+            "pinned signing key. A working GnuPG installation is required; missing or invalid signatures stop installation.\n\n"
+            "OFF: TorProxy downloads from the official HTTPS host and checks archive structure, but does not "
+            "authenticate the publisher's cryptographic signature. This is less secure if the distribution host, "
+            "connection or archive is compromised.\n\n"
+            "The same preference applies to manually imported bundles when a matching .asc file is available."
         )
         details.setWordWrap(True)
         details.setObjectName("signatureVerificationDetails")

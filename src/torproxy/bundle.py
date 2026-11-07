@@ -16,6 +16,8 @@ from urllib.parse import urlsplit
 
 import requests
 
+from .network import NetworkRouteError, create_session
+
 
 TOR_SIGNING_FINGERPRINT = "EF6E286DDA85EA2A4BA7DE684E2C6E8793298290"
 TOR_PUBLIC_KEY_URL = "https://keys.openpgp.org/vks/v1/by-fingerprint/" + TOR_SIGNING_FINGERPRINT
@@ -78,6 +80,8 @@ def _download(
     stage: str = "downloading_archive",
     progress_callback=None,
     cancel_event: Event | None = None,
+    proxy_url: str | None = None,
+    allow_direct: bool = False,
 ) -> None:
     parsed = urlsplit(url)
     if (parsed.scheme != "https" or parsed.hostname not in allowed_hosts
@@ -89,56 +93,59 @@ def _download(
     total_bytes = None
     try:
         _check_cancelled(cancel_event)
-        with requests.get(url, stream=True, timeout=timeout, allow_redirects=False) as response:
-            if 300 <= response.status_code < 400:
-                raise BundleVerificationError(
-                    "Download redirects are refused; use the published Tor distribution URL."
-                )
-            final = urlsplit(response.url)
-            if (final.scheme != "https" or final.hostname not in allowed_hosts
-                    or final.username or final.password or final.port not in (None, 443)):
-                raise BundleVerificationError(
-                    "The download redirected outside the approved Tor distribution hosts."
-                )
-            response.raise_for_status()
-            raw_length = response.headers.get("Content-Length")
-            try:
-                declared = int(raw_length) if raw_length is not None else 0
-                total_bytes = declared if declared > 0 else None
-            except (TypeError, ValueError):
-                total_bytes = None
-            if total_bytes is not None and total_bytes > max_bytes:
-                raise BundleVerificationError("The server file exceeds the configured size limit.")
-            _progress(progress_callback, BundleProgress(
-                version, operation, stage, 0, total_bytes, 0 if total_bytes else None,
-                None, None, "Connecting to the official Tor distribution.",
-            ))
-            with destination.open("wb") as output:
-                for chunk in response.iter_content(chunk_size=256 * 1024):
-                    _check_cancelled(cancel_event)
-                    if not chunk:
-                        continue
-                    total += len(chunk)
-                    if total > max_bytes:
-                        raise BundleVerificationError("The downloaded file exceeds the configured size limit.")
-                    if total_bytes is not None and total > total_bytes:
-                        raise BundleVerificationError(
-                            "The server sent more bytes than its declared Content-Length."
-                        )
-                    output.write(chunk)
-                    now = time.monotonic()
-                    elapsed = max(now - started, 0.001)
-                    speed = total / elapsed
-                    percentage = int(total * 100 / total_bytes) if total_bytes else None
-                    eta = int(max(total_bytes - total, 0) / speed) if total_bytes and speed > 0 else None
-                    if now - last_report >= PROGRESS_MIN_INTERVAL_SECONDS:
-                        _progress(progress_callback, BundleProgress(
-                            version, operation, stage, total, total_bytes, percentage, speed, eta,
-                            f"Received {total} bytes",
-                        ))
-                        last_report = now
-                output.flush()
-                os.fsync(output.fileno())
+        with create_session(proxy_url, allow_direct=allow_direct) as session:
+            with session.get(url, stream=True, timeout=timeout, allow_redirects=False) as response:
+                if 300 <= response.status_code < 400:
+                    raise BundleVerificationError(
+                        "Download redirects are refused; use the published Tor distribution URL."
+                    )
+                final = urlsplit(response.url)
+                if (final.scheme != "https" or final.hostname not in allowed_hosts
+                        or final.username or final.password or final.port not in (None, 443)):
+                    raise BundleVerificationError(
+                        "The download redirected outside the approved Tor distribution hosts."
+                    )
+                response.raise_for_status()
+                raw_length = response.headers.get("Content-Length")
+                try:
+                    declared = int(raw_length) if raw_length is not None else 0
+                    total_bytes = declared if declared > 0 else None
+                except (TypeError, ValueError):
+                    total_bytes = None
+                if total_bytes is not None and total_bytes > max_bytes:
+                    raise BundleVerificationError("The server file exceeds the configured size limit.")
+                _progress(progress_callback, BundleProgress(
+                    version, operation, stage, 0, total_bytes, 0 if total_bytes else None,
+                    None, None, "Connecting to the official Tor distribution.",
+                ))
+                with destination.open("wb") as output:
+                    for chunk in response.iter_content(chunk_size=256 * 1024):
+                        _check_cancelled(cancel_event)
+                        if not chunk:
+                            continue
+                        total += len(chunk)
+                        if total > max_bytes:
+                            raise BundleVerificationError("The downloaded file exceeds the configured size limit.")
+                        if total_bytes is not None and total > total_bytes:
+                            raise BundleVerificationError(
+                                "The server sent more bytes than its declared Content-Length."
+                            )
+                        output.write(chunk)
+                        now = time.monotonic()
+                        elapsed = max(now - started, 0.001)
+                        speed = total / elapsed
+                        percentage = int(total * 100 / total_bytes) if total_bytes else None
+                        eta = int(max(total_bytes - total, 0) / speed) if total_bytes and speed > 0 else None
+                        if now - last_report >= PROGRESS_MIN_INTERVAL_SECONDS:
+                            _progress(progress_callback, BundleProgress(
+                                version, operation, stage, total, total_bytes, percentage, speed, eta,
+                                f"Received {total} bytes",
+                            ))
+                            last_report = now
+                    output.flush()
+                    os.fsync(output.fileno())
+    except NetworkRouteError as exc:
+        raise BundleVerificationError(str(exc)) from exc
     except requests.RequestException as exc:
         raise BundleVerificationError(f"Download failed: {exc}") from exc
     except OSError:
@@ -220,6 +227,8 @@ def verify_tor_signature(
     progress_callback=None,
     cancel_event: Event | None = None,
     version: str = "",
+    proxy_url: str | None = None,
+    allow_direct: bool = False,
 ) -> None:
     """Verify a detached OpenPGP signature against the independently pinned Tor key."""
     artifact = Path(artifact)
@@ -241,7 +250,7 @@ def verify_tor_signature(
                 {"keys.openpgp.org", "openpgpkey.torproject.org"},
                 max_bytes=2 * 1024 * 1024, version=version, operation="verify",
                 stage="downloading_signing_key", progress_callback=progress_callback,
-                cancel_event=cancel_event,
+                cancel_event=cancel_event, proxy_url=proxy_url, allow_direct=allow_direct,
             )
             env = os.environ.copy()
             env["GNUPGHOME"] = str(home_path)
@@ -362,8 +371,10 @@ def download_verified_bundle(
     progress_callback=None,
     cancel_event: Event | None = None,
     verify_signature: bool = True,
+    proxy_url: str | None = None,
+    allow_direct: bool = False,
 ) -> Path:
-    """Download an exact Tor Expert Bundle over HTTPS and optionally authenticate its OpenPGP signature."""
+    """Download an exact Tor Expert Bundle over HTTPS using an explicit network route."""
     if not SUPPORTED_VERSION.fullmatch(version):
         raise BundleVerificationError("Unsupported Tor release version.")
     if platform_name not in {"windows", "linux"} or architecture not in {"x86_64", "i686"}:
@@ -399,6 +410,7 @@ def download_verified_bundle(
             base + filename, archive_tmp, ALLOWED_DISTRIBUTION_HOSTS,
             version=version, operation="download", stage="downloading_archive",
             progress_callback=progress_callback, cancel_event=cancel_event,
+            proxy_url=proxy_url, allow_direct=allow_direct,
         )
         _check_cancelled(cancel_event)
         if verify_signature:
@@ -406,7 +418,7 @@ def download_verified_bundle(
                 base + filename + ".asc", signature_tmp, ALLOWED_DISTRIBUTION_HOSTS,
                 max_bytes=1024 * 1024, version=version, operation="download",
                 stage="downloading_signature", progress_callback=progress_callback,
-                cancel_event=cancel_event,
+                cancel_event=cancel_event, proxy_url=proxy_url, allow_direct=allow_direct,
             )
             _check_cancelled(cancel_event)
             _progress(progress_callback, BundleProgress(
@@ -416,6 +428,7 @@ def download_verified_bundle(
             verify_tor_signature(
                 archive_tmp, signature_tmp, progress_callback=progress_callback,
                 cancel_event=cancel_event, version=version,
+                proxy_url=proxy_url, allow_direct=allow_direct,
             )
             _check_cancelled(cancel_event)
             _progress(progress_callback, BundleProgress(

@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QFrame,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -37,8 +38,10 @@ from updater import (
     get_own_bundles,
     get_tor_versions,
     get_version_by_bundle,
+    import_local_bundle as import_bundle_archive,
     tor_version_channel,
 )
+from torproxy.network import tor_socks_proxy_url
 from utils import extract_tar_gz_file
 from ui_.worker.worker import Worker
 
@@ -46,7 +49,7 @@ logger = logging.getLogger(__name__)
 
 
 class UpdaterWindow(QWidget):
-    """Discover official releases on demand; only verified extracted bundles are selectable."""
+    """Manage official and local Tor bundles with explicit trust and network routes."""
 
     progress_event = Signal(object)
 
@@ -62,6 +65,7 @@ class UpdaterWindow(QWidget):
         self._bundle_scan_in_progress = False
         self._bundle_scan_worker = None
         self._last_download: tuple[str, str, bool] | None = None
+        self._operation_route: tuple[str | None, bool] | None = None
         self._missing_bundle_notified = False
 
         root = QVBoxLayout(self)
@@ -146,6 +150,14 @@ class UpdaterWindow(QWidget):
         local_title = QLabel("Installed bundles")
         local_title.setObjectName("sectionTitle")
         local_heading.addWidget(local_title, 1)
+        self.btn_import_bundle = QPushButton("Import .tar.gz")
+        self.btn_import_bundle.setObjectName("quietButton")
+        self.btn_import_bundle.setIcon(qta.icon("fa6s.file-import", color="#dce8f4"))
+        self.btn_import_bundle.setToolTip(
+            "Import a local Tor Expert Bundle archive. A matching .asc file is used when signature verification is enabled."
+        )
+        self.btn_import_bundle.clicked.connect(self.choose_local_bundle)
+        local_heading.addWidget(self.btn_import_bundle)
         self.btn_refresh_version = QPushButton("Rescan")
         self.btn_refresh_version.setIcon(qta.icon("fa6s.rotate", color="#dce8f4"))
         self.btn_refresh_version.clicked.connect(self.refresh_version)
@@ -155,7 +167,9 @@ class UpdaterWindow(QWidget):
         self.list_tor_versions.setObjectName("releaseList")
         self.list_tor_versions.setMinimumHeight(250)
         self.list_tor_versions.setSelectionMode(QListWidget.SingleSelection)
-        self.list_tor_versions.setToolTip("Only signed, structurally validated bundles are listed here.")
+        self.list_tor_versions.setToolTip(
+            "Only bundles with a valid integrity marker, matching archive digest, compatible executable and safe layout are listed. Trust method is shown per bundle."
+        )
         installed_layout.addWidget(self.list_tor_versions, 1)
         self.lbl_default = QLabel()
         self.lbl_default.setObjectName("mutedText")
@@ -281,6 +295,7 @@ class UpdaterWindow(QWidget):
             widget.setPalette(palette)
         self._title_icon.setPixmap(qta.icon("fa6s.boxes-stacked", color=accent).pixmap(22, 22))
         self.btn_get_versions.setIcon(qta.icon("fa6s.arrows-rotate", color="#ffffff" if dark else "#ffffff"))
+        self.btn_import_bundle.setIcon(qta.icon("fa6s.file-import", color=icon_color))
         self.btn_refresh_version.setIcon(qta.icon("fa6s.rotate", color=icon_color))
         self.btn_set_default_version.setIcon(qta.icon("fa6s.check", color="#ffffff"))
         self.btn_delete_version.setIcon(qta.icon("fa6s.trash", color="#d94c4c"))
@@ -298,6 +313,7 @@ class UpdaterWindow(QWidget):
     def _set_busy(self, busy: bool, cancellable: bool = False) -> None:
         self._busy = busy
         self.btn_get_versions.setEnabled(not busy)
+        self.btn_import_bundle.setEnabled(not busy and not self._bundle_scan_in_progress)
         self.btn_refresh_version.setEnabled(not busy and not self._bundle_scan_in_progress)
         self.updates_list.setEnabled(not busy and not self._bundle_scan_in_progress)
         self.list_tor_versions.setEnabled(not busy and not self._bundle_scan_in_progress)
@@ -334,6 +350,70 @@ class UpdaterWindow(QWidget):
         except (OSError, ValueError, AttributeError):
             return False
 
+    @staticmethod
+    def _bundle_verification_method(path: str | Path) -> str:
+        try:
+            metadata = json.loads(
+                (Path(path) / ".torproxy-verified.json").read_text(encoding="utf-8")
+            )
+            return str(metadata.get("verification_method", ""))
+        except (OSError, ValueError, AttributeError):
+            return ""
+
+    @classmethod
+    def _bundle_trust_label(cls, path: str | Path) -> str:
+        method = cls._bundle_verification_method(path)
+        if method == "openpgp" and cls._bundle_signature_verified(path):
+            return "SIGNED"
+        if method == "local_unverified":
+            return "LOCAL · UNSIGNED"
+        return "HTTPS ONLY · UNSIGNED"
+
+    def _resolve_network_route(self, purpose: str) -> tuple[str | None, bool] | None:
+        """Use live Tor SOCKS when ready; direct bootstrap requires a separate opt-in."""
+        proxy_widget = getattr(self.parent_, "proxyWidget", None)
+        tor_runner = getattr(proxy_widget, "tor", None)
+        state = str(getattr(tor_runner, "state", "STOPPED") or "STOPPED").upper()
+        state = state.split(".")[-1]
+        if state == "READY":
+            try:
+                port = int(getattr(tor_runner, "socks_port"))
+                route = (tor_socks_proxy_url("127.0.0.1", port), False)
+                self._operation_route = route
+                return route
+            except (AttributeError, TypeError, ValueError, RuntimeError) as exc:
+                QMessageBox.warning(
+                    self, "Tor proxy unavailable",
+                    "Tor reports READY, but its SOCKS endpoint could not be validated: {}".format(exc),
+                )
+                return None
+        if state in {"STARTING", "BOOTSTRAPPING", "STOPPING"}:
+            QMessageBox.information(
+                self, "Tor is still connecting",
+                "{} was not started. Wait until Tor reaches READY; TorProxy will not bypass a connecting Tor instance.".format(purpose),
+            )
+            return None
+        if CONFIG["kill_switch_enabled"]:
+            QMessageBox.information(
+                self, "Kill Switch is active",
+                "The system-wide Kill Switch blocks direct bootstrap traffic. Connect Tor first, or deliberately disable the Kill Switch before using direct bootstrap.",
+            )
+            return None
+        reply = QMessageBox.question(
+            self,
+            "Allow direct bootstrap connection?",
+            (
+                "Tor is not connected. {} needs to contact the official Tor distribution service. "
+                "Allow this operation to connect directly, outside Tor? Your network provider may see "
+                "the destination and traffic metadata. No automatic direct fallback will occur if a Tor "
+                "connection fails."
+            ).format(purpose),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        route = (None, True) if reply == QMessageBox.StandardButton.Yes else None
+        return route
+
     def _update_install_state(self) -> None:
         if self._bundle_scan_in_progress and not self._verified_bundles_cache:
             self.lbl_install_state.setText("CHECKING LOCAL BUNDLES")
@@ -353,7 +433,8 @@ class UpdaterWindow(QWidget):
             ), None)
         if active_path:
             self.lbl_install_state.setText(
-                "SIGNED DEFAULT" if self._bundle_signature_verified(active_path) else "HTTPS-ONLY DEFAULT"
+                "SIGNED DEFAULT" if self._bundle_signature_verified(active_path)
+                else self._bundle_trust_label(active_path) + " DEFAULT"
             )
         elif available:
             self.lbl_install_state.setText("{} installed bundle(s)".format(len(available)))
@@ -362,8 +443,11 @@ class UpdaterWindow(QWidget):
         else:
             self.lbl_install_state.setText("No compatible bundle installed")
         if selected:
+            method = self._bundle_verification_method(selected)
             trust = (
                 "OpenPGP signature checked" if self._bundle_signature_verified(selected)
+                else "manually imported; publisher signature not checked" if method == "local_unverified"
+                else "HTTPS only; publisher signature not checked" if method == "https_only"
                 else "signature not checked / external path"
             )
             self.lbl_default.setText("Default: {} · {}".format(Path(selected).name, trust))
@@ -395,14 +479,18 @@ class UpdaterWindow(QWidget):
         configured = str(CONFIG["tor_path"] or "")
         for path in self._verified_bundles_cache:
             signed = self._bundle_signature_verified(path)
-            trust_label = "SIGNED" if signed else "HTTPS ONLY · UNSIGNED"
+            trust_label = self._bundle_trust_label(path)
+            method = self._bundle_verification_method(path)
             item = QListWidgetItem("{}  ·  {}".format(Path(path).name, trust_label))
             item.setData(Qt.ItemDataRole.UserRole, path)
-            item.setToolTip(
-                path + ("\nDetached OpenPGP signature matched the pinned Tor key."
-                        if signed else
-                        "\nDownloaded over HTTPS; the publisher's OpenPGP signature was not checked.")
+            detail = (
+                "Detached OpenPGP signature matched the pinned Tor key."
+                if signed else
+                "Manually imported from a local archive; publisher signature was not checked."
+                if method == "local_unverified" else
+                "Downloaded over HTTPS; publisher signature was not checked."
             )
+            item.setToolTip(path + "\n" + detail)
             if configured and os.path.normcase(str(Path(configured).resolve())) == os.path.normcase(str(Path(path).resolve())):
                 item.setText("{}  ·  {}  ·  DEFAULT".format(Path(path).name, trust_label))
             self.list_tor_versions.addItem(item)
@@ -441,9 +529,16 @@ class UpdaterWindow(QWidget):
             self.refresh_version()
             return
         signed = self._bundle_signature_verified(path)
+        method = self._bundle_verification_method(path)
         if signed:
             title = "Set default Tor bundle"
             prompt = "Use this OpenPGP-verified bundle for future Tor starts?\n\n{}".format(Path(path).name)
+        elif method == "local_unverified":
+            title = "Use locally imported bundle without signature?"
+            prompt = (
+                "This archive was supplied manually and its publisher signature was NOT checked. "
+                "A modified archive could execute malicious code. Use it only if you trust its source.\n\n{}"
+            ).format(Path(path).name)
         else:
             title = "Use HTTPS-only bundle?"
             prompt = (
@@ -497,16 +592,124 @@ class UpdaterWindow(QWidget):
             logger.exception("Could not delete Tor bundle.")
             QMessageBox.warning(self, "Could not delete bundle", str(exc))
 
+    def choose_local_bundle(self) -> None:
+        """Select and safely import a local Tor Expert Bundle archive."""
+        if self._busy:
+            return
+        filename, _filter = QFileDialog.getOpenFileName(
+            self, "Import Tor Expert Bundle", "",
+            "Tor Expert Bundle archives (*.tar.gz);;All files (*)",
+        )
+        if not filename:
+            return
+        source = Path(filename)
+        try:
+            version = get_version_by_bundle(source.name)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid Tor bundle", str(exc))
+            return
+
+        has_signature = source.with_name(source.name + ".asc").is_file()
+        verify_signature = bool(CONFIG["verify_tor_signatures"] and has_signature)
+        if verify_signature:
+            trust_text = (
+                "The matching .asc file was found. TorProxy will verify it against the pinned Tor signing key."
+            )
+        else:
+            reason = "The matching .asc file is missing." if not has_signature else (
+                "OpenPGP verification is disabled in Settings."
+            )
+            reply = QMessageBox.question(
+                self, "Import without publisher verification?",
+                "{} The archive will be marked LOCAL · UNSIGNED. Its publisher identity will not be "
+                "authenticated. Only continue if you trust the source of this file.\n\n{}".format(reason, source.name),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+            trust_text = "The local archive will be safely extracted and marked LOCAL · UNSIGNED."
+
+        route: tuple[str | None, bool] = (None, False)
+        if verify_signature:
+            selected_route = self._resolve_network_route("Tor signing-key retrieval for local bundle verification")
+            if selected_route is None:
+                return
+            route = selected_route
+        proxy_url, allow_direct = route
+        self.cancel_event = Event()
+        self._set_busy(True, cancellable=True)
+        self.lbl_status.setText("Importing local Tor bundle…")
+        self.lbl_progress_details.setText(trust_text)
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setFormat("Importing local archive…")
+        self.worker = Worker(
+            self._import_local_bundle_worker, filename, version, self.cancel_event,
+            self.progress_event.emit, verify_signature, proxy_url, allow_direct,
+        )
+        self.worker.signals.finished.connect(self._on_local_import_finished)
+        self.worker.signals.error.connect(self._on_local_import_error)
+        self.thread_pool.start(self.worker)
+
+    @staticmethod
+    def _import_local_bundle_worker(
+        filename: str, version: str, cancel_event: Event, progress_callback,
+        verify_signature: bool, proxy_url: str | None, allow_direct: bool,
+    ) -> str:
+        installed = import_bundle_archive(
+            filename, verify_signature=verify_signature,
+            proxy_url=proxy_url, allow_direct=allow_direct,
+            progress_callback=progress_callback, cancel_event=cancel_event,
+        )
+        progress_callback(BundleProgress(
+            version, "import", "installation_complete", percentage=100,
+            message="Local archive import completed.",
+        ))
+        if verify_signature:
+            return "Imported and OpenPGP-verified Tor Expert Bundle {}".format(Path(installed).name)
+        return "Imported local Tor Expert Bundle {} · LOCAL UNSIGNED".format(Path(installed).name)
+
+    def _on_local_import_finished(self, message: str) -> None:
+        self._set_busy(False)
+        self.cancel_event = None
+        self._operation_route = None
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(100)
+        self.progress_bar.setFormat("Imported")
+        self.lbl_status.setText(message)
+        self.lbl_progress_details.setText(
+            "Detached signature matched the pinned Tor key."
+            if "OpenPGP-verified" in message else
+            "Local archive imported and safely extracted; publisher signature was not checked."
+        )
+        self.refresh_version()
+        self._update_install_state()
+
+    def _on_local_import_error(self, error: str) -> None:
+        self._set_busy(False)
+        self.cancel_event = None
+        self._operation_route = None
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("Import failed")
+        self.lbl_status.setText("The local bundle was not installed.")
+        self.lbl_progress_details.setText(str(error))
+        QMessageBox.warning(self, "Local Tor bundle import failed", str(error))
+
     def get_available_versions(self) -> None:
         if self._busy:
             return
+        route = self._resolve_network_route("Tor release discovery")
+        if route is None:
+            return
+        proxy_url, allow_direct = route
         self._set_busy(True)
         self.lbl_discovery.setText("Contacting the official Tor distribution index…")
         self.lbl_status.setText("Discovering release directories. Artifact checks happen only when a release is selected.")
         self.progress_bar.setRange(0, 0)
         self.progress_bar.setFormat("Discovering releases…")
         self.lbl_progress_details.setText("")
-        self.worker = Worker(get_tor_versions)
+        self.worker = Worker(get_tor_versions, proxy_url=proxy_url, allow_direct=allow_direct)
         self.worker.signals.finished.connect(self.set_tor_versions)
         self.worker.signals.error.connect(self._on_discovery_error)
         self.thread_pool.start(self.worker)
@@ -558,6 +761,10 @@ class UpdaterWindow(QWidget):
         version = str(item.data(Qt.ItemDataRole.UserRole) or "").strip()
         if not version:
             return
+        route = self._resolve_network_route("Tor bundle availability check")
+        if route is None:
+            return
+        proxy_url, allow_direct = route
         verify_signature = bool(CONFIG["verify_tor_signatures"])
         self._set_busy(True)
         self.lbl_status.setText(
@@ -567,19 +774,30 @@ class UpdaterWindow(QWidget):
         self.lbl_progress_details.setText("A release directory alone does not mean a compatible archive is available.")
         self.progress_bar.setRange(0, 0)
         self.progress_bar.setFormat("Checking artifact…")
-        self.worker = Worker(self._check_selected_release, version, verify_signature)
+        self.worker = Worker(self._check_selected_release, version, verify_signature, proxy_url, allow_direct)
         self.worker.signals.finished.connect(self._on_links_checked)
         self.worker.signals.error.connect(self._on_discovery_error)
         self.thread_pool.start(self.worker)
 
-    def _check_selected_release(self, version: str, verify_signature: bool = True):
-        return version, get_bundle_links(version, require_signature=verify_signature), bool(verify_signature)
+    def _check_selected_release(
+        self, version: str, verify_signature: bool = True,
+        proxy_url: str | None = None, allow_direct: bool = False,
+    ):
+        links = get_bundle_links(
+            version, require_signature=verify_signature,
+            proxy_url=proxy_url, allow_direct=allow_direct,
+        )
+        return version, links, bool(verify_signature), proxy_url, bool(allow_direct)
 
     def _on_links_checked(self, data: str) -> None:
         result = self._parse_result(data, tuple)
         version = str(result[0]) if len(result) >= 1 else ""
         links = result[1] if len(result) >= 2 and isinstance(result[1], list) else []
         verify_signature = bool(result[2]) if len(result) >= 3 else bool(CONFIG["verify_tor_signatures"])
+        self._operation_route = (
+            result[3] if len(result) >= 4 else None,
+            bool(result[4]) if len(result) >= 5 else False,
+        )
         already_installed = any(
             Path(path).name.endswith("-" + version) for path in self._verified_bundles_cache
         )
@@ -649,6 +867,10 @@ class UpdaterWindow(QWidget):
     def _start_download(self, bundle: str, version: str, verify_signature: bool | None = None) -> None:
         if self._busy:
             return
+        route = self._resolve_network_route("Tor bundle download")
+        if route is None:
+            return
+        proxy_url, allow_direct = route
         verify_signature = bool(CONFIG["verify_tor_signatures"]) if verify_signature is None else bool(verify_signature)
         self.cancel_event = Event()
         self._last_download = (bundle, version, verify_signature)
@@ -663,7 +885,7 @@ class UpdaterWindow(QWidget):
         self.progress_bar.setFormat("Preparing…")
         self.worker = Worker(
             self.download_bundle, bundle, version, self.cancel_event,
-            self.progress_event.emit, verify_signature
+            self.progress_event.emit, verify_signature, proxy_url, allow_direct
         )
         self.worker.signals.finished.connect(self._on_download_finished)
         self.worker.signals.error.connect(self._on_download_error)
@@ -676,11 +898,13 @@ class UpdaterWindow(QWidget):
         cancel_event: Event,
         progress_callback,
         verify_signature: bool = True,
+        proxy_url: str | None = None,
+        allow_direct: bool = False,
     ):
         logger.info("Downloading Tor Expert Bundle %s (OpenPGP verification=%s)", bundle, verify_signature)
         archive = download_file(
             bundle, version, progress_callback=progress_callback, cancel_event=cancel_event,
-            verify_signature=verify_signature,
+            verify_signature=verify_signature, proxy_url=proxy_url, allow_direct=allow_direct,
         )
         if cancel_event.is_set():
             raise RuntimeError("Tor bundle installation was cancelled.")
@@ -688,6 +912,7 @@ class UpdaterWindow(QWidget):
         extract_tar_gz_file(
             archive, base_path, progress_callback=progress_callback,
             cancel_event=cancel_event, version=version, verify_signature=verify_signature,
+            proxy_url=proxy_url, allow_direct=allow_direct,
         )
         message = (
             "OpenPGP signature verified and bundle installed."
@@ -714,6 +939,7 @@ class UpdaterWindow(QWidget):
             "downloading_archive": "Downloading Tor archive",
             "downloading_signature": "Downloading detached signature",
             "downloading_signing_key": "Retrieving pinned-key material",
+            "copying_local_archive": "Copying local Tor archive",
             "verifying_signature": "Verifying OpenPGP signature",
             "signature_verified": "Signature verified",
             "archive_validated": "Archive saved; installation pending",
@@ -790,6 +1016,7 @@ class UpdaterWindow(QWidget):
             if "OpenPGP-verified" in message else
             "Downloaded from the official HTTPS host and safely extracted; publisher signature was not checked."
         )
+        self._operation_route = None
         self.refresh_version()
         self._update_install_state()
 
@@ -802,10 +1029,12 @@ class UpdaterWindow(QWidget):
         self.progress_bar.setFormat("Failed")
         message = str(error)
         if "cancelled" in message.lower():
+            self._operation_route = None
             self.lbl_status.setText("Operation cancelled. Temporary download files were removed; no bundle was installed.")
             self.lbl_progress_details.setText(message)
             self.btn_retry.setVisible(self._last_download is not None)
             return
+        self._operation_route = None
         self.lbl_status.setText("Download or installation failed. The bundle was not reported as installed.")
         self.lbl_progress_details.setText(message)
         self.btn_retry.setVisible(self._last_download is not None)

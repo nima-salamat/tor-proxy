@@ -76,3 +76,10 @@ System proxy changes happen only when the user explicitly selects the system-pro
 - Applications must be configured to use TorProxy's local HTTP proxy. Other applications' direct outbound connections are blocked, not transparently redirected.
 - Direct Exclude Host rules are blocked while Kill Switch is enabled.
 - The firewall policy intentionally remains active after Tor stops, TorProxy exits, and system restart. Turn the setting off explicitly to restore the saved state. If another administrator or security product changes the firewall policy, restoration may be refused to avoid overwriting external changes.
+
+
+## Bundle downloads and local imports
+
+When Tor reaches READY, TorProxy's own release-list, artifact, archive, detached-signature, and pinned-key requests use its live local SOCKS5H listener, including remote DNS. Direct bootstrap is a separate, explicitly confirmed operation and is unavailable while the Kill Switch is active. Network failures never trigger an automatic direct fallback.
+
+OpenPGP signature verification is enabled by default. To import a local Tor Expert Bundle, open Bundles → Import .tar.gz and select the exact archive matching this device's OS and architecture. A matching `.asc` file beside it is checked against the pinned Tor key when signature verification is enabled. An import without verified publisher signature is marked `LOCAL · UNSIGNED`, is never mislabeled as an HTTPS download, and requires an explicit trust confirmation before setting it as the default.

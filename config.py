@@ -52,7 +52,7 @@ DEFAULT_DATA: dict[str, Any] = {
     "system_proxy_auto": False,
     "system_proxy_mode": "unchanged",
     "log_level": "INFO",
-    "verify_tor_signatures": False,
+    "verify_tor_signatures": True,
     "kill_switch_enabled": False,
     "confirm_exit": True,
     "global_shortcut": "Ctrl+Alt+P",
