@@ -92,7 +92,7 @@ Before changing existing outbound Allow rules, TorProxy queries the merged Activ
 For a non-local rule, the activation error also includes its display name, description, policy source, application/package, service, protocol, ports, and address filters where Windows exposes them. These fields are read-only diagnostics: TorProxy does not remove a Dynamic/Generated/Hardcoded rule or assume that a rule is harmless merely because it belongs to Windows. For manual inspection, run the following in an elevated PowerShell window, substituting the rule name from the error:
 
 ```powershell
-$ruleName = '{d8fe030c-ada9-458c-b96a-8cf61b6ddc46}'
+$ruleName = Read-Host 'Paste the rule Name from the TorProxy error, including braces'
 $rule = Get-NetFirewallRule -PolicyStore ActiveStore -TracePolicyStore -Name $ruleName
 $rule | Format-List Name, DisplayName, Description, Group, Enabled, Profile, Direction, Action, PolicyStoreSourceType, PolicyStoreSource
 $rule | Get-NetFirewallApplicationFilter | Format-List Program, Package
