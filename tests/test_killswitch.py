@@ -173,6 +173,9 @@ def test_windows_firewall_helper_is_strict_about_outbound_exceptions():
     assert "Get-NetFirewallServiceFilter" in _POWERSHELL
     assert "Get-NetFirewallPortFilter" in _POWERSHELL
     assert "Get-NetFirewallAddressFilter" in _POWERSHELL
+    assert "Get-NetFirewallSecurityFilter" in _POWERSHELL
+    assert "security.OverrideBlockRules -eq 'True'" in _POWERSHELL
+    assert "authenticated block bypass" in _POWERSHELL
     assert "Program=$program" in _POWERSHELL
     assert "RemotePort=$remotePort" in _POWERSHELL
     assert "RemoteAddress=$remoteAddress" in _POWERSHELL
