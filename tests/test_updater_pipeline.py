@@ -440,7 +440,7 @@ def test_manual_bundle_import_installs_and_records_local_trust(tmp_path, monkeyp
 
     platform_name = "windows" if os.name == "nt" else "linux"
     executable_name = "tor.exe" if os.name == "nt" else "tor"
-    filename = "tor-expert-bundle-{}-x86_64-15.0.26.tar.gz".format(platform_name)
+    filename = f"tor-expert-bundle-{platform_name}-x86_64-15.0.26.tar.gz"
     source = _make_local_expert_bundle(tmp_path / filename)
     managed = tmp_path / "managed"
     monkeypatch.setattr(updater, "BUNDLE_DIR", str(managed))
@@ -466,7 +466,7 @@ def test_manual_bundle_import_checks_adjacent_signature(tmp_path, monkeypatch):
     import utils
 
     platform_name = "windows" if os.name == "nt" else "linux"
-    filename = "tor-expert-bundle-{}-x86_64-15.0.26.tar.gz".format(platform_name)
+    filename = f"tor-expert-bundle-{platform_name}-x86_64-15.0.26.tar.gz"
     source = _make_local_expert_bundle(tmp_path / filename)
     source.with_name(source.name + ".asc").write_bytes(b"detached signature")
     managed = tmp_path / "managed"
@@ -509,7 +509,7 @@ def test_manual_bundle_import_does_not_overwrite_existing_archive(tmp_path, monk
 
     platform_name = "windows" if os.name == "nt" else "linux"
     source = _make_local_expert_bundle(
-        tmp_path / "tor-expert-bundle-{}-x86_64-15.0.26.tar.gz".format(platform_name)
+        tmp_path / f"tor-expert-bundle-{platform_name}-x86_64-15.0.26.tar.gz"
     )
     managed = tmp_path / "managed"
     managed.mkdir()
