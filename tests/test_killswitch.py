@@ -186,7 +186,7 @@ def test_windows_firewall_helper_is_strict_about_outbound_exceptions():
     assert "[string]$rule.PolicyStoreSourceType -ne 'Dynamic'" in _POWERSHELL
     assert "$serviceNames -contains 'SharedAccess'" in _POWERSHELL
     assert "TorProxy_KS_Block_SharedAccess" in _POWERSHELL
-    assert "-Action Block -Program $sharedAccessProgram -Service SharedAccess" in _POWERSHELL
+    assert "-Action Block -Program $sharedAccessProgram -Service SharedAccess -OverrideBlockRules $false" in _POWERSHELL
     assert "Assert-SharedAccessBlockRule" in _POWERSHELL
     assert "Get-SnapshotValue $snapshot 'blockSharedAccess' -and" not in _POWERSHELL
     assert "Get-SnapshotValue $snapshot 'blockSharedAccess') -and (Test-SharedAccessDynamicAllowRule $_)" in _POWERSHELL
