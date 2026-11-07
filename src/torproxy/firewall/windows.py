@@ -342,8 +342,17 @@ try {
     }
     elseif ($Action -eq 'recover') {
         if (-not (Test-Path -LiteralPath $SnapshotPath)) {
-            throw 'No saved TorProxy firewall snapshot exists. Use emergency recovery to restore normal outbound access.'
-        }
+            $orphanedRules = @(Get-NetFirewallRule -PolicyStore PersistentStore -Group $Group -ErrorAction SilentlyContinue)
+            if ($orphanedRules.Count -gt 0) {
+                throw 'TorProxy firewall rules exist but the saved snapshot is missing. Use emergency recovery to restore outbound access.'
+            }
+            $currentProfiles = Get-ActiveProfiles
+            $stillBlocked = @($currentProfiles | Where-Object { [string]$_.DefaultOutboundAction -eq 'Block' })
+            if ($stillBlocked.Count -gt 0) {
+                throw 'No saved snapshot exists and outbound traffic is still blocked. Use emergency recovery to restore normal outbound access.'
+            }
+            Write-Result @{ ok = $true; active = $false; mode = 'already-restored'; detail = 'No TorProxy rules or restrictive outbound profile settings remain; recovery is already complete.' }
+        } else {
         $snapshot = Get-Content -LiteralPath $SnapshotPath -Raw | ConvertFrom-Json
         if (@($snapshot.profiles).Count -lt 1 -or [string]$snapshot.group -ne $Group) {
             throw 'The saved TorProxy firewall snapshot is invalid; no firewall changes were made.'
@@ -388,6 +397,7 @@ try {
         }
         Move-Item -LiteralPath $SnapshotPath -Destination $archivePath -Force
         Write-Result @{ ok = $true; active = $false; mode = 'snapshot'; detail = 'The saved firewall profiles and previously enabled local rules were restored and verified.' }
+        }
     }
     elseif ($Action -eq 'emergency') {
         # Explicit user-requested fallback. Keep Windows Firewall enabled and
