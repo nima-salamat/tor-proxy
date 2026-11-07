@@ -37,6 +37,43 @@ function Save-Snapshot($snapshot) {
 function Get-ActiveProfiles {
     return @(Get-NetFirewallProfile -Profile Domain,Private,Public | Select-Object Name,Enabled,DefaultOutboundAction)
 }
+function Format-FilterValue($value) {
+    if ($null -eq $value) { return 'Any' }
+    $items = @($value | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($items.Count -eq 0) { return 'Any' }
+    $text = $items -join ','
+    if ($text.Length -gt 96) { return $text.Substring(0, 93) + '...' }
+    return $text
+}
+function Get-RuleFilter($rule, [string]$cmdletName) {
+    try {
+        return ($rule | & $cmdletName -ErrorAction Stop | Select-Object -First 1)
+    } catch {
+        return $null
+    }
+}
+function Get-UnmanagedRuleDiagnostic($rule) {
+    $application = Get-RuleFilter $rule 'Get-NetFirewallApplicationFilter'
+    $service = Get-RuleFilter $rule 'Get-NetFirewallServiceFilter'
+    $port = Get-RuleFilter $rule 'Get-NetFirewallPortFilter'
+    $address = Get-RuleFilter $rule 'Get-NetFirewallAddressFilter'
+    $sourceType = if ([string]$rule.PolicyStoreSourceType) { [string]$rule.PolicyStoreSourceType } else { 'unknown' }
+    $source = if ([string]$rule.PolicyStoreSource) { [string]$rule.PolicyStoreSource } else { 'unavailable' }
+    $description = if ([string]$rule.Description) { [string]$rule.Description } else { 'none' }
+    $program = if ($null -ne $application) { Format-FilterValue $application.Program } else { 'unavailable' }
+    $package = if ($null -ne $application) { Format-FilterValue $application.Package } else { 'unavailable' }
+    $serviceName = if ($null -ne $service) { Format-FilterValue $service.Service } else { 'unavailable' }
+    $protocol = if ($null -ne $port) { Format-FilterValue $port.Protocol } else { 'unavailable' }
+    $localPort = if ($null -ne $port) { Format-FilterValue $port.LocalPort } else { 'unavailable' }
+    $remotePort = if ($null -ne $port) { Format-FilterValue $port.RemotePort } else { 'unavailable' }
+    $localAddress = if ($null -ne $address) { Format-FilterValue $address.LocalAddress } else { 'unavailable' }
+    $remoteAddress = if ($null -ne $address) { Format-FilterValue $address.RemoteAddress } else { 'unavailable' }
+    $displayName = if ([string]$rule.DisplayName) { [string]$rule.DisplayName } else { 'none' }
+    $group = if ([string]$rule.Group) { [string]$rule.Group } else { 'none' }
+    $details = "Name=$([string]$rule.Name); DisplayName=$displayName; Group=$group; Description=$description; SourceType=$sourceType; Source=$source; Program=$program; Package=$package; Service=$serviceName; Protocol=$protocol; LocalPort=$localPort; RemotePort=$remotePort; LocalAddress=$localAddress; RemoteAddress=$remoteAddress"
+    if ($details.Length -gt 620) { return $details.Substring(0, 617) + '...' }
+    return $details
+}
 function Assert-ManagedState($snapshot, $requireRules = $true) {
     $profiles = Get-ActiveProfiles
     foreach ($saved in $snapshot.profiles) {
@@ -100,20 +137,10 @@ try {
                 [string]$_.Group -ne $Group
             })
             if ($unmanaged.Count -gt 0) {
-                $details = @($unmanaged | Select-Object -First 8 | ForEach-Object {
-                    $sourceType = if ([string]$_.PolicyStoreSourceType) {
-                        [string]$_.PolicyStoreSourceType
-                    } else {
-                        'unknown source'
-                    }
-                    $source = if ([string]$_.PolicyStoreSource) {
-                        [string]$_.PolicyStoreSource
-                    } else {
-                        'source path unavailable'
-                    }
-                    "$([string]$_.Name) [$sourceType; $source]"
-                }) -join '; '
-                throw "Enabled outbound Allow rules outside the local firewall store cannot be safely disabled: $details"
+                $details = @($unmanaged | Select-Object -First 4 | ForEach-Object {
+                    Get-UnmanagedRuleDiagnostic $_
+                }) -join ' || '
+                throw "Enabled outbound Allow rules outside the local firewall store cannot be safely disabled. Rule filters are included to identify their owner and scope: $details"
             }
             $snapshot = [ordered]@{
                 version = 1
