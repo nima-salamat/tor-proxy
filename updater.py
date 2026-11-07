@@ -141,11 +141,12 @@ def get_tor_versions(
     avoids firing one network request for every historical release at startup.
     """
     failures: list[str] = []
-    saw_listing = False
+    last_error: requests.RequestException | None = None
     for source_base in _distribution_base_urls(url):
         try:
             soup = _fetch_listing(source_base, proxy_url, allow_direct=allow_direct)
         except requests.RequestException as exc:
+            last_error = exc
             message = network_error_message(
                 exc, purpose="Tor release discovery",
                 proxy_url=proxy_url, allow_direct=allow_direct,
@@ -157,7 +158,6 @@ def get_tor_versions(
             )
             continue
 
-        saw_listing = True
         versions: set[str] = set()
         for link in soup.find_all("a", href=True):
             href = unquote(str(link.get("href", "")).strip())
@@ -188,7 +188,7 @@ def get_tor_versions(
         raise _raise_distribution_failure(
             "Tor release discovery", failures,
             proxy_url=proxy_url, allow_direct=allow_direct,
-        )
+        ) from last_error
     raise BundleVerificationError(
         "The official Tor release listings returned no recognizable stable or supported alpha release directories."
     )
@@ -229,12 +229,14 @@ def get_bundle_links(
     architecture = _architecture_name()
     expected = f"tor-expert-bundle-{platform_name}-{architecture}-{release}.tar.gz"
     failures: list[str] = []
+    last_error: requests.RequestException | None = None
     sources = _distribution_base_urls(base_url)
     for source_base in sources:
         listing_url = urljoin(source_base, release + "/")
         try:
             soup = _fetch_listing(listing_url, proxy_url, allow_direct=allow_direct)
         except requests.RequestException as exc:
+            last_error = exc
             message = network_error_message(
                 exc,
                 purpose=f"Artifact availability check for Tor release {release}",
@@ -266,7 +268,7 @@ def get_bundle_links(
         raise _raise_distribution_failure(
             f"Artifact availability check for Tor release {release}", failures,
             proxy_url=proxy_url, allow_direct=allow_direct,
-        )
+        ) from last_error
     return []
 
 def get_version_by_bundle(filename: str, with_slash: bool = False) -> str:
