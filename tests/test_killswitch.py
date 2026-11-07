@@ -131,6 +131,19 @@ def test_windows_elevated_runner_has_a_bounded_wait_and_terminates_timeouts():
     assert "WAIT_TIMEOUT" in source
 
 
+def test_manager_recovery_state_is_local_and_does_not_require_admin():
+    class RecoveryStateBackend(FakeBackend):
+        def recovery_state(self):
+            return {"available": True, "snapshot_exists": True, "verified": False}
+
+    manager = KillSwitchManager(backend=RecoveryStateBackend())
+    assert manager.recovery_state() == {
+        "available": True,
+        "snapshot_exists": True,
+        "verified": False,
+    }
+
+
 def test_manager_rejects_missing_or_empty_tor_allowlist(tmp_path):
     manager = KillSwitchManager(backend=FakeBackend())
     with pytest.raises(KillSwitchError, match="does not exist"):
