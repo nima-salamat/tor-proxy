@@ -100,7 +100,7 @@ def network_error_message(
 
     return (
         f"{purpose} failed {route_context} ({route}): {cause} "
-        "Check Tor connectivity or network access, then retry."
+        "Check the network connection, Tor connectivity, or firewall settings, then retry."
     )
 
 
