@@ -779,17 +779,21 @@ class ProxyWindow(QWidget):
                     or "Kill Switch recovery is unavailable on this operating system."
                 )
             if emergency:
-                manager.emergency_recover()
+                outcome = manager.emergency_recover()
+                detail = str(outcome.get("detail", "")).strip() if isinstance(outcome, dict) else ""
                 message = (
                     "Emergency recovery completed. Windows Firewall remains enabled; outbound traffic is allowed, "
                     "and only TorProxy-owned firewall rules were removed."
                 )
             else:
-                manager.recover()
+                outcome = manager.recover()
+                detail = str(outcome.get("detail", "")).strip() if isinstance(outcome, dict) else ""
                 message = (
                     "The saved firewall configuration was restored and verified. "
                     "The Kill Switch is now disabled."
                 )
+            if detail:
+                message += " " + detail
             try:
                 CONFIG["kill_switch_enabled"] = False
             except Exception as exc:
@@ -828,6 +832,20 @@ class ProxyWindow(QWidget):
             programs = [self.tor.tor_path]
             if self.tor.bridge and self.tor.lyrebird_path and Path(self.tor.lyrebird_path).is_file():
                 programs.append(self.tor.lyrebird_path)
+
+            # A previous failed enable/disable can leave a saved snapshot behind
+            # while the persistent preference is off. Reconcile that partial state
+            # before taking a fresh snapshot. Do not do this during normal connection
+            # preflight when Kill Switch is already configured as active.
+            if not bool(CONFIG["kill_switch_enabled"]):
+                recovery_state = manager.recovery_state()
+                if recovery_state.get("snapshot_exists"):
+                    recovered = manager.recover()
+                    recovery_detail = str(recovered.get("detail", "")).strip() if isinstance(recovered, dict) else ""
+                    logger.warning(
+                        "Reconciled a pending Kill Switch snapshot before activation: %s",
+                        recovery_detail or "recovery completed",
+                    )
 
             try:
                 manager.activate(programs)
