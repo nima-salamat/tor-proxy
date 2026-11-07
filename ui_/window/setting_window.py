@@ -873,7 +873,7 @@ class SettingWindow(QWidget):
             )
         else:
             self._set_kill_switch_status(
-                "Protection is off. No pending TorProxy firewall snapshot was found.",
+                "The saved preference is off and no snapshot was found. The Windows firewall's effective policy has not been verified.",
                 "idle",
             )
 
