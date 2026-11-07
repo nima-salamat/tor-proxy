@@ -37,6 +37,26 @@ function Save-Snapshot($snapshot) {
 function Get-ActiveProfiles {
     return @(Get-NetFirewallProfile -Profile Domain,Private,Public | Select-Object Name,Enabled,DefaultOutboundAction)
 }
+function Get-SnapshotValue($snapshot, [string]$name) {
+    if ($snapshot -is [System.Collections.IDictionary]) {
+        return $snapshot[$name]
+    }
+    $property = $snapshot.PSObject.Properties[$name]
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
+function Set-SnapshotValue($snapshot, [string]$name, $value) {
+    if ($snapshot -is [System.Collections.IDictionary]) {
+        $snapshot[$name] = $value
+        return
+    }
+    $property = $snapshot.PSObject.Properties[$name]
+    if ($null -eq $property) {
+        $snapshot | Add-Member -NotePropertyName $name -NotePropertyValue $value
+    } else {
+        $property.Value = $value
+    }
+}
 function Format-FilterValue($value) {
     if ($null -eq $value) { return 'Any' }
     $items = @($value | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
@@ -139,7 +159,7 @@ function Assert-ManagedState($snapshot, $requireRules = $true) {
         if ($groupRules.Count -lt 1) {
             throw 'TorProxy firewall rules are missing. The saved snapshot was retained for manual recovery.'
         }
-        if ([bool]$snapshot.blockSharedAccess) {
+        if ([bool](Get-SnapshotValue $snapshot 'blockSharedAccess')) {
             Assert-SharedAccessBlockRule
         }
     }
@@ -214,12 +234,12 @@ try {
         $latestActiveAllow = @(Get-NetFirewallRule -PolicyStore ActiveStore -TracePolicyStore -Direction Outbound -Action Allow -Enabled True -ErrorAction SilentlyContinue)
         $latestSharedAccessRules = @($latestActiveAllow | Where-Object { Test-SharedAccessDynamicAllowRule $_ })
         if ($latestSharedAccessRules.Count -gt 0) {
-            $snapshot.blockSharedAccess = $true
-            $snapshot.sharedAccessProgram = Join-Path $env:SystemRoot 'System32\svchost.exe'
+            Set-SnapshotValue $snapshot 'blockSharedAccess' $true
+            Set-SnapshotValue $snapshot 'sharedAccessProgram' (Join-Path $env:SystemRoot 'System32\svchost.exe')
             Save-Snapshot $snapshot
-        } elseif ($null -eq $snapshot.blockSharedAccess) {
-            $snapshot.blockSharedAccess = $false
-            $snapshot.sharedAccessProgram = Join-Path $env:SystemRoot 'System32\svchost.exe'
+        } elseif ($null -eq (Get-SnapshotValue $snapshot 'blockSharedAccess')) {
+            Set-SnapshotValue $snapshot 'blockSharedAccess' $false
+            Set-SnapshotValue $snapshot 'sharedAccessProgram' (Join-Path $env:SystemRoot 'System32\svchost.exe')
             Save-Snapshot $snapshot
         }
 
@@ -238,8 +258,8 @@ try {
         New-NetFirewallRule -PolicyStore PersistentStore -Name 'TorProxy_KS_DHCPv4' -DisplayName 'TorProxy Kill Switch DHCPv4' -Group $Group -Direction Outbound -Action Allow -Protocol UDP -LocalPort 68 -RemotePort 67 -RemoteAddress Any -Profile Any | Out-Null
         New-NetFirewallRule -PolicyStore PersistentStore -Name 'TorProxy_KS_DHCPv6' -DisplayName 'TorProxy Kill Switch DHCPv6' -Group $Group -Direction Outbound -Action Allow -Protocol UDP -LocalPort 546 -RemotePort 547 -RemoteAddress Any -Profile Any | Out-Null
         New-NetFirewallRule -PolicyStore PersistentStore -Name 'TorProxy_KS_NDP' -DisplayName 'TorProxy Kill Switch IPv6 Neighbor Discovery' -Group $Group -Direction Outbound -Action Allow -Protocol ICMPv6 -IcmpType 133,135,136 -RemoteAddress Any -Profile Any | Out-Null
-        if ([bool]$snapshot.blockSharedAccess) {
-            $sharedAccessProgram = [string]$snapshot.sharedAccessProgram
+        if ([bool](Get-SnapshotValue $snapshot 'blockSharedAccess')) {
+            $sharedAccessProgram = [string](Get-SnapshotValue $snapshot 'sharedAccessProgram')
             if (-not $sharedAccessProgram) {
                 $sharedAccessProgram = Join-Path $env:SystemRoot 'System32\svchost.exe'
             }
@@ -255,14 +275,14 @@ try {
         }
         $remaining = @(Get-NetFirewallRule -PolicyStore ActiveStore -TracePolicyStore -Direction Outbound -Action Allow -Enabled True | Where-Object {
             if ([string]$_.Group -eq $Group) { return $false }
-            if ([bool]$snapshot.blockSharedAccess -and (Test-SharedAccessDynamicAllowRule $_)) { return $false }
+            if ([bool](Get-SnapshotValue $snapshot 'blockSharedAccess') -and (Test-SharedAccessDynamicAllowRule $_)) { return $false }
             return $true
         })
         if ($remaining.Count -gt 0) {
             $details = @($remaining | Select-Object -First 4 | ForEach-Object { Get-UnmanagedRuleDiagnostic $_ }) -join ' || '
             throw "Unmanaged outbound Allow rules remain active; strict Kill Switch verification failed: $details"
         }
-        if ([bool]$snapshot.blockSharedAccess) {
+        if ([bool](Get-SnapshotValue $snapshot 'blockSharedAccess')) {
             Assert-SharedAccessBlockRule
         }
         Write-Result @{ ok = $true; active = $true; detail = 'Outbound default block verified; TorProxy exceptions and the SharedAccess deny override are active.' }
@@ -320,7 +340,7 @@ try {
             Assert-ManagedState $snapshot
             $remaining = @(Get-NetFirewallRule -PolicyStore ActiveStore -TracePolicyStore -Direction Outbound -Action Allow -Enabled True | Where-Object {
                 if ([string]$_.Group -eq $Group) { return $false }
-                if ([bool]$snapshot.blockSharedAccess -and (Test-SharedAccessDynamicAllowRule $_)) { return $false }
+                if ([bool](Get-SnapshotValue $snapshot 'blockSharedAccess') -and (Test-SharedAccessDynamicAllowRule $_)) { return $false }
                 return $true
             })
             $verified = $remaining.Count -eq 0
