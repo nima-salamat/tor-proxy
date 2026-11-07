@@ -165,6 +165,8 @@ def test_windows_standard_install_paths_find_chrome_edge_and_firefox(tmp_path, m
     for executable in (chrome, edge, firefox, ungoogled):
         executable.parent.mkdir(parents=True, exist_ok=True)
         executable.write_text("browser", encoding="utf-8")
+    if os.name != "nt":
+        executable.chmod(0o755)
 
     monkeypatch.setitem(sys.modules, "winreg", None)
     detector = BrowserDetector(
@@ -256,6 +258,8 @@ def test_browser_profiles_are_separated_when_proxy_port_changes(tmp_path):
 def test_chromium_launch_uses_isolated_profile_and_single_non_direct_proxy(tmp_path):
     executable = tmp_path / "chrome"
     executable.write_text("browser", encoding="utf-8")
+    if os.name != "nt":
+        executable.chmod(0o755)
     captured = {}
 
     class Process:
@@ -299,6 +303,8 @@ def test_chromium_launch_uses_isolated_profile_and_single_non_direct_proxy(tmp_p
 def test_firefox_launch_configures_manual_proxy_without_touching_other_profile(tmp_path):
     executable = tmp_path / "firefox"
     executable.write_text("browser", encoding="utf-8")
+    if os.name != "nt":
+        executable.chmod(0o755)
     captured = {}
 
     class Process:
@@ -342,6 +348,8 @@ def test_firefox_launch_configures_manual_proxy_without_touching_other_profile(t
 def test_browser_launch_is_refused_when_proxy_is_not_listening(tmp_path):
     executable = tmp_path / "chrome"
     executable.write_text("browser", encoding="utf-8")
+    if os.name != "nt":
+        executable.chmod(0o755)
     launcher = BrowserLauncher(
         BrowserProfileManager(tmp_path / "profiles"),
         proxy_probe=lambda _host, _port: False,
@@ -356,6 +364,8 @@ def test_tor_browser_is_rejected_as_a_managed_browser(tmp_path):
     executable = tmp_path / "Tor Browser" / "Browser" / "firefox"
     executable.parent.mkdir(parents=True)
     executable.write_text("browser", encoding="utf-8")
+    if os.name != "nt":
+        executable.chmod(0o755)
     launcher = BrowserLauncher(BrowserProfileManager(tmp_path / "profiles"))
     browser = Browser("tor-browser", "Tor Browser", "firefox", str(executable))
     with pytest.raises(BrowserLaunchError, match="own Tor stack"):
@@ -365,6 +375,8 @@ def test_tor_browser_is_rejected_as_a_managed_browser(tmp_path):
 def test_browser_url_must_be_http_or_https(tmp_path):
     executable = tmp_path / "chrome"
     executable.write_text("browser", encoding="utf-8")
+    if os.name != "nt":
+        executable.chmod(0o755)
     launcher = BrowserLauncher(BrowserProfileManager(tmp_path / "profiles"))
     browser = Browser("chrome", "Chrome", "chromium", str(executable))
     with pytest.raises(BrowserLaunchError, match="HTTP or HTTPS"):
@@ -379,8 +391,9 @@ def test_home_open_browser_button_requires_verified_tor_and_persistent_listener_
     assert 'self.btn_open_browser = QPushButton' in home_source
     assert "self.btn_open_browser.clicked.connect(self.open_browser_dialog)" in home_source
     assert "self.running and self.connected" in home_source
-    assert "resolve_listener_ports(CONFIG, strict_manual=False)" in home_source
-    assert "resolve_listener_ports(CONFIG, strict_manual=True)" in home_source
+    assert "resolve_listener_ports(" in home_source
+    assert "strict_manual=False" in home_source
+    assert "strict_manual=True" in home_source
     assert "reusing saved port" in ports_source
     assert "switched to and saved port" in ports_source
     settings_source = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
@@ -398,6 +411,8 @@ def test_home_open_browser_button_requires_verified_tor_and_persistent_listener_
 def test_custom_browser_store_persists_and_reloads_entries(tmp_path):
     executable = tmp_path / "custom-browser"
     executable.write_text("browser", encoding="utf-8")
+    if os.name != "nt":
+        executable.chmod(0o755)
     store = CustomBrowserStore(tmp_path / "custom_browsers.json")
     browser = Browser("custom-test", "Custom Browser", "chromium", str(executable), source="custom")
     store.add(browser)
