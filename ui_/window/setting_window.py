@@ -845,14 +845,34 @@ class SettingWindow(QWidget):
         label.style().polish(label)
 
     def _refresh_kill_switch_status(self) -> None:
-        if bool(CONFIG["kill_switch_enabled"]):
+        enabled = bool(CONFIG["kill_switch_enabled"])
+        proxy_owner = getattr(self._parent, "proxyWidget", None)
+        manager = getattr(proxy_owner, "killswitch_manager", None)
+        recovery_state = manager.recovery_state() if manager is not None else {}
+        snapshot_exists = bool(recovery_state.get("snapshot_exists"))
+
+        if snapshot_exists and not enabled:
             self._set_kill_switch_status(
-                "Protection is active. Direct outbound connections are blocked; TorProxy's managed Tor traffic remains allowed.",
+                "A previous Kill Switch snapshot was found while the saved preference is off. "
+                "The firewall may contain a partial or stale policy. Use Restore saved firewall; "
+                "use Emergency network recovery only if normal recovery cannot restore connectivity.",
+                "error",
+            )
+        elif enabled and not snapshot_exists and recovery_state.get("available"):
+            self._set_kill_switch_status(
+                "The saved preference says protection is on, but its recovery snapshot is missing. "
+                "The firewall state cannot be verified. Use Emergency network recovery if direct connectivity is blocked.",
+                "error",
+            )
+        elif enabled:
+            self._set_kill_switch_status(
+                "Kill Switch is configured as enabled. Firewall state is verified again before Tor starts. "
+                "Use Restore saved firewall to disable protection.",
                 "active",
             )
         else:
             self._set_kill_switch_status(
-                "Protection is off. TorProxy has not changed the system firewall policy.",
+                "Protection is off. No pending TorProxy firewall snapshot was found.",
                 "idle",
             )
 
@@ -958,11 +978,18 @@ class SettingWindow(QWidget):
         self.chk_kill_switch.blockSignals(True)
         self.chk_kill_switch.setChecked(actual)
         self.chk_kill_switch.blockSignals(False)
-        action = "enable" if requested else "disable"
-        self._set_kill_switch_status(
-            f"Could not {action} protection. Current saved state: {'on' if actual else 'off'}.",
-            "error",
-        )
+        if requested:
+            status_message = (
+                "Enable did not complete. TorProxy attempted to roll back any partial firewall changes. "
+                "Use Restore saved firewall to reconcile a remaining snapshot, or Emergency network recovery "
+                "if network access is still blocked."
+            )
+        else:
+            status_message = (
+                "Disable could not be verified. The firewall may still be restrictive. "
+                "Use Restore saved firewall; use Emergency network recovery if that cannot restore connectivity."
+            )
+        self._set_kill_switch_status(status_message, "error")
         QMessageBox.warning(self, "Kill Switch", str(error))
 
     def _confirm_kill_switch_recovery(self, mode: str) -> None:
