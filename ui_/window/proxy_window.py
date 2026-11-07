@@ -793,18 +793,29 @@ class ProxyWindow(QWidget):
             try:
                 manager.activate(programs)
             except Exception as activation_error:
-                # Activation can fail after a restrictive profile/table has been
-                # installed. Attempt ownership-checked cleanup; if that fails,
-                # surface both errors and leave manual recovery possible.
+                # Activation can fail after a restrictive policy was partially
+                # installed. Reconcile the snapshot before reporting failure.
                 try:
                     manager.recover()
                 except Exception as recovery_error:
                     raise KillSwitchError(
                         f"Firewall activation failed: {activation_error}. "
                         f"Automatic recovery also failed: {recovery_error}. "
-                        "The firewall may remain restrictive; inspect its TorProxy-owned state before changing it."
+                        "The firewall state is not confirmed. Use Restore saved firewall or Emergency network recovery."
                     ) from activation_error
-                raise
+                try:
+                    CONFIG["kill_switch_enabled"] = False
+                except Exception as preference_error:
+                    logger.exception("Could not clear the Kill Switch preference after rollback.")
+                    raise KillSwitchError(
+                        f"Activation failed and the firewall recovery completed, but the off preference could not be saved: {preference_error}. "
+                        "Do not restart TorProxy until the Kill Switch preference is confirmed off."
+                    ) from activation_error
+                raise KillSwitchError(
+                    f"Kill Switch was not enabled: {activation_error}. "
+                    "TorProxy removed its partial rules and reconciled the saved firewall state. "
+                    "Review the firewall profile settings; you can retry after they are consistent."
+                ) from activation_error
 
             try:
                 CONFIG["kill_switch_enabled"] = True
