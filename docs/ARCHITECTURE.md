@@ -55,3 +55,10 @@ OpenPGP publisher-signature verification is optional and off by default in Setti
 ## Identity workflow
 
 A manual identity request checks Stem's `get_newnym_wait()`. When Tor reports a cooldown, the UI declines the request and logs the wait; otherwise it sends `NEWNYM`. Neither signal acceptance nor a completed request guarantees an exit-IP change. Existing connections may remain on their current circuits.
+
+
+## Kill Switch lifecycle
+
+\`KillSwitchManager\` coordinates platform-specific firewall backends independently of \`TorManager\`. \`ProxyWindow\` applies and verifies the firewall policy before launching the local HTTP proxy or Tor. Windows uses a named Defender Firewall rule group and a snapshot of profile defaults/local outbound Allow rules. Linux uses an owned nftables \`inet\` table and a persistent system service; \`TorManager\` launches the Tor process in a transient systemd user scope and registers that scope's cgroup ID as the only outbound exception. The desktop user's UID is never exempted.
+
+The firewall remains in default-deny state while Tor is stopped or bootstrapping. On Linux, the cgroup exception is cleared when the managed Tor process stops. On both platforms, disabling Kill Switch explicitly restores the saved firewall policy; a missing or externally modified policy is not blindly overwritten. The HTTP proxy's direct-exclusion route is also disabled while the preference is active.

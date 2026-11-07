@@ -62,3 +62,36 @@ def test_app_configuration_rejects_invalid_sni_override():
     data["webtunnel_sni_imitation"] = "https://example.com/path"
     with pytest.raises(AppConfigError, match="webtunnel_sni_imitation is invalid"):
         AppConfig._validate(data)
+
+
+
+def test_kill_switch_setting_defaults_to_off_and_requires_boolean_values():
+    from torproxy.configuration import TorProxyConfig
+
+    assert DEFAULT_DATA["kill_switch_enabled"] is False
+    assert TorProxyConfig().kill_switch_enabled is False
+
+    data = dict(DEFAULT_DATA)
+    data["kill_switch_enabled"] = 1
+    with pytest.raises(AppConfigError, match="kill_switch_enabled"):
+        AppConfig._validate(data)
+
+    with pytest.raises(ConfigurationError, match="Boolean"):
+        TorProxyConfig(kill_switch_enabled=1)
+
+
+def test_kill_switch_preference_survives_typed_legacy_migration():
+    migrated = migrate_legacy_config({"kill_switch_enabled": True})
+    assert migrated["kill_switch_enabled"] is True
+    assert TorProxyConfig(**migrated).kill_switch_enabled is True
+
+
+
+def test_config_store_persists_the_kill_switch_preference(tmp_path):
+    path = tmp_path / "config.json"
+    store = ConfigStore(path)
+    store.save(TorProxyConfig(kill_switch_enabled=True))
+
+    loaded = store.load()
+    assert loaded.kill_switch_enabled is True
+    assert json.loads(path.read_text(encoding="utf-8"))["kill_switch_enabled"] is True

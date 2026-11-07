@@ -53,6 +53,7 @@ DEFAULT_DATA: dict[str, Any] = {
     "system_proxy_mode": "unchanged",
     "log_level": "INFO",
     "verify_tor_signatures": False,
+    "kill_switch_enabled": False,
     "confirm_exit": True,
     "global_shortcut": "Ctrl+Alt+P",
 }
@@ -113,7 +114,7 @@ class Config:
         data["global_shortcut"] = parsed_shortcut.text
         for name in ("bridge", "proxy_port_checked", "tor_port_checked", "control_port_checked",
                      "dns_port_checked", "system_proxy_auto", "verify_tor_signatures", "confirm_exit",
-                     "auto_prune_bridges"):
+                     "auto_prune_bridges", "kill_switch_enabled"):
             if name in data and type(data[name]) is not bool:
                 raise ConfigError(f"{name} must be true or false.")
         ports = []

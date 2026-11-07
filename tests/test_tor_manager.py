@@ -550,3 +550,33 @@ def test_stale_tor_cleanup_targets_only_process_using_exact_managed_torrc(tmp_pa
     assert stale.killed is False
     assert unrelated.terminated is False
     assert unrelated.killed is False
+
+
+
+def test_linux_kill_switch_requires_a_dedicated_cgroup_callback(tmp_path):
+    with pytest.raises(TorManagerError, match="cgroup isolation"):
+        TorSettings(
+            executable=tmp_path / "tor",
+            data_directory=tmp_path / "state",
+            isolate_in_cgroup=True,
+        )
+
+    def callback(_cgroup_id, _level):
+        return None
+    if tor_manager_module.os.name == "nt":
+        with pytest.raises(TorManagerError, match="cgroup isolation"):
+            TorSettings(
+                executable=tmp_path / "tor",
+                data_directory=tmp_path / "state",
+                isolate_in_cgroup=True,
+                cgroup_callback=callback,
+            )
+        return
+
+    settings = TorSettings(
+        executable=tmp_path / "tor",
+        data_directory=tmp_path / "state",
+        isolate_in_cgroup=True,
+        cgroup_callback=callback,
+    )
+    assert settings.isolate_in_cgroup is True

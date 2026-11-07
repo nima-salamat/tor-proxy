@@ -18,7 +18,7 @@ datas += collect_data_files("qtawesome")
 # The pyzbar decoder is optional at runtime; collect packaged native binaries
 # when the platform's pyzbar wheel provides them (notably on Windows).
 binaries = collect_dynamic_libs("pyzbar")
-hiddenimports = collect_submodules("qtawesome")
+hiddenimports = collect_submodules("qtawesome") + ["torproxy.firewall.linux_helper"]
 
 # Keep this a focused desktop package. OpenCV's headless wheel already avoids
 # bundling a duplicate GUI toolkit; the app does not use Qt WebEngine.

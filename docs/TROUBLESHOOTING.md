@@ -71,3 +71,16 @@ Install dependencies with `python -m pip install -e ".[dev]"`. On Debian/Ubuntu,
 ## Reporting an issue
 
 Include OS/Python versions, sanitized logs, the action that failed, and whether the issue reproduces with a verified Tor Expert Bundle. Remove IPs, bridge lines, usernames, cookies, credentials, full URLs, and query strings first.
+
+
+## Kill Switch blocks all network access or will not activate
+
+This is expected when Tor is stopped: the firewall intentionally remains in outbound default-deny mode. Start TorProxy, connect Tor, and configure applications to use the displayed loopback HTTP proxy. Direct connections from applications that ignore the proxy are blocked, not redirected.
+
+On Windows, activation asks for Administrator approval. It fails closed if Group Policy or another policy store contributes outbound Allow rules that cannot safely be disabled and verified. If another administrator or firewall product changes the managed profiles/rules, TorProxy may refuse automatic restoration and preserve its snapshot. Inspect Windows Defender Firewall before making manual changes.
+
+On Linux, check that \`nft\`, \`pkexec\`, \`systemctl\`, a systemd user manager and unified cgroup v2 are available. The kernel and nftables build must support \`socket cgroupv2\` matching. A systemd service installs the \`torproxy_killswitch\` nftables table before network startup. If the desktop session lacks a working PolicyKit agent or \`systemd-run --user --scope\` cannot create a scope, TorProxy refuses to start Tor under the Kill Switch rather than allowing the desktop user's UID.
+
+To restore access, use **Settings → Advanced → Network protection → System-wide Kill Switch → Disable** while TorProxy can request administrator approval. If the UI cannot start, Windows administrators can inspect the saved state under the TorProxy per-user state directory and the rules named \`TorProxy Kill Switch\`. On Linux, the owned service is \`torproxy-killswitch.service\` and the owned table is \`inet torproxy_killswitch\`; do not delete unrelated nftables tables. Manual recovery should remove only those TorProxy-owned resources after inspecting their ownership markers.
+
+When Kill Switch is enabled, direct Exclude Host entries are blocked. Tor bundle downloads or updater operations that use a direct connection may also fail until protection is deliberately disabled.

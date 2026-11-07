@@ -15,6 +15,7 @@ The project is being modernized from a flat desktop utility into a testable Pyth
 - Immutable block/bypass host-rule snapshots shared by HTTP and CONNECT.
 - An IP-check action that uses the configured local HTTP proxy and **does not retry directly**.
 - Explicit opt-in for system proxy changes, snapshot-based restoration, and protection against overwriting later external changes.
+- Optional system-wide Kill Switch using Windows Defender Firewall or Linux nftables/cgroup v2. The firewall remains default-deny until explicitly disabled; applications must still use TorProxy’s loopback HTTP proxy.
 - Tor Expert Bundle downloads are restricted to official Tor HTTPS hosts and safely extracted; optional OpenPGP signature verification checks the pinned Tor signing-key fingerprint when enabled in Settings → Advanced.
 - Versioned configuration, per-user writable data paths, atomic settings writes, tests, and CI.
 
@@ -185,7 +186,7 @@ Traffic usage counts bytes observed in both directions for proxied HTTP requests
 - Logs avoid recording request URLs and query strings, but local logs and host-rule lists should still be treated as user data.
 - Direct exclusions intentionally bypass Tor.
 - System-proxy restoration can fail safely if another program changes settings.
-- This is not a firewall or system-wide traffic-enforcement mechanism. An application can ignore the proxy.
+- The loopback HTTP proxy by itself is not a firewall: applications can ignore it. The optional system-wide Kill Switch adds outbound firewall enforcement, but blocks direct traffic rather than transparently redirecting applications into Tor.
 - CI tests use fakes/local servers; they do not prove real-world anonymity or verify every OS integration.
 
 Read [Security](docs/SECURITY.md) and [Troubleshooting](docs/TROUBLESHOOTING.md) before reporting an issue.

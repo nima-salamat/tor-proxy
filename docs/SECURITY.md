@@ -34,4 +34,19 @@ Configuration and host-rule writes use atomic replacement and restrictive file m
 
 ## Anonymity limitations
 
-TorProxy does not guarantee anonymity, a different IP after `NEWNYM`, no DNS leaks for directly excluded hosts, or system-wide traffic capture. Browsers and other applications can leak identity by design or configuration. Use a correctly configured application and verify the route actually used.
+TorProxy does not guarantee anonymity, a different IP after `NEWNYM`, or no DNS leaks for directly excluded hosts while the Kill Switch is disabled. The loopback HTTP proxy does not transparently capture and redirect every application; the optional Kill Switch instead blocks direct outbound traffic. Browsers and other applications can still leak identity by design or configuration. Use a correctly configured application and verify the route actually used.
+
+
+## System-wide Kill Switch
+
+The optional Kill Switch is an operating-system firewall policy, not a system-proxy preference. When enabled, TorProxy applies an outbound default-deny policy and permits only the managed Tor process (plus narrowly scoped local network control traffic). Applications must still be configured to use TorProxy's loopback HTTP proxy; the Kill Switch does not transparently proxy arbitrary applications. Applications that bypass the proxy are blocked rather than silently routed directly.
+
+On Windows, TorProxy uses Windows Defender Firewall. It snapshots the Domain, Private and Public profile enabled/default-outbound settings and the enabled local outbound Allow rule names before applying outbound Block. It disables the saved local outbound Allow rules and adds exact-program exceptions for the selected Tor executable and, when applicable, Lyrebird. DHCP and IPv6 Neighbor Discovery exceptions are narrow protocol/port rules. If Group Policy or another policy store contributes enabled outbound Allow rules that TorProxy cannot safely own, activation fails closed. Existing profile state and saved local rules are restored only when the managed profile policy can still be identified. External policy changes may require manual recovery; the original snapshot is intentionally retained rather than overwritten.
+
+On Linux, TorProxy requires nftables, PolicyKit (\`pkexec\`), systemd user scopes, unified cgroup v2, and nftables/kernel support for \`socket cgroupv2\`. A persistent system service installs an \`inet\` output chain with policy \`drop\` before normal network startup. Tor is launched in a dedicated transient systemd scope; only sockets associated with that scope's cgroup are exempted. TorProxy deliberately does not exempt the desktop user's UID, because that would also exempt browsers and unrelated applications running as the same user. If cgroup isolation or nftables syntax validation is unavailable, activation is rejected.
+
+The Kill Switch remains active after Tor stops, TorProxy exits, or the machine restarts. It is removed only by explicitly disabling the setting and successfully restoring the saved policy. This is intentional: a stopped Tor process must not cause the machine to resume unprotected outbound access. On Linux the persistent service owns only the \`torproxy_killswitch\` table and its own unit/files. On Windows it owns only the named TorProxy rule group plus the firewall profile values and local outbound rules recorded in its snapshot.
+
+Direct Exclude Host rules are treated as blocked while the Kill Switch preference is enabled. Bundle downloads and other TorProxy features that attempt direct network access may also be unavailable while protection is active; disable the Kill Switch deliberately before performing such operations outside Tor.
+
+The Kill Switch does not promise anonymity, protect against application-layer identification, block every non-IP link-layer protocol, or make a manually configured application safe if it ignores the HTTP proxy. Firewall policies may also be constrained by enterprise management or other firewall software. Verify the actual firewall state on the target machine before relying on it.

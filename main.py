@@ -13,6 +13,17 @@ SRC_ROOT = APP_ROOT / "src"
 if SRC_ROOT.is_dir() and str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+# PyInstaller invokes this dedicated entry point for the elevated Linux firewall helper.
+if sys.platform.startswith("linux") and sys.argv[1:2] == ["--killswitch-helper"]:
+    # Windowed PyInstaller builds may not initialize console streams. The
+    # privileged helper's JSON response must still reach pkexec's pipe.
+    if sys.stdout is None:
+        sys.stdout = open("/dev/stdout", "w", encoding="utf-8", buffering=1)
+    if sys.stderr is None:
+        sys.stderr = open("/dev/stderr", "w", encoding="utf-8", buffering=1)
+    from torproxy.firewall.linux_helper import main as killswitch_helper_main
+    raise SystemExit(killswitch_helper_main(sys.argv[2:]))
+
 import portalocker
 import qdarkstyle
 from PySide6.QtCore import QTimer, Qt

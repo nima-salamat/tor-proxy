@@ -30,6 +30,7 @@ Writes use a unique temporary file, restrictive permissions where supported, and
 | `MaxCircuitDirtiness` | Tor circuit dirtiness in seconds | `600` |
 | `newnym_interval` | Legacy preference in milliseconds | `0`; automatic rotation disabled |
 | `system_proxy_auto` | Reserved compatibility preference | `false`; never automatically changes OS settings |
+| `kill_switch_enabled` | Persistent system-wide outbound firewall protection | `false`; Windows Defender Firewall or Linux nftables/cgroup v2 |
 | `data_usage` | Aggregate proxy byte count | `0` |
 | `log_level` | Logging verbosity | `INFO` |
 
@@ -64,3 +65,14 @@ The optional `auto_prune_bridges` preference performs individual, isolated bridg
 ## System proxy settings
 
 System proxy changes happen only when the user explicitly selects the system-proxy action. The app stores a snapshot and restores it only if it still owns the active values. If another process changes the setting, restoration is refused and requires manual inspection.
+
+
+## Kill Switch
+
+\`kill_switch_enabled\` is an opt-in, persistent firewall preference. Enabling it requires administrator approval and a valid selected Tor executable. Disconnect Tor before enabling it so the firewall can be installed before the managed Tor process starts.
+
+- Windows: administrator/UAC approval, Windows Defender Firewall, and no unmanaged/Group Policy outbound Allow rules that prevent strict verification.
+- Linux: PolicyKit (\`pkexec\`), nftables, systemd user scopes, unified cgroup v2, and support for nftables \`socket cgroupv2\` matching. UID-wide exceptions are deliberately not used.
+- Applications must be configured to use TorProxy's local HTTP proxy. Other applications' direct outbound connections are blocked, not transparently redirected.
+- Direct Exclude Host rules are blocked while Kill Switch is enabled.
+- The firewall policy intentionally remains active after Tor stops, TorProxy exits, and system restart. Turn the setting off explicitly to restore the saved state. If another administrator or security product changes the firewall policy, restoration may be refused to avoid overwriting external changes.

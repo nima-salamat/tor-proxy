@@ -5,7 +5,9 @@ import logging
 import os
 import re
 import socket
+import shutil
 import subprocess
+import uuid
 import tempfile
 import threading
 import time
@@ -57,6 +59,8 @@ class TorSettings:
     shutdown_timeout_seconds: float = 5.0
     log_path: Path | None = None
     webtunnel_sni_imitation: str = ""
+    isolate_in_cgroup: bool = False
+    cgroup_callback: Callable[[int | None, int | None], None] | None = None
 
     def __post_init__(self) -> None:
         ports = [self.socks_port, self.control_port]
@@ -76,6 +80,8 @@ class TorSettings:
             raise TorManagerError(f"Invalid WebTunnel SNI imitation hostname: {exc}") from exc
         if self.startup_timeout_seconds <= 0 or self.shutdown_timeout_seconds <= 0:
             raise TorManagerError("Startup and shutdown timeouts must be positive.")
+        if self.isolate_in_cgroup and (os.name == "nt" or self.cgroup_callback is None):
+            raise TorManagerError("Linux cgroup isolation requires a callback and is unavailable on this platform.")
 
 
 class TorManager:
@@ -107,6 +113,10 @@ class TorManager:
         self._data_directory_lock_path = self.data_directory / ".torproxy-data-directory.lock"
         self._data_directory_lock_handle = None
         self._locked_data_directory: str | None = None
+        self._scope_unit: str | None = None
+        self._tor_pid: int | None = None
+        self._tor_cgroup_id: int | None = None
+        self._tor_cgroup_level: int | None = None
 
     def _acquire_data_directory_lock(self) -> None:
         """Exclusively claim the configured data directory before touching Tor state."""
@@ -604,6 +614,59 @@ class TorManager:
         lines = [line.strip() for line in (output or "").splitlines() if line.strip()]
         return " | ".join(line[-220:] for line in lines[-max_lines:])
 
+    def _scope_identity(self) -> tuple[int, int, int] | None:
+        """Return (Tor PID, cgroup ID, cgroup hierarchy level) for the managed scope."""
+        if not self._scope_unit:
+            return None
+        try:
+            result = self._run_factory(
+                ["systemctl", "--user", "show", "--property=ControlGroup", "--value", self._scope_unit],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, timeout=5, check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if result.returncode != 0:
+            return None
+        relative = (result.stdout or "").strip()
+        if not relative.startswith("/") or ".." in Path(relative).parts:
+            return None
+        cgroup_path = Path("/sys/fs/cgroup") / relative.lstrip("/")
+        try:
+            cgroup_id = int(cgroup_path.stat().st_ino)
+            cgroup_level = len([part for part in relative.split("/") if part])
+            pids = [int(value) for value in (cgroup_path / "cgroup.procs").read_text().split() if value.isdecimal()]
+        except (OSError, ValueError):
+            return None
+        expected_executable = Path(self.settings.executable).resolve()
+        for pid in pids:
+            try:
+                process = psutil.Process(pid)
+                executable = Path(process.exe()).resolve()
+                command = process.cmdline()
+            except (psutil.Error, OSError, RuntimeError):
+                continue
+            if executable == expected_executable and str(self.torrc_path) in command:
+                return pid, cgroup_id, cgroup_level
+        return None
+
+    def _allow_managed_tor_cgroup(self) -> bool:
+        if not self.settings.isolate_in_cgroup or self._tor_pid is not None:
+            return self._tor_pid is not None
+        identity = self._scope_identity()
+        if identity is None:
+            return False
+        tor_pid, cgroup_id, cgroup_level = identity
+        callback = self.settings.cgroup_callback
+        if callback is None:
+            raise TorManagerError("The Tor cgroup firewall callback is unavailable.")
+        callback(cgroup_id, cgroup_level)
+        self._tor_pid = tor_pid
+        self._tor_cgroup_id = cgroup_id
+        self._tor_cgroup_level = cgroup_level
+        LOGGER.info("Tor network access restricted to cgroup id=%s level=%s.", cgroup_id, cgroup_level)
+        return True
+
     def start(self, on_status: BootstrapCallback | None = None) -> None:
         if not self._start_lock.acquire(blocking=False):
             raise TorManagerError("A Tor start operation is already in progress.")
@@ -701,8 +764,15 @@ class TorManager:
                 kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             else:
                 kwargs["start_new_session"] = True
+            launch_command = [str(executable), "-f", str(self.torrc_path)]
+            if self.settings.isolate_in_cgroup:
+                systemd_run = shutil.which("systemd-run")
+                if not systemd_run or not shutil.which("systemctl"):
+                    raise TorManagerError("A systemd user manager is required for Linux Kill Switch isolation.")
+                self._scope_unit = "torproxy-tor-" + uuid.uuid4().hex[:12] + ".scope"
+                launch_command = [systemd_run, "--user", "--scope", "--unit", self._scope_unit, "--quiet", "--", *launch_command]
             with self._lock:
-                self.process = self._popen_factory([str(executable), "-f", str(self.torrc_path)], **kwargs)
+                self.process = self._popen_factory(launch_command, **kwargs)
             deadline = time.monotonic() + self.settings.startup_timeout_seconds
             last_detail = "Waiting for Tor ControlPort."
             curve_warning_reported = False
@@ -725,6 +795,9 @@ class TorManager:
                 for log_progress, log_detail in self._read_bootstrap_log_updates():
                     last_detail = log_detail
                     self._emit(on_status, TorState.BOOTSTRAPPING, log_progress, log_detail)
+                if self.settings.isolate_in_cgroup and not self._allow_managed_tor_cgroup():
+                    time.sleep(0.1)
+                    continue
                 if self.settings.bridges_enabled:
                     diagnostic = self._recent_tor_log_detail(max_lines=20)
                     lowered_diagnostic = diagnostic.lower()
@@ -787,7 +860,7 @@ class TorManager:
                         self._controller = self._connect_controller()
                         reported_pid = self._controller.get_info("process/pid", None)
                         if (reported_pid is None or not str(reported_pid).isdecimal()
-                                or int(reported_pid) != int(proc.pid)):
+                                or int(reported_pid) != int(self._tor_pid if self.settings.isolate_in_cgroup else proc.pid)):
                             try:
                                 self._controller.close()
                             except Exception:
@@ -862,6 +935,15 @@ class TorManager:
                 controller.close()
             except Exception:
                 pass
+        if self._scope_unit:
+            try:
+                self._run_factory(
+                    ["systemctl", "--user", "stop", self._scope_unit],
+                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    text=True, timeout=max(10, int(self.settings.shutdown_timeout_seconds) + 5), check=False,
+                )
+            except (OSError, subprocess.SubprocessError):
+                LOGGER.exception("Could not stop the dedicated Tor systemd scope.")
         if process is not None and process.poll() is None:
             try:
                 process.terminate()
@@ -874,6 +956,15 @@ class TorManager:
                     LOGGER.error("Tor did not exit after force termination.")
             except OSError:
                 LOGGER.exception("Could not terminate the managed Tor process.")
+        if self.settings.isolate_in_cgroup and self.settings.cgroup_callback is not None and self._scope_unit is not None:
+            try:
+                self.settings.cgroup_callback(None, None)
+            except Exception:
+                LOGGER.exception("Could not remove the stale Tor cgroup firewall exception; the default-drop policy remains active.")
+        self._tor_pid = None
+        self._tor_cgroup_id = None
+        self._tor_cgroup_level = None
+        self._scope_unit = None
         with self._lock:
             if process is not None and self.process is process:
                 self.process = None

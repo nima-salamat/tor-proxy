@@ -1,0 +1,300 @@
+"""Windows Defender Firewall backend with reversible outbound-policy changes."""
+from __future__ import annotations
+
+import ctypes
+import json
+import os
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+from ..killswitch import KillSwitchError
+from ..paths import user_directories
+
+GROUP = "TorProxy Kill Switch"
+SNAPSHOT_NAME = "windows-firewall-snapshot.json"
+
+_POWERSHELL = r"""
+param(
+    [Parameter(Mandatory=$true)][string]$Action,
+    [Parameter(Mandatory=$true)][string]$SnapshotPath,
+    [Parameter(Mandatory=$true)][string]$RequestPath,
+    [Parameter(Mandatory=$true)][string]$ResultPath
+)
+$ErrorActionPreference = 'Stop'
+$Group = 'TorProxy Kill Switch'
+function Write-Result($value) {
+    $json = ConvertTo-Json -InputObject $value -Depth 8 -Compress
+    [System.IO.File]::WriteAllText($ResultPath, $json, [System.Text.UTF8Encoding]::new($false))
+}
+function Save-Snapshot($snapshot) {
+    $temp = $SnapshotPath + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
+    $json = ConvertTo-Json -InputObject $snapshot -Depth 10
+    [System.IO.File]::WriteAllText($temp, $json, [System.Text.UTF8Encoding]::new($false))
+    Move-Item -LiteralPath $temp -Destination $SnapshotPath -Force
+}
+function Get-ActiveProfiles {
+    return @(Get-NetFirewallProfile -Profile Domain,Private,Public | Select-Object Name,Enabled,DefaultOutboundAction)
+}
+function Assert-ManagedState($snapshot, $requireRules = $true) {
+    $profiles = Get-ActiveProfiles
+    foreach ($saved in $snapshot.profiles) {
+        $current = $profiles | Where-Object { $_.Name -eq $saved.Name } | Select-Object -First 1
+        if ($null -eq $current) {
+            throw "Firewall profile $($saved.Name) is unavailable."
+        }
+        $original = ([bool]$current.Enabled -eq [bool]$saved.Enabled) -and
+                    ([string]$current.DefaultOutboundAction -eq [string]$saved.DefaultOutboundAction)
+        $applied = [bool]$current.Enabled -and [string]$current.DefaultOutboundAction -eq 'Block'
+        if (-not $original -and -not $applied) {
+            throw "Firewall profile $($saved.Name) changed outside TorProxy. Refusing to overwrite the external change."
+        }
+        if ($requireRules -and -not $applied) {
+            throw "Firewall profile $($saved.Name) is not enabled with outbound Block; protection is not active."
+        }
+    }
+    if ($requireRules) {
+        $groupRules = @(Get-NetFirewallRule -PolicyStore ActiveStore -Group $Group -ErrorAction SilentlyContinue)
+        if ($groupRules.Count -lt 1) {
+            throw 'TorProxy firewall rules are missing. The saved snapshot was retained for manual recovery.'
+        }
+    }
+}
+try {
+    if (-not (Get-Command Get-NetFirewallProfile -ErrorAction SilentlyContinue)) {
+        throw 'The Windows NetSecurity PowerShell module is unavailable.'
+    }
+    $request = Get-Content -LiteralPath $RequestPath -Raw | ConvertFrom-Json
+    if ($Action -eq 'activate') {
+        $programs = @($request.programs)
+        if ($programs.Count -lt 1) { throw 'At least one Tor executable must be allowlisted.' }
+        foreach ($program in $programs) {
+            if (-not [System.IO.File]::Exists([string]$program)) { throw "Allowed executable does not exist: $program" }
+        }
+
+        if (Test-Path -LiteralPath $SnapshotPath) {
+            $snapshot = Get-Content -LiteralPath $SnapshotPath -Raw | ConvertFrom-Json
+            Assert-ManagedState $snapshot $false
+        } else {
+            $orphanedGroup = @(Get-NetFirewallRule -PolicyStore ActiveStore -Group $Group -ErrorAction SilentlyContinue)
+            if ($orphanedGroup.Count -gt 0) {
+                throw 'TorProxy firewall rules exist but the original snapshot is missing. Refusing to guess the original firewall policy; manual recovery is required.'
+            }
+            $profiles = Get-ActiveProfiles
+            $activeAllow = @(Get-NetFirewallRule -PolicyStore ActiveStore -Direction Outbound -Action Allow -Enabled True -ErrorAction SilentlyContinue)
+            $gpoRules = @($activeAllow | Where-Object { [string]$_.PolicyStoreSourceType -eq 'GroupPolicy' })
+            if ($gpoRules.Count -gt 0) {
+                throw 'Enabled outbound allow rules are enforced by Group Policy. TorProxy cannot safely override them.'
+            }
+            $localAllow = @(Get-NetFirewallRule -PolicyStore PersistentStore -Direction Outbound -Action Allow -Enabled True -ErrorAction SilentlyContinue)
+            $localNames = @($localAllow | ForEach-Object { [string]$_.Name } | Sort-Object -Unique)
+            $localSet = @{}
+            foreach ($name in $localNames) { $localSet[$name] = $true }
+            $unmanaged = @($activeAllow | Where-Object {
+                -not $localSet.ContainsKey([string]$_.Name) -and [string]$_.Group -ne $Group
+            })
+            if ($unmanaged.Count -gt 0) {
+                throw 'An enabled outbound allow rule is not in the local firewall store. Strict mode cannot verify its ownership.'
+            }
+            $snapshot = [ordered]@{
+                version = 1
+                profiles = @($profiles | ForEach-Object {
+                    [ordered]@{
+                        Name = [string]$_.Name
+                        Enabled = [bool]$_.Enabled
+                        DefaultOutboundAction = [string]$_.DefaultOutboundAction
+                    }
+                })
+                disabledRules = @($localNames)
+                applied = [ordered]@{ Enabled = $true; DefaultOutboundAction = 'Block' }
+                group = $Group
+            }
+            Save-Snapshot $snapshot
+        }
+
+        # Apply the restrictive default before removing old exceptions.
+        Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled True -DefaultOutboundAction Block
+        foreach ($name in @($snapshot.disabledRules)) {
+            Set-NetFirewallRule -PolicyStore PersistentStore -Name ([string]$name) -Enabled False
+        }
+        Get-NetFirewallRule -PolicyStore PersistentStore -Group $Group -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+
+        $i = 0
+        foreach ($program in $programs) {
+            $i++
+            New-NetFirewallRule -PolicyStore PersistentStore -Name ("TorProxy_KS_Tor_" + $i) -DisplayName ("TorProxy Kill Switch Tor " + $i) -Group $Group -Direction Outbound -Action Allow -Program ([string]$program) -Profile Any -Enabled True | Out-Null
+        }
+        New-NetFirewallRule -PolicyStore PersistentStore -Name 'TorProxy_KS_DHCPv4' -DisplayName 'TorProxy Kill Switch DHCPv4' -Group $Group -Direction Outbound -Action Allow -Protocol UDP -LocalPort 68 -RemotePort 67 -RemoteAddress Any -Profile Any | Out-Null
+        New-NetFirewallRule -PolicyStore PersistentStore -Name 'TorProxy_KS_DHCPv6' -DisplayName 'TorProxy Kill Switch DHCPv6' -Group $Group -Direction Outbound -Action Allow -Protocol UDP -LocalPort 546 -RemotePort 547 -RemoteAddress Any -Profile Any | Out-Null
+        New-NetFirewallRule -PolicyStore PersistentStore -Name 'TorProxy_KS_NDP' -DisplayName 'TorProxy Kill Switch IPv6 Neighbor Discovery' -Group $Group -Direction Outbound -Action Allow -Protocol ICMPv6 -IcmpType 133,135,136 -RemoteAddress Any -Profile Any | Out-Null
+
+        $effective = Get-ActiveProfiles
+        foreach ($profile in $effective) {
+            if (-not $profile.Enabled -or [string]$profile.DefaultOutboundAction -ne 'Block') {
+                throw "Windows Firewall did not retain the outbound block policy for profile $($profile.Name)."
+            }
+        }
+        $remaining = @(Get-NetFirewallRule -PolicyStore ActiveStore -Direction Outbound -Action Allow -Enabled True | Where-Object { [string]$_.Group -ne $Group })
+        if ($remaining.Count -gt 0) {
+            throw 'Unmanaged outbound allow rules remain active; strict Kill Switch verification failed.'
+        }
+        Write-Result @{ ok = $true; active = $true; detail = 'Outbound default block verified; only TorProxy rules remain enabled.' }
+    }
+    elseif ($Action -eq 'deactivate') {
+        if (-not (Test-Path -LiteralPath $SnapshotPath)) {
+            $orphanedGroup = @(Get-NetFirewallRule -PolicyStore ActiveStore -Group $Group -ErrorAction SilentlyContinue)
+            if ($orphanedGroup.Count -gt 0) {
+                throw 'TorProxy firewall rules exist but the original snapshot is missing. Refusing to guess the original firewall policy; manual recovery is required.'
+            }
+            Write-Result @{ ok = $true; active = $false; detail = 'No TorProxy firewall snapshot or managed rules exist.' }
+        } else {
+            $snapshot = Get-Content -LiteralPath $SnapshotPath -Raw | ConvertFrom-Json
+            Assert-ManagedState $snapshot $false
+            Get-NetFirewallRule -PolicyStore PersistentStore -Group $Group -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+
+            $currentProfiles = Get-ActiveProfiles
+            foreach ($saved in $snapshot.profiles) {
+                $current = $currentProfiles | Where-Object { $_.Name -eq $saved.Name } | Select-Object -First 1
+                if ($null -ne $current -and [bool]$current.Enabled -and [string]$current.DefaultOutboundAction -eq 'Block') {
+                    Set-NetFirewallProfile -Profile ([string]$saved.Name) -Enabled ([bool]$saved.Enabled) -DefaultOutboundAction ([string]$saved.DefaultOutboundAction)
+                }
+            }
+            foreach ($name in @($snapshot.disabledRules)) {
+                $rule = Get-NetFirewallRule -PolicyStore PersistentStore -Name ([string]$name) -ErrorAction SilentlyContinue
+                if ($null -ne $rule -and [string]$rule.Enabled -eq 'False') {
+                    Set-NetFirewallRule -PolicyStore PersistentStore -Name ([string]$name) -Enabled True
+                }
+            }
+            $restoredProfiles = Get-ActiveProfiles
+            foreach ($saved in $snapshot.profiles) {
+                $current = $restoredProfiles | Where-Object { $_.Name -eq $saved.Name } | Select-Object -First 1
+                if ($null -eq $current -or [bool]$current.Enabled -ne [bool]$saved.Enabled -or
+                    [string]$current.DefaultOutboundAction -ne [string]$saved.DefaultOutboundAction) {
+                    throw "Windows Firewall profile $($saved.Name) could not be restored to its saved state."
+                }
+            }
+            foreach ($name in @($snapshot.disabledRules)) {
+                $rule = Get-NetFirewallRule -PolicyStore PersistentStore -Name ([string]$name) -ErrorAction SilentlyContinue
+                if ($null -ne $rule -and [string]$rule.Enabled -ne 'True') {
+                    throw "Outbound firewall rule $name could not be restored to its saved enabled state."
+                }
+            }
+            Remove-Item -LiteralPath $SnapshotPath -Force
+            Write-Result @{ ok = $true; active = $false; detail = 'TorProxy rules removed and the saved firewall policy restored and verified.' }
+        }
+    }
+    elseif ($Action -eq 'status') {
+        if (-not (Test-Path -LiteralPath $SnapshotPath)) {
+            $orphanedGroup = @(Get-NetFirewallRule -PolicyStore ActiveStore -Group $Group -ErrorAction SilentlyContinue)
+            $orphaned = $orphanedGroup.Count -gt 0
+            Write-Result @{ ok = $true; active = $false; verified = (-not $orphaned); detail = $(if ($orphaned) { 'TorProxy rules exist without the original snapshot; manual recovery is required.' } else { 'No saved Kill Switch policy.' }) }
+        } else {
+            $snapshot = Get-Content -LiteralPath $SnapshotPath -Raw | ConvertFrom-Json
+            Assert-ManagedState $snapshot
+            $remaining = @(Get-NetFirewallRule -PolicyStore ActiveStore -Direction Outbound -Action Allow -Enabled True | Where-Object { [string]$_.Group -ne $Group })
+            $verified = $remaining.Count -eq 0
+            Write-Result @{ ok = $true; active = $verified; verified = $verified; detail = 'Windows Firewall policy inspected.' }
+        }
+    }
+    else {
+        throw 'Unsupported firewall action.'
+    }
+}
+catch {
+    Write-Result @{ ok = $false; error = [string]$_.Exception.Message }
+    exit 1
+}
+"""
+
+
+def _run_elevated(script_path: Path, action: str, snapshot_path: Path,
+                  request_path: Path, result_path: Path) -> int:
+    """Run a fixed, locally written PowerShell script through the standard UAC prompt."""
+    if os.name != "nt":
+        raise KillSwitchError("The Windows firewall backend is available only on Windows.")
+    from ctypes import wintypes
+
+    class SHELLEXECUTEINFOW(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD), ("fMask", ctypes.c_ulong), ("hwnd", wintypes.HWND),
+            ("lpVerb", wintypes.LPCWSTR), ("lpFile", wintypes.LPCWSTR),
+            ("lpParameters", wintypes.LPCWSTR), ("lpDirectory", wintypes.LPCWSTR),
+            ("nShow", ctypes.c_int), ("hInstApp", wintypes.HINSTANCE),
+            ("lpIDList", ctypes.c_void_p), ("lpClass", wintypes.LPCWSTR),
+            ("hkeyClass", wintypes.HANDLE), ("dwHotKey", wintypes.DWORD),
+            ("hIcon", wintypes.HANDLE), ("hProcess", wintypes.HANDLE),
+        ]
+
+    powershell = shutil.which("powershell.exe") or shutil.which("powershell")
+    if not powershell:
+        raise KillSwitchError("Windows PowerShell is required for Defender Firewall integration.")
+    args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+            "-File", str(script_path), "-Action", action,
+            "-SnapshotPath", str(snapshot_path), "-RequestPath", str(request_path),
+            "-ResultPath", str(result_path)]
+    info = SHELLEXECUTEINFOW()
+    info.cbSize = ctypes.sizeof(info)
+    info.fMask = 0x00000040  # SEE_MASK_NOCLOSEPROCESS
+    info.lpVerb = "runas"
+    info.lpFile = powershell
+    info.lpParameters = subprocess.list2cmdline(args)
+    info.nShow = 0
+    if not ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(info)):
+        error = ctypes.get_last_error()
+        if error == 1223:
+            raise KillSwitchError("Administrator approval was cancelled; no firewall change was confirmed.")
+        raise KillSwitchError(f"Windows could not request administrator privileges (error {error}).")
+    try:
+        wait_result = ctypes.windll.kernel32.WaitForSingleObject(info.hProcess, 120000)
+        if wait_result != 0:
+            raise KillSwitchError("The elevated Windows firewall operation timed out.")
+        exit_code = wintypes.DWORD()
+        if not ctypes.windll.kernel32.GetExitCodeProcess(info.hProcess, ctypes.byref(exit_code)):
+            raise KillSwitchError("Windows could not read the elevated firewall process exit code.")
+        return int(exit_code.value)
+    finally:
+        ctypes.windll.kernel32.CloseHandle(info.hProcess)
+
+
+class WindowsFirewallBackend:
+    """Use Defender Firewall's default-block policy with exact Tor exceptions."""
+
+    def __init__(self, *, state_dir: Path | None = None, runner=_run_elevated):
+        self.state_dir = Path(state_dir or (user_directories().state / "killswitch"))
+        self.snapshot_path = self.state_dir / SNAPSHOT_NAME
+        self._runner = runner
+
+    def _invoke(self, action: str, programs: tuple[str, ...] = ()) -> dict[str, object]:
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="torproxy-killswitch-") as temporary:
+            root = Path(temporary)
+            script = root / "firewall.ps1"
+            request = root / "request.json"
+            result = root / "result.json"
+            script.write_text(_POWERSHELL, encoding="utf-8")
+            request.write_text(json.dumps({"programs": list(programs)}), encoding="utf-8")
+            exit_code = self._runner(script, action, self.snapshot_path, request, result)
+            if not result.is_file():
+                raise KillSwitchError("The elevated firewall helper did not write a result; its state is unknown.")
+            try:
+                payload = json.loads(result.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise KillSwitchError("The elevated firewall helper returned malformed status data.") from exc
+            if exit_code != 0 or not payload.get("ok"):
+                raise KillSwitchError(str(payload.get("error") or f"Windows firewall operation failed ({exit_code})."))
+            return payload
+
+    def activate(self, programs: tuple[str, ...]) -> None:
+        self._invoke("activate", programs)
+
+    def deactivate(self) -> None:
+        # The elevated helper also checks for orphaned TorProxy rules when a
+        # snapshot is missing; silently skipping would leave an unknown policy.
+        self._invoke("deactivate")
+
+    def status(self) -> dict[str, object]:
+        try:
+            return self._invoke("status")
+        except KillSwitchError as exc:
+            return {"active": False, "verified": False, "detail": str(exc)}

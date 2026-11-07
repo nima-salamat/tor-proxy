@@ -26,11 +26,14 @@ from ui_.btn.pulse_button import PulseButton
 from ui_.worker.worker import Worker
 from ui_.worker.utils import Data
 from config import CONFIG
+from torproxy.killswitch import KillSwitchManager, KillSwitchError
 from ui_.window.dialogs import QMessageBox
 from torproxy.paths import user_directories
 from ui_.window.tor_log_dialog import TorLogDialog
 import json
 import logging
+import threading
+from pathlib import Path
 import qtawesome as qta
 
 logger = logging.getLogger(__name__)
@@ -50,6 +53,9 @@ class ProxyWindow(QWidget):
         self._exit_ip_check_busy = False
         self._exit_ip_worker = None
         self._parent = parent
+        self._operation_lock = threading.RLock()
+        self._connect_operation_busy = False
+        self._killswitch_operation_active = False
         chosen_ports = []
         while len(chosen_ports) < 4:
             candidate = get_free_port()
@@ -58,6 +64,13 @@ class ProxyWindow(QWidget):
         self.tor_socks_port, self.proxy_port, self.tor_control_port, self.tor_dns_port = chosen_ports
         logger.info(f'port(proxy): {self.proxy_port} - port(socks): {self.tor_socks_port} - port(control): {self.tor_control_port}, - port(dns): {self.tor_dns_port}')
         self.tor = TorRunner(self.tor_socks_port, self.tor_control_port, self.tor_dns_port)
+        try:
+            self.killswitch_manager = KillSwitchManager()
+            self._killswitch_unavailable = None
+        except KillSwitchError as exc:
+            self.killswitch_manager = None
+            self._killswitch_unavailable = str(exc)
+        self.tor.killswitch_manager = self.killswitch_manager
         self.tor.bridge = CONFIG["bridge"]
         self.tor.bridges = CONFIG["bridges"]
         self.tor.app_window = self
@@ -567,10 +580,21 @@ class ProxyWindow(QWidget):
             self._update_proxy_mode_status()
 
     def _toggle(self):
-        if self.running:
-            self.connect_btn.set_disconnecting()
-            self._stop_services()
-            return
+        with self._operation_lock:
+            if self._killswitch_operation_active:
+                QMessageBox.information(
+                    self, "Network protection", "Wait until the Kill Switch operation finishes before connecting."
+                )
+                return
+            if self.running:
+                self.connect_btn.set_disconnecting()
+                self._stop_services()
+                return
+            if self._connect_operation_busy:
+                return
+            # Claim the connection transition synchronously on the GUI thread.
+            # Settings must not arm/disarm the firewall between preflight and Tor start.
+            self._connect_operation_busy = True
 
         self.failed = False
         self.connect_btn.set_connecting()
@@ -580,7 +604,20 @@ class ProxyWindow(QWidget):
 
         worker = Worker(self._check_ports_worker)
         worker.signals.finished.connect(self._on_ports_checked)
+        worker.signals.error.connect(self._on_port_check_error)
         self.thread_pool.start(worker)
+
+    def _on_port_check_error(self, error):
+        with self._operation_lock:
+            self._connect_operation_busy = False
+        self.failed = True
+        self.running = False
+        self.connected = False
+        self.connect_btn.set_connected(False)
+        self.connect_btn.setEnabled(True)
+        self.btn_status.setText("CONNECTION PREFLIGHT FAILED")
+        self.set_btn_status_style("disconnected")
+        QMessageBox.warning(self, "Connection preflight", str(error))
 
     # ===== slot that runs on main thread with the result =====
     def _on_ports_checked(self, result):
@@ -604,6 +641,8 @@ class ProxyWindow(QWidget):
                 logger.info("log: %s", m)
 
         if not ok:
+            with self._operation_lock:
+                self._connect_operation_busy = False
             self.failed = True
             self.connect_btn.set_connected(False)
             self.set_btn_status_style("disconnected")
@@ -664,10 +703,89 @@ class ProxyWindow(QWidget):
             self.set_btn_status_style("disconnected")
             self.connect_btn.set_connected(False)
         finally:
+            with self._operation_lock:
+                self._connect_operation_busy = False
             # always re-enable the button
             self.connect_btn.setEnabled(True)
 
     # ===== helper worker (runs in background) =====
+    def set_kill_switch_enabled(self, enabled: bool) -> str:
+        """Serialize firewall changes against Tor connection transitions."""
+        with self._operation_lock:
+            if self._connect_operation_busy or self.running or self._stopping:
+                raise KillSwitchError("Finish connecting or disconnecting Tor before changing Kill Switch.")
+            if self._killswitch_operation_active:
+                raise KillSwitchError("Another Kill Switch operation is already running.")
+            self._killswitch_operation_active = True
+        try:
+            return self._apply_kill_switch_enabled(bool(enabled))
+        finally:
+            with self._operation_lock:
+                self._killswitch_operation_active = False
+
+    def _apply_kill_switch_enabled(self, enabled: bool) -> str:
+        """Apply the OS firewall policy and keep the saved preference consistent."""
+        enabled = bool(enabled)
+        manager = getattr(self, "killswitch_manager", None)
+        if manager is None:
+            raise KillSwitchError(
+                getattr(self, "_killswitch_unavailable", None)
+                or "Kill Switch is unavailable on this operating system."
+            )
+        if enabled:
+            tor_state = str(getattr(self.tor, "state", "STOPPED")).upper()
+            if self.running or tor_state in {"STARTING", "BOOTSTRAPPING", "READY"}:
+                raise KillSwitchError("Disconnect Tor before enabling Kill Switch so its process can be isolated safely.")
+            if not self.tor.update_path(CONFIG["tor_path"]) or not self.tor.tor_path:
+                raise KillSwitchError("Select a valid Tor Expert Bundle before enabling Kill Switch.")
+            programs = [self.tor.tor_path]
+            if self.tor.bridge and self.tor.lyrebird_path and Path(self.tor.lyrebird_path).is_file():
+                programs.append(self.tor.lyrebird_path)
+
+            try:
+                manager.activate(programs)
+            except Exception as activation_error:
+                # Activation can fail after a restrictive profile/table has been
+                # installed. Attempt ownership-checked cleanup; if that fails,
+                # surface both errors and leave manual recovery possible.
+                try:
+                    manager.deactivate()
+                except Exception as recovery_error:
+                    raise KillSwitchError(
+                        f"Firewall activation failed: {activation_error}. "
+                        f"Automatic recovery also failed: {recovery_error}. "
+                        "The firewall may remain restrictive; inspect its TorProxy-owned state before changing it."
+                    ) from activation_error
+                raise
+
+            try:
+                CONFIG["kill_switch_enabled"] = True
+            except Exception as save_error:
+                try:
+                    manager.deactivate()
+                except Exception as recovery_error:
+                    raise KillSwitchError(
+                        f"Firewall protection was applied but its preference could not be saved: {save_error}. "
+                        f"Automatic firewall recovery also failed: {recovery_error}. "
+                        "Inspect the firewall state before reconnecting."
+                    ) from save_error
+                raise KillSwitchError(
+                    f"Could not save the Kill Switch preference; the firewall policy was safely restored: {save_error}"
+                ) from save_error
+            return "Kill Switch enabled. Outbound traffic is restricted to Tor and essential local network control."
+
+        # Remove the firewall policy first. If restoring it fails, retain the
+        # enabled preference so a subsequent connect cannot silently bypass it.
+        manager.deactivate()
+        try:
+            CONFIG["kill_switch_enabled"] = False
+        except Exception as exc:
+            raise KillSwitchError(
+                f"The firewall policy was restored, but the disabled preference could not be saved: {exc}. "
+                "The saved preference remains enabled and will re-apply protection before the next Tor start."
+            ) from exc
+        return "Kill Switch disabled and the previously saved firewall policy restored."
+
     def _check_ports_worker(self):
         """
         Pure worker: no GUI ops here.
@@ -741,6 +859,20 @@ class ProxyWindow(QWidget):
             else:
                 messages.append(f"{human}: port {p} is free.")
                 ports[cfg_key] = p
+
+        if not failures and CONFIG["kill_switch_enabled"]:
+            try:
+                if self.killswitch_manager is None:
+                    raise KillSwitchError(self._killswitch_unavailable or "Kill Switch backend is unavailable.")
+                if not self.tor.update_path(CONFIG["tor_path"]) or not self.tor.tor_path:
+                    raise KillSwitchError("The configured Tor executable is unavailable.")
+                programs = [self.tor.tor_path]
+                if self.tor.bridge and self.tor.lyrebird_path and Path(self.tor.lyrebird_path).is_file():
+                    programs.append(self.tor.lyrebird_path)
+                self.killswitch_manager.activate(programs)
+                messages.append("Kill Switch firewall policy was re-applied before starting Tor.")
+            except Exception as exc:
+                failures.append(f"Kill Switch could not be verified or activated: {exc}")
 
         # finalize messages and ok
         if failures:

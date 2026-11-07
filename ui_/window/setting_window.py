@@ -59,6 +59,8 @@ class SettingWindow(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._parent = parent
+        self._kill_switch_pool = QThreadPool(self)
+        self._kill_switch_pool.setMaxThreadCount(1)
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(10, 8, 10, 8)
         main_layout.setSpacing(8)
@@ -738,7 +740,72 @@ class SettingWindow(QWidget):
         details.setWordWrap(True)
         details.setObjectName("signatureVerificationDetails")
         self.advanced_page_layout.addWidget(details)
+        self.advanced_page_layout.addWidget(self._section_title("Network protection"))
+        self.advanced_page_layout.addWidget(
+            self._description("A system-wide firewall policy blocks direct outbound connections that bypass TorProxy.")
+        )
+        kill_switch_row = QFrame(self)
+        kill_switch_row.setObjectName("settingsRowCard")
+        kill_switch_layout = QHBoxLayout(kill_switch_row)
+        kill_switch_layout.setContentsMargins(14, 10, 14, 10)
+        kill_switch_layout.setSpacing(12)
+        kill_switch_copy = QVBoxLayout()
+        kill_switch_copy.setSpacing(3)
+        kill_switch_title = QLabel("System-wide Kill Switch")
+        kill_switch_title.setObjectName("settingsFieldLabel")
+        kill_switch_description = self._description(
+            "Allow outbound network traffic only for the managed Tor process and required local network control traffic. "
+            "Disconnect Tor before changing this setting. The firewall remains active after TorProxy exits or the computer restarts until you turn it off."
+        )
+        kill_switch_copy.addWidget(kill_switch_title)
+        kill_switch_copy.addWidget(kill_switch_description)
+        kill_switch_layout.addLayout(kill_switch_copy, 1)
+        self.chk_kill_switch = QCheckBox("Enable", self)
+        self.chk_kill_switch.setObjectName("killSwitchPreference")
+        self.chk_kill_switch.setChecked(bool(CONFIG["kill_switch_enabled"]))
+        self.chk_kill_switch.toggled.connect(self.kill_switch_changed)
+        kill_switch_layout.addWidget(self.chk_kill_switch, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.advanced_page_layout.addWidget(kill_switch_row)
+
+        kill_switch_details = self._description(
+            "Windows: TorProxy snapshots the current firewall profiles and local outbound allow rules, "
+            "then restores them only when the managed policy is still intact. Group Policy allow rules cause "
+            "activation to fail. Linux: nftables, cgroup v2, systemd user scopes and PolicyKit are required. "
+            "Only applications explicitly configured to use TorProxy can access the Tor network; all other "
+            "direct internet access is blocked. Direct Exclude Host rules are disabled while protection is active."
+        )
+        kill_switch_details.setWordWrap(True)
+        self.advanced_page_layout.addWidget(kill_switch_details)
         self.advanced_page_layout.addStretch(1)
+
+    def kill_switch_changed(self, checked: bool) -> None:
+        checked = bool(checked)
+        proxy_widget = getattr(getattr(self._parent, "proxyWidget", None), "set_kill_switch_enabled", None)
+        if not callable(proxy_widget):
+            self.chk_kill_switch.blockSignals(True)
+            self.chk_kill_switch.setChecked(not checked)
+            self.chk_kill_switch.blockSignals(False)
+            QMessageBox.warning(self, "Kill Switch unavailable", "The network protection service is not available.")
+            return
+        self.chk_kill_switch.setEnabled(False)
+        worker = Worker(proxy_widget, checked)
+        worker.signals.finished.connect(lambda _result, value=checked: self._on_kill_switch_finished(value))
+        worker.signals.error.connect(lambda error, value=checked: self._on_kill_switch_failed(value, error))
+        self._kill_switch_worker = worker
+        self._kill_switch_pool.start(worker)
+
+    def _on_kill_switch_finished(self, enabled: bool) -> None:
+        self.chk_kill_switch.setEnabled(True)
+        self.chk_kill_switch.blockSignals(True)
+        self.chk_kill_switch.setChecked(enabled)
+        self.chk_kill_switch.blockSignals(False)
+
+    def _on_kill_switch_failed(self, requested: bool, error: str) -> None:
+        self.chk_kill_switch.setEnabled(True)
+        self.chk_kill_switch.blockSignals(True)
+        self.chk_kill_switch.setChecked(bool(CONFIG["kill_switch_enabled"]))
+        self.chk_kill_switch.blockSignals(False)
+        QMessageBox.warning(self, "Kill Switch", str(error))
 
     def signature_verification_changed(self, state):
         enabled = bool(state)

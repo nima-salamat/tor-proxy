@@ -1108,3 +1108,24 @@ def test_statistics_page_is_reachable_from_proxy_traffic_and_uses_live_direction
     assert '("download", "DOWNLOADED"' in stats_source
     assert 'TrafficChart("rate"' in stats_source
     assert 'TrafficChart("volume"' in stats_source
+
+
+
+def test_kill_switch_is_configurable_and_preflighted_before_services_start():
+    repository = Path(__file__).resolve().parents[1]
+    settings_source = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
+    home_source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+    proxy_source = (repository / "proxy.py").read_text(encoding="utf-8")
+    config_source = (repository / "config.py").read_text(encoding="utf-8")
+
+    assert '"kill_switch_enabled": False' in config_source
+    assert 'self.chk_kill_switch = QCheckBox("Enable", self)' in settings_source
+    assert "def kill_switch_changed(self, checked: bool)" in settings_source
+    assert 'self.chk_kill_switch.setChecked(bool(CONFIG["kill_switch_enabled"]))' in settings_source
+    assert "def set_kill_switch_enabled(self, enabled: bool)" in home_source
+    assert "self._connect_operation_busy = True" in home_source
+    assert "if self._killswitch_operation_active:" in home_source
+    assert "self._apply_kill_switch_enabled(bool(enabled))" in home_source
+    assert "self.killswitch_manager.activate(programs)" in home_source
+    assert 'if not failures and CONFIG["kill_switch_enabled"]:' in home_source
+    assert 'return "blocked" if CONFIG["kill_switch_enabled"] else "direct"' in proxy_source
