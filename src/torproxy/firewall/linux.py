@@ -16,7 +16,8 @@ class LinuxFirewallBackend:
         self._runner = runner
 
     def _helper_command(self, action: str, argument: str | None = None) -> list[str]:
-        if not shutil.which("pkexec"):
+        pkexec = shutil.which("pkexec")
+        if not pkexec:
             raise KillSwitchError("PolicyKit pkexec is required to manage nftables with administrator privileges.")
         if not shutil.which("systemd-run") or not shutil.which("systemctl"):
             raise KillSwitchError("A systemd user manager is required to isolate Tor in a dedicated cgroup.")
@@ -29,7 +30,7 @@ class LinuxFirewallBackend:
             command = [sys.executable, str(helper_script), action]
         if argument is not None:
             command.append(argument)
-        return ["pkexec", *command]
+        return [pkexec, *command]
 
     def _run_helper(self, action: str, argument: str | None = None) -> dict[str, object]:
         try:
