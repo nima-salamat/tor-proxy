@@ -680,7 +680,11 @@ class SettingWindow(QWidget):
 
     def initialize_second_page(self):
         self.second_page_layout.addWidget(self._section_title("Listener ports"))
-        description = self._description("Enable only the listeners you use. Active ports must be unique and within 1–65535. Changes to active listeners apply on the next Tor start.")
+        description = self._description(
+            "TorProxy automatically selects and remembers distinct loopback ports. The displayed values are reused on later launches. "
+            "Use Fixed only when you want to pin a listener to a manual port; a busy fixed port is reported instead of silently changed. "
+            "Port changes are applied on the next connection."
+        )
         self.second_page_layout.addWidget(description)
         ports = ["tor_port", "proxy_port", "dns_port", "control_port"]
         port_labels = {
@@ -689,6 +693,8 @@ class SettingWindow(QWidget):
             "dns_port": "DNS listener",
             "control_port": "Control interface",
         }
+        self._listener_port_inputs = {}
+        self._listener_port_status_labels = {}
         for port in ports:
             row = QFrame(self)
             row.setObjectName("settingsRowCard")
@@ -701,7 +707,10 @@ class SettingWindow(QWidget):
             inp_port.setObjectName("portValueInput")
             inp_port.setPlaceholderText("Port 1–65535")
             inp_port.setMaximumWidth(220)
-            inp_port.setToolTip("Local loopback listener port. Active listener ports must not conflict.")
+            inp_port.setToolTip(
+                "Current loopback port. Leave automatic mode selected to reuse TorProxy's saved value, "
+                "or pin this value as a manual port."
+            )
 
             # populate input with existing value if present (avoid "None" string)
             current_val = CONFIG[port]
@@ -710,9 +719,14 @@ class SettingWindow(QWidget):
             enabled_initial = bool(CONFIG[port + "_checked"]) if CONFIG[port + "_checked"] is not None else False
             inp_port.setEnabled(enabled_initial)
 
-            lbl_status = QLabel(CORRECT if enabled_initial and self._is_valid_port(current_val) else WRONG)
-            check_port = QCheckBox("Enabled")
-            check_port.setToolTip("Enable or disable this listener on the next Tor start.")
+            lbl_status = QLabel(
+                CORRECT if enabled_initial and self._is_valid_port(current_val)
+                else ("AUTO" if self._is_valid_port(current_val) else WRONG)
+            )
+            check_port = QCheckBox("Fixed")
+            check_port.setToolTip(
+                "Pin the value above as a manual port. When unchecked, TorProxy chooses and remembers an available port."
+            )
             check_port.setChecked(enabled_initial)
 
             # connect text changed -> validator (partial binds the widgets)
@@ -727,7 +741,24 @@ class SettingWindow(QWidget):
             lyt.addWidget(lbl_status)
             lyt.addWidget(check_port)
 
+            self._listener_port_inputs[port] = inp_port
+            self._listener_port_status_labels[port] = lbl_status
             self.second_page_layout.addWidget(row)
+
+    def sync_listener_ports(self, ports: dict[str, int]) -> None:
+        """Refresh automatically reassigned port values without changing pin preferences."""
+        for port, value in ports.items():
+            if port not in self._listener_port_inputs or CONFIG[port + "_checked"]:
+                continue
+            editor = self._listener_port_inputs[port]
+            previous = editor.blockSignals(True)
+            try:
+                editor.setText(str(int(value)))
+            finally:
+                editor.blockSignals(previous)
+            status = self._listener_port_status_labels.get(port)
+            if status is not None:
+                status.setText("AUTO")
 
     def initialize_advanced_page(self):
         self.advanced_page_layout.addWidget(self._section_title("Optional security verification"))
@@ -1130,7 +1161,20 @@ class SettingWindow(QWidget):
     def check_port_changed(self, state: int, inp_port: QLineEdit = None, lbl_status: QLabel = None, port: str = ""):
         enabled = bool(state)
         val_text = inp_port.text().strip() if inp_port is not None else ""
-        if enabled and self._is_valid_port(val_text):
+        if enabled and not self._is_valid_port(val_text):
+            if lbl_status is not None:
+                lbl_status.setText(WRONG)
+            QMessageBox.warning(
+                self,
+                "Invalid listener port",
+                "Enter a port between 1 and 65535 before marking this listener as Fixed.",
+            )
+            checkbox = self.sender()
+            if checkbox is not None and hasattr(checkbox, "setChecked"):
+                checkbox.setChecked(False)
+            return
+
+        if enabled:
             conflict = self._enabled_port_conflict(port, int(val_text))
             if conflict:
                 if lbl_status is not None:
@@ -1158,7 +1202,10 @@ class SettingWindow(QWidget):
             return
 
         if lbl_status is not None:
-            lbl_status.setText(CORRECT if enabled and self._is_valid_port(val_text) else WRONG)
+            lbl_status.setText(
+                CORRECT if enabled and self._is_valid_port(val_text)
+                else ("AUTO" if self._is_valid_port(val_text) else WRONG)
+            )
 
     # ---------- other helpers ----------
     def go_to_before_page(self):

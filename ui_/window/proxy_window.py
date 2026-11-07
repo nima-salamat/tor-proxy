@@ -16,7 +16,7 @@ from stem.control import Controller
 from stem import SocketClosed, OperationFailed
 from stem.connection import AuthenticationFailure
 
-from proxy import get_free_port, is_port_free
+from torproxy.ports import PortAllocationError, resolve_listener_ports
 from set_proxy import has_proxy_snapshot, manage_proxy
 from tor import TorRunner, Runner
 
@@ -30,6 +30,7 @@ from torproxy.killswitch import KillSwitchManager, KillSwitchError
 from ui_.window.dialogs import QMessageBox
 from torproxy.paths import user_directories
 from ui_.window.tor_log_dialog import TorLogDialog
+from ui_.window.open_browser_dialog import OpenBrowserDialog
 import json
 import logging
 import threading
@@ -56,13 +57,17 @@ class ProxyWindow(QWidget):
         self._operation_lock = threading.RLock()
         self._connect_operation_busy = False
         self._killswitch_operation_active = False
-        chosen_ports = []
-        while len(chosen_ports) < 4:
-            candidate = get_free_port()
-            if candidate not in chosen_ports:
-                chosen_ports.append(candidate)
-        self.tor_socks_port, self.proxy_port, self.tor_control_port, self.tor_dns_port = chosen_ports
-        logger.info(f'port(proxy): {self.proxy_port} - port(socks): {self.tor_socks_port} - port(control): {self.tor_control_port}, - port(dns): {self.tor_dns_port}')
+        # Resolve listener ports before building the services. Automatic values
+        # are saved once, reused on later launches and repaired only on conflict.
+        self.listener_ports, self._port_initialization_messages = resolve_listener_ports(
+            CONFIG, strict_manual=False
+        )
+        for message in self._port_initialization_messages:
+            logger.info("%s", message)
+        self.tor_socks_port = self.listener_ports["tor_port"]
+        self.proxy_port = self.listener_ports["proxy_port"]
+        self.tor_control_port = self.listener_ports["control_port"]
+        self.tor_dns_port = self.listener_ports["dns_port"]
         self.tor = TorRunner(self.tor_socks_port, self.tor_control_port, self.tor_dns_port)
         try:
             self.killswitch_manager = KillSwitchManager()
@@ -186,6 +191,14 @@ class ProxyWindow(QWidget):
         self.btn_whatismyip.setObjectName("secondaryAction")
         self.btn_whatismyip.clicked.connect(self.whatismyip_clicked)
         utility_row.addWidget(self.btn_whatismyip)
+        self.btn_open_browser = QPushButton(qta.icon("fa6s.globe"), "  Open Browser", self.home_content)
+        self.btn_open_browser.setObjectName("secondaryAction")
+        self.btn_open_browser.setToolTip(
+            "Connect to Tor and wait for the verified bootstrap to finish before opening a browser."
+        )
+        self.btn_open_browser.setEnabled(False)
+        self.btn_open_browser.clicked.connect(self.open_browser_dialog)
+        utility_row.addWidget(self.btn_open_browser)
         self.home_layout.addLayout(utility_row)
 
         self.thread_pool = QThreadPool(self)
@@ -246,6 +259,20 @@ class ProxyWindow(QWidget):
         show_statistics = getattr(owner, "_show_statistics", None)
         if callable(show_statistics):
             show_statistics()
+
+    def open_browser_dialog(self):
+        """Open the browser chooser only after Tor and the local HTTP listener are ready."""
+        if not self.running or not self.connected or getattr(self.proxy, "server", None) is None:
+            self.logs_widget.update_log(
+                "Open Browser is unavailable until Tor bootstrap and the local HTTP proxy are ready."
+            )
+            return
+        try:
+            dialog = OpenBrowserDialog(self, proxy_port=int(self.proxy.port))
+            dialog.exec()
+        except Exception as exc:
+            logger.exception("Could not open the browser chooser.")
+            QMessageBox.warning(self, "Open Browser", str(exc))
 
     def whatismyip_clicked(self):
         if self._exit_ip_check_busy:
@@ -368,6 +395,7 @@ class ProxyWindow(QWidget):
         self.btn_change_identity.setIcon(qta.icon("fa6s.arrows-rotate", color=icon_color))
         self.btn_log.setIcon(qta.icon("fa6s.align-left", color=icon_color))
         self.btn_whatismyip.setIcon(qta.icon("fa6s.globe", color=icon_color))
+        self.btn_open_browser.setIcon(qta.icon("fa6s.globe", color=icon_color))
         self.btn_statistics.setIcon(qta.icon("fa6s.chart-line", color=accent))
 
     def _on_system_proxy_mode_changed(self, index):
@@ -648,6 +676,12 @@ class ProxyWindow(QWidget):
             self.set_btn_status_style("disconnected")
             self.btn_status.setText("PORT CHECK FAILED")
             self.connect_btn.setEnabled(True)
+            QMessageBox.warning(
+                self,
+                "Connection preflight",
+                "\n".join(messages[-5:]) if messages else "Listener port validation failed.",
+            )
+            self._update_proxy_buttons()
             return
 
         # ok==True -> attempt to set ports and start services (on main thread)
@@ -666,6 +700,11 @@ class ProxyWindow(QWidget):
             if "dns_port" in ports:
                 self.tor_dns_port = ports["dns_port"]
                 self.tor.dns_port = ports["dns_port"]
+            self.listener_ports = dict(ports)
+            settings_page = getattr(self._parent, "settingWidget", None)
+            sync_listener_ports = getattr(settings_page, "sync_listener_ports", None)
+            if callable(sync_listener_ports):
+                sync_listener_ports(ports)
 
             # start services (wrap try/except)
             self.btn_status.setText("CONNECTING TO TOR")
@@ -846,83 +885,19 @@ class ProxyWindow(QWidget):
         return "Kill Switch disabled and the previously saved firewall policy restored."
 
     def _check_ports_worker(self):
-        """
-        Pure worker: no GUI ops here.
-        Returns (ok: bool, ports: dict, messages: list[str])
-        Clear and explicit failures list is used.
-        """
-        messages = []
+        """Resolve persistent listener ports and verify the Kill Switch before start."""
+        try:
+            ports, messages = resolve_listener_ports(CONFIG, strict_manual=True)
+        except PortAllocationError as exc:
+            return json.dumps([False, {}, [str(exc)]])
+
         failures = []
-        ports = {}
-
-        checks = [
-            ("proxy_port", "proxy_port_checked", "proxy port"),
-            ("tor_port", "tor_port_checked", "tor socks port"),
-            ("control_port", "control_port_checked", "tor control port"),
-            ("dns_port", "dns_port_checked", "dns port"),
-        ]
-
-        for cfg_key, checked_key, human in checks:
-            # read checked flag (use try/except because CONFIG may not have key)
-            try:
-                raw_checked = CONFIG[checked_key]
-            except KeyError:
-                # treat missing checked flag as disabled (like you asked)
-                messages.append(f"{human}: missing checked flag '{checked_key}', treating as disabled.")
-                continue
-
-            checked = bool(raw_checked)
-            messages.append(f"{human}: checked={checked}")
-
-            # read raw port value
-            try:
-                raw = CONFIG[cfg_key]
-            except KeyError:
-                raw = None
-
-            messages.append(f"{human}: value={raw!r}")
-
-            if not checked:
-                messages.append(f"{human}: disabled, skipping.")
-                continue
-
-            if raw is None or str(raw).strip() == "":
-                failures.append(f"{human}: enabled but no value provided.")
-                continue
-
-            try:
-                p = int(raw)
-            except Exception:
-                failures.append(f"{human}: value '{raw}' is not a valid integer.")
-                continue
-
-            if int(raw) in ports.values():
-                failures.append(f"{human}: This port is duplicated.")
-                continue
-
-            if not (1 <= p <= 65535):
-                failures.append(f"{human}: port {p} out of valid range (1-65535).")
-                continue
-
-            # Check port free (bind-based). Wrap in try/except and log result.
-            try:
-                free = is_port_free("127.0.0.1", p)
-            except Exception as e:
-                free = False
-                failures.append(f"{human}: error while checking port: {e}")
-                logger.exception("is_port_free error for %s:%s", human, p)
-                continue
-
-            if not free:
-                failures.append(f"{human}: port {p} not free.")
-            else:
-                messages.append(f"{human}: port {p} is free.")
-                ports[cfg_key] = p
-
-        if not failures and CONFIG["kill_switch_enabled"]:
+        if CONFIG["kill_switch_enabled"]:
             try:
                 if self.killswitch_manager is None:
-                    raise KillSwitchError(self._killswitch_unavailable or "Kill Switch backend is unavailable.")
+                    raise KillSwitchError(
+                        self._killswitch_unavailable or "Kill Switch backend is unavailable."
+                    )
                 if not self.tor.update_path(CONFIG["tor_path"]) or not self.tor.tor_path:
                     raise KillSwitchError("The configured Tor executable is unavailable.")
                 programs = [self.tor.tor_path]
@@ -933,16 +908,13 @@ class ProxyWindow(QWidget):
             except Exception as exc:
                 failures.append(f"Kill Switch could not be verified or activated: {exc}")
 
-        # finalize messages and ok
         if failures:
-            messages.append("Port checks failed.")
+            messages.append("Connection preflight failed.")
             messages.extend(failures)
-            ok = False
-        else:
-            messages.append("All requested ports OK.")
-            ok = True
+            return json.dumps([False, {}, messages])
 
-        return json.dumps([ok, ports, messages])
+        messages.append("All four persistent listener ports are available.")
+        return json.dumps([True, ports, messages])
 
     def _stop_services(self):
         if self._stopping:
@@ -1077,5 +1049,15 @@ class ProxyWindow(QWidget):
         self._update_proxy_buttons()
 
     def _update_proxy_buttons(self):
-        # Retain this handler name for existing callbacks, but update the policy status.
+        browser_button = getattr(self, "btn_open_browser", None)
+        if browser_button is not None:
+            ready = bool(
+                self.running and self.connected and not self._connect_operation_busy and not self._stopping
+            )
+            browser_button.setEnabled(ready)
+            browser_button.setToolTip(
+                "Open an installed browser through the local TorProxy HTTP proxy."
+                if ready else
+                "Connect to Tor and wait for the verified bootstrap to finish first."
+            )
         self._update_proxy_mode_status()

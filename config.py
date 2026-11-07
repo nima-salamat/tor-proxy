@@ -167,6 +167,18 @@ class Config:
                 pass
             raise ConfigError(f"Could not persist configuration in {self.path}: {exc}") from exc
 
+    def update_many(self, values: dict[str, Any]) -> None:
+        """Validate and persist a group of settings as one locked atomic update."""
+        unknown = set(values).difference(LEGACY_KEYS)
+        if unknown:
+            raise KeyError(f"Unsupported configuration settings: {', '.join(sorted(unknown))}")
+        with self._lock:
+            new_data = dict(self.data)
+            new_data.update(values)
+            self._validate(new_data)
+            self._save_data(new_data)
+            self.data = new_data
+
     def save_config(self, data: str) -> None:
         try:
             payload = json.loads(data)

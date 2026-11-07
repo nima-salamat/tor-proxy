@@ -32,7 +32,7 @@ package = ["pyinstaller>=6.10,<7"]
 
 [tool.setuptools]
 package-dir = {"" = ".", "torproxy" = "src/torproxy"}
-packages = ["torproxy", "torproxy.firewall", "ui_", "ui_.btn", "ui_.emojis", "ui_.window", "ui_.worker"]
+packages = ["torproxy", "torproxy.firewall", "torproxy.browsers", "ui_", "ui_.btn", "ui_.emojis", "ui_.window", "ui_.worker"]
 py-modules = ["main", "ui", "config", "proxy", "tor", "set_proxy", "updater", "utils", "whatismyip"]
 include-package-data = false
 

@@ -40,6 +40,11 @@ Unknown keys are ignored by the compatibility facade during loading. The newer t
 
 Tor's SOCKS, ControlPort, DNSPort, and TorProxy's HTTP proxy are configured for `127.0.0.1`. Listener ports must be valid and distinct. Do not configure a non-loopback proxy interface.
 
+Automatic listener ports are initialized once and stored in the existing `proxy_port`, `tor_port`, `control_port` and `dns_port` fields. They are reused across application launches while available. If another process occupies an automatic port, TorProxy allocates and atomically saves a replacement before connection. When the corresponding `*_checked` flag is enabled, the port is user-pinned: TorProxy reports a conflict rather than silently changing the requested value. The DNSPort is probed against both TCP and UDP binds. These stored values do not reserve sockets while TorProxy is stopped; the connection preflight probes them again immediately before starting the listeners.
+
+Browser-only profiles are stored under the per-user data directory in `browser_profiles/`. Manually added browser executables are recorded in `custom_browsers.json` in the per-user configuration directory. Neither feature modifies the user's normal browser profile or operating-system proxy settings.
+
+
 ## Host-rule files
 
 Blocked hosts and direct exclusions are maintained separately in per-user configuration storage. Both lists use the same host-rule parser and matcher.
@@ -69,10 +74,10 @@ System proxy changes happen only when the user explicitly selects the system-pro
 
 ## Kill Switch
 
-\`kill_switch_enabled\` is an opt-in, persistent firewall preference. Enabling it requires administrator approval and a valid selected Tor executable. Disconnect Tor before enabling it so the firewall can be installed before the managed Tor process starts.
+`kill_switch_enabled` is an opt-in, persistent firewall preference. Enabling it requires administrator approval and a valid selected Tor executable. Disconnect Tor before enabling it so the firewall can be installed before the managed Tor process starts.
 
 - Windows: administrator/UAC approval, Windows Defender Firewall, and no unmanaged/Group Policy outbound Allow rules that prevent strict verification.
-- Linux: PolicyKit (\`pkexec\`), nftables, systemd user scopes, unified cgroup v2, and support for nftables \`socket cgroupv2\` matching. UID-wide exceptions are deliberately not used.
+- Linux: PolicyKit (`pkexec`), nftables, systemd user scopes, unified cgroup v2, and support for nftables `socket cgroupv2` matching. UID-wide exceptions are deliberately not used.
 - Applications must be configured to use TorProxy's local HTTP proxy. Other applications' direct outbound connections are blocked, not transparently redirected.
 - Direct Exclude Host rules are blocked while Kill Switch is enabled.
 - The firewall policy intentionally remains active after Tor stops, TorProxy exits, and system restart. Turn the setting off explicitly to restore the saved state. If another administrator or security product changes the firewall policy, restoration may be refused to avoid overwriting external changes.

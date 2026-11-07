@@ -4,6 +4,11 @@ All notable changes are recorded here. Dates and release numbers are added only 
 
 ## Unreleased — UI, updater, and security redesign
 
+- Added a Home-page Open Browser dialog with Windows/Linux detection for common Chromium and Firefox-family browsers, persistent custom-browser entries, isolated per-browser profiles, and a dedicated safe launcher that uses the existing TorProxy HTTP proxy without adding an explicit direct route to Chromium's proxy argument and with Firefox's system-request proxy failover disabled. Chromium's non-proxied WebRTC UDP policy and Firefox's proxy-aware ICE restrictions are applied in those isolated profiles. Repeated Firefox launches reuse the active TorProxy profile without forcing a second Firefox instance.
+- Added persistent listener-port allocation. Automatic ports are initialized and saved once, reused on later launches, and replaced only when a port conflict is detected; DNSPort checks both TCP and UDP; manually pinned ports remain user-controlled and fail preflight rather than being silently changed.
+- Added browser discovery, profile, launch and listener-port regression tests; included the browser package in PyInstaller builds.
+
+
 - Hardened the HTTP proxy request boundary against expected client abort/reset/broken-pipe errors, added a bounded idle-read timeout for incomplete requests, and introduced regression tests for disconnect handling and stalled request lines.
 - Hardened Check Exit IP: overlapping checks are prevented, the UI always clears the busy state on success/failure, background worker failures record tracebacks, and the request remains explicitly proxied with no direct-network fallback. Added a dedicated `torproxy-crash.log` native-fault trace and main-thread exception logging for diagnosis of previously silent exits.
 - Added an optional WebTunnel SNI imitation setting with no-override as the default, a small list of hostname suggestions, custom DNS-hostname validation, and `sni-imitation=` injection for WebTunnel records only. Explicit per-bridge SNI values take precedence, and changes apply on the next Tor start.

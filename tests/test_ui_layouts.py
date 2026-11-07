@@ -1188,3 +1188,50 @@ def test_bundle_source_tooltip_documents_official_archive_fallback():
     source = (repository / "ui_/window/updater_window.py").read_text(encoding="utf-8")
     assert "archive.torproject.org/tor-package-archive/torbrowser/" in source
     assert "same explicitly selected network route" in source
+
+
+def test_open_browser_dialog_lists_installed_browsers_and_filters_search(qt_app, tmp_path):
+    pytest.importorskip("qtawesome")
+    from PySide6.QtWidgets import QLabel
+    from torproxy.browsers import Browser
+    from ui_.window.open_browser_dialog import OpenBrowserDialog
+
+    chrome_path = tmp_path / "chrome"
+    firefox_path = tmp_path / "firefox"
+    chrome_path.write_text("browser", encoding="utf-8")
+    firefox_path.write_text("browser", encoding="utf-8")
+
+    class _FakeDetector:
+        def detect(self):
+            return [
+                Browser("chrome", "Chrome", "chromium", str(chrome_path)),
+                Browser("firefox", "Firefox", "firefox", str(firefox_path)),
+            ]
+
+        def register_custom(self, browser):
+            return None
+
+    class _FakeLauncher:
+        def launch(self, browser, proxy_port, url=None):
+            return 1234
+
+    dialog = OpenBrowserDialog(
+        proxy_port=45555,
+        detector=_FakeDetector(),
+        launcher=_FakeLauncher(),
+    )
+    try:
+        assert len(dialog._cards) == 2
+        assert dialog.start_page_input.text() == "https://check.torproject.org/"
+        endpoint = dialog.findChild(QLabel, "browserProxyEndpoint")
+        assert endpoint is not None
+        assert "127.0.0.1:45555" in endpoint.text()
+
+        dialog._filter_cards("firefox")
+        visibility = {name: card.isHidden() for card, name, _family in dialog._cards}
+        assert visibility["chrome"] is True
+        assert visibility["firefox"] is False
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        qt_app.processEvents()

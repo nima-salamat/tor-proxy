@@ -15,6 +15,8 @@ The project is being modernized from a flat desktop utility into a testable Pyth
 - Immutable block/bypass host-rule snapshots shared by HTTP and CONNECT.
 - An IP-check action that uses the configured local HTTP proxy and **does not retry directly**.
 - Explicit opt-in for system proxy changes, snapshot-based restoration, and protection against overwriting later external changes.
+- Home-page **Open Browser** launcher for detected Chromium and Firefox-family browsers, using isolated per-browser profiles and the existing TorProxy HTTP proxy.
+- Listener ports are allocated once, persisted in the per-user configuration, and reused on later launches; automatic ports are repaired only when a conflict is detected.
 - Optional system-wide Kill Switch using Windows Defender Firewall or Linux nftables/cgroup v2. The firewall remains default-deny until explicitly disabled; applications must still use TorProxy’s loopback HTTP proxy.
 - Tor Expert Bundle downloads use Tor's live SOCKS5H route whenever Tor is READY, are restricted to official distribution hosts, and are safely extracted. OpenPGP publisher-signature verification is enabled by default and checks the pinned Tor signing-key fingerprint.
 - Versioned configuration, per-user writable data paths, atomic settings writes, tests, and CI.
@@ -130,6 +132,17 @@ To diagnose a stalled connection, open **Event Log → Live Tor log**. It stream
 4. Test with **What is my IP?**. It sends an HTTPS request through the local proxy and reports the observed exit IP only if the proxied request succeeds.
 
 Do not expose the local HTTP proxy, SOCKS port, or ControlPort to a LAN. The application deliberately rejects non-loopback HTTP proxy binds.
+
+## Open Browser
+
+When Tor is fully READY, choose **Home → Open Browser** to launch an installed browser through the existing loopback HTTP proxy. TorProxy currently discovers common Chromium-family browsers (Chrome, Chromium, Edge, Brave, Vivaldi, Opera, Opera GX, Yandex and Ungoogled Chromium) and Firefox-family browsers (Firefox, Firefox ESR, LibreWolf, Waterfox, Floorp and Zen Browser) on Windows and Linux. Detection uses Windows App Paths/standard installation locations or Linux XDG Desktop Entry files and `PATH`; **Add custom browser** stores an additional executable in the user's configuration directory.
+
+Each browser receives its own TorProxy profile under the per-user application-data directory. Chromium launches with a single `--proxy-server=http://127.0.0.1:<port>` and a separate `--user-data-dir`; Firefox receives managed HTTP/HTTPS proxy preferences in its dedicated `user.js` and starts with `--profile`. Firefox's profile-scoped remoting reuses an already-running TorProxy Firefox profile on repeated launches; a changed proxy port gets a different profile directory. The user's normal browser profile and system-wide proxy settings are not modified. TorProxy does not add an explicit `direct://` route to Chromium's proxy argument. Firefox's isolated profile disables its proxy-failure direct failover preference for system requests. These are browser-level controls, not an OS firewall; enable the system Kill Switch when machine-wide blocking of direct outbound connections is required.
+
+Tor Browser is intentionally excluded from this generic launcher because it manages its own Tor process and browser profile; it should be launched separately. The launcher is enabled only after Tor bootstrap, ControlPort verification and the local HTTP proxy are ready. It checks that the loopback HTTP listener responds before starting a browser. Browser profiles are separate from the browser's everyday profile, so bookmarks, extensions and sign-in state are not automatically shared.
+
+**Privacy limitation:** a regular browser launched through TorProxy is not Tor Browser. Browser fingerprinting, application metadata and browser-specific bypasses remain relevant. TorProxy applies browser-specific restrictions to WebRTC's non-proxied UDP paths, which may reduce call/media compatibility, but these settings are not a complete traffic firewall. This feature does not promise anonymity; do not treat it as equivalent to Tor Browser.
+
 
 ## Identity requests
 
