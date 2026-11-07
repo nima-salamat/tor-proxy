@@ -169,6 +169,14 @@ def test_windows_firewall_helper_is_strict_about_outbound_exceptions():
     assert "Enabled outbound Allow rules are enforced by Group Policy" in _POWERSHELL
     assert "PolicyStoreSource" in _POWERSHELL
     assert "Enabled outbound Allow rules outside the local firewall store" in _POWERSHELL
+    assert "Get-NetFirewallApplicationFilter" in _POWERSHELL
+    assert "Get-NetFirewallServiceFilter" in _POWERSHELL
+    assert "Get-NetFirewallPortFilter" in _POWERSHELL
+    assert "Get-NetFirewallAddressFilter" in _POWERSHELL
+    assert "Program=$program" in _POWERSHELL
+    assert "RemotePort=$remotePort" in _POWERSHELL
+    assert "RemoteAddress=$remoteAddress" in _POWERSHELL
+    assert "Rule filters are included to identify their owner and scope" in _POWERSHELL
     assert "Set-NetFirewallRule" in _POWERSHELL
     assert "TorProxy Kill Switch" in _POWERSHELL
     assert "original snapshot is missing" in _POWERSHELL
