@@ -4,8 +4,8 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 LOGGER = logging.getLogger(__name__)
 
