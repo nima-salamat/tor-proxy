@@ -793,7 +793,7 @@ class SettingWindow(QWidget):
         kill_switch_layout.addLayout(kill_switch_controls, 0)
         self.advanced_page_layout.addWidget(kill_switch_row)
 
-        self.kill_switch_status_label = QLabel(self.advanced_page)
+        self.kill_switch_status_label = QLabel(self.advanced_page.widget())
         self.kill_switch_status_label.setObjectName("killSwitchStatus")
         self.kill_switch_status_label.setWordWrap(True)
         self.advanced_page_layout.addWidget(self.kill_switch_status_label)
