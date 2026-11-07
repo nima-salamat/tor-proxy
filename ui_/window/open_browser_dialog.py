@@ -1,4 +1,4 @@
-"""Browser chooser dialog with isolated TorProxy profiles."""
+"""Browser chooser using TorProxy's shared custom dialog shell."""
 from __future__ import annotations
 
 import hashlib
@@ -7,13 +7,14 @@ import re
 from pathlib import Path
 
 import qtawesome as qta
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QFileInfo, QSize, Qt
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
-    QDialog,
+    QComboBox,
     QFileDialog,
+    QFileIconProvider,
     QFrame,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -24,101 +25,312 @@ from PySide6.QtWidgets import (
 )
 
 from torproxy.browsers import Browser, BrowserDetector, BrowserLaunchError, BrowserLauncher
+from ui_.window.dialogs import _FramelessDialog
 
 
-class OpenBrowserDialog(QDialog):
+_BRAND_ICON_NAMES = {
+    "chrome": "fa6b.chrome",
+    "chromium": "fa6s.globe",
+    "edge": "fa6b.edge",
+    "brave": "fa6b.brave",
+    "vivaldi": "fa6b.vivaldi",
+    "opera": "fa6b.opera",
+    "opera_gx": "fa6b.opera",
+    "firefox": "fa6b.firefox-browser",
+    "firefox_esr": "fa6b.firefox-browser",
+    "librewolf": "fa6b.firefox-browser",
+    "waterfox": "fa6b.firefox-browser",
+    "floorp": "fa6s.globe",
+    "zen": "fa6s.globe",
+    "yandex": "fa6s.globe",
+    "ungoogled_chromium": "fa6s.globe",
+}
+
+
+class _BrowserEngineDialog(_FramelessDialog):
+    """Small engine picker that follows the shared application popup style."""
+
+    def __init__(self, parent=None):
+        super().__init__(
+            parent,
+            "Add a browser",
+            "fa6s.plus",
+            "#287db5",
+            width=420,
+        )
+        prompt = QLabel(
+            "Choose the browser engine used by the executable you are adding.",
+            self.body_host,
+        )
+        prompt.setObjectName("dialogMessage")
+        prompt.setWordWrap(True)
+        self.body_layout.addWidget(prompt)
+
+        self.engine_combo = QComboBox(self.body_host)
+        self.engine_combo.setObjectName("browserEngineCombo")
+        self.engine_combo.addItem("Chromium-based", "chromium")
+        self.engine_combo.addItem("Firefox-based", "firefox")
+        self.body_layout.addWidget(self.engine_combo)
+
+        self.add_footer_spacer()
+        self.add_button("Cancel", primary=False, callback=self.reject)
+        self.add_button("Continue", primary=True, callback=self.accept)
+        self.setStyleSheet(self.styleSheet() + self._extra_styles())
+        self.adjustSize()
+        self._remember_preferred_size()
+
+    @property
+    def family(self) -> str:
+        return str(self.engine_combo.currentData())
+
+    def _extra_styles(self) -> str:
+        return f"""
+            QComboBox#browserEngineCombo {{
+                color: {self._colors["text"]};
+                background: {self._colors["panel"]};
+                border: 1px solid {self._colors["border"]};
+                border-radius: 8px;
+                padding: 7px 10px;
+                min-height: 30px;
+            }}
+        """
+
+
+class OpenBrowserDialog(_FramelessDialog):
+    """Browse installed browsers and launch one through the active TorProxy HTTP listener."""
+
     def __init__(self, parent=None, *, proxy_port: int, detector=None, launcher=None):
-        super().__init__(parent)
-        self.setWindowTitle("Open Browser through Tor")
-        self.setObjectName("openBrowserDialog")
-        self.setModal(True)
-        self.resize(680, 650)
-        self.setMinimumSize(520, 440)
+        super().__init__(
+            parent,
+            "Open Browser",
+            "fa6s.globe",
+            "#287db5",
+            width=620,
+        )
+        self.setMinimumSize(600, 520)
+        self.setMaximumSize(1100, 1000)
+        self.resize(760, 720)
+        self._remember_preferred_size()
+
         self.proxy_port = int(proxy_port)
         self.detector = detector or BrowserDetector()
         self.launcher = launcher or BrowserLauncher()
         self.browsers = self.detector.detect()
-        self._cards: list[tuple[QFrame, str, str]] = []
+        self._cards: list[tuple[QFrame, str, str, Browser]] = []
+        self._icon_provider = QFileIconProvider()
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(22, 20, 22, 18)
-        root.setSpacing(12)
+        heading = QHBoxLayout()
+        heading.setSpacing(10)
+        intro = QLabel(
+            "Choose an installed browser. TorProxy opens it with a dedicated profile and the active local proxy.",
+            self.body_host,
+        )
+        intro.setObjectName("dialogMessage")
+        intro.setWordWrap(True)
+        heading.addWidget(intro, 1)
 
-        title_row = QHBoxLayout()
-        title_text = QVBoxLayout()
-        title = QLabel("Open Browser")
-        title.setObjectName("browserDialogTitle")
-        subtitle = QLabel("Choose an installed browser to launch with your TorProxy connection.")
-        subtitle.setObjectName("browserDialogSubtitle")
-        subtitle.setWordWrap(True)
-        title_text.addWidget(title)
-        title_text.addWidget(subtitle)
-        title_row.addLayout(title_text, 1)
-        connected = QLabel("● TOR READY")
-        connected.setObjectName("browserReadyBadge")
-        title_row.addWidget(connected, 0, Qt.AlignmentFlag.AlignTop)
-        root.addLayout(title_row)
+        self.ready_badge = QLabel("TOR READY", self.body_host)
+        self.ready_badge.setObjectName("browserReadyBadge")
+        heading.addWidget(self.ready_badge, 0, Qt.AlignmentFlag.AlignTop)
+        self.body_layout.addLayout(heading)
 
-        proxy_panel = QFrame(self)
-        proxy_panel.setObjectName("browserProxyPanel")
-        proxy_layout = QHBoxLayout(proxy_panel)
-        proxy_layout.setContentsMargins(12, 8, 12, 8)
-        proxy_layout.addWidget(QLabel("Local HTTP proxy"))
-        proxy_layout.addStretch(1)
-        endpoint = QLabel(f"127.0.0.1:{self.proxy_port}")
-        endpoint.setObjectName("browserProxyEndpoint")
-        proxy_layout.addWidget(endpoint)
-        root.addWidget(proxy_panel)
+        connection_row = QHBoxLayout()
+        connection_row.setSpacing(8)
+        local_label = QLabel("Local HTTP proxy", self.body_host)
+        local_label.setObjectName("dialogHint")
+        connection_row.addWidget(local_label)
+        connection_row.addStretch(1)
+        self.endpoint_label = QLabel(f"127.0.0.1:{self.proxy_port}", self.body_host)
+        self.endpoint_label.setObjectName("browserProxyEndpoint")
+        connection_row.addWidget(self.endpoint_label)
+        self.body_layout.addLayout(connection_row)
 
-        self.search = QLineEdit(self)
+        search_row = QHBoxLayout()
+        search_row.setSpacing(8)
+        self.search = QLineEdit(self.body_host)
         self.search.setObjectName("browserSearch")
         self.search.setClearButtonEnabled(True)
         self.search.setPlaceholderText("Search installed browsers…")
+        self.search.addAction(
+            qta.icon("fa6s.magnifying-glass", color=self._colors["muted"]),
+            QLineEdit.ActionPosition.LeadingPosition,
+        )
         self.search.textChanged.connect(self._filter_cards)
-        root.addWidget(self.search)
+        search_row.addWidget(self.search, 1)
+        self.count_label = QLabel(self.body_host)
+        self.count_label.setObjectName("dialogHint")
+        search_row.addWidget(self.count_label)
+        self.body_layout.addLayout(search_row)
 
-        start_page_label = QLabel("Start page")
-        start_page_label.setObjectName("browserGroupHeading")
-        root.addWidget(start_page_label)
-        self.start_page_input = QLineEdit(self)
+        start_row = QHBoxLayout()
+        start_label = QLabel("Start page", self.body_host)
+        start_label.setObjectName("dialogHint")
+        start_row.addWidget(start_label)
+        self.start_page_input = QLineEdit(self.body_host)
         self.start_page_input.setObjectName("browserStartPage")
         self.start_page_input.setText("https://check.torproject.org/")
         self.start_page_input.setPlaceholderText("https://example.com/")
         self.start_page_input.setClearButtonEnabled(True)
-        root.addWidget(self.start_page_input)
+        start_row.addWidget(self.start_page_input, 1)
+        self.body_layout.addLayout(start_row)
 
-        self.scroll = QScrollArea(self)
+        self.scroll = QScrollArea(self.body_host)
+        self.scroll.setObjectName("dialogScroll")
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.content = QWidget()
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.content = QWidget(self.scroll)
+        self.content.setObjectName("browserListContent")
         self.content_layout = QVBoxLayout(self.content)
-        self.content_layout.setContentsMargins(2, 2, 8, 2)
-        self.content_layout.setSpacing(9)
-        self._build_cards()
+        self.content_layout.setContentsMargins(1, 2, 7, 2)
+        self.content_layout.setSpacing(8)
         self.scroll.setWidget(self.content)
-        root.addWidget(self.scroll, 1)
+        self.body_layout.addWidget(self.scroll, 1)
 
         self.notice = QLabel(
-            "A separate TorProxy profile is used. Regular browsers do not gain Tor Browser's "
-            "anti-fingerprinting protections. WebRTC's non-proxied UDP paths are restricted; "
-            "some real-time media features may not work. Tor Browser is intentionally excluded because it runs its own Tor stack."
+            "Each browser uses a separate TorProxy profile. A normal browser does not provide Tor Browser's "
+            "anti-fingerprinting protections; some WebRTC media features may also be restricted.",
+            self.body_host,
         )
-        self.notice.setObjectName("browserPrivacyNotice")
+        self.notice.setObjectName("dialogHint")
         self.notice.setWordWrap(True)
-        root.addWidget(self.notice)
+        self.body_layout.addWidget(self.notice)
 
-        footer = QHBoxLayout()
-        self.add_button = QPushButton(qta.icon("fa6s.plus"), " Add custom browser")
-        self.add_button.setObjectName("browserAddButton")
-        self.add_button.clicked.connect(self._add_custom_browser)
-        footer.addWidget(self.add_button)
-        footer.addStretch(1)
-        close_button = QPushButton("Close")
-        close_button.setObjectName("browserCloseButton")
-        close_button.clicked.connect(self.reject)
-        footer.addWidget(close_button)
-        root.addLayout(footer)
-        self._apply_styles()
+        self._build_cards()
+        self.add_button("Add custom browser", primary=False, callback=self._add_custom_browser).setIcon(
+            qta.icon("fa6s.plus", color=self._colors["text"])
+        )
+        self.add_footer_spacer()
+        self.add_button("Close", primary=True, callback=self.accept)
+        self.setStyleSheet(self.styleSheet() + self._extra_styles())
+        self.adjustSize()
+        self.resize(760, max(600, self.sizeHint().height()))
+        self._remember_preferred_size()
+
+    def _extra_styles(self) -> str:
+        return f"""
+            QLabel#browserReadyBadge {{
+                color: #1f9d68;
+                background: rgba(31, 157, 104, 0.12);
+                border: 1px solid rgba(31, 157, 104, 0.28);
+                border-radius: 8px;
+                padding: 5px 9px;
+                font-size: 8pt;
+                font-weight: 800;
+                letter-spacing: 0.4px;
+            }}
+            QLabel#browserProxyEndpoint {{
+                color: {self._colors["text"]};
+                background: {self._colors["panel"]};
+                border: 1px solid {self._colors["border"]};
+                border-radius: 7px;
+                padding: 5px 9px;
+                font-family: Consolas, monospace;
+                font-weight: 700;
+            }}
+            QLineEdit#browserSearch, QLineEdit#browserStartPage {{
+                color: {self._colors["text"]};
+                background: {self._colors["panel"]};
+                border: 1px solid {self._colors["border"]};
+                border-radius: 8px;
+                padding: 7px 9px;
+                min-height: 28px;
+                selection-background-color: {self._accent};
+            }}
+            QLineEdit#browserSearch:focus, QLineEdit#browserStartPage:focus {{
+                border-color: {self._accent};
+            }}
+            QLabel#browserGroupHeading {{
+                color: {self._accent};
+                background: transparent;
+                font-size: 8.5pt;
+                font-weight: 800;
+                padding: 7px 2px 1px;
+            }}
+            QFrame#browserCard {{
+                background: {self._colors["panel"]};
+                border: 1px solid {self._colors["border"]};
+                border-radius: 10px;
+            }}
+            QFrame#browserCard:hover {{
+                border-color: {self._accent};
+                background: {self._colors["hover"]};
+            }}
+            QFrame#browserIconFrame {{
+                background: {self._colors["surface"]};
+                border: 1px solid {self._colors["border"]};
+                border-radius: 9px;
+            }}
+            QLabel#browserName {{
+                color: {self._colors["text"]};
+                background: transparent;
+                font-size: 9.5pt;
+                font-weight: 750;
+            }}
+            QLabel#browserSource {{
+                color: {self._colors["muted"]};
+                background: transparent;
+                font-size: 7.5pt;
+            }}
+            QPushButton#browserOpenButton {{
+                color: #ffffff;
+                background: {self._accent};
+                border: 1px solid {self._accent};
+                border-radius: 7px;
+                padding: 0 15px;
+                min-height: 31px;
+                font-weight: 750;
+            }}
+            QPushButton#browserOpenButton:hover {{ background: #236b9b; }}
+            QLabel#browserEmptyState {{
+                color: {self._colors["muted"]};
+                background: {self._colors["panel"]};
+                border: 1px dashed {self._colors["border"]};
+                border-radius: 10px;
+                padding: 18px;
+            }}
+            QLabel#browserErrorNotice {{
+                color: #dc5656;
+                background: rgba(220, 86, 86, 0.10);
+                border: 1px solid rgba(220, 86, 86, 0.28);
+                border-radius: 8px;
+                padding: 8px 10px;
+            }}
+        """
+
+    def _browser_icon(self, browser: Browser) -> QIcon:
+        """Use the real installed application icon before falling back to a family glyph."""
+        if browser.icon:
+            icon_path = Path(browser.icon).expanduser()
+            if icon_path.is_file():
+                icon = QIcon(str(icon_path))
+                if not icon.isNull():
+                    return icon
+                try:
+                    native_icon = self._icon_provider.icon(QFileInfo(str(icon_path)))
+                except (OSError, RuntimeError, TypeError):
+                    native_icon = QIcon()
+                if not native_icon.isNull():
+                    return native_icon
+            themed = QIcon.fromTheme(browser.icon)
+            if not themed.isNull():
+                return themed
+
+        for candidate in (browser.executable, browser.desktop_file):
+            if not candidate:
+                continue
+            try:
+                icon = self._icon_provider.icon(QFileInfo(candidate))
+            except (OSError, RuntimeError, TypeError):
+                continue
+            if not icon.isNull():
+                return icon
+
+        icon_name = _BRAND_ICON_NAMES.get(browser.id, "fa6s.globe")
+        try:
+            return qta.icon(icon_name, color=self._accent)
+        except Exception:
+            return qta.icon("fa6s.globe", color=self._accent)
 
     def _build_cards(self) -> None:
         while self.content_layout.count():
@@ -136,46 +348,57 @@ class OpenBrowserDialog(QDialog):
             matches = [browser for browser in self.browsers if browser.family == family]
             if not matches:
                 continue
-            heading = QLabel(heading_text)
+            heading = QLabel(heading_text, self.content)
             heading.setObjectName("browserGroupHeading")
             self.content_layout.addWidget(heading)
             for browser in matches:
                 card = self._create_card(browser)
                 self.content_layout.addWidget(card)
-                self._cards.append((card, browser.name.casefold(), family))
+                self._cards.append((card, browser.name.casefold(), family, browser))
 
         if not self.browsers:
             empty = QLabel(
-                "No supported browser was detected. Use “Add custom browser” to select an executable."
+                "No supported browser was detected. Use “Add custom browser” to select an executable.",
+                self.content,
             )
             empty.setObjectName("browserEmptyState")
             empty.setWordWrap(True)
             self.content_layout.addWidget(empty)
         self.content_layout.addStretch(1)
+        self._update_count_label()
 
     def _create_card(self, browser: Browser) -> QFrame:
         card = QFrame(self.content)
         card.setObjectName("browserCard")
         row = QHBoxLayout(card)
-        row.setContentsMargins(12, 10, 12, 10)
-        row.setSpacing(12)
+        row.setContentsMargins(11, 9, 11, 9)
+        row.setSpacing(11)
 
-        glyph = QLabel()
-        glyph.setObjectName("browserGlyph")
-        glyph.setPixmap(qta.icon("fa6s.globe", color="#47a3f2").pixmap(25, 25))
-        glyph.setFixedSize(36, 36)
-        row.addWidget(glyph)
+        icon_frame = QFrame(card)
+        icon_frame.setObjectName("browserIconFrame")
+        icon_frame.setFixedSize(48, 48)
+        icon_layout = QHBoxLayout(icon_frame)
+        icon_layout.setContentsMargins(5, 5, 5, 5)
+        icon_label = QLabel(icon_frame)
+        icon_label.setObjectName("browserIconLabel")
+        icon_label.setProperty("browserId", browser.id)
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon_label.setPixmap(self._browser_icon(browser).pixmap(QSize(36, 36)))
+        icon_layout.addWidget(icon_label)
+        row.addWidget(icon_frame)
 
         text_column = QVBoxLayout()
-        name = QLabel(browser.name)
+        text_column.setSpacing(3)
+        name = QLabel(browser.name, card)
         name.setObjectName("browserName")
-        source = QLabel(self._source_label(browser))
+        source = QLabel(self._source_label(browser), card)
         source.setObjectName("browserSource")
+        source.setWordWrap(True)
         text_column.addWidget(name)
         text_column.addWidget(source)
         row.addLayout(text_column, 1)
 
-        open_button = QPushButton("Open")
+        open_button = QPushButton("Open", card)
         open_button.setObjectName("browserOpenButton")
         open_button.setCursor(Qt.CursorShape.PointingHandCursor)
         open_button.clicked.connect(lambda _checked=False, selected=browser: self._launch(selected))
@@ -186,118 +409,88 @@ class OpenBrowserDialog(QDialog):
     @staticmethod
     def _source_label(browser: Browser) -> str:
         labels = {
-            "registry": "Detected from Windows application registration",
-            "known-path": "Detected in a standard installation location",
-            "desktop-entry": "Detected from Linux desktop application metadata",
+            "registry": "Windows application registration",
+            "registry-app-paths": "Windows registered executable",
+            "start-menu-registration": "Windows Start Menu browser list",
+            "start-menu-shortcut": "Windows Start Menu shortcut",
+            "uninstall-registry": "Windows installed application record",
+            "known-path": "Standard installation location",
+            "desktop-entry": "Linux desktop application entry",
             "PATH": "Detected from PATH",
             "custom": "Custom executable",
         }
         return labels.get(browser.source, "Installed browser")
 
+    def _update_count_label(self) -> None:
+        visible = sum(not card.isHidden() for card, _name, _family, _browser in self._cards)
+        total = len(self._cards)
+        self.count_label.setText(f"{visible} of {total} found")
+
     def _filter_cards(self, query: str) -> None:
         needle = str(query or "").strip().casefold()
-        for card, name, family in self._cards:
-            show = not needle or needle in name or needle in family
-            card.setVisible(show)
+        for card, name, family, browser in self._cards:
+            haystack = " ".join((name, family, browser.id, browser.executable)).casefold()
+            card.setVisible(not needle or needle in haystack)
+        self._update_count_label()
+
+    def _show_error(self, message: str) -> None:
+        self.notice.setText(message)
+        self.notice.setObjectName("browserErrorNotice")
+        self.notice.style().unpolish(self.notice)
+        self.notice.style().polish(self.notice)
 
     def _launch(self, browser: Browser) -> None:
         try:
-            self.notice.setText(f"Starting {browser.name} with the isolated TorProxy profile…")
-            self.notice.setObjectName("browserPrivacyNotice")
             start_url = self.start_page_input.text().strip() or None
             self.launcher.launch(browser, self.proxy_port, start_url)
         except (BrowserLaunchError, OSError, ValueError) as exc:
-            self.notice.setText(f"Could not open {browser.name}: {exc}")
-            self.notice.setObjectName("browserErrorNotice")
-            self.notice.style().unpolish(self.notice)
-            self.notice.style().polish(self.notice)
+            self._show_error(f"Could not open {browser.name}: {exc}")
             return
         self.accept()
 
     def _add_custom_browser(self) -> None:
-        family, accepted = QInputDialog.getItem(
-            self,
-            "Custom browser type",
-            "Choose the browser engine:",
-            ["Chromium-based", "Firefox-based"],
-            0,
-            False,
-        )
-        if not accepted:
+        engine_dialog = _BrowserEngineDialog(self)
+        if engine_dialog.exec() != _FramelessDialog.DialogCode.Accepted:
             return
         selected, _filter = QFileDialog.getOpenFileName(
             self,
             "Select browser executable",
             str(Path.home()),
-            "Applications (*)" if os.name != "nt" else "Applications (*.exe)",
+            "Applications (*.exe)" if os.name == "nt" else "Applications (*)",
         )
         if not selected:
             return
         path = Path(selected).expanduser()
+        if not path.is_file():
+            self._show_error("The selected executable does not exist.")
+            return
         safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "-", path.stem).strip(".-") or "browser"
         browser_identity = f"{path.stem} {path.resolve()}".casefold()
         if any(marker in browser_identity for marker in ("tor browser", "tor-browser", "torbrowser")):
-            self.notice.setText(
+            self._show_error(
                 "Tor Browser manages its own Tor process and browser profile. "
-                "Launch it separately instead of routing it through this generic browser launcher."
+                "Launch it separately instead of routing it through this generic launcher."
             )
-            self.notice.setObjectName("browserErrorNotice")
-            self.notice.style().unpolish(self.notice)
-            self.notice.style().polish(self.notice)
             return
+
         digest = hashlib.sha256(str(path.resolve()).encode("utf-8")).hexdigest()[:10]
         browser = Browser(
             id=f"custom-{safe_name}-{digest}",
             name=path.stem,
-            family="chromium" if family.startswith("Chromium") else "firefox",
+            family=engine_dialog.family,
             executable=str(path.resolve()),
             source="custom",
+            icon=str(path.resolve()),
         )
         try:
             self.detector.register_custom(browser)
             self.browsers = self.detector.detect()
         except Exception as exc:
-            self.notice.setText(f"Could not save this browser: {exc}")
-            self.notice.setObjectName("browserErrorNotice")
-            self.notice.style().unpolish(self.notice)
-            self.notice.style().polish(self.notice)
+            self._show_error(f"Could not save this browser: {exc}")
             return
+        self.notice.setText("Custom browser saved. It will remain available in this list.")
+        self.notice.setObjectName("dialogHint")
+        self.notice.style().unpolish(self.notice)
+        self.notice.style().polish(self.notice)
         self._build_cards()
         self._filter_cards(self.search.text())
-
-    def _apply_styles(self) -> None:
-        self.setStyleSheet("""
-            QDialog#openBrowserDialog { background: palette(window); }
-            QLabel#browserDialogTitle { font-size: 17pt; font-weight: 750; }
-            QLabel#browserDialogSubtitle, QLabel#browserSource { color: palette(mid); }
-            QLabel#browserReadyBadge {
-                color: #20a66a; background: rgba(32,166,106,0.12);
-                border: 1px solid rgba(32,166,106,0.28); border-radius: 9px;
-                padding: 6px 9px; font-size: 9pt; font-weight: 750;
-            }
-            QFrame#browserProxyPanel, QFrame#browserCard {
-                background: palette(base); border: 1px solid palette(midlight); border-radius: 10px;
-            }
-            QLabel#browserProxyEndpoint { font-weight: 700; }
-            QLabel#browserGroupHeading { font-size: 10pt; font-weight: 750; padding: 5px 2px 1px; }
-            QLabel#browserName { font-size: 10pt; font-weight: 700; }
-            QLabel#browserSource { font-size: 8pt; }
-            QLabel#browserPrivacyNotice {
-                color: palette(mid); background: palette(alternate-base);
-                border: 1px solid palette(midlight); border-radius: 8px; padding: 9px;
-            }
-            QLabel#browserErrorNotice {
-                color: #d9534f; background: rgba(217,83,79,0.10);
-                border: 1px solid rgba(217,83,79,0.30); border-radius: 8px; padding: 9px;
-            }
-            QPushButton#browserOpenButton {
-                min-width: 76px; min-height: 31px; border-radius: 7px;
-                background: #287db5; color: white; border: none; font-weight: 700;
-            }
-            QPushButton#browserOpenButton:hover { background: #3797d2; }
-            QPushButton#browserAddButton, QPushButton#browserCloseButton {
-                min-height: 32px; padding: 0 11px; border-radius: 7px;
-            }
-        """)
-
-

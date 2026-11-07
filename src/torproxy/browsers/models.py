@@ -13,6 +13,7 @@ class Browser:
     arguments: tuple[str, ...] = ()
     source: str = "detected"
     desktop_file: str | None = None
+    icon: str | None = None
 
     def __post_init__(self) -> None:
         if self.family not in {"chromium", "firefox"}:

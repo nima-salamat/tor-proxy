@@ -4,6 +4,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -241,6 +242,151 @@ def test_windows_standard_install_paths_find_chrome_edge_and_firefox(tmp_path, m
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Linux desktop-entry discovery is platform-specific")
+def test_windows_start_menu_shortcuts_find_opera_and_firefox_and_keep_their_icons(tmp_path, monkeypatch):
+    from torproxy.browsers import detector as detector_module
+
+    appdata = tmp_path / "Roaming"
+    start_menu = appdata / "Microsoft" / "Windows" / "Start Menu" / "Programs"
+    start_menu.mkdir(parents=True)
+    opera = tmp_path / "Opera GX" / "launcher.exe"
+    firefox = tmp_path / "Mozilla Firefox" / "firefox.exe"
+    opera_icon = tmp_path / "opera.ico"
+    firefox_icon = tmp_path / "firefox.ico"
+    for path in (opera, firefox, opera_icon, firefox_icon):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"fixture")
+
+    records = [
+        {
+            "Name": "Opera GX",
+            "TargetPath": str(opera),
+            "Arguments": "",
+            "IconLocation": f"{opera_icon},0",
+            "ShortcutPath": str(start_menu / "Opera GX.lnk"),
+        },
+        {
+            "Name": "Firefox",
+            "TargetPath": str(firefox),
+            "Arguments": "",
+            "IconLocation": f"{firefox_icon},0",
+            "ShortcutPath": str(start_menu / "Firefox.lnk"),
+        },
+    ]
+    monkeypatch.setattr(
+        detector_module.shutil,
+        "which",
+        lambda command, path=None: "powershell.exe" if command.casefold() == "powershell.exe" else None,
+    )
+    monkeypatch.setattr(
+        detector_module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(records),
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "winreg", None)
+
+    detector = BrowserDetector(
+        system="win32",
+        environ={
+            "APPDATA": str(appdata),
+            "PROGRAMDATA": str(tmp_path / "ProgramData"),
+            "PROGRAMFILES": str(tmp_path / "Program Files"),
+            "PROGRAMFILES(X86)": str(tmp_path / "Program Files (x86)"),
+            "LOCALAPPDATA": str(tmp_path / "Local"),
+            "PATH": "",
+        },
+        custom_store=CustomBrowserStore(tmp_path / "custom.json"),
+    )
+    browsers = {item.id: item for item in detector.detect()}
+
+    assert browsers["opera_gx"].executable == str(opera)
+    assert browsers["opera_gx"].source == "start-menu-shortcut"
+    assert browsers["opera_gx"].icon == str(opera_icon)
+    assert browsers["firefox"].executable == str(firefox)
+    assert browsers["firefox"].source == "start-menu-shortcut"
+    assert browsers["firefox"].icon == str(firefox_icon)
+
+
+def test_windows_start_menu_internet_registry_detects_opera_and_firefox(tmp_path, monkeypatch):
+    opera = tmp_path / "Opera" / "launcher.exe"
+    firefox = tmp_path / "Firefox" / "firefox.exe"
+    for path in (opera, firefox):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"fixture")
+
+    root_path = r"Software\Clients\StartMenuInternet"
+    values = {
+        ("HKLM", root_path): {},
+        ("HKLM", root_path + r"\Opera"): {"": "Opera"},
+        ("HKLM", root_path + r"\Opera\shell\open\command"): {"": f'"{opera}" "%1"'},
+        ("HKLM", root_path + r"\Firefox"): {"": "Mozilla Firefox"},
+        ("HKLM", root_path + r"\Firefox\shell\open\command"): {"": f'"{firefox}" "%1"'},
+    }
+    children = {
+        ("HKLM", root_path): ["Opera", "Firefox"],
+    }
+
+    class FakeKey:
+        def __init__(self, hive, path):
+            self.hive = hive
+            self.path = path
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class FakeWinreg:
+        HKEY_CURRENT_USER = "HKCU"
+        HKEY_LOCAL_MACHINE = "HKLM"
+        KEY_READ = 1
+        KEY_WOW64_64KEY = 2
+        KEY_WOW64_32KEY = 4
+
+        @staticmethod
+        def OpenKey(parent, path, *_args):
+            if isinstance(parent, FakeKey):
+                hive, full_path = parent.hive, parent.path + "\\" + path
+            else:
+                hive, full_path = parent, path
+            if (hive, full_path) not in values and (hive, full_path) not in children:
+                raise OSError("registry key not found")
+            return FakeKey(hive, full_path)
+
+        @staticmethod
+        def QueryInfoKey(key):
+            return (len(children.get((key.hive, key.path), [])), 0, 0)
+
+        @staticmethod
+        def EnumKey(key, index):
+            return children[(key.hive, key.path)][index]
+
+        @staticmethod
+        def QueryValueEx(key, name):
+            return values[(key.hive, key.path)][name], 1
+
+    monkeypatch.setitem(sys.modules, "winreg", FakeWinreg)
+    detector = BrowserDetector(
+        system="win32",
+        environ={
+            "PROGRAMFILES": str(tmp_path / "Program Files"),
+            "PROGRAMFILES(X86)": str(tmp_path / "Program Files (x86)"),
+            "LOCALAPPDATA": str(tmp_path / "Local"),
+            "PATH": "",
+        },
+        custom_store=CustomBrowserStore(tmp_path / "custom.json"),
+    )
+    browsers = {item.id: item for item in detector.detect()}
+
+    assert browsers["opera"].executable == str(opera)
+    assert browsers["opera"].source == "start-menu-registration"
+    assert browsers["firefox"].executable == str(firefox)
+    assert browsers["firefox"].source == "start-menu-registration"
+
+
 def test_linux_desktop_entries_are_parsed_without_a_shell(tmp_path):
     data_home = tmp_path / "data"
     applications = data_home / "applications"
@@ -250,6 +396,12 @@ def test_linux_desktop_entries_are_parsed_without_a_shell(tmp_path):
     flatpak = binary_dir / "flatpak"
     flatpak.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     flatpak.chmod(0o755)
+    opera = binary_dir / "opera"
+    firefox = binary_dir / "firefox"
+    for executable in (opera, firefox):
+        executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        executable.chmod(0o755)
+
     entry = applications / "google-chrome.desktop"
     entry.write_text(
         "[Desktop Entry]\n"
@@ -257,6 +409,26 @@ def test_linux_desktop_entries_are_parsed_without_a_shell(tmp_path):
         "Type=Application\n"
         "TryExec=flatpak\n"
         "Exec=flatpak run com.google.Chrome %U\n",
+        encoding="utf-8",
+    )
+    opera_entry = applications / "opera.desktop"
+    opera_entry.write_text(
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=Opera Web Browser\n"
+        "TryExec=opera\n"
+        "Exec=opera %U\n"
+        "Icon=opera-browser\n",
+        encoding="utf-8",
+    )
+    firefox_entry = applications / "firefox.desktop"
+    firefox_entry.write_text(
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=Firefox Web Browser\n"
+        "TryExec=firefox\n"
+        "Exec=firefox %u\n"
+        "Icon=firefox-browser\n",
         encoding="utf-8",
     )
 
@@ -275,6 +447,13 @@ def test_linux_desktop_entries_are_parsed_without_a_shell(tmp_path):
     assert chrome.executable == str(flatpak)
     assert chrome.arguments == ("run", "com.google.Chrome")
     assert chrome.source == "desktop-entry"
+
+    opera_browser = next(item for item in browsers if item.id == "opera")
+    firefox_browser = next(item for item in browsers if item.id == "firefox")
+    assert opera_browser.executable == str(opera)
+    assert opera_browser.icon == "opera-browser"
+    assert firefox_browser.executable == str(firefox)
+    assert firefox_browser.icon == "firefox-browser"
 
 
 def test_firefox_profile_keeps_user_settings_and_replaces_managed_proxy_block(tmp_path):

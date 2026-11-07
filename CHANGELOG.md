@@ -3,6 +3,8 @@
 All notable changes are recorded here. Dates and release numbers are added only when a release is actually published.
 
 ## Unreleased — UI, updater, and security redesign
+- Reworked the Open Browser chooser to use the shared frameless popup shell and existing dialog theme; browser cards now display installed Windows executable/shortcut icons or Linux desktop-theme icons instead of a generic globe.
+- Expanded Windows browser discovery to StartMenuInternet registrations, Start Menu shortcuts, App Paths, uninstall metadata and user/machine install folders; Linux discovery now retains desktop-file icon metadata alongside XDG launch information.
 
 - Added a Home-page Open Browser dialog with Windows/Linux detection for common Chromium and Firefox-family browsers, persistent custom-browser entries, isolated per-browser profiles, and a dedicated safe launcher that uses the existing TorProxy HTTP proxy without adding an explicit direct route to Chromium's proxy argument and with Firefox's system-request proxy failover disabled. Chromium's non-proxied WebRTC UDP policy and Firefox's proxy-aware ICE restrictions are applied in those isolated profiles. Repeated Firefox launches reuse the active TorProxy profile without forcing a second Firefox instance.
 - Added persistent listener-port allocation. Automatic ports are initialized and saved once, reused on later launches, and replaced only when a port conflict is detected; DNSPort checks both TCP and UDP; manually pinned ports remain user-controlled and fail preflight rather than being silently changed.

@@ -1199,18 +1199,25 @@ def test_open_browser_dialog_lists_installed_browsers_and_filters_search(qt_app,
     pytest.importorskip("qtawesome")
     from PySide6.QtWidgets import QLabel
     from torproxy.browsers import Browser
+    from ui_.window.dialogs import _FramelessDialog
     from ui_.window.open_browser_dialog import OpenBrowserDialog
 
     chrome_path = tmp_path / "chrome"
     firefox_path = tmp_path / "firefox"
     chrome_path.write_text("browser", encoding="utf-8")
     firefox_path.write_text("browser", encoding="utf-8")
+    icon_path = tmp_path / "browser.svg"
+    icon_path.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">'
+        '<circle cx="32" cy="32" r="28" fill="#287db5"/></svg>',
+        encoding="utf-8",
+    )
 
     class _FakeDetector:
         def detect(self):
             return [
-                Browser("chrome", "Chrome", "chromium", str(chrome_path)),
-                Browser("firefox", "Firefox", "firefox", str(firefox_path)),
+                Browser("chrome", "Chrome", "chromium", str(chrome_path), icon=str(icon_path)),
+                Browser("firefox", "Firefox", "firefox", str(firefox_path), icon=str(icon_path)),
             ]
 
         def register_custom(self, browser):
@@ -1226,14 +1233,23 @@ def test_open_browser_dialog_lists_installed_browsers_and_filters_search(qt_app,
         launcher=_FakeLauncher(),
     )
     try:
+        assert isinstance(dialog, _FramelessDialog)
+        assert dialog.title_bar is not None
         assert len(dialog._cards) == 2
         assert dialog.start_page_input.text() == "https://check.torproject.org/"
+        browser_icon = dialog.findChild(QLabel, "browserIconLabel")
+        assert browser_icon is not None
+        assert browser_icon.property("browserId") == "chrome"
+        assert browser_icon.pixmap() is not None and not browser_icon.pixmap().isNull()
         endpoint = dialog.findChild(QLabel, "browserProxyEndpoint")
         assert endpoint is not None
         assert "127.0.0.1:45555" in endpoint.text()
 
         dialog._filter_cards("firefox")
-        visibility = {name: card.isHidden() for card, name, _family in dialog._cards}
+        visibility = {
+            name: card.isHidden()
+            for card, name, _family, _browser in dialog._cards
+        }
         assert visibility["chrome"] is True
         assert visibility["firefox"] is False
     finally:
