@@ -13,7 +13,8 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QListWidget,
     QFrame,
-    QScrollArea
+    QScrollArea,
+    QProgressBar
 )
 from PySide6.QtCore import Qt, QThreadPool, QTimer
 from PySide6.QtGui import QColor, QPalette
@@ -61,6 +62,9 @@ class SettingWindow(QWidget):
         self._parent = parent
         self._kill_switch_pool = QThreadPool(self)
         self._kill_switch_pool.setMaxThreadCount(1)
+        self._kill_switch_busy = False
+        self._kill_switch_requested_state: bool | None = None
+        self._kill_switch_pending_state: bool | None = None
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(10, 8, 10, 8)
         main_layout.setSpacing(8)
@@ -173,6 +177,12 @@ class SettingWindow(QWidget):
             QLabel#settingsDescription {{ color: {muted}; font-size: 11px; padding: 0; }}
             QLabel#settingsFieldLabel {{ color: {text}; font-weight: 650; }}
             QLabel#signatureVerificationDetails {{ color: {muted}; background: transparent; padding: 3px 0; }}
+            QLabel#killSwitchStatus {{ color: {muted}; background: transparent; font-size: 11px; padding: 3px 2px; }}
+            QLabel#killSwitchStatus[statusState="active"] {{ color: #27a879; font-weight: 700; }}
+            QLabel#killSwitchStatus[statusState="busy"] {{ color: {accent}; font-weight: 650; }}
+            QLabel#killSwitchStatus[statusState="error"] {{ color: #d66b75; font-weight: 650; }}
+            QProgressBar#killSwitchProgress {{ border: none; border-radius: 3px; background: {border}; max-height: 6px; min-height: 6px; }}
+            QProgressBar#killSwitchProgress::chunk {{ border-radius: 3px; background: {accent}; }}
             QLabel#globalShortcutStatus {{ background: transparent; font-size: 10px; }}
             QLabel#bridgeInputStatus {{ color: {muted}; background: transparent; font-size: 10px; padding: 2px 1px; }}
             QLabel#bridgeCountLabel {{ color: {accent}; background: transparent; font-size: 10px; font-weight: 750; }}
@@ -763,15 +773,36 @@ class SettingWindow(QWidget):
         kill_switch_layout.addLayout(kill_switch_copy, 1)
         self.chk_kill_switch = QCheckBox("Enable", self)
         self.chk_kill_switch.setObjectName("killSwitchPreference")
+        self.chk_kill_switch.setAccessibleName("Enable or disable system-wide Kill Switch")
+        self.chk_kill_switch.setToolTip(
+            "During a firewall update this control stays available. A change made while busy is queued until the current step finishes."
+        )
         self.chk_kill_switch.setChecked(bool(CONFIG["kill_switch_enabled"]))
         self.chk_kill_switch.toggled.connect(self.kill_switch_changed)
-        kill_switch_layout.addWidget(self.chk_kill_switch, 0, Qt.AlignmentFlag.AlignVCenter)
+        kill_switch_controls = QVBoxLayout()
+        kill_switch_controls.setContentsMargins(0, 0, 0, 0)
+        kill_switch_controls.setSpacing(7)
+        kill_switch_controls.addWidget(self.chk_kill_switch, 0, Qt.AlignmentFlag.AlignRight)
+        self.kill_switch_progress = QProgressBar(kill_switch_row)
+        self.kill_switch_progress.setObjectName("killSwitchProgress")
+        self.kill_switch_progress.setRange(0, 0)
+        self.kill_switch_progress.setTextVisible(False)
+        self.kill_switch_progress.setFixedSize(104, 6)
+        self.kill_switch_progress.hide()
+        kill_switch_controls.addWidget(self.kill_switch_progress, 0, Qt.AlignmentFlag.AlignRight)
+        kill_switch_layout.addLayout(kill_switch_controls, 0)
         self.advanced_page_layout.addWidget(kill_switch_row)
+
+        self.kill_switch_status_label = QLabel(self.advanced_page)
+        self.kill_switch_status_label.setObjectName("killSwitchStatus")
+        self.kill_switch_status_label.setWordWrap(True)
+        self.advanced_page_layout.addWidget(self.kill_switch_status_label)
+        self._refresh_kill_switch_status()
 
         kill_switch_details = self._description(
             "Windows: TorProxy snapshots the current firewall profiles and local outbound allow rules, "
-            "then restores them only when the managed policy is still intact. Group Policy allow rules cause "
-            "activation to fail. Linux: nftables, cgroup v2, systemd user scopes and PolicyKit are required. "
+            "then restores them only when the managed policy is still intact. Internet Connection Sharing (ICS) is blocked while protection is active. "
+            "Linux: nftables, cgroup v2, systemd user scopes and PolicyKit are required. "
             "Only applications explicitly configured to use TorProxy can access the Tor network; all other "
             "direct internet access is blocked. Direct Exclude Host rules are disabled while protection is active."
         )
@@ -779,33 +810,121 @@ class SettingWindow(QWidget):
         self.advanced_page_layout.addWidget(kill_switch_details)
         self.advanced_page_layout.addStretch(1)
 
+    def _set_kill_switch_status(self, message: str, state: str = "idle") -> None:
+        label = getattr(self, "kill_switch_status_label", None)
+        if label is None:
+            return
+        label.setText(str(message))
+        label.setProperty("statusState", state)
+        label.style().unpolish(label)
+        label.style().polish(label)
+
+    def _refresh_kill_switch_status(self) -> None:
+        if bool(CONFIG["kill_switch_enabled"]):
+            self._set_kill_switch_status(
+                "Protection is active. Direct outbound connections are blocked; TorProxy's managed Tor traffic remains allowed.",
+                "active",
+            )
+        else:
+            self._set_kill_switch_status(
+                "Protection is off. TorProxy has not changed the system firewall policy.",
+                "idle",
+            )
+
     def kill_switch_changed(self, checked: bool) -> None:
         checked = bool(checked)
         proxy_widget = getattr(getattr(self._parent, "proxyWidget", None), "set_kill_switch_enabled", None)
         if not callable(proxy_widget):
             self.chk_kill_switch.blockSignals(True)
-            self.chk_kill_switch.setChecked(not checked)
+            self.chk_kill_switch.setChecked(bool(CONFIG["kill_switch_enabled"]))
             self.chk_kill_switch.blockSignals(False)
+            self._refresh_kill_switch_status()
             QMessageBox.warning(self, "Kill Switch unavailable", "The network protection service is not available.")
             return
-        self.chk_kill_switch.setEnabled(False)
-        worker = Worker(proxy_widget, checked)
-        worker.signals.finished.connect(lambda _result, value=checked: self._on_kill_switch_finished(value))
-        worker.signals.error.connect(lambda error, value=checked: self._on_kill_switch_failed(value, error))
+
+        if self._kill_switch_busy:
+            requested = self._kill_switch_requested_state
+            self._kill_switch_pending_state = checked if checked != requested else None
+            if self._kill_switch_pending_state is None:
+                action = "Enabling" if requested else "Disabling"
+                self._set_kill_switch_status(
+                    f"{action} firewall protection… The current operation is still running.",
+                    "busy",
+                )
+            else:
+                queued_action = "enable" if self._kill_switch_pending_state else "disable"
+                self._set_kill_switch_status(
+                    f"Request to {queued_action} protection queued. The current firewall operation will finish first.",
+                    "busy",
+                )
+            return
+
+        self._start_kill_switch_operation(checked, proxy_widget)
+
+    def _start_kill_switch_operation(self, enabled: bool, proxy_widget=None) -> None:
+        if proxy_widget is None:
+            proxy_widget = getattr(getattr(self._parent, "proxyWidget", None), "set_kill_switch_enabled", None)
+        if not callable(proxy_widget):
+            self._set_kill_switch_status("The network protection service is unavailable.", "error")
+            return
+
+        self._kill_switch_busy = True
+        self._kill_switch_requested_state = bool(enabled)
+        self._kill_switch_pending_state = None
+        action = "Enabling" if enabled else "Disabling"
+        self.kill_switch_progress.show()
+        self._set_kill_switch_status(
+            f"{action} system firewall protection… This may take a moment. "
+            "You can change the switch again to queue the opposite action.",
+            "busy",
+        )
+        worker = Worker(proxy_widget, bool(enabled))
+        worker.signals.finished.connect(
+            lambda result, value=bool(enabled): self._on_kill_switch_finished(value, result)
+        )
+        worker.signals.error.connect(
+            lambda error, value=bool(enabled): self._on_kill_switch_failed(value, error)
+        )
         self._kill_switch_worker = worker
         self._kill_switch_pool.start(worker)
 
-    def _on_kill_switch_finished(self, enabled: bool) -> None:
-        self.chk_kill_switch.setEnabled(True)
+    def _on_kill_switch_finished(self, enabled: bool, result: str = "") -> None:
+        self._kill_switch_busy = False
+        pending = self._kill_switch_pending_state
+        self._kill_switch_pending_state = None
+        self._kill_switch_requested_state = None
+
+        if pending is not None and pending != bool(enabled):
+            self.chk_kill_switch.blockSignals(True)
+            self.chk_kill_switch.setChecked(bool(pending))
+            self.chk_kill_switch.blockSignals(False)
+            self._start_kill_switch_operation(bool(pending))
+            return
+
+        self.kill_switch_progress.hide()
         self.chk_kill_switch.blockSignals(True)
-        self.chk_kill_switch.setChecked(enabled)
+        self.chk_kill_switch.setChecked(bool(enabled))
         self.chk_kill_switch.blockSignals(False)
+        message = str(result or "").strip()
+        if message:
+            self._set_kill_switch_status(message, "active" if enabled else "idle")
+        else:
+            self._refresh_kill_switch_status()
 
     def _on_kill_switch_failed(self, requested: bool, error: str) -> None:
-        self.chk_kill_switch.setEnabled(True)
+        self._kill_switch_busy = False
+        self._kill_switch_requested_state = None
+        self._kill_switch_pending_state = None
+        self.kill_switch_progress.hide()
+        actual = bool(CONFIG["kill_switch_enabled"])
         self.chk_kill_switch.blockSignals(True)
-        self.chk_kill_switch.setChecked(bool(CONFIG["kill_switch_enabled"]))
+        self.chk_kill_switch.setChecked(actual)
         self.chk_kill_switch.blockSignals(False)
+        action = "enable" if requested else "disable"
+        self._set_kill_switch_status(
+            f"Could not {action} protection. Current saved state: {'on' if actual else 'off'}.",
+            "error",
+        )
         QMessageBox.warning(self, "Kill Switch", str(error))
 
     def signature_verification_changed(self, state):
