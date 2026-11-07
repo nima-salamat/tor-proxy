@@ -65,6 +65,30 @@ class KillSwitchManager:
         except Exception as exc:
             raise KillSwitchError(f"Could not safely deactivate the kill switch: {exc}") from exc
 
+    def recover(self) -> None:
+        """Restore the pre-Kill-Switch firewall snapshot when one is available."""
+        callback = getattr(self.backend, "recover", None)
+        if callback is None:
+            callback = self.backend.deactivate
+        try:
+            callback()
+        except KillSwitchError:
+            raise
+        except Exception as exc:
+            raise KillSwitchError(f"Could not restore the saved firewall policy: {exc}") from exc
+
+    def emergency_recover(self) -> None:
+        """Explicitly restore ordinary outbound access if normal recovery is insufficient."""
+        callback = getattr(self.backend, "emergency_recover", None)
+        if callback is None:
+            callback = getattr(self.backend, "recover", None) or self.backend.deactivate
+        try:
+            callback()
+        except KillSwitchError:
+            raise
+        except Exception as exc:
+            raise KillSwitchError(f"Emergency firewall recovery failed: {exc}") from exc
+
     def set_tor_cgroup(self, cgroup_id: int | None, cgroup_level: int | None = None) -> None:
         callback = getattr(self.backend, "set_tor_cgroup", None)
         if callback is None:
