@@ -723,6 +723,54 @@ class ProxyWindow(QWidget):
             with self._operation_lock:
                 self._killswitch_operation_active = False
 
+    def _run_kill_switch_recovery(self, *, emergency: bool = False) -> str:
+        """Restore firewall connectivity without racing Tor startup or another policy change."""
+        with self._operation_lock:
+            if self._connect_operation_busy or self.running or self._stopping:
+                raise KillSwitchError("Disconnect Tor before recovering the system firewall.")
+            if self._killswitch_operation_active:
+                raise KillSwitchError("A Kill Switch operation is still running; recovery will be queued by Settings.")
+            self._killswitch_operation_active = True
+
+        try:
+            manager = getattr(self, "killswitch_manager", None)
+            if manager is None:
+                raise KillSwitchError(
+                    getattr(self, "_killswitch_unavailable", None)
+                    or "Kill Switch recovery is unavailable on this operating system."
+                )
+            if emergency:
+                manager.emergency_recover()
+                message = (
+                    "Emergency recovery completed. Windows Firewall remains enabled; outbound traffic is allowed, "
+                    "and only TorProxy-owned firewall rules were removed."
+                )
+            else:
+                manager.recover()
+                message = (
+                    "The saved firewall configuration was restored and verified. "
+                    "The Kill Switch is now disabled."
+                )
+            try:
+                CONFIG["kill_switch_enabled"] = False
+            except Exception as exc:
+                raise KillSwitchError(
+                    f"The firewall was recovered, but TorProxy could not save the disabled preference: {exc}. "
+                    "Keep the Kill Switch off in Settings before restarting the app."
+                ) from exc
+            return message
+        finally:
+            with self._operation_lock:
+                self._killswitch_operation_active = False
+
+    def recover_kill_switch(self) -> str:
+        """Restore the original firewall snapshot, including a partially applied enable."""
+        return self._run_kill_switch_recovery(emergency=False)
+
+    def emergency_recover_kill_switch(self) -> str:
+        """Use the explicit outbound-Allow fallback while keeping the OS firewall enabled."""
+        return self._run_kill_switch_recovery(emergency=True)
+
     def _apply_kill_switch_enabled(self, enabled: bool) -> str:
         """Apply the OS firewall policy and keep the saved preference consistent."""
         enabled = bool(enabled)
@@ -749,7 +797,7 @@ class ProxyWindow(QWidget):
                 # installed. Attempt ownership-checked cleanup; if that fails,
                 # surface both errors and leave manual recovery possible.
                 try:
-                    manager.deactivate()
+                    manager.recover()
                 except Exception as recovery_error:
                     raise KillSwitchError(
                         f"Firewall activation failed: {activation_error}. "
