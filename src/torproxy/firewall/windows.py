@@ -83,9 +83,9 @@ function Test-SharedAccessDynamicAllowRule($rule) {
     $service = Get-RuleFilter $rule 'Get-NetFirewallServiceFilter'
     $security = Get-RuleFilter $rule 'Get-NetFirewallSecurityFilter'
     if ($null -eq $application -or $null -eq $service) { return $false }
-    # An authenticated allow-bypass rule must never be treated as contained
-    # by a normal explicit Block rule.
-    if ($null -ne $security -and [string]$security.OverrideBlockRules -eq 'True') { return $false }
+    # Only treat the dynamic ICS allow as contained when Windows confirms
+    # it does not carry the authenticated allow-bypass flag.
+    if ($null -eq $security -or [string]$security.OverrideBlockRules -ne 'False') { return $false }
     $programPath = [Environment]::ExpandEnvironmentVariables([string]$application.Program)
     $expectedPath = Join-Path $env:SystemRoot 'System32\svchost.exe'
     try {
@@ -110,8 +110,8 @@ function Assert-SharedAccessBlockRule {
     if ($null -eq $application -or $null -eq $service) {
         throw 'The TorProxy Internet Connection Sharing block rule filters cannot be verified.'
     }
-    if ($null -ne $security -and [string]$security.OverrideBlockRules -eq 'True') {
-        throw 'The TorProxy Internet Connection Sharing block rule unexpectedly permits authenticated block bypass.'
+    if ($null -eq $security -or [string]$security.OverrideBlockRules -ne 'False') {
+        throw 'The TorProxy Internet Connection Sharing block rule cannot verify that authenticated block bypass is disabled.'
     }
     $programPath = [Environment]::ExpandEnvironmentVariables([string]$application.Program)
     $expectedPath = [System.IO.Path]::GetFullPath((Join-Path $env:SystemRoot 'System32\svchost.exe'))
