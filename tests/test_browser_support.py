@@ -156,7 +156,7 @@ def test_manual_port_conflict_reports_the_process_using_the_listener(monkeypatch
             return "tor.exe"
 
         def exe(self):
-            return r"C:\\TorProxy\\Tor\\tor.exe"
+            return r"C:\TorProxy\Tor\tor.exe"
 
     monkeypatch.setattr(psutil, "net_connections", lambda kind: [connection])
     monkeypatch.setattr(psutil, "Process", FakeProcess)
@@ -166,7 +166,7 @@ def test_manual_port_conflict_reports_the_process_using_the_listener(monkeypatch
     assert owner is not None
     assert "tor.exe" in owner
     assert "PID 4242" in owner
-    assert "C:\\TorProxy" in owner
+    assert r"C:\TorProxy" in owner
 
 
 def test_manual_port_collision_fails_without_overwriting_user_choice():
@@ -243,7 +243,6 @@ def test_windows_standard_install_paths_find_chrome_edge_and_firefox(tmp_path, m
     assert browsers["ungoogled_chromium"].executable == str(ungoogled)
 
 
-@pytest.mark.skipif(os.name == "nt", reason="Linux desktop-entry discovery is platform-specific")
 def test_windows_commandline_split_preserves_quoted_program_files_paths():
     from torproxy.browsers.detector import _windows_commandline_split
 
@@ -416,6 +415,7 @@ def test_windows_start_menu_internet_registry_detects_opera_and_firefox(tmp_path
     assert browsers["firefox"].source == "start-menu-registration"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Linux desktop-entry discovery is platform-specific")
 def test_linux_desktop_entries_are_parsed_without_a_shell(tmp_path):
     data_home = tmp_path / "data"
     applications = data_home / "applications"
