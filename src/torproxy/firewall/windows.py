@@ -52,6 +52,49 @@ function Get-RuleFilter($rule, [string]$cmdletName) {
         return $null
     }
 }
+function Test-SharedAccessDynamicAllowRule($rule) {
+    if ([string]$rule.PolicyStoreSourceType -ne 'Dynamic' -or
+        [string]$rule.Direction -ne 'Outbound' -or
+        [string]$rule.Action -ne 'Allow' -or
+        [string]$rule.Enabled -ne 'True') {
+        return $false
+    }
+    $application = Get-RuleFilter $rule 'Get-NetFirewallApplicationFilter'
+    $service = Get-RuleFilter $rule 'Get-NetFirewallServiceFilter'
+    if ($null -eq $application -or $null -eq $service) { return $false }
+    $programPath = [Environment]::ExpandEnvironmentVariables([string]$application.Program)
+    $expectedPath = Join-Path $env:SystemRoot 'System32\svchost.exe'
+    try {
+        $programPath = [System.IO.Path]::GetFullPath($programPath)
+        $expectedPath = [System.IO.Path]::GetFullPath($expectedPath)
+    } catch {
+        return $false
+    }
+    $serviceNames = @($service.Service | ForEach-Object { [string]$_ })
+    return ($programPath -ieq $expectedPath) -and ($serviceNames -contains 'SharedAccess')
+}
+function Assert-SharedAccessBlockRule {
+    $rule = Get-NetFirewallRule -PolicyStore ActiveStore -Name 'TorProxy_KS_Block_SharedAccess' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -eq $rule -or [string]$rule.Group -ne $Group -or
+        [string]$rule.Enabled -ne 'True' -or [string]$rule.Direction -ne 'Outbound' -or
+        [string]$rule.Action -ne 'Block') {
+        throw 'The TorProxy Internet Connection Sharing block rule is missing or was modified.'
+    }
+    $application = Get-RuleFilter $rule 'Get-NetFirewallApplicationFilter'
+    $service = Get-RuleFilter $rule 'Get-NetFirewallServiceFilter'
+    if ($null -eq $application -or $null -eq $service) {
+        throw 'The TorProxy Internet Connection Sharing block rule filters cannot be verified.'
+    }
+    $programPath = [Environment]::ExpandEnvironmentVariables([string]$application.Program)
+    $expectedPath = [System.IO.Path]::GetFullPath((Join-Path $env:SystemRoot 'System32\svchost.exe'))
+    try { $programPath = [System.IO.Path]::GetFullPath($programPath) } catch {
+        throw 'The TorProxy Internet Connection Sharing block rule program path is invalid.'
+    }
+    $serviceNames = @($service.Service | ForEach-Object { [string]$_ })
+    if ($programPath -ine $expectedPath -or $serviceNames -notcontains 'SharedAccess') {
+        throw 'The TorProxy Internet Connection Sharing block rule no longer matches only the SharedAccess service.'
+    }
+}
 function Get-UnmanagedRuleDiagnostic($rule) {
     $application = Get-RuleFilter $rule 'Get-NetFirewallApplicationFilter'
     $service = Get-RuleFilter $rule 'Get-NetFirewallServiceFilter'
@@ -96,6 +139,9 @@ function Assert-ManagedState($snapshot, $requireRules = $true) {
         if ($groupRules.Count -lt 1) {
             throw 'TorProxy firewall rules are missing. The saved snapshot was retained for manual recovery.'
         }
+        if ([bool]$snapshot.blockSharedAccess) {
+            Assert-SharedAccessBlockRule
+        }
     }
 }
 try {
@@ -127,6 +173,7 @@ try {
                 }) -join '; '
                 throw "Enabled outbound Allow rules are enforced by Group Policy and cannot be safely disabled: $gpoDetails"
             }
+            $sharedAccessRules = @($activeAllow | Where-Object { Test-SharedAccessDynamicAllowRule $_ })
             $localAllow = @(Get-NetFirewallRule -PolicyStore PersistentStore -Direction Outbound -Action Allow -Enabled True -ErrorAction SilentlyContinue)
             $localNames = @($localAllow | ForEach-Object { [string]$_.Name } | Sort-Object -Unique)
             $localSet = @{}
@@ -134,7 +181,8 @@ try {
             $unmanaged = @($activeAllow | Where-Object {
                 ([string]$_.PolicyStoreSourceType -ne 'Local' -or
                  -not $localSet.ContainsKey([string]$_.Name)) -and
-                [string]$_.Group -ne $Group
+                [string]$_.Group -ne $Group -and
+                -not (Test-SharedAccessDynamicAllowRule $_)
             })
             if ($unmanaged.Count -gt 0) {
                 $details = @($unmanaged | Select-Object -First 4 | ForEach-Object {
@@ -152,9 +200,26 @@ try {
                     }
                 })
                 disabledRules = @($localNames)
+                blockSharedAccess = ($sharedAccessRules.Count -gt 0)
+                sharedAccessProgram = (Join-Path $env:SystemRoot 'System32\svchost.exe')
                 applied = [ordered]@{ Enabled = $true; DefaultOutboundAction = 'Block' }
                 group = $Group
             }
+            Save-Snapshot $snapshot
+        }
+
+        # A dynamic ICS allow rule is tied to svchost.exe/SharedAccess. Keep
+        # that source rule intact, but override it with a TorProxy-owned
+        # explicit Block rule while the Kill Switch is active.
+        $latestActiveAllow = @(Get-NetFirewallRule -PolicyStore ActiveStore -TracePolicyStore -Direction Outbound -Action Allow -Enabled True -ErrorAction SilentlyContinue)
+        $latestSharedAccessRules = @($latestActiveAllow | Where-Object { Test-SharedAccessDynamicAllowRule $_ })
+        if ($latestSharedAccessRules.Count -gt 0) {
+            $snapshot.blockSharedAccess = $true
+            $snapshot.sharedAccessProgram = Join-Path $env:SystemRoot 'System32\svchost.exe'
+            Save-Snapshot $snapshot
+        } elseif ($null -eq $snapshot.blockSharedAccess) {
+            $snapshot.blockSharedAccess = $false
+            $snapshot.sharedAccessProgram = Join-Path $env:SystemRoot 'System32\svchost.exe'
             Save-Snapshot $snapshot
         }
 
@@ -173,6 +238,14 @@ try {
         New-NetFirewallRule -PolicyStore PersistentStore -Name 'TorProxy_KS_DHCPv4' -DisplayName 'TorProxy Kill Switch DHCPv4' -Group $Group -Direction Outbound -Action Allow -Protocol UDP -LocalPort 68 -RemotePort 67 -RemoteAddress Any -Profile Any | Out-Null
         New-NetFirewallRule -PolicyStore PersistentStore -Name 'TorProxy_KS_DHCPv6' -DisplayName 'TorProxy Kill Switch DHCPv6' -Group $Group -Direction Outbound -Action Allow -Protocol UDP -LocalPort 546 -RemotePort 547 -RemoteAddress Any -Profile Any | Out-Null
         New-NetFirewallRule -PolicyStore PersistentStore -Name 'TorProxy_KS_NDP' -DisplayName 'TorProxy Kill Switch IPv6 Neighbor Discovery' -Group $Group -Direction Outbound -Action Allow -Protocol ICMPv6 -IcmpType 133,135,136 -RemoteAddress Any -Profile Any | Out-Null
+        if ([bool]$snapshot.blockSharedAccess) {
+            $sharedAccessProgram = [string]$snapshot.sharedAccessProgram
+            if (-not $sharedAccessProgram) {
+                $sharedAccessProgram = Join-Path $env:SystemRoot 'System32\svchost.exe'
+            }
+            New-NetFirewallRule -PolicyStore PersistentStore -Name 'TorProxy_KS_Block_SharedAccess' -DisplayName 'TorProxy Kill Switch Block Internet Connection Sharing' -Group $Group -Direction Outbound -Action Block -Program $sharedAccessProgram -Service SharedAccess -Profile Any -Enabled True | Out-Null
+            Assert-SharedAccessBlockRule
+        }
 
         $effective = Get-ActiveProfiles
         foreach ($profile in $effective) {
@@ -180,11 +253,19 @@ try {
                 throw "Windows Firewall did not retain the outbound block policy for profile $($profile.Name)."
             }
         }
-        $remaining = @(Get-NetFirewallRule -PolicyStore ActiveStore -Direction Outbound -Action Allow -Enabled True | Where-Object { [string]$_.Group -ne $Group })
+        $remaining = @(Get-NetFirewallRule -PolicyStore ActiveStore -TracePolicyStore -Direction Outbound -Action Allow -Enabled True | Where-Object {
+            if ([string]$_.Group -eq $Group) { return $false }
+            if ([bool]$snapshot.blockSharedAccess -and (Test-SharedAccessDynamicAllowRule $_)) { return $false }
+            return $true
+        })
         if ($remaining.Count -gt 0) {
-            throw 'Unmanaged outbound allow rules remain active; strict Kill Switch verification failed.'
+            $details = @($remaining | Select-Object -First 4 | ForEach-Object { Get-UnmanagedRuleDiagnostic $_ }) -join ' || '
+            throw "Unmanaged outbound Allow rules remain active; strict Kill Switch verification failed: $details"
         }
-        Write-Result @{ ok = $true; active = $true; detail = 'Outbound default block verified; only TorProxy rules remain enabled.' }
+        if ([bool]$snapshot.blockSharedAccess) {
+            Assert-SharedAccessBlockRule
+        }
+        Write-Result @{ ok = $true; active = $true; detail = 'Outbound default block verified; TorProxy exceptions and the SharedAccess deny override are active.' }
     }
     elseif ($Action -eq 'deactivate') {
         if (-not (Test-Path -LiteralPath $SnapshotPath)) {
@@ -237,7 +318,11 @@ try {
         } else {
             $snapshot = Get-Content -LiteralPath $SnapshotPath -Raw | ConvertFrom-Json
             Assert-ManagedState $snapshot
-            $remaining = @(Get-NetFirewallRule -PolicyStore ActiveStore -Direction Outbound -Action Allow -Enabled True | Where-Object { [string]$_.Group -ne $Group })
+            $remaining = @(Get-NetFirewallRule -PolicyStore ActiveStore -TracePolicyStore -Direction Outbound -Action Allow -Enabled True | Where-Object {
+                if ([string]$_.Group -eq $Group) { return $false }
+                if ([bool]$snapshot.blockSharedAccess -and (Test-SharedAccessDynamicAllowRule $_)) { return $false }
+                return $true
+            })
             $verified = $remaining.Count -eq 0
             Write-Result @{ ok = $true; active = $verified; verified = $verified; detail = 'Windows Firewall policy inspected.' }
         }
