@@ -65,6 +65,7 @@ class SettingWindow(QWidget):
         self._kill_switch_busy = False
         self._kill_switch_requested_state: bool | None = None
         self._kill_switch_pending_state: bool | None = None
+        self._kill_switch_pending_recovery: str | None = None
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(10, 8, 10, 8)
         main_layout.setSpacing(8)
@@ -799,6 +800,30 @@ class SettingWindow(QWidget):
         self.advanced_page_layout.addWidget(self.kill_switch_status_label)
         self._refresh_kill_switch_status()
 
+        recovery_actions = QHBoxLayout()
+        recovery_actions.setContentsMargins(0, 2, 0, 2)
+        recovery_actions.setSpacing(8)
+        self.btn_kill_switch_restore = QPushButton("Restore saved firewall", self)
+        self.btn_kill_switch_restore.setObjectName("killSwitchRestoreButton")
+        self.btn_kill_switch_restore.setToolTip(
+            "Restore the firewall profiles and local rules saved before Kill Switch activation."
+        )
+        self.btn_kill_switch_restore.clicked.connect(
+            lambda: self._confirm_kill_switch_recovery("restore")
+        )
+        self.btn_kill_switch_emergency = QPushButton("Emergency network recovery", self)
+        self.btn_kill_switch_emergency.setObjectName("killSwitchEmergencyButton")
+        self.btn_kill_switch_emergency.setToolTip(
+            "Keep Windows Firewall enabled, restore outbound Allow, and remove only TorProxy-owned rules."
+        )
+        self.btn_kill_switch_emergency.clicked.connect(
+            lambda: self._confirm_kill_switch_recovery("emergency")
+        )
+        recovery_actions.addWidget(self.btn_kill_switch_restore)
+        recovery_actions.addWidget(self.btn_kill_switch_emergency)
+        recovery_actions.addStretch(1)
+        self.advanced_page_layout.addLayout(recovery_actions)
+
         kill_switch_details = self._description(
             "Windows: TorProxy snapshots the current firewall profiles and local outbound allow rules, "
             "then restores them only when the managed policy is still intact. Internet Connection Sharing (ICS) is blocked while protection is active. "
@@ -890,6 +915,12 @@ class SettingWindow(QWidget):
 
     def _on_kill_switch_finished(self, enabled: bool, result: str = "") -> None:
         self._kill_switch_busy = False
+        recovery = self._kill_switch_pending_recovery
+        if recovery is not None:
+            self._kill_switch_pending_recovery = None
+            self._kill_switch_pending_state = None
+            self._start_kill_switch_recovery(recovery)
+            return
         pending = self._kill_switch_pending_state
         self._kill_switch_pending_state = None
         self._kill_switch_requested_state = None
@@ -914,6 +945,13 @@ class SettingWindow(QWidget):
     def _on_kill_switch_failed(self, requested: bool, error: str) -> None:
         self._kill_switch_busy = False
         self._kill_switch_requested_state = None
+        recovery = self._kill_switch_pending_recovery
+        if recovery is not None:
+            self._kill_switch_pending_recovery = None
+            self._kill_switch_pending_state = None
+            logger.warning("Kill Switch operation failed; starting queued firewall recovery: %s", error)
+            self._start_kill_switch_recovery(recovery)
+            return
         self._kill_switch_pending_state = None
         self.kill_switch_progress.hide()
         actual = bool(CONFIG["kill_switch_enabled"])
@@ -926,6 +964,79 @@ class SettingWindow(QWidget):
             "error",
         )
         QMessageBox.warning(self, "Kill Switch", str(error))
+
+    def _confirm_kill_switch_recovery(self, mode: str) -> None:
+        if mode == "emergency":
+            message = (
+                "Emergency recovery will keep Windows Firewall enabled, set outbound traffic to Allow "
+                "for Domain, Private and Public profiles, and remove only firewall rules owned by TorProxy. "
+                "It may replace a custom outbound-block preference. Use this only when normal recovery cannot "
+                "restore connectivity. Continue?"
+            )
+            title = "Emergency network recovery"
+        else:
+            message = (
+                "TorProxy will remove its own firewall rules and restore the saved firewall profiles and "
+                "local rules from before Kill Switch activation. No unrelated firewall rules will be reset. Continue?"
+            )
+            title = "Restore saved firewall"
+        answer = QMessageBox.question(
+            self,
+            title,
+            message,
+            buttons=QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            defaultButton=QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        self.chk_kill_switch.blockSignals(True)
+        self.chk_kill_switch.setChecked(False)
+        self.chk_kill_switch.blockSignals(False)
+
+        if self._kill_switch_busy:
+            self._kill_switch_pending_state = None
+            self._kill_switch_pending_recovery = mode
+            self._set_kill_switch_status(
+                "Firewall recovery is queued. The current helper has a strict timeout and will be stopped before recovery runs.",
+                "busy",
+            )
+            return
+        self._start_kill_switch_recovery(mode)
+
+    def _start_kill_switch_recovery(self, mode: str) -> None:
+        proxy_owner = getattr(self._parent, "proxyWidget", None)
+        method_name = (
+            "emergency_recover_kill_switch" if mode == "emergency" else "recover_kill_switch"
+        )
+        recovery = getattr(proxy_owner, method_name, None)
+        if not callable(recovery):
+            self._set_kill_switch_status("The firewall recovery service is unavailable.", "error")
+            QMessageBox.warning(
+                self,
+                "Kill Switch recovery unavailable",
+                "TorProxy could not access its firewall recovery service.",
+            )
+            return
+
+        self._kill_switch_busy = True
+        self._kill_switch_requested_state = False
+        self._kill_switch_pending_state = None
+        self.kill_switch_progress.show()
+        self._set_kill_switch_status(
+            "Running emergency firewall recovery…" if mode == "emergency"
+            else "Restoring the saved firewall configuration…",
+            "busy",
+        )
+        worker = Worker(recovery)
+        worker.signals.finished.connect(
+            lambda result: self._on_kill_switch_finished(False, result)
+        )
+        worker.signals.error.connect(
+            lambda error: self._on_kill_switch_failed(False, error)
+        )
+        self._kill_switch_worker = worker
+        self._kill_switch_pool.start(worker)
 
     def signature_verification_changed(self, state):
         enabled = bool(state)
