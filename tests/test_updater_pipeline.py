@@ -541,8 +541,6 @@ def test_release_discovery_falls_back_to_official_archive_on_connection_failure(
 
 
 def test_release_discovery_reports_both_hosts_if_all_official_endpoints_fail(monkeypatch):
-    from config import TOR_BUNDLE_BASE_URL, TOR_BUNDLE_FALLBACK_URL
-
     calls = []
 
     def fetch(url, *_args, **_kwargs):
