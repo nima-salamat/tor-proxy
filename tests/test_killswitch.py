@@ -57,17 +57,21 @@ def test_manager_recovery_prefers_backend_recovery_hooks():
     class RecoveryBackend(FakeBackend):
         def recover(self):
             self.calls.append("recover")
+            return {"ok": True, "detail": "preserved Domain"}
 
         def emergency_recover(self):
             self.calls.append("emergency-recover")
+            return {"ok": True, "detail": "outbound Allow restored"}
 
     backend = RecoveryBackend()
     manager = KillSwitchManager(backend=backend)
 
-    manager.recover()
-    manager.emergency_recover()
+    recovered = manager.recover()
+    emergency = manager.emergency_recover()
 
     assert backend.calls == ["recover", "emergency-recover"]
+    assert recovered["detail"] == "preserved Domain"
+    assert emergency["detail"] == "outbound Allow restored"
 
 
 def test_windows_backend_forwards_recovery_actions(tmp_path):
