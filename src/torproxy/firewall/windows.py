@@ -585,19 +585,19 @@ class WindowsFirewallBackend:
     def activate(self, programs: tuple[str, ...]) -> None:
         self._invoke("activate", programs)
 
-    def deactivate(self) -> None:
+    def deactivate(self) -> dict[str, object]:
         # Normal disable and explicit recovery share the tolerant restore path.
         # Externally changed firewall profiles are preserved rather than making
         # the user unable to disable protection after a Windows policy update.
-        self._invoke("recover")
+        return self._invoke("recover")
 
-    def recover(self) -> None:
+    def recover(self) -> dict[str, object]:
         """Restore the saved pre-Kill-Switch firewall state, including partial installs."""
-        self._invoke("recover")
+        return self._invoke("recover")
 
-    def emergency_recover(self) -> None:
+    def emergency_recover(self) -> dict[str, object]:
         """Restore ordinary outbound access while keeping Defender Firewall enabled."""
-        self._invoke("emergency")
+        return self._invoke("emergency")
 
     def recovery_state(self) -> dict[str, object]:
         """Inspect the local snapshot without requiring UAC or querying firewall policy."""
