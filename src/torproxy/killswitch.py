@@ -102,6 +102,17 @@ class KillSwitchManager:
         except Exception as exc:
             raise KillSwitchError(f"Could not update the Tor cgroup firewall exception: {exc}") from exc
 
+    def recovery_state(self) -> dict[str, object]:
+        """Return local, non-privileged hints about pending recovery state."""
+        callback = getattr(self.backend, "recovery_state", None)
+        if callback is None:
+            return {"available": False, "verified": False}
+        try:
+            return dict(callback())
+        except Exception as exc:
+            LOGGER.warning("Could not inspect local Kill Switch recovery state: %s", exc)
+            return {"available": False, "verified": False, "detail": str(exc)}
+
     def status(self) -> dict[str, object]:
         try:
             return dict(self.backend.status())
