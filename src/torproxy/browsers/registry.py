@@ -38,8 +38,6 @@ class CustomBrowserStore:
                     source="custom",
                     desktop_file=item.get("desktop_file"),
                     icon=item.get("icon"),
-                    desktop_file=item.get("desktop_file"),
-                    icon=item.get("icon"),
                 )
             except (KeyError, TypeError, ValueError):
                 continue
