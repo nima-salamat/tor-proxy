@@ -190,12 +190,14 @@ def test_linux_install_is_idempotent_without_restarting_the_live_drop_chain(tmp_
     def fake_run(args, *, input_text=None, timeout=20):
         calls.append((args, input_text))
         if args[:3] == ["nft", "list", "chain"]:
-            return """chain output {
-                type filter hook output priority 0; policy drop;
+            return """table inet torproxy_killswitch {
+                chain output {
+                type filter hook output priority filter; policy drop;
                 oifname "lo" accept
                 udp sport 68 udp dport 67 accept
                 udp sport 546 udp dport 547 accept
                 ip6 daddr { fe80::/10, ff02::/16 } icmpv6 type { nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert } accept
+                }
             }"""
         return ""
 
@@ -221,14 +223,16 @@ def test_windows_helper_can_restore_a_partially_applied_policy():
 
 
 def test_linux_chain_verification_rejects_missing_rules_and_unexpected_allow_rules():
-    safe_chain = """chain output {
-        type filter hook output priority 0; policy drop;
+    safe_chain = """table inet torproxy_killswitch {
+    chain output {
+        type filter hook output priority filter; policy drop;
         oifname "lo" accept
         udp sport 68 udp dport 67 accept
         udp sport 546 udp dport 547 accept
         ip6 daddr { fe80::/10, ff02::/16 } icmpv6 type { nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert } accept
         socket cgroupv2 level 5 @tor_cgroups accept
-    }"""
+    }
+}"""
     assert _chain_is_safe(safe_chain)
     assert not _chain_is_safe(safe_chain.replace('oifname "lo" accept', "oifname eth0 accept"))
     assert not _chain_is_safe(safe_chain.replace("socket cgroupv2 level 5 @tor_cgroups accept", "ip daddr 0.0.0.0/0 accept"))
@@ -273,3 +277,20 @@ def test_windows_backend_does_not_silently_ignore_orphaned_firewall_rules(tmp_pa
     backend = WindowsFirewallBackend(state_dir=tmp_path / "state", runner=fake_runner)
     with pytest.raises(KillSwitchError, match="original snapshot is missing"):
         backend.deactivate()
+
+
+
+def test_linux_chain_verification_rejects_a_foreign_table_header():
+    safe_chain = """table inet torproxy_killswitch {
+        chain output {
+            type filter hook output priority filter; policy drop;
+            oifname "lo" accept
+            udp sport 68 udp dport 67 accept
+            udp sport 546 udp dport 547 accept
+            ip6 daddr { fe80::/10, ff02::/16 } icmpv6 type { nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert } accept
+        }
+    }"""
+    assert _chain_is_safe(safe_chain)
+    assert not _chain_is_safe(safe_chain.replace(
+        "table inet torproxy_killswitch", "table inet other_table"
+    ))

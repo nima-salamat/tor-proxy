@@ -65,6 +65,8 @@ def _chain_is_safe(chain: str) -> bool:
         line = raw_line.strip()
         if not line or line.startswith("chain ") or line in {"{", "}"}:
             continue
+        if line == f"table inet {TABLE} {{":
+            continue
         if line.startswith("type filter hook output"):
             if "policy drop" not in line:
                 return False
