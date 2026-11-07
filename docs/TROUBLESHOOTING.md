@@ -88,3 +88,17 @@ When Kill Switch is enabled, direct Exclude Host entries are blocked. Tor bundle
 ### Windows firewall source detection
 
 Before changing existing outbound Allow rules, TorProxy queries the merged ActiveStore with PowerShell's `-TracePolicyStore` switch. Windows only populates `PolicyStoreSourceType` and `PolicyStoreSource` for ActiveStore results when source tracing is requested. This distinguishes Local rules from Group Policy, Dynamic, Generated and Hardcoded entries; unsupported sources remain a fail-closed error and are reported by rule name/source rather than silently ignored.
+
+For a non-local rule, the activation error also includes its display name, description, policy source, application/package, service, protocol, ports, and address filters where Windows exposes them. These fields are read-only diagnostics: TorProxy does not remove a Dynamic/Generated/Hardcoded rule or assume that a rule is harmless merely because it belongs to Windows. For manual inspection, run the following in an elevated PowerShell window, substituting the rule name from the error:
+
+```powershell
+$ruleName = '{d8fe030c-ada9-458c-b96a-8cf61b6ddc46}'
+$rule = Get-NetFirewallRule -PolicyStore ActiveStore -TracePolicyStore -Name $ruleName
+$rule | Format-List Name, DisplayName, Description, Group, Enabled, Profile, Direction, Action, PolicyStoreSourceType, PolicyStoreSource
+$rule | Get-NetFirewallApplicationFilter | Format-List Program, Package
+$rule | Get-NetFirewallServiceFilter | Format-List Service
+$rule | Get-NetFirewallPortFilter | Format-List Protocol, LocalPort, RemotePort, IcmpType
+$rule | Get-NetFirewallAddressFilter | Format-List LocalAddress, RemoteAddress
+```
+
+Share the output after removing usernames or other private paths. Do not manually delete or disable a Dynamic rule as a workaround; first identify the component that owns it and whether its policy can be changed through that component.
