@@ -53,6 +53,61 @@ def test_manager_validates_programs_and_delegates_to_backend(tmp_path):
     assert backend.calls == ["activate", "deactivate"]
 
 
+def test_manager_recovery_prefers_backend_recovery_hooks():
+    class RecoveryBackend(FakeBackend):
+        def recover(self):
+            self.calls.append("recover")
+
+        def emergency_recover(self):
+            self.calls.append("emergency-recover")
+
+    backend = RecoveryBackend()
+    manager = KillSwitchManager(backend=backend)
+
+    manager.recover()
+    manager.emergency_recover()
+
+    assert backend.calls == ["recover", "emergency-recover"]
+
+
+def test_windows_backend_forwards_recovery_actions(tmp_path):
+    calls = []
+
+    def fake_runner(_script, action, _snapshot, _request, result_path):
+        calls.append(action)
+        result_path.write_text(
+            json.dumps({"ok": True, "active": False, "mode": action}),
+            encoding="utf-8",
+        )
+        return 0
+
+    backend = WindowsFirewallBackend(state_dir=tmp_path / "state", runner=fake_runner)
+    backend.recover()
+    backend.emergency_recover()
+
+    assert calls == ["recover", "emergency"]
+
+
+def test_windows_helper_exposes_saved_and_emergency_recovery_paths():
+    assert "elseif ($Action -eq 'recover')" in _POWERSHELL
+    assert "elseif ($Action -eq 'emergency')" in _POWERSHELL
+    assert "The saved TorProxy firewall snapshot is invalid" in _POWERSHELL
+    assert "already-restored" in _POWERSHELL
+    assert "-DefaultOutboundAction Allow" in _POWERSHELL
+    assert "kept Windows Firewall enabled" in _POWERSHELL
+
+
+def test_windows_elevated_runner_has_a_bounded_wait_and_terminates_timeouts():
+    import inspect
+    from torproxy.firewall.windows import _run_elevated
+
+    source = inspect.getsource(_run_elevated)
+    assert "WaitForSingleObject(info.hProcess, 60000)" in source
+    assert "TerminateProcess" in source
+    assert "ctypes.POINTER(wintypes.DWORD)" in source
+    assert "WAIT_TIMEOUT" in source
+
+
 def test_manager_rejects_missing_or_empty_tor_allowlist(tmp_path):
     manager = KillSwitchManager(backend=FakeBackend())
     with pytest.raises(KillSwitchError, match="does not exist"):
