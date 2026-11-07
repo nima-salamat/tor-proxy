@@ -273,7 +273,7 @@ try {
             if (-not $sharedAccessProgram) {
                 $sharedAccessProgram = Join-Path $env:SystemRoot 'System32\svchost.exe'
             }
-            New-NetFirewallRule -PolicyStore PersistentStore -Name 'TorProxy_KS_Block_SharedAccess' -DisplayName 'TorProxy Kill Switch Block Internet Connection Sharing' -Group $Group -Direction Outbound -Action Block -Program $sharedAccessProgram -Service SharedAccess -Profile Any -Enabled True | Out-Null
+            New-NetFirewallRule -PolicyStore PersistentStore -Name 'TorProxy_KS_Block_SharedAccess' -DisplayName 'TorProxy Kill Switch Block Internet Connection Sharing' -Group $Group -Direction Outbound -Action Block -Program $sharedAccessProgram -Service SharedAccess -OverrideBlockRules $false -Profile Any -Enabled True | Out-Null
             Assert-SharedAccessBlockRule
         }
 
