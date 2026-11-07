@@ -1198,7 +1198,7 @@ def test_bundle_source_tooltip_documents_official_archive_fallback():
 def test_open_browser_dialog_lists_installed_browsers_and_filters_search(qt_app, tmp_path):
     pytest.importorskip("qtawesome")
     from PySide6.QtWidgets import QLabel
-    from torproxy.browsers import Browser
+    from torproxy.browsers import Browser, BrowserInventoryStore
     from ui_.window.dialogs import _FramelessDialog
     from ui_.window.open_browser_dialog import OpenBrowserDialog
 
@@ -1206,6 +1206,9 @@ def test_open_browser_dialog_lists_installed_browsers_and_filters_search(qt_app,
     firefox_path = tmp_path / "firefox"
     chrome_path.write_text("browser", encoding="utf-8")
     firefox_path.write_text("browser", encoding="utf-8")
+    if os.name != "nt":
+        chrome_path.chmod(0o755)
+        firefox_path.chmod(0o755)
     icon_path = tmp_path / "browser.svg"
     icon_path.write_text(
         '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">'
@@ -1227,10 +1230,16 @@ def test_open_browser_dialog_lists_installed_browsers_and_filters_search(qt_app,
         def launch(self, browser, proxy_port, url=None):
             return 1234
 
+    inventory = BrowserInventoryStore(tmp_path / "browser_inventory.sqlite3")
+    inventory.replace_snapshot([
+        Browser("chrome", "Chrome", "chromium", str(chrome_path), icon=str(icon_path)),
+        Browser("firefox", "Firefox", "firefox", str(firefox_path), icon=str(icon_path)),
+    ])
     dialog = OpenBrowserDialog(
         proxy_port=45555,
         detector=_FakeDetector(),
         launcher=_FakeLauncher(),
+        inventory=inventory,
     )
     try:
         assert isinstance(dialog, _FramelessDialog)
@@ -1255,4 +1264,134 @@ def test_open_browser_dialog_lists_installed_browsers_and_filters_search(qt_app,
     finally:
         dialog.close()
         dialog.deleteLater()
+        qt_app.processEvents()
+
+
+def test_open_browser_dialog_shows_cache_then_scans_off_the_ui_thread(qt_app, tmp_path):
+    import threading
+
+    from PySide6.QtCore import QThreadPool
+    from torproxy.browsers import Browser, BrowserInventoryStore
+    from ui_.window.open_browser_dialog import OpenBrowserDialog
+
+    cached_executable = tmp_path / "cached-browser"
+    fresh_executable = tmp_path / "fresh-browser"
+    for executable in (cached_executable, fresh_executable):
+        executable.write_text("browser", encoding="utf-8")
+        if os.name != "nt":
+            executable.chmod(0o755)
+
+    cached = Browser("cached", "Cached Browser", "chromium", str(cached_executable))
+    fresh = Browser("fresh", "Fresh Browser", "firefox", str(fresh_executable))
+    inventory = BrowserInventoryStore(tmp_path / "browser_inventory.sqlite3")
+    inventory.upsert(cached)
+
+    entered = threading.Event()
+    release = threading.Event()
+    scan_threads = []
+
+    class _SlowDetector:
+        def detect(self):
+            scan_threads.append(threading.get_ident())
+            entered.set()
+            release.wait(4)
+            return [fresh]
+
+        def register_custom(self, browser):
+            return None
+
+    class _Launcher:
+        def launch(self, browser, proxy_port, url=None):
+            return 1234
+
+    dialog = OpenBrowserDialog(
+        proxy_port=45556,
+        detector=_SlowDetector(),
+        launcher=_Launcher(),
+        inventory=inventory,
+    )
+    try:
+        # The cache is rendered synchronously; the expensive detector has not run.
+        assert [browser.id for browser in dialog.browsers] == ["cached"]
+        assert len(dialog._cards) == 1
+        assert scan_threads == []
+
+        dialog.show()
+        qt_app.processEvents()
+        assert entered.wait(2)
+        assert scan_threads[0] != threading.get_ident()
+        assert dialog._scan_running is True
+        assert not dialog.scan_spinner.isHidden()
+
+        release.set()
+        assert QThreadPool.globalInstance().waitForDone(4000)
+        qt_app.processEvents()
+        assert [browser.id for browser in dialog.browsers] == ["fresh"]
+        assert [browser.id for browser in inventory.load()] == ["fresh"]
+        assert dialog.scan_spinner.isHidden()
+    finally:
+        release.set()
+        dialog.close()
+        dialog.deleteLater()
+        QThreadPool.globalInstance().waitForDone(4000)
+        qt_app.processEvents()
+
+
+def test_open_browser_removes_a_deleted_cached_executable_immediately(qt_app, tmp_path):
+    import threading
+
+    from PySide6.QtCore import QThreadPool
+    from torproxy.browsers import Browser, BrowserInventoryStore
+    from ui_.window.open_browser_dialog import OpenBrowserDialog
+
+    executable = tmp_path / "removed-browser"
+    executable.write_text("browser", encoding="utf-8")
+    if os.name != "nt":
+        executable.chmod(0o755)
+    browser = Browser("removed", "Removed Browser", "chromium", str(executable))
+    inventory = BrowserInventoryStore(tmp_path / "browser_inventory.sqlite3")
+    inventory.upsert(browser)
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    class _SlowDetector:
+        def detect(self):
+            entered.set()
+            release.wait(4)
+            return []
+
+        def register_custom(self, browser):
+            return None
+
+    class _Launcher:
+        called = False
+
+        def launch(self, browser, proxy_port, url=None):
+            self.called = True
+            raise AssertionError("A removed browser must not be launched")
+
+    launcher = _Launcher()
+    dialog = OpenBrowserDialog(
+        proxy_port=45557,
+        detector=_SlowDetector(),
+        launcher=launcher,
+        inventory=inventory,
+    )
+    try:
+        dialog._start_scan()
+        assert entered.wait(2)
+        executable.unlink()
+
+        dialog._launch(browser)
+
+        assert launcher.called is False
+        assert inventory.load() == []
+        assert dialog.browsers == []
+        assert "no longer installed" in dialog.notice.text()
+    finally:
+        release.set()
+        dialog.close()
+        dialog.deleteLater()
+        QThreadPool.globalInstance().waitForDone(4000)
         qt_app.processEvents()

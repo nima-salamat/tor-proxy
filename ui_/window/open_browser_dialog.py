@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 from pathlib import Path
 
 import qtawesome as qta
-from PySide6.QtCore import QFileInfo, QSize, Qt
-from PySide6.QtGui import QIcon
+from PySide6.QtCore import QFileInfo, QSize, Qt, QThreadPool, QTimer
+from PySide6.QtGui import QColor, QIcon, QPainter, QPen
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -24,8 +25,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from torproxy.browsers import Browser, BrowserDetector, BrowserLaunchError, BrowserLauncher
+from torproxy.browsers import (
+    Browser,
+    BrowserDetector,
+    BrowserInventoryStore,
+    BrowserLaunchError,
+    BrowserLauncher,
+)
+from ui_.worker.browser_discovery import BrowserDiscoveryWorker
 from ui_.window.dialogs import _FramelessDialog
+
+logger = logging.getLogger(__name__)
 
 
 _BRAND_ICON_NAMES = {
@@ -45,6 +55,52 @@ _BRAND_ICON_NAMES = {
     "yandex": "fa6s.globe",
     "ungoogled_chromium": "fa6s.globe",
 }
+
+
+class _BrowserScanSpinner(QWidget):
+    """Small native Qt spinner that animates without blocking the GUI thread."""
+
+    def __init__(self, color: str, parent=None):
+        super().__init__(parent)
+        self._color = QColor(color)
+        self._angle = 0
+        self.setFixedSize(18, 18)
+        self._timer = QTimer(self)
+        self._timer.setInterval(75)
+        self._timer.timeout.connect(self._advance)
+        self.hide()
+
+    def start(self) -> None:
+        self._angle = 0
+        self.show()
+        if not self._timer.isActive():
+            self._timer.start()
+
+    def stop(self) -> None:
+        self._timer.stop()
+        self.hide()
+
+    def _advance(self) -> None:
+        self._angle = (self._angle + 30) % 360
+        self.update()
+
+    def paintEvent(self, _event) -> None:
+        if not self.isVisible():
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        center_x = self.width() / 2
+        center_y = self.height() / 2
+        painter.translate(center_x, center_y)
+        for index in range(12):
+            color = QColor(self._color)
+            color.setAlpha(35 + index * 18)
+            pen = QPen(color, 2.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+            painter.setPen(pen)
+            painter.save()
+            painter.rotate(self._angle + index * 30)
+            painter.drawLine(0, -3, 0, -7)
+            painter.restore()
 
 
 class _BrowserEngineDialog(_FramelessDialog):
@@ -99,7 +155,9 @@ class _BrowserEngineDialog(_FramelessDialog):
 class OpenBrowserDialog(_FramelessDialog):
     """Browse installed browsers and launch one through the active TorProxy HTTP listener."""
 
-    def __init__(self, parent=None, *, proxy_port: int, detector=None, launcher=None):
+    def __init__(
+        self, parent=None, *, proxy_port: int, detector=None, launcher=None, inventory=None
+    ):
         super().__init__(
             parent,
             "Open Browser",
@@ -115,9 +173,20 @@ class OpenBrowserDialog(_FramelessDialog):
         self.proxy_port = int(proxy_port)
         self.detector = detector or BrowserDetector()
         self.launcher = launcher or BrowserLauncher()
-        self.browsers = self.detector.detect()
+        self.inventory = inventory or BrowserInventoryStore()
+        try:
+            # This is a tiny local SQLite read only. Full OS discovery runs
+            # after the dialog is constructed, on QThreadPool.
+            self.browsers = self.inventory.load()
+        except Exception:
+            logger.exception("Could not load the cached browser inventory.")
+            self.browsers = []
         self._cards: list[tuple[QFrame, str, str, Browser]] = []
         self._icon_provider = QFileIconProvider()
+        self._scan_running = False
+        self._scan_pending = True
+        self._scan_worker = None
+        self._closing = False
 
         heading = QHBoxLayout()
         heading.setSpacing(10)
@@ -144,6 +213,22 @@ class OpenBrowserDialog(_FramelessDialog):
         self.endpoint_label.setObjectName("browserProxyEndpoint")
         connection_row.addWidget(self.endpoint_label)
         self.body_layout.addLayout(connection_row)
+
+        scan_row = QHBoxLayout()
+        scan_row.setSpacing(8)
+        self.scan_spinner = _BrowserScanSpinner(self._accent, self.body_host)
+        self.scan_spinner.start()
+        scan_row.addWidget(self.scan_spinner)
+        self.scan_status = QLabel("Loading saved browsers…", self.body_host)
+        self.scan_status.setObjectName("dialogHint")
+        scan_row.addWidget(self.scan_status, 1)
+        self.refresh_button = QPushButton("Refresh", self.body_host)
+        self.refresh_button.setObjectName("browserRefreshButton")
+        self.refresh_button.setIcon(qta.icon("fa6s.rotate", color=self._colors["text"]))
+        self.refresh_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.refresh_button.clicked.connect(self._start_scan)
+        scan_row.addWidget(self.refresh_button)
+        self.body_layout.addLayout(scan_row)
 
         search_row = QHBoxLayout()
         search_row.setSpacing(8)
@@ -196,7 +281,6 @@ class OpenBrowserDialog(_FramelessDialog):
         self.notice.setWordWrap(True)
         self.body_layout.addWidget(self.notice)
 
-        self._build_cards()
         self.add_button("Add custom browser", primary=False, callback=self._add_custom_browser).setIcon(
             qta.icon("fa6s.plus", color=self._colors["text"])
         )
@@ -206,6 +290,9 @@ class OpenBrowserDialog(_FramelessDialog):
         self.adjustSize()
         self.resize(760, max(600, self.sizeHint().height()))
         self._remember_preferred_size()
+        self._build_cards()
+        # Let Qt paint the dialog and its cached rows before the OS scan begins.
+        QTimer.singleShot(0, self._start_scan)
 
     def _extra_styles(self) -> str:
         return f"""
@@ -239,6 +326,22 @@ class OpenBrowserDialog(_FramelessDialog):
             }}
             QLineEdit#browserSearch:focus, QLineEdit#browserStartPage:focus {{
                 border-color: {self._accent};
+            }}
+            QPushButton#browserRefreshButton {{
+                color: {self._colors["text"]};
+                background: {self._colors["panel"]};
+                border: 1px solid {self._colors["border"]};
+                border-radius: 7px;
+                padding: 0 10px;
+                min-height: 29px;
+                font-weight: 650;
+            }}
+            QPushButton#browserRefreshButton:hover {{
+                background: {self._colors["hover"]};
+                border-color: {self._accent};
+            }}
+            QPushButton#browserRefreshButton:disabled {{
+                color: {self._colors["muted"]};
             }}
             QLabel#browserGroupHeading {{
                 color: {self._accent};
@@ -357,10 +460,12 @@ class OpenBrowserDialog(_FramelessDialog):
                 self._cards.append((card, browser.name.casefold(), family, browser))
 
         if not self.browsers:
-            empty = QLabel(
-                "No supported browser was detected. Use “Add custom browser” to select an executable.",
-                self.content,
+            empty_text = (
+                "Searching for installed browsers…"
+                if self._scan_running or self._scan_pending
+                else "No supported browser was detected. Use “Add custom browser” to select an executable."
             )
+            empty = QLabel(empty_text, self.content)
             empty.setObjectName("browserEmptyState")
             empty.setWordWrap(True)
             self.content_layout.addWidget(empty)
@@ -424,7 +529,8 @@ class OpenBrowserDialog(_FramelessDialog):
     def _update_count_label(self) -> None:
         visible = sum(not card.isHidden() for card, _name, _family, _browser in self._cards)
         total = len(self._cards)
-        self.count_label.setText(f"{visible} of {total} found")
+        suffix = " cached" if self._scan_running or self._scan_pending else " installed"
+        self.count_label.setText(f"{visible} of {total}{suffix}")
 
     def _filter_cards(self, query: str) -> None:
         needle = str(query or "").strip().casefold()
@@ -433,6 +539,93 @@ class OpenBrowserDialog(_FramelessDialog):
             card.setVisible(not needle or needle in haystack)
         self._update_count_label()
 
+    def _start_scan(self) -> None:
+        """Start/resume an OS scan without delaying popup presentation."""
+        if self._closing or self._scan_running:
+            return
+        self._scan_pending = False
+        self._scan_running = True
+        self.scan_spinner.start()
+        self.scan_status.setText("Checking installed browsers in the background…")
+        self.refresh_button.setEnabled(False)
+        if not self.browsers:
+            self._build_cards()
+        worker = BrowserDiscoveryWorker(self.detector, self.inventory)
+        worker.signals.completed.connect(self._on_scan_completed)
+        worker.signals.failed.connect(self._on_scan_failed)
+        self._scan_worker = worker
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_scan_completed(self, browsers) -> None:
+        if self._closing:
+            return
+        self._scan_running = False
+        self._scan_worker = None
+        self.browsers = list(browsers or [])
+        self.scan_spinner.stop()
+        self.refresh_button.setEnabled(True)
+        count = len(self.browsers)
+        self.scan_status.setText(
+            f"System check complete · {count} browser{'s' if count != 1 else ''} found"
+        )
+        self.notice.setText(
+            "Each browser uses a separate TorProxy profile. A normal browser does not provide Tor Browser's "
+            "anti-fingerprinting protections; some WebRTC media features may also be restricted."
+        )
+        self.notice.setObjectName("dialogHint")
+        self.notice.style().unpolish(self.notice)
+        self.notice.style().polish(self.notice)
+        self._build_cards()
+        self._filter_cards(self.search.text())
+
+    def _on_scan_failed(self, message: str) -> None:
+        if self._closing:
+            return
+        self._scan_running = False
+        self._scan_worker = None
+        self.scan_spinner.stop()
+        self.refresh_button.setEnabled(True)
+        self.scan_status.setText("System scan failed · saved browser list retained")
+        self._show_error(
+            "Could not refresh the installed browser list. The last saved list is still available. "
+            f"Details: {message}"
+        )
+        self._build_cards()
+        self._filter_cards(self.search.text())
+
+    def _remove_stale_browser(self, browser: Browser) -> None:
+        """Remove a deleted installation immediately, even before discovery completes."""
+        try:
+            self.inventory.remove(browser.id, browser.executable)
+        except Exception:
+            logger.exception("Could not remove stale browser from the inventory database.")
+        if browser.source == "custom":
+            custom_store = getattr(self.detector, "custom_store", None)
+            remove_custom = getattr(custom_store, "remove", None)
+            if callable(remove_custom):
+                try:
+                    remove_custom(browser.id, browser.executable)
+                except Exception:
+                    logger.exception("Could not remove stale custom browser registration.")
+        self.browsers = [
+            item for item in self.browsers
+            if not (item.id == browser.id and item.executable == browser.executable)
+        ]
+        self._build_cards()
+        self._filter_cards(self.search.text())
+
+    @staticmethod
+    def _is_executable_available(browser: Browser) -> bool:
+        executable = Path(browser.executable).expanduser()
+        if not executable.is_file():
+            return False
+        return os.name == "nt" or os.access(executable, os.X_OK)
+
+    def closeEvent(self, event) -> None:
+        self._closing = True
+        self.scan_spinner.stop()
+        super().closeEvent(event)
+
     def _show_error(self, message: str) -> None:
         self.notice.setText(message)
         self.notice.setObjectName("browserErrorNotice")
@@ -440,10 +633,26 @@ class OpenBrowserDialog(_FramelessDialog):
         self.notice.style().polish(self.notice)
 
     def _launch(self, browser: Browser) -> None:
+        # The saved snapshot can be older than an uninstall. Check the exact
+        # executable before launch rather than waiting for the background scan.
+        if not self._is_executable_available(browser):
+            self._remove_stale_browser(browser)
+            self._show_error(
+                f"{browser.name} is no longer installed or its executable was moved. "
+                "The saved entry has been removed; the background scan will refresh the list."
+            )
+            return
         try:
             start_url = self.start_page_input.text().strip() or None
             self.launcher.launch(browser, self.proxy_port, start_url)
         except (BrowserLaunchError, OSError, ValueError) as exc:
+            if not self._is_executable_available(browser):
+                self._remove_stale_browser(browser)
+                self._show_error(
+                    f"{browser.name} was removed before it could be started. "
+                    "Its saved entry has been removed from the list."
+                )
+                return
             self._show_error(f"Could not open {browser.name}: {exc}")
             return
         self.accept()
@@ -484,10 +693,14 @@ class OpenBrowserDialog(_FramelessDialog):
         )
         try:
             self.detector.register_custom(browser)
-            self.browsers = self.detector.detect()
+            self.inventory.upsert(browser)
         except Exception as exc:
             self._show_error(f"Could not save this browser: {exc}")
             return
+        self.browsers = [
+            item for item in self.browsers
+            if item.id != browser.id
+        ] + [browser]
         self.notice.setText("Custom browser saved. It will remain available in this list.")
         self.notice.setObjectName("dialogHint")
         self.notice.style().unpolish(self.notice)

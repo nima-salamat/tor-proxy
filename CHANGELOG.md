@@ -3,6 +3,8 @@
 All notable changes are recorded here. Dates and release numbers are added only when a release is actually published.
 
 ## Unreleased — UI, updater, and security redesign
+- Browser discovery now starts after the shared popup is shown and runs in a Qt background worker; the dialog immediately renders its last SQLite-cached snapshot and refreshes it atomically when the scan finishes.
+- Added stale-install handling for cached browser cards: an executable that was deleted or moved is removed from the database/UI immediately and produces a clear launch error, even while discovery is still running.
 - Reworked the Open Browser chooser to use the shared frameless popup shell and existing dialog theme; browser cards now display installed Windows executable/shortcut icons or Linux desktop-theme icons instead of a generic globe.
 - Expanded Windows browser discovery to StartMenuInternet registrations, Start Menu shortcuts, App Paths, uninstall metadata and user/machine install folders; Linux discovery now retains desktop-file icon metadata alongside XDG launch information.
 

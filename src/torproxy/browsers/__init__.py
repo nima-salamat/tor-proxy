@@ -1,5 +1,6 @@
 """Isolated browser launch support for TorProxy."""
 from .detector import BrowserDetector
+from .inventory import BrowserInventoryStore
 from .launchers import BrowserLaunchError, BrowserLauncher
 from .models import Browser
 from .profiles import BrowserProfileManager
@@ -11,5 +12,6 @@ __all__ = [
     "BrowserLaunchError",
     "BrowserLauncher",
     "BrowserProfileManager",
+    "BrowserInventoryStore",
     "CustomBrowserStore",
 ]
