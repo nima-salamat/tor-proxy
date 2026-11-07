@@ -353,50 +353,79 @@ try {
             }
             Write-Result @{ ok = $true; active = $false; mode = 'already-restored'; detail = 'No TorProxy rules or restrictive outbound profile settings remain; recovery is already complete.' }
         } else {
-        $snapshot = Get-Content -LiteralPath $SnapshotPath -Raw | ConvertFrom-Json
-        if (@($snapshot.profiles).Count -lt 1 -or [string]$snapshot.group -ne $Group) {
-            throw 'The saved TorProxy firewall snapshot is invalid; no firewall changes were made.'
-        }
-        Assert-ManagedState $snapshot $false
-        $currentProfiles = Get-ActiveProfiles
-        Get-NetFirewallRule -PolicyStore PersistentStore -Group $Group -ErrorAction SilentlyContinue |
-            Remove-NetFirewallRule -ErrorAction Stop
+            $snapshot = Get-Content -LiteralPath $SnapshotPath -Raw | ConvertFrom-Json
+            if (@($snapshot.profiles).Count -lt 1 -or [string]$snapshot.group -ne $Group) {
+                throw 'The saved TorProxy firewall snapshot is invalid; no firewall changes were made.'
+            }
 
-        foreach ($saved in $snapshot.profiles) {
-            $current = $currentProfiles | Where-Object { $_.Name -eq $saved.Name } | Select-Object -First 1
-            if ($null -ne $current -and [bool]$current.Enabled -and
-                [string]$current.DefaultOutboundAction -eq 'Block') {
-                Set-NetFirewallProfile -Profile ([string]$saved.Name) -Enabled ([bool]$saved.Enabled) -DefaultOutboundAction ([string]$saved.DefaultOutboundAction)
+            # Preserve externally changed profile settings while restoring only
+            # profiles which still match the exact restrictive state TorProxy applied.
+            $currentProfiles = Get-ActiveProfiles
+            $preservedProfiles = @{}
+            $preservedNames = @()
+            foreach ($saved in $snapshot.profiles) {
+                $current = $currentProfiles | Where-Object { $_.Name -eq $saved.Name } | Select-Object -First 1
+                if ($null -eq $current) {
+                    throw "Firewall profile $($saved.Name) is unavailable; recovery cannot be verified."
+                }
+                $original = ([bool]$current.Enabled -eq [bool]$saved.Enabled) -and ([string]$current.DefaultOutboundAction -eq [string]$saved.DefaultOutboundAction)
+                $applied = [bool]$current.Enabled -and [string]$current.DefaultOutboundAction -eq 'Block'
+                if ($original) { continue }
+                if ($applied) {
+                    Set-NetFirewallProfile -Profile ([string]$saved.Name) -Enabled ([bool]$saved.Enabled) -DefaultOutboundAction ([string]$saved.DefaultOutboundAction)
+                } else {
+                    $name = [string]$saved.Name
+                    $preservedProfiles[$name] = @{
+                        Enabled = [bool]$current.Enabled
+                        DefaultOutboundAction = [string]$current.DefaultOutboundAction
+                    }
+                    $preservedNames += $name
+                }
             }
-        }
-        foreach ($name in @($snapshot.disabledRules)) {
-            $rule = Get-NetFirewallRule -PolicyStore PersistentStore -Name ([string]$name) -ErrorAction SilentlyContinue
-            if ($null -ne $rule -and [string]$rule.Enabled -ne 'True') {
-                Set-NetFirewallRule -PolicyStore PersistentStore -Name ([string]$name) -Enabled True
-            }
-        }
 
-        $restoredProfiles = Get-ActiveProfiles
-        foreach ($saved in $snapshot.profiles) {
-            $current = $restoredProfiles | Where-Object { $_.Name -eq $saved.Name } | Select-Object -First 1
-            if ($null -eq $current -or [bool]$current.Enabled -ne [bool]$saved.Enabled -or
-                [string]$current.DefaultOutboundAction -ne [string]$saved.DefaultOutboundAction) {
-                throw "Firewall profile $($saved.Name) could not be restored to its saved state."
+            # Delete only TorProxy-owned persistent rules and re-enable only
+            # the local rules recorded as enabled in the original snapshot.
+            Get-NetFirewallRule -PolicyStore PersistentStore -Group $Group -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction Stop
+            foreach ($name in @($snapshot.disabledRules)) {
+                $rule = Get-NetFirewallRule -PolicyStore PersistentStore -Name ([string]$name) -ErrorAction SilentlyContinue
+                if ($null -ne $rule -and [string]$rule.Enabled -ne 'True') {
+                    Set-NetFirewallRule -PolicyStore PersistentStore -Name ([string]$name) -Enabled True
+                }
             }
-        }
-        foreach ($name in @($snapshot.disabledRules)) {
-            $rule = Get-NetFirewallRule -PolicyStore PersistentStore -Name ([string]$name) -ErrorAction SilentlyContinue
-            if ($null -ne $rule -and [string]$rule.Enabled -ne 'True') {
-                throw "Firewall rule $name could not be restored to its saved enabled state."
-            }
-        }
 
-        $archivePath = $SnapshotPath + '.recovered'
-        if (Test-Path -LiteralPath $archivePath) {
-            $archivePath = $SnapshotPath + '.recovered.' + [guid]::NewGuid().ToString('N')
-        }
-        Move-Item -LiteralPath $SnapshotPath -Destination $archivePath -Force
-        Write-Result @{ ok = $true; active = $false; mode = 'snapshot'; detail = 'The saved firewall profiles and previously enabled local rules were restored and verified.' }
+            $restoredProfiles = Get-ActiveProfiles
+            foreach ($saved in $snapshot.profiles) {
+                $name = [string]$saved.Name
+                $current = $restoredProfiles | Where-Object { $_.Name -eq $name } | Select-Object -First 1
+                if ($null -eq $current) {
+                    throw "Firewall profile $name disappeared during recovery."
+                }
+                if ($preservedProfiles.ContainsKey($name)) {
+                    $expected = $preservedProfiles[$name]
+                    if ([bool]$current.Enabled -ne [bool]$expected.Enabled -or [string]$current.DefaultOutboundAction -ne [string]$expected.DefaultOutboundAction) {
+                        throw "Externally changed firewall profile $name was modified during recovery."
+                    }
+                } elseif ([bool]$current.Enabled -ne [bool]$saved.Enabled -or [string]$current.DefaultOutboundAction -ne [string]$saved.DefaultOutboundAction) {
+                    throw "Firewall profile $name could not be restored to its saved state."
+                }
+            }
+            foreach ($name in @($snapshot.disabledRules)) {
+                $rule = Get-NetFirewallRule -PolicyStore PersistentStore -Name ([string]$name) -ErrorAction SilentlyContinue
+                if ($null -ne $rule -and [string]$rule.Enabled -ne 'True') {
+                    throw "Firewall rule $name could not be restored to its saved enabled state."
+                }
+            }
+
+            $archivePath = $SnapshotPath + '.recovered'
+            if (Test-Path -LiteralPath $archivePath) {
+                $archivePath = $SnapshotPath + '.recovered.' + [guid]::NewGuid().ToString('N')
+            }
+            Move-Item -LiteralPath $SnapshotPath -Destination $archivePath -Force
+            $detail = 'TorProxy rules were removed; managed profile changes and saved local rules were restored and verified.'
+            if ($preservedNames.Count -gt 0) {
+                $detail += ' Externally changed profile settings were preserved: ' + ($preservedNames -join ', ') + '.'
+            }
+            Write-Result @{ ok = $true; active = $false; mode = 'snapshot'; detail = $detail }
         }
     }
     elseif ($Action -eq 'emergency') {
@@ -557,9 +586,10 @@ class WindowsFirewallBackend:
         self._invoke("activate", programs)
 
     def deactivate(self) -> None:
-        # The elevated helper also checks for orphaned TorProxy rules when a
-        # snapshot is missing; silently skipping would leave an unknown policy.
-        self._invoke("deactivate")
+        # Normal disable and explicit recovery share the tolerant restore path.
+        # Externally changed firewall profiles are preserved rather than making
+        # the user unable to disable protection after a Windows policy update.
+        self._invoke("recover")
 
     def recover(self) -> None:
         """Restore the saved pre-Kill-Switch firewall state, including partial installs."""
