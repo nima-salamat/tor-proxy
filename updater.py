@@ -105,7 +105,7 @@ def _raise_distribution_failure(
 ) -> BundleVerificationError:
     route = "TOR_SOCKS" if proxy_url else "DIRECT_BOOTSTRAP" if allow_direct else "NO_ROUTE"
     return BundleVerificationError(
-        f"{purpose} failed on all official Tor distribution endpoints using {route}. "
+        f"{purpose} could not be completed using {route}. "
         + " | ".join(failures)
         + " The application did not change network routes. "
         "Check connectivity or try Import .tar.gz with a locally downloaded Expert Bundle."
@@ -184,7 +184,7 @@ def get_tor_versions(
             urlsplit(source_base).hostname,
         )
 
-    if failures and not saw_listing:
+    if failures:
         raise _raise_distribution_failure(
             "Tor release discovery", failures,
             proxy_url=proxy_url, allow_direct=allow_direct,
@@ -262,7 +262,7 @@ def get_bundle_links(
         if expected in names and (not require_signature or expected + ".asc" in names):
             return [expected]
 
-    if failures and len(failures) == len(sources):
+    if failures:
         raise _raise_distribution_failure(
             f"Artifact availability check for Tor release {release}", failures,
             proxy_url=proxy_url, allow_direct=allow_direct,
@@ -333,6 +333,7 @@ def download_file(
     # fresh archive for installation when OpenPGP verification is disabled.
     archive.parent.mkdir(parents=True, exist_ok=True)
     source_urls = _distribution_base_urls(base_url)
+    source_failures: list[str] = []
     result = None
     for source_index, source_base in enumerate(source_urls):
         try:
@@ -355,7 +356,17 @@ def download_file(
                     )
                 )
             )
-            if source_index + 1 >= len(source_urls) or not retryable_source_error:
+            if not retryable_source_error:
+                raise
+            source_failures.append(f"{urlsplit(source_base).hostname}: {exc}")
+            if source_index + 1 >= len(source_urls):
+                if len(source_urls) > 1:
+                    raise _raise_distribution_failure(
+                        f"Tor bundle download for release {release}",
+                        source_failures,
+                        proxy_url=proxy_url,
+                        allow_direct=allow_direct,
+                    ) from exc
                 raise
             logger.warning(
                 "Tor bundle download from %s failed; trying official archive mirror %s: %s",
