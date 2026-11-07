@@ -825,8 +825,9 @@ class SettingWindow(QWidget):
         self.advanced_page_layout.addLayout(recovery_actions)
 
         kill_switch_details = self._description(
-            "Windows: TorProxy snapshots the current firewall profiles and local outbound allow rules, "
-            "then restores them only when the managed policy is still intact. Internet Connection Sharing (ICS) is blocked while protection is active. "
+            "Windows: TorProxy snapshots firewall profiles and local outbound rules. When disabling, it removes only TorProxy-owned rules, "
+            "restores profile changes that still match its applied policy, and preserves settings changed elsewhere. "
+            "A saved-state restore and an emergency network recovery are available if activation or shutdown is interrupted. "
             "Linux: nftables, cgroup v2, systemd user scopes and PolicyKit are required. "
             "Only applications explicitly configured to use TorProxy can access the Tor network; all other "
             "direct internet access is blocked. Direct Exclude Host rules are disabled while protection is active."
@@ -920,7 +921,7 @@ class SettingWindow(QWidget):
         self.kill_switch_progress.show()
         self._set_kill_switch_status(
             f"{action} system firewall protection… This may take a moment. "
-            "You can change the switch again to queue the opposite action.",
+            "The elevated helper has a 60-second limit. If Windows does not respond, it is stopped and recovery remains available.",
             "busy",
         )
         worker = Worker(proxy_widget, bool(enabled))
