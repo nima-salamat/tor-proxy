@@ -88,6 +88,29 @@ def test_windows_backend_forwards_recovery_actions(tmp_path):
     assert calls == ["recover", "emergency"]
 
 
+def test_windows_disable_uses_drift_tolerant_recovery():
+    def fake_runner(_script, action, _snapshot, _request, result_path):
+        assert action == "recover"
+        result_path.write_text(
+            json.dumps({"ok": True, "active": False, "detail": "preserved Domain"}),
+            encoding="utf-8",
+        )
+        return 0
+
+    backend = WindowsFirewallBackend(state_dir=Path("state"), runner=fake_runner)
+    backend.deactivate()
+
+
+def test_windows_recovery_preserves_external_profile_changes():
+    assert "Externally changed profile settings were preserved" in _POWERSHELL
+    assert "$preservedProfiles[$name]" in _POWERSHELL
+    assert "Externally changed firewall profile $name was modified during recovery." in _POWERSHELL
+    recover_start = _POWERSHELL.index("elseif ($Action -eq 'recover')")
+    recover_end = _POWERSHELL.index("elseif ($Action -eq 'emergency')", recover_start)
+    recovery_script = _POWERSHELL[recover_start:recover_end]
+    assert "Assert-ManagedState $snapshot $false" not in recovery_script
+
+
 def test_windows_helper_exposes_saved_and_emergency_recovery_paths():
     assert "elseif ($Action -eq 'recover')" in _POWERSHELL
     assert "elseif ($Action -eq 'emergency')" in _POWERSHELL
@@ -199,7 +222,7 @@ def test_windows_backend_uses_elevated_helper_and_verifies_result(tmp_path):
     backend.activate((str(executable.resolve()),))
     assert backend.status()["active"] is True
     backend.deactivate()
-    assert calls == ["activate", "status", "deactivate"]
+    assert calls == ["activate", "status", "recover"]
 
 
 def test_windows_backend_refuses_unverified_helper_result(tmp_path):
