@@ -57,33 +57,36 @@ class KillSwitchManager:
         except Exception as exc:
             raise KillSwitchError(f"Could not activate the system firewall kill switch: {exc}") from exc
 
-    def deactivate(self) -> None:
+    def deactivate(self) -> dict[str, object]:
         try:
-            self.backend.deactivate()
+            result = self.backend.deactivate()
+            return dict(result) if isinstance(result, dict) else {}
         except KillSwitchError:
             raise
         except Exception as exc:
             raise KillSwitchError(f"Could not safely deactivate the kill switch: {exc}") from exc
 
-    def recover(self) -> None:
+    def recover(self) -> dict[str, object]:
         """Restore the pre-Kill-Switch firewall snapshot when one is available."""
         callback = getattr(self.backend, "recover", None)
         if callback is None:
             callback = self.backend.deactivate
         try:
-            callback()
+            result = callback()
+            return dict(result) if isinstance(result, dict) else {}
         except KillSwitchError:
             raise
         except Exception as exc:
             raise KillSwitchError(f"Could not restore the saved firewall policy: {exc}") from exc
 
-    def emergency_recover(self) -> None:
+    def emergency_recover(self) -> dict[str, object]:
         """Explicitly restore ordinary outbound access if normal recovery is insufficient."""
         callback = getattr(self.backend, "emergency_recover", None)
         if callback is None:
             callback = getattr(self.backend, "recover", None) or self.backend.deactivate
         try:
-            callback()
+            result = callback()
+            return dict(result) if isinstance(result, dict) else {}
         except KillSwitchError:
             raise
         except Exception as exc:
