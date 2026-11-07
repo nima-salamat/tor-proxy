@@ -97,39 +97,80 @@ def resolve_listener_ports(
     udp_available: Callable[[str, int], bool] | None = None,
     strict_manual: bool = True,
 ) -> tuple[dict[str, int], list[str]]:
-    """Reuse persisted ports, repair automatic collisions, and never override pinned values.
+    """Reuse saved ports; allocate unique automatic ports and never silently change pinned values.
 
-    The sockets are probed and released before their owners start. This deliberately
-    avoids holding a socket that Tor or the HTTP server must bind itself; the actual
-    bind remains authoritative and a subsequent preflight repairs an automatic
-    collision if another process wins the small probe-to-bind race.
+    Existing saved values are checked before any new port is allocated. New TCP listener
+    candidates are reserved with live sockets while the complete set is selected. This
+    prevents the OS from handing the same ephemeral port repeatedly when a port is
+    allocated and immediately released (notably observed on Windows). The reservations
+    are released immediately before returning so Tor and the HTTP proxy can bind them.
+
+    A custom candidate_provider is primarily for deterministic tests and retains the
+    explicit availability-probe behavior. Production allocation uses bind(port=0)
+    directly, without an unnecessary second bind to the just-released candidate.
     """
     probe = available or can_bind_loopback
     udp_probe = udp_available or can_bind_loopback_udp
-    candidate = candidate_provider or ephemeral_loopback_port
+    assigned: dict[str, int] = {}
+    automatic_updates: dict[str, int] = {}
+    messages: list[str] = []
+    used: set[int] = set()
+    reservations: list[socket.socket] = []
 
     def port_is_available(key: str, port: int) -> bool:
         try:
             if not bool(probe("127.0.0.1", port)):
                 return False
-            # Tor's DNSPort may own both TCP and UDP on the same numeric port.
+            # Tor's DNSPort can require the same numeric port for TCP and UDP.
             if key == "dns_port" and not bool(udp_probe("127.0.0.1", port)):
                 return False
             return True
         except Exception:
             return False
-    assigned: dict[str, int] = {}
-    automatic_updates: dict[str, int] = {}
-    messages: list[str] = []
-    used: set[int] = set()
 
-    # Resolve user-pinned ports first so automatic selections cannot collide with them.
-    ordered_specs = sorted(PORT_SPECS, key=lambda item: not bool(config[item[1]]))
+    def new_bound_candidate(key: str, label: str) -> int:
+        last_error: OSError | None = None
+        for _attempt in range(128):
+            tcp_socket: socket.socket | None = None
+            udp_socket: socket.socket | None = None
+            try:
+                tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                tcp_socket.bind(("127.0.0.1", 0))
+                port = int(tcp_socket.getsockname()[1])
+                if not _valid_port(port) or port in used:
+                    tcp_socket.close()
+                    continue
+
+                if key == "dns_port":
+                    udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    udp_socket.bind(("127.0.0.1", port))
+
+                # Keep the reservation until every listener port has been selected.
+                reservations.append(tcp_socket)
+                tcp_socket = None
+                if udp_socket is not None:
+                    reservations.append(udp_socket)
+                    udp_socket = None
+                return port
+            except OSError as exc:
+                last_error = exc
+                if tcp_socket is not None:
+                    tcp_socket.close()
+                if udp_socket is not None:
+                    udp_socket.close()
+
+        detail = f" Last socket error: {last_error}" if last_error else ""
+        raise PortAllocationError(
+            f"Could not reserve an available loopback port for {label} after 128 attempts.{detail}"
+        )
 
     def pick_ephemeral(key: str, label: str) -> int:
+        if candidate_provider is None:
+            return new_bound_candidate(key, label)
+
         for _attempt in range(128):
             try:
-                port = candidate()
+                port = candidate_provider()
             except Exception as exc:
                 raise PortAllocationError(f"Could not allocate a port for {label}: {exc}") from exc
             if not _valid_port(port) or port in used:
@@ -140,65 +181,84 @@ def resolve_listener_ports(
             f"Could not find an available loopback port for {label} after 128 attempts."
         )
 
-    for key, checked_key, label in ordered_specs:
-        pinned = bool(config[checked_key])
-        saved = config[key]
+    # Validate pinned entries first, then preserve every other valid saved value.
+    # Missing/invalid values are allocated only after these preferred ports are assigned.
+    def priority(spec: tuple[str, str, str]) -> int:
+        key, checked_key, _label = spec
+        if _valid_port(config[key]) and bool(config[checked_key]):
+            return 0
+        if _valid_port(config[key]):
+            return 1
+        if bool(config[checked_key]):
+            return 2
+        return 3
 
-        if pinned:
-            if not _valid_port(saved):
-                reason = (
-                    f"{label}: a manual port is enabled, but its value is not an integer between 1 and 65535."
-                )
-                if strict_manual:
-                    raise PortAllocationError(reason)
-                selected = pick_ephemeral(key, label)
-                assigned[key] = selected
-                used.add(selected)
-                messages.append(reason + f" A temporary port {selected} is used only to keep the UI available.")
-                continue
-            if saved in used:
-                reason = f"{label}: port {saved} duplicates another listener port."
-                if strict_manual:
-                    raise PortAllocationError(reason)
-                selected = pick_ephemeral(key, label)
-                assigned[key] = selected
-                used.add(selected)
-                messages.append(reason + f" A temporary port {selected} is used only to keep the UI available.")
-                continue
-            is_available = port_is_available(key, saved)
-            if not is_available:
-                reason = f"{label}: manually selected port {saved} is already in use."
-                if strict_manual:
-                    raise PortAllocationError(reason + " Free it or choose another port in Settings → Ports.")
-                selected = pick_ephemeral(key, label)
-                assigned[key] = selected
-                used.add(selected)
-                messages.append(reason + f" A temporary port {selected} is used only to keep the UI available.")
-                continue
-            assigned[key] = saved
-            used.add(saved)
-            messages.append(f"{label}: keeping manually selected port {saved}.")
-            continue
+    ordered_specs = sorted(PORT_SPECS, key=priority)
+    try:
+        for key, checked_key, label in ordered_specs:
+            pinned = bool(config[checked_key])
+            saved = config[key]
 
-        if _valid_port(saved) and saved not in used:
-            is_available = port_is_available(key, saved)
-            if is_available:
+            if pinned:
+                if not _valid_port(saved):
+                    reason = (
+                        f"{label}: a manual port is enabled, but its value is not an integer between 1 and 65535."
+                    )
+                    if strict_manual:
+                        raise PortAllocationError(reason)
+                    selected = pick_ephemeral(key, label)
+                    assigned[key] = selected
+                    used.add(selected)
+                    messages.append(reason + f" A temporary port {selected} is used only to keep the UI available.")
+                    continue
+                if saved in used:
+                    reason = f"{label}: port {saved} duplicates another listener port."
+                    if strict_manual:
+                        raise PortAllocationError(reason)
+                    selected = pick_ephemeral(key, label)
+                    assigned[key] = selected
+                    used.add(selected)
+                    messages.append(reason + f" A temporary port {selected} is used only to keep the UI available.")
+                    continue
+                if not port_is_available(key, saved):
+                    reason = f"{label}: manually selected port {saved} is already in use."
+                    if strict_manual:
+                        raise PortAllocationError(reason + " Free it or choose another port in Settings → Ports.")
+                    selected = pick_ephemeral(key, label)
+                    assigned[key] = selected
+                    used.add(selected)
+                    messages.append(reason + f" A temporary port {selected} is used only to keep the UI available.")
+                    continue
                 assigned[key] = saved
                 used.add(saved)
-                messages.append(f"{label}: reusing saved port {saved}.")
+                messages.append(f"{label}: keeping manually selected port {saved}.")
                 continue
 
-        previous = saved if _valid_port(saved) else None
-        selected = pick_ephemeral(key, label)
-        assigned[key] = selected
-        used.add(selected)
-        automatic_updates[key] = selected
-        if previous is None:
-            messages.append(f"{label}: initialized and saved port {selected}.")
-        else:
-            messages.append(
-                f"{label}: saved port {previous} is unavailable; switched to and saved port {selected}."
-            )
+            if _valid_port(saved) and saved not in used:
+                if port_is_available(key, saved):
+                    assigned[key] = saved
+                    used.add(saved)
+                    messages.append(f"{label}: reusing saved port {saved}.")
+                    continue
 
-    _save_auto_values(config, automatic_updates)
-    return assigned, messages
+            previous = saved if _valid_port(saved) else None
+            selected = pick_ephemeral(key, label)
+            assigned[key] = selected
+            used.add(selected)
+            automatic_updates[key] = selected
+            if previous is None:
+                messages.append(f"{label}: initialized and saved port {selected}.")
+            else:
+                messages.append(
+                    f"{label}: saved port {previous} is unavailable; switched to and saved port {selected}."
+                )
+
+        _save_auto_values(config, automatic_updates)
+        return assigned, messages
+    finally:
+        # Never keep a socket open after handing ports to Tor/Runner.
+        for reserved_socket in reservations:
+            try:
+                reserved_socket.close()
+            except OSError:
+                pass

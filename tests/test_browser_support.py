@@ -15,7 +15,12 @@ from torproxy.browsers import (
     BrowserProfileManager,
     CustomBrowserStore,
 )
-from torproxy.ports import PortAllocationError, resolve_listener_ports
+from torproxy.ports import (
+    PortAllocationError,
+    can_bind_loopback,
+    can_bind_loopback_udp,
+    resolve_listener_ports,
+)
 
 
 class MemoryConfig(dict):
@@ -44,6 +49,23 @@ def _port_config(**overrides):
     }
     values.update(overrides)
     return MemoryConfig(values)
+
+
+def test_default_allocator_reserves_four_distinct_os_ports_and_reuses_them():
+    config = _port_config()
+
+    allocated, messages = resolve_listener_ports(config)
+
+    assert set(allocated) == {"proxy_port", "tor_port", "control_port", "dns_port"}
+    assert len(set(allocated.values())) == 4
+    assert all(can_bind_loopback(port) for port in allocated.values())
+    assert can_bind_loopback_udp(allocated["dns_port"])
+    assert all(config[key] == value for key, value in allocated.items())
+    assert sum("initialized and saved" in message for message in messages) == 4
+
+    second, second_messages = resolve_listener_ports(config)
+    assert second == allocated
+    assert all("reusing saved port" in message for message in second_messages)
 
 
 def test_listener_ports_are_allocated_once_and_reused():
