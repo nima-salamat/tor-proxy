@@ -25,7 +25,7 @@ from torproxy.bundle import (
     sha256_file,
     verify_tor_signature,
 )
-from torproxy.network import NetworkRouteError, create_session
+from torproxy.network import NetworkRouteError, create_session, network_error_message
 from utils import resource_path
 
 logger = logging.getLogger(__name__)
@@ -135,12 +135,19 @@ def get_tor_versions(
             )
         return [version + "/" for version in sorted(versions, key=tor_version_sort_key, reverse=True)]
     except BundleVerificationError:
-        logger.exception("Tor release discovery rejected the listing.")
         raise
-    except (requests.RequestException, ValueError) as exc:
-        logger.exception("Could not retrieve the official Tor Expert Bundle release list.")
+    except requests.RequestException as exc:
         raise BundleVerificationError(
-            "Could not retrieve or parse the official Tor release list. Check the network connection and retry."
+            network_error_message(
+                exc,
+                purpose="Tor release discovery",
+                proxy_url=proxy_url,
+                allow_direct=allow_direct,
+            )
+        ) from exc
+    except ValueError as exc:
+        raise BundleVerificationError(
+            f"Could not parse the official Tor release listing: {exc}"
         ) from exc
 
 
@@ -183,10 +190,13 @@ def get_bundle_links(
     except BundleVerificationError:
         raise
     except requests.RequestException as exc:
-        logger.exception("Could not list signed Tor bundles for release %s.", release)
         raise BundleVerificationError(
-            f"Could not check artifact availability for Tor release {release}. "
-            "Check the network connection and retry."
+            network_error_message(
+                exc,
+                purpose=f"Artifact availability check for Tor release {release}",
+                proxy_url=proxy_url,
+                allow_direct=allow_direct,
+            )
         ) from exc
     anchors = soup.find_all("a", href=True)
     if not anchors:
@@ -325,8 +335,12 @@ def check_hash(
                     if not response.content or len(response.content) > 1024 * 1024:
                         return False
                     signature.write_bytes(response.content)
-        except Exception:
-            logger.exception("Could not retrieve a detached signature for %s.", path.name)
+        except (requests.RequestException, BundleVerificationError, NetworkRouteError, OSError, ValueError) as exc:
+            logger.warning(
+                "Could not retrieve a detached signature for %s: %s",
+                path.name,
+                exc,
+            )
             return False
     if not signature.is_file():
         return False

@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from config import BUNDLE_DIR, CONFIG
+from config import BUNDLE_DIR, CONFIG, TOR_BUNDLE_BASE_URL
 from ui_.window.dialogs import QMessageBox
 from torproxy.bundle import BundleProgress
 from updater import (
@@ -82,6 +82,28 @@ class UpdaterWindow(QWidget):
         title = QLabel("Tor Bundles & Updates")
         title.setObjectName("pageTitle")
         title_row.addWidget(title, 1)
+
+        source_label = QLabel("Official source")
+        source_label.setObjectName("metadataLabel")
+        source_label.setToolTip("Official Tor Expert Bundle release listing used for discovery and downloads.")
+        title_row.addWidget(source_label)
+        self.bundle_source_url = QLineEdit(TOR_BUNDLE_BASE_URL)
+        self.bundle_source_url.setObjectName("bundleSourceUrl")
+        self.bundle_source_url.setReadOnly(True)
+        self.bundle_source_url.setFixedSize(272, 27)
+        self.bundle_source_url.setToolTip(
+            "Official Tor Expert Bundle release index. Use the adjacent button to copy this URL."
+        )
+        title_row.addWidget(self.bundle_source_url)
+        self.btn_copy_bundle_source = QPushButton()
+        self.btn_copy_bundle_source.setObjectName("copySourceButton")
+        self.btn_copy_bundle_source.setFixedSize(28, 27)
+        self.btn_copy_bundle_source.setIcon(qta.icon("fa6s.copy", color="#334155"))
+        self.btn_copy_bundle_source.setToolTip("Copy the official Tor release index URL")
+        self.btn_copy_bundle_source.setAccessibleName("Copy official Tor release index URL")
+        self.btn_copy_bundle_source.clicked.connect(self._copy_bundle_source_url)
+        title_row.addWidget(self.btn_copy_bundle_source)
+
         root.addLayout(title_row)
         self._title_icon = title_icon
 
@@ -263,6 +285,10 @@ class UpdaterWindow(QWidget):
         self.setStyleSheet(f"""
             QLabel#pageTitle {{ color: {text}; font-size: 20px; font-weight: 750; background: transparent; }}
             QLabel#bundlePageIcon {{ background: transparent; border: none; }}
+            QLineEdit#bundleSourceUrl {{ min-height: 27px; max-height: 27px; font-size: 10px; }}
+            QPushButton#copySourceButton {{
+                min-height: 27px; max-height: 27px; min-width: 28px; max-width: 28px; padding: 0;
+            }}
             QFrame#infoCard, QFrame#contentCard {{ background: {surface}; border: 1px solid {border}; border-radius: 9px; }}
             QLabel#sectionTitle {{ color: {text}; font-size: 13px; font-weight: 700; background: transparent; }}
             QLabel#metadataLabel, QLabel#stateLabel {{ color: {muted}; font-size: 11px; background: transparent; }}
@@ -295,6 +321,7 @@ class UpdaterWindow(QWidget):
             widget.setPalette(palette)
         self._title_icon.setPixmap(qta.icon("fa6s.boxes-stacked", color=accent).pixmap(22, 22))
         self.btn_get_versions.setIcon(qta.icon("fa6s.arrows-rotate", color="#ffffff" if dark else "#ffffff"))
+        self.btn_copy_bundle_source.setIcon(qta.icon("fa6s.copy", color=icon_color))
         self.btn_import_bundle.setIcon(qta.icon("fa6s.file-import", color=icon_color))
         self.btn_refresh_version.setIcon(qta.icon("fa6s.rotate", color=icon_color))
         self.btn_set_default_version.setIcon(qta.icon("fa6s.check", color="#ffffff"))
@@ -302,6 +329,11 @@ class UpdaterWindow(QWidget):
         self.btn_cancel.setIcon(qta.icon("fa6s.xmark", color=icon_color))
         self.btn_retry.setIcon(qta.icon("fa6s.rotate-right", color="#ffffff"))
         self.btn_gpg_help.setIcon(qta.icon("fa6s.download", color=icon_color))
+
+    def _copy_bundle_source_url(self) -> None:
+        """Copy the official Tor release index without adding another page row."""
+        QApplication.clipboard().setText(TOR_BUNDLE_BASE_URL)
+        self.lbl_status.setText("Copied the official Tor release index URL to the clipboard.")
 
     def _parse_result(self, data, expected_type):
         try:
@@ -746,13 +778,15 @@ class UpdaterWindow(QWidget):
         self.lbl_status.setText("Choose a release to check compatible artifact availability and the selected trust method.")
 
     def _on_discovery_error(self, error: str) -> None:
-        logger.error("Tor release discovery failed: %s", error)
+        # Keep installed bundles intact: discovery needs the network, local bundles do not.
         self._set_busy(False)
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self.progress_bar.setFormat("Discovery failed")
         self.lbl_discovery.setText("The official release list could not be retrieved.")
-        self.lbl_status.setText("Discovery failed. Check network connectivity and the application log.")
+        self.lbl_status.setText(
+            "Discovery failed. Installed bundles remain available; check the network route and retry."
+        )
         QMessageBox.warning(self, "Tor release discovery failed", error)
 
     def selected_version(self, item: QListWidgetItem) -> None:

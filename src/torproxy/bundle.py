@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 
 import requests
 
-from .network import NetworkRouteError, create_session
+from .network import NetworkRouteError, create_session, network_error_message
 
 
 TOR_SIGNING_FINGERPRINT = "EF6E286DDA85EA2A4BA7DE684E2C6E8793298290"
@@ -147,7 +147,14 @@ def _download(
     except NetworkRouteError as exc:
         raise BundleVerificationError(str(exc)) from exc
     except requests.RequestException as exc:
-        raise BundleVerificationError(f"Download failed: {exc}") from exc
+        raise BundleVerificationError(
+            network_error_message(
+                exc,
+                purpose=f"Tor bundle {operation}",
+                proxy_url=proxy_url,
+                allow_direct=allow_direct,
+            )
+        ) from exc
     except OSError:
         # The caller owns the temporary destination and removes it on all failure paths.
         raise

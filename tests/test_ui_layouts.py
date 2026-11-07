@@ -1141,3 +1141,30 @@ def test_bundle_manager_exposes_manual_import_and_tor_only_network_routing():
     assert "Allow direct bootstrap connection?" in updater_source
     assert 'if CONFIG["kill_switch_enabled"]:' in updater_source
     assert "LOCAL · UNSIGNED" in updater_source
+
+
+
+def test_bundle_source_url_is_copyable_in_the_existing_title_row_without_extra_height():
+    repository = Path(__file__).resolve().parents[1]
+    updater_source = (repository / "ui_/window/updater_window.py").read_text(encoding="utf-8")
+    title_row_start = updater_source.index("title_row = QHBoxLayout()")
+    title_row_end = updater_source.index("root.addLayout(title_row)", title_row_start)
+    title_row = updater_source[title_row_start:title_row_end]
+    assert "self.bundle_source_url = QLineEdit(TOR_BUNDLE_BASE_URL)" in title_row
+    assert "self.bundle_source_url.setReadOnly(True)" in title_row
+    assert "self.bundle_source_url.setFixedSize(272, 27)" in title_row
+    assert "self.btn_copy_bundle_source.clicked.connect(self._copy_bundle_source_url)" in title_row
+    assert "QApplication.clipboard().setText(TOR_BUNDLE_BASE_URL)" in updater_source
+    assert "QLineEdit#bundleSourceUrl" in updater_source
+    assert "QPushButton#copySourceButton" in updater_source
+
+
+def test_failed_release_discovery_keeps_installed_bundles_available():
+    repository = Path(__file__).resolve().parents[1]
+    updater_source = (repository / "ui_/window/updater_window.py").read_text(encoding="utf-8")
+    start = updater_source.index("def _on_discovery_error")
+    end = updater_source.index("def selected_version", start)
+    error_handler = updater_source[start:end]
+    assert "Installed bundles remain available" in error_handler
+    assert "self.list_tor_versions.clear()" not in error_handler
+    assert "logger.error(" not in error_handler

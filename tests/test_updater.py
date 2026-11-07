@@ -1,4 +1,7 @@
+import logging
+
 import pytest
+import requests
 
 import updater
 from torproxy.bundle import BundleVerificationError
@@ -95,3 +98,24 @@ def test_check_hash_uses_the_supplied_tor_route_for_signature_and_key(monkeypatc
     assert verify_calls[0][2]["proxy_url"] == proxy
     assert verify_calls[0][2]["allow_direct"] is False
     assert archive.with_name(archive.name + ".asc").read_bytes() == b"detached signature"
+
+
+
+def test_release_discovery_formats_connection_refusal_without_duplicate_error_log(
+    monkeypatch, caplog
+):
+    def fail_listing(*_args, **_kwargs):
+        raise requests.ConnectionError(
+            "HTTPSConnectionPool(host='dist.torproject.org', port=443): "
+            "Failed to establish a new connection: [WinError 10061] actively refused"
+        )
+
+    monkeypatch.setattr(updater, "_fetch_listing", fail_listing)
+    with caplog.at_level(logging.ERROR, logger="updater"):
+        with pytest.raises(BundleVerificationError) as exc_info:
+            updater.get_tor_versions(proxy_url="socks5h://127.0.0.1:19050")
+
+    assert "TOR_SOCKS" in str(exc_info.value)
+    assert "refused the connection" in str(exc_info.value)
+    assert exc_info.value.__cause__ is not None
+    assert not caplog.records

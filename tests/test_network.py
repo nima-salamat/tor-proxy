@@ -1,14 +1,25 @@
 from __future__ import annotations
 
 import pytest
+import requests
 
-from torproxy.network import NetworkRouteError, create_session, tor_socks_proxy_url
+from torproxy.network import (
+    NetworkRouteError,
+    create_session,
+    network_error_message,
+    network_route_label,
+    tor_socks_proxy_url,
+)
 
 
 class FakeSession:
     def __init__(self):
         self.trust_env = True
         self.proxies = {"http": "http://environment-proxy", "https": "http://environment-proxy"}
+        self.adapters = {}
+
+    def mount(self, prefix, adapter):
+        self.adapters[prefix] = adapter
 
 
 def test_tor_proxy_url_uses_socks5h_for_remote_dns():
@@ -65,3 +76,40 @@ def test_unsafe_or_non_loopback_proxy_urls_are_rejected(proxy_url):
 def test_direct_and_proxy_routes_cannot_be_enabled_together():
     with pytest.raises(NetworkRouteError, match="either"):
         create_session("socks5h://127.0.0.1:9050", allow_direct=True)
+
+
+
+def test_session_mounts_bounded_retries_for_idempotent_requests():
+    session = create_session("socks5h://127.0.0.1:19050", session_factory=FakeSession)
+    assert set(session.adapters) == {"http://", "https://"}
+    for adapter in session.adapters.values():
+        retry = adapter.max_retries
+        assert retry.total == 2
+        assert retry.connect == 2
+        assert retry.read == 1
+        assert retry.status == 2
+        assert retry.allowed_methods == frozenset({"GET", "HEAD"})
+        assert retry.status_forcelist == frozenset({429, 500, 502, 503, 504})
+        assert retry.respect_retry_after_header is False
+
+
+def test_network_route_labels_distinguish_tor_and_direct_bootstrap():
+    assert network_route_label("socks5h://127.0.0.1:19050") == "TOR_SOCKS"
+    assert network_route_label("http://127.0.0.1:8080") == "LOCAL_HTTP_PROXY"
+    assert network_route_label(allow_direct=True) == "DIRECT_BOOTSTRAP"
+    assert network_route_label() == "NO_ROUTE"
+
+
+def test_connection_refusal_message_identifies_route_and_next_action():
+    error = requests.ConnectionError(
+        "HTTPSConnectionPool(host='dist.torproject.org', port=443): "
+        "Failed to establish a new connection: [WinError 10061] actively refused"
+    )
+    message = network_error_message(
+        error,
+        purpose="Tor release discovery",
+        proxy_url="socks5h://127.0.0.1:19050",
+    )
+    assert "TOR_SOCKS" in message
+    assert "refused the connection" in message
+    assert "retry" in message.lower()
