@@ -84,3 +84,7 @@ On Linux, check that \`nft\`, \`pkexec\`, \`systemctl\`, a systemd user manager 
 To restore access, use **Settings → Advanced → Network protection → System-wide Kill Switch → Disable** while TorProxy can request administrator approval. If the UI cannot start, Windows administrators can inspect the saved state under the TorProxy per-user state directory and the rules named \`TorProxy Kill Switch\`. On Linux, the owned service is \`torproxy-killswitch.service\` and the owned table is \`inet torproxy_killswitch\`; do not delete unrelated nftables tables. Manual recovery should remove only those TorProxy-owned resources after inspecting their ownership markers.
 
 When Kill Switch is enabled, direct Exclude Host entries are blocked. Tor bundle downloads or updater operations that use a direct connection may also fail until protection is deliberately disabled.
+
+### Windows firewall source detection
+
+Before changing existing outbound Allow rules, TorProxy queries the merged ActiveStore with PowerShell's `-TracePolicyStore` switch. Windows only populates `PolicyStoreSourceType` and `PolicyStoreSource` for ActiveStore results when source tracing is requested. This distinguishes Local rules from Group Policy, Dynamic, Generated and Hardcoded entries; unsupported sources remain a fail-closed error and are reported by rule name/source rather than silently ignored.

@@ -163,7 +163,10 @@ def test_windows_backend_refuses_unverified_helper_result(tmp_path):
 def test_windows_firewall_helper_is_strict_about_outbound_exceptions():
     assert "DefaultOutboundAction Block" in _POWERSHELL
     assert "GroupPolicy" in _POWERSHELL
-    assert "Unmanaged outbound allow rules remain active" in _POWERSHELL
+    assert "-PolicyStore ActiveStore -TracePolicyStore -Direction Outbound" in _POWERSHELL
+    assert "PolicyStoreSourceType" in _POWERSHELL
+    assert "PolicyStoreSource" in _POWERSHELL
+    assert "Enabled outbound Allow rules outside the local firewall store" in _POWERSHELL
     assert "Set-NetFirewallRule" in _POWERSHELL
     assert "TorProxy Kill Switch" in _POWERSHELL
     assert "original snapshot is missing" in _POWERSHELL

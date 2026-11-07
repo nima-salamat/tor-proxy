@@ -82,7 +82,7 @@ try {
                 throw 'TorProxy firewall rules exist but the original snapshot is missing. Refusing to guess the original firewall policy; manual recovery is required.'
             }
             $profiles = Get-ActiveProfiles
-            $activeAllow = @(Get-NetFirewallRule -PolicyStore ActiveStore -Direction Outbound -Action Allow -Enabled True -ErrorAction SilentlyContinue)
+            $activeAllow = @(Get-NetFirewallRule -PolicyStore ActiveStore -TracePolicyStore -Direction Outbound -Action Allow -Enabled True -ErrorAction SilentlyContinue)
             $gpoRules = @($activeAllow | Where-Object { [string]$_.PolicyStoreSourceType -eq 'GroupPolicy' })
             if ($gpoRules.Count -gt 0) {
                 throw 'Enabled outbound allow rules are enforced by Group Policy. TorProxy cannot safely override them.'
@@ -95,7 +95,20 @@ try {
                 -not $localSet.ContainsKey([string]$_.Name) -and [string]$_.Group -ne $Group
             })
             if ($unmanaged.Count -gt 0) {
-                throw 'An enabled outbound allow rule is not in the local firewall store. Strict mode cannot verify its ownership.'
+                $details = @($unmanaged | Select-Object -First 8 | ForEach-Object {
+                    $sourceType = if ([string]$_.PolicyStoreSourceType) {
+                        [string]$_.PolicyStoreSourceType
+                    } else {
+                        'unknown source'
+                    }
+                    $source = if ([string]$_.PolicyStoreSource) {
+                        [string]$_.PolicyStoreSource
+                    } else {
+                        'source path unavailable'
+                    }
+                    "$([string]$_.Name) [$sourceType; $source]"
+                }) -join '; '
+                throw "Enabled outbound Allow rules outside the local firewall store cannot be safely disabled: $details"
             }
             $snapshot = [ordered]@{
                 version = 1
