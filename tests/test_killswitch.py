@@ -384,7 +384,7 @@ def test_windows_firewall_script_parses_as_valid_powershell(tmp_path):
 
 def test_windows_backend_does_not_silently_ignore_orphaned_firewall_rules(tmp_path):
     def fake_runner(_script, action, _snapshot, _request, result_path):
-        assert action == "deactivate"
+        assert action == "recover"
         result_path.write_text(
             json.dumps({"ok": False, "error": "original snapshot is missing"}),
             encoding="utf-8",
