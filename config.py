@@ -28,6 +28,7 @@ ARCHITECTURE = 64 if platform.architecture()[0].startswith("64") else 32
 BUNDLE_DIR = str(user_directories().data / "bundles")
 CHECKSUM_FILE = "sha256sums.txt"
 TOR_BUNDLE_BASE_URL = "https://dist.torproject.org/torbrowser/"
+TOR_BUNDLE_FALLBACK_URL = "https://archive.torproject.org/tor-package-archive/torbrowser/"
 
 DEFAULT_DATA: dict[str, Any] = {
     "schema_version": 1,

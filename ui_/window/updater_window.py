@@ -85,14 +85,19 @@ class UpdaterWindow(QWidget):
 
         source_label = QLabel("Official source")
         source_label.setObjectName("metadataLabel")
-        source_label.setToolTip("Official Tor Expert Bundle release listing used for discovery and downloads.")
+        source_label.setToolTip(
+            "Primary official source. TorProxy also tries the archive.torproject.org mirror "
+            "on network failures, without changing the selected network route."
+        )
         title_row.addWidget(source_label)
         self.bundle_source_url = QLineEdit(TOR_BUNDLE_BASE_URL)
         self.bundle_source_url.setObjectName("bundleSourceUrl")
         self.bundle_source_url.setReadOnly(True)
         self.bundle_source_url.setFixedSize(272, 27)
         self.bundle_source_url.setToolTip(
-            "Official Tor Expert Bundle release index. Use the adjacent button to copy this URL."
+            "Primary official Tor Expert Bundle release index. If it cannot be reached, "
+            "TorProxy tries https://archive.torproject.org/tor-package-archive/torbrowser/ "
+            "using the same explicitly selected network route."
         )
         title_row.addWidget(self.bundle_source_url)
         self.btn_copy_bundle_source = QPushButton()

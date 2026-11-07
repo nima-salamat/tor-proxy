@@ -15,7 +15,7 @@ from urllib.parse import unquote, urljoin, urlsplit
 import requests
 from bs4 import BeautifulSoup
 
-from config import ARCHITECTURE, BUNDLE_DIR, OS_NAME, TOR_BUNDLE_BASE_URL
+from config import ARCHITECTURE, BUNDLE_DIR, OS_NAME, TOR_BUNDLE_BASE_URL, TOR_BUNDLE_FALLBACK_URL
 from torproxy.bundle import (
     ALLOWED_DISTRIBUTION_HOSTS,
     BundleProgress,
@@ -83,6 +83,35 @@ def create_bundle_dir() -> None:
     Path(resource_path(BUNDLE_DIR)).mkdir(parents=True, exist_ok=True)
 
 
+def _distribution_base_urls(base_url: str = TOR_BUNDLE_BASE_URL) -> tuple[str, ...]:
+    """Return a selected official source and the other Tor endpoint as fallback."""
+    primary = str(base_url).rstrip("/") + "/"
+    official = {
+        TOR_BUNDLE_BASE_URL.rstrip("/") + "/",
+        TOR_BUNDLE_FALLBACK_URL.rstrip("/") + "/",
+    }
+    if primary not in official:
+        return (primary,)
+    secondary = (
+        TOR_BUNDLE_FALLBACK_URL.rstrip("/") + "/"
+        if primary == TOR_BUNDLE_BASE_URL.rstrip("/") + "/"
+        else TOR_BUNDLE_BASE_URL.rstrip("/") + "/"
+    )
+    return (primary, secondary)
+
+
+def _raise_distribution_failure(
+    purpose: str, failures: list[str], *, proxy_url: str | None, allow_direct: bool
+) -> BundleVerificationError:
+    route = "TOR_SOCKS" if proxy_url else "DIRECT_BOOTSTRAP" if allow_direct else "NO_ROUTE"
+    return BundleVerificationError(
+        f"{purpose} failed on all official Tor distribution endpoints using {route}. "
+        + " | ".join(failures)
+        + " The application did not change network routes. "
+        "Check connectivity or try Import .tar.gz with a locally downloaded Expert Bundle."
+    )
+
+
 def _fetch_listing(
     url: str, proxy_url: str | None = None, *, allow_direct: bool = False
 ) -> BeautifulSoup:
@@ -111,8 +140,24 @@ def get_tor_versions(
     Artifact availability is checked lazily when a user selects a release. This
     avoids firing one network request for every historical release at startup.
     """
-    try:
-        soup = _fetch_listing(url, proxy_url, allow_direct=allow_direct)
+    failures: list[str] = []
+    saw_listing = False
+    for source_base in _distribution_base_urls(url):
+        try:
+            soup = _fetch_listing(source_base, proxy_url, allow_direct=allow_direct)
+        except requests.RequestException as exc:
+            message = network_error_message(
+                exc, purpose="Tor release discovery",
+                proxy_url=proxy_url, allow_direct=allow_direct,
+            )
+            failures.append(f"{urlsplit(source_base).hostname}: {message}")
+            logger.warning(
+                "Tor release endpoint %s failed; trying the next official endpoint: %s",
+                urlsplit(source_base).hostname, message,
+            )
+            continue
+
+        saw_listing = True
         versions: set[str] = set()
         for link in soup.find_all("a", href=True):
             href = unquote(str(link.get("href", "")).strip())
@@ -129,26 +174,24 @@ def get_tor_versions(
             except ValueError:
                 continue
             versions.add(path)
-        if not versions:
-            raise BundleVerificationError(
-                "The official Tor listing returned no recognizable stable or supported alpha release directories."
-            )
-        return [version + "/" for version in sorted(versions, key=tor_version_sort_key, reverse=True)]
-    except BundleVerificationError:
-        raise
-    except requests.RequestException as exc:
-        raise BundleVerificationError(
-            network_error_message(
-                exc,
-                purpose="Tor release discovery",
-                proxy_url=proxy_url,
-                allow_direct=allow_direct,
-            )
-        ) from exc
-    except ValueError as exc:
-        raise BundleVerificationError(
-            f"Could not parse the official Tor release listing: {exc}"
-        ) from exc
+        if versions:
+            return [
+                version + "/"
+                for version in sorted(versions, key=tor_version_sort_key, reverse=True)
+            ]
+        logger.warning(
+            "Tor release endpoint %s returned no recognized versions; trying the next official endpoint.",
+            urlsplit(source_base).hostname,
+        )
+
+    if failures and not saw_listing:
+        raise _raise_distribution_failure(
+            "Tor release discovery", failures,
+            proxy_url=proxy_url, allow_direct=allow_direct,
+        )
+    raise BundleVerificationError(
+        "The official Tor release listings returned no recognizable stable or supported alpha release directories."
+    )
 
 
 def _platform_name() -> str:
@@ -184,32 +227,46 @@ def get_bundle_links(
     parse_tor_version(release)
     platform_name = _platform_name()
     architecture = _architecture_name()
-    listing_url = urljoin(base_url.rstrip("/") + "/", release + "/")
-    try:
-        soup = _fetch_listing(listing_url, proxy_url, allow_direct=allow_direct)
-    except BundleVerificationError:
-        raise
-    except requests.RequestException as exc:
-        raise BundleVerificationError(
-            network_error_message(
+    expected = f"tor-expert-bundle-{platform_name}-{architecture}-{release}.tar.gz"
+    failures: list[str] = []
+    sources = _distribution_base_urls(base_url)
+    for source_base in sources:
+        listing_url = urljoin(source_base, release + "/")
+        try:
+            soup = _fetch_listing(listing_url, proxy_url, allow_direct=allow_direct)
+        except requests.RequestException as exc:
+            message = network_error_message(
                 exc,
                 purpose=f"Artifact availability check for Tor release {release}",
                 proxy_url=proxy_url,
                 allow_direct=allow_direct,
             )
-        ) from exc
-    anchors = soup.find_all("a", href=True)
-    if not anchors:
-        raise BundleVerificationError(
-            f"The Tor release listing for {release} was empty or malformed."
+            failures.append(f"{urlsplit(source_base).hostname}: {message}")
+            logger.warning(
+                "Tor artifact listing %s failed; trying the next official endpoint: %s",
+                urlsplit(source_base).hostname, message,
+            )
+            continue
+
+        anchors = soup.find_all("a", href=True)
+        if not anchors:
+            logger.warning(
+                "Tor artifact listing for %s at %s was empty; trying its official mirror.",
+                release, urlsplit(source_base).hostname,
+            )
+            continue
+        names = {
+            Path(urlsplit(str(link.get("href", ""))).path).name
+            for link in anchors
+        }
+        if expected in names and (not require_signature or expected + ".asc" in names):
+            return [expected]
+
+    if failures and len(failures) == len(sources):
+        raise _raise_distribution_failure(
+            f"Artifact availability check for Tor release {release}", failures,
+            proxy_url=proxy_url, allow_direct=allow_direct,
         )
-    expected = f"tor-expert-bundle-{platform_name}-{architecture}-{release}.tar.gz"
-    names = {
-        Path(urlsplit(str(link.get("href", ""))).path).name
-        for link in anchors
-    }
-    if expected in names and (not require_signature or expected + ".asc" in names):
-        return [expected]
     return []
 
 def get_version_by_bundle(filename: str, with_slash: bool = False) -> str:
@@ -275,11 +332,40 @@ def download_file(
     # An unsigned cache has no authenticated publisher identity. Always fetch a
     # fresh archive for installation when OpenPGP verification is disabled.
     archive.parent.mkdir(parents=True, exist_ok=True)
-    result = download_verified_bundle(
-        release, _platform_name(), _architecture_name(), archive, base_url,
-        progress_callback=progress_callback, cancel_event=cancel_event,
-        verify_signature=verify_signature, proxy_url=proxy_url, allow_direct=allow_direct,
-    )
+    source_urls = _distribution_base_urls(base_url)
+    result = None
+    for source_index, source_base in enumerate(source_urls):
+        try:
+            result = download_verified_bundle(
+                release, _platform_name(), _architecture_name(), archive, source_base,
+                progress_callback=progress_callback, cancel_event=cancel_event,
+                verify_signature=verify_signature, proxy_url=proxy_url, allow_direct=allow_direct,
+            )
+            break
+        except BundleVerificationError as exc:
+            message = str(exc).lower()
+            retryable_source_error = (
+                "download failed" in message
+                and any(
+                    marker in message
+                    for marker in (
+                        "connection", "timed out", "refused", "dns resolution",
+                        "tls certificate", "http 403", "http 404", "http 408",
+                        "http 429", "http 500", "http 502", "http 503", "http 504",
+                    )
+                )
+            )
+            if source_index + 1 >= len(source_urls) or not retryable_source_error:
+                raise
+            logger.warning(
+                "Tor bundle download from %s failed; trying official archive mirror %s: %s",
+                urlsplit(source_base).hostname,
+                urlsplit(source_urls[source_index + 1]).hostname,
+                exc,
+            )
+
+    if result is None:
+        raise BundleVerificationError("Tor bundle download failed without a result.")
     if verify_signature:
         logger.info("Downloaded and signature-verified Tor Expert Bundle %s.", expected)
     else:

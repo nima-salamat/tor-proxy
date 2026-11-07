@@ -1168,3 +1168,11 @@ def test_failed_release_discovery_keeps_installed_bundles_available():
     assert "Installed bundles remain available" in error_handler
     assert "self.list_tor_versions.clear()" not in error_handler
     assert "logger.error(" not in error_handler
+
+
+
+def test_bundle_source_tooltip_documents_official_archive_fallback():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/updater_window.py").read_text(encoding="utf-8")
+    assert "archive.torproject.org/tor-package-archive/torbrowser/" in source
+    assert "same explicitly selected network route" in source

@@ -150,7 +150,7 @@ def _download(
         raise BundleVerificationError(
             network_error_message(
                 exc,
-                purpose="Download",
+                purpose=operation.capitalize(),
                 proxy_url=proxy_url,
                 allow_direct=allow_direct,
             )

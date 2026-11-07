@@ -521,3 +521,103 @@ def test_manual_bundle_import_does_not_overwrite_existing_archive(tmp_path, monk
     with pytest.raises(BundleVerificationError, match="already exists"):
         updater.import_local_bundle(source, verify_signature=False)
     assert (managed / source.name).read_bytes() == b"preserve existing archive"
+
+
+
+def test_release_discovery_falls_back_to_official_archive_on_connection_failure(monkeypatch):
+    from config import TOR_BUNDLE_BASE_URL, TOR_BUNDLE_FALLBACK_URL
+
+    calls = []
+
+    def fetch(url, *_args, **_kwargs):
+        calls.append(url)
+        if url.startswith(TOR_BUNDLE_BASE_URL):
+            raise requests.ConnectionError("connection refused")
+        return _listing("16.0.0/", "15.0.26/")
+
+    monkeypatch.setattr(updater, "_fetch_listing", fetch)
+    assert updater.get_tor_versions(allow_direct=True) == ["16.0.0/", "15.0.26/"]
+    assert calls == [TOR_BUNDLE_BASE_URL, TOR_BUNDLE_FALLBACK_URL]
+
+
+def test_release_discovery_reports_both_hosts_if_all_official_endpoints_fail(monkeypatch):
+    from config import TOR_BUNDLE_BASE_URL, TOR_BUNDLE_FALLBACK_URL
+
+    calls = []
+
+    def fetch(url, *_args, **_kwargs):
+        calls.append(url)
+        raise requests.ConnectionError("actively refused")
+
+    monkeypatch.setattr(updater, "_fetch_listing", fetch)
+    with pytest.raises(BundleVerificationError) as exc_info:
+        updater.get_tor_versions(allow_direct=True)
+
+    message = str(exc_info.value)
+    assert "dist.torproject.org" in message
+    assert "archive.torproject.org" in message
+    assert "did not change network routes" in message
+    assert len(calls) == 2
+
+
+def test_artifact_discovery_uses_archive_after_primary_network_failure(monkeypatch):
+    from config import TOR_BUNDLE_BASE_URL, TOR_BUNDLE_FALLBACK_URL
+
+    expected = "tor-expert-bundle-windows-x86_64-16.0.0.tar.gz"
+    monkeypatch.setattr(updater, "_platform_name", lambda: "windows")
+    monkeypatch.setattr(updater, "_architecture_name", lambda: "x86_64")
+    calls = []
+
+    def fetch(url, *_args, **_kwargs):
+        calls.append(url)
+        if url.startswith(TOR_BUNDLE_BASE_URL):
+            raise requests.ConnectionError("actively refused")
+        return _listing(expected, expected + ".asc")
+
+    monkeypatch.setattr(updater, "_fetch_listing", fetch)
+    assert updater.get_bundle_links("16.0.0", allow_direct=True) == [expected]
+    assert calls == [
+        TOR_BUNDLE_BASE_URL + "16.0.0/",
+        TOR_BUNDLE_FALLBACK_URL + "16.0.0/",
+    ]
+
+
+def test_download_file_uses_archive_mirror_only_for_network_failure(monkeypatch, tmp_path):
+    from config import TOR_BUNDLE_BASE_URL, TOR_BUNDLE_FALLBACK_URL
+
+    archive_name = "tor-expert-bundle-windows-x86_64-16.0.0.tar.gz"
+    monkeypatch.setattr(updater, "BUNDLE_DIR", str(tmp_path))
+    monkeypatch.setattr(updater, "resource_path", lambda value: value)
+    monkeypatch.setattr(updater, "_platform_name", lambda: "windows")
+    monkeypatch.setattr(updater, "_architecture_name", lambda: "x86_64")
+    calls = []
+
+    def download(_version, _platform, _arch, destination, base_url, **_kwargs):
+        calls.append(base_url)
+        if base_url == TOR_BUNDLE_BASE_URL:
+            raise BundleVerificationError("Download failed: connection refused.")
+        Path(destination).write_bytes(b"archive fixture")
+        return Path(destination)
+
+    monkeypatch.setattr(updater, "download_verified_bundle", download)
+    result = updater.download_file(archive_name, "16.0.0", allow_direct=True)
+    assert result.read_bytes() == b"archive fixture"
+    assert calls == [TOR_BUNDLE_BASE_URL, TOR_BUNDLE_FALLBACK_URL]
+
+
+def test_download_file_never_falls_back_after_signature_failure(monkeypatch, tmp_path):
+    archive_name = "tor-expert-bundle-windows-x86_64-16.0.0.tar.gz"
+    monkeypatch.setattr(updater, "BUNDLE_DIR", str(tmp_path))
+    monkeypatch.setattr(updater, "resource_path", lambda value: value)
+    monkeypatch.setattr(updater, "_platform_name", lambda: "windows")
+    monkeypatch.setattr(updater, "_architecture_name", lambda: "x86_64")
+    calls = []
+
+    def invalid_signature(*_args, **_kwargs):
+        calls.append(True)
+        raise BundleVerificationError("The Tor release signature is missing or invalid.")
+
+    monkeypatch.setattr(updater, "download_verified_bundle", invalid_signature)
+    with pytest.raises(BundleVerificationError, match="signature is missing or invalid"):
+        updater.download_file(archive_name, "16.0.0", allow_direct=True)
+    assert calls == [True]
