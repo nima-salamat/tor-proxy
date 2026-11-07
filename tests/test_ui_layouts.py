@@ -1139,7 +1139,7 @@ def test_kill_switch_is_configurable_and_preflighted_before_services_start():
     assert "if self._killswitch_operation_active:" in home_source
     assert "self._apply_kill_switch_enabled(bool(enabled))" in home_source
     assert "self.killswitch_manager.activate(programs)" in home_source
-    assert 'if not failures and CONFIG["kill_switch_enabled"]:' in home_source
+    assert 'if CONFIG["kill_switch_enabled"]:' in home_source
     assert 'return "blocked" if CONFIG["kill_switch_enabled"] else "direct"' in proxy_source
 
 
