@@ -340,6 +340,77 @@ try {
             Write-Result @{ ok = $true; active = $false; detail = 'TorProxy rules removed and the saved firewall policy restored and verified.' }
         }
     }
+    elseif ($Action -eq 'recover') {
+        if (-not (Test-Path -LiteralPath $SnapshotPath)) {
+            throw 'No saved TorProxy firewall snapshot exists. Use emergency recovery to restore normal outbound access.'
+        }
+        $snapshot = Get-Content -LiteralPath $SnapshotPath -Raw | ConvertFrom-Json
+        if (@($snapshot.profiles).Count -lt 1 -or [string]$snapshot.group -ne $Group) {
+            throw 'The saved TorProxy firewall snapshot is invalid; no firewall changes were made.'
+        }
+        Assert-ManagedState $snapshot $false
+        $currentProfiles = Get-ActiveProfiles
+        Get-NetFirewallRule -PolicyStore PersistentStore -Group $Group -ErrorAction SilentlyContinue |
+            Remove-NetFirewallRule -ErrorAction Stop
+
+        foreach ($saved in $snapshot.profiles) {
+            $current = $currentProfiles | Where-Object { $_.Name -eq $saved.Name } | Select-Object -First 1
+            if ($null -ne $current -and [bool]$current.Enabled -and
+                [string]$current.DefaultOutboundAction -eq 'Block') {
+                Set-NetFirewallProfile -Profile ([string]$saved.Name) -Enabled ([bool]$saved.Enabled) -DefaultOutboundAction ([string]$saved.DefaultOutboundAction)
+            }
+        }
+        foreach ($name in @($snapshot.disabledRules)) {
+            $rule = Get-NetFirewallRule -PolicyStore PersistentStore -Name ([string]$name) -ErrorAction SilentlyContinue
+            if ($null -ne $rule -and [string]$rule.Enabled -ne 'True') {
+                Set-NetFirewallRule -PolicyStore PersistentStore -Name ([string]$name) -Enabled True
+            }
+        }
+
+        $restoredProfiles = Get-ActiveProfiles
+        foreach ($saved in $snapshot.profiles) {
+            $current = $restoredProfiles | Where-Object { $_.Name -eq $saved.Name } | Select-Object -First 1
+            if ($null -eq $current -or [bool]$current.Enabled -ne [bool]$saved.Enabled -or
+                [string]$current.DefaultOutboundAction -ne [string]$saved.DefaultOutboundAction) {
+                throw "Firewall profile $($saved.Name) could not be restored to its saved state."
+            }
+        }
+        foreach ($name in @($snapshot.disabledRules)) {
+            $rule = Get-NetFirewallRule -PolicyStore PersistentStore -Name ([string]$name) -ErrorAction SilentlyContinue
+            if ($null -ne $rule -and [string]$rule.Enabled -ne 'True') {
+                throw "Firewall rule $name could not be restored to its saved enabled state."
+            }
+        }
+
+        $archivePath = $SnapshotPath + '.recovered'
+        if (Test-Path -LiteralPath $archivePath) {
+            $archivePath = $SnapshotPath + '.recovered.' + [guid]::NewGuid().ToString('N')
+        }
+        Move-Item -LiteralPath $SnapshotPath -Destination $archivePath -Force
+        Write-Result @{ ok = $true; active = $false; mode = 'snapshot'; detail = 'The saved firewall profiles and previously enabled local rules were restored and verified.' }
+    }
+    elseif ($Action -eq 'emergency') {
+        # Explicit user-requested fallback. Keep Windows Firewall enabled and
+        # restore ordinary outbound access without resetting unrelated rules.
+        Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled True -DefaultOutboundAction Allow
+        $recoveryProfiles = Get-ActiveProfiles
+        foreach ($profile in $recoveryProfiles) {
+            if (-not [bool]$profile.Enabled -or [string]$profile.DefaultOutboundAction -ne 'Allow') {
+                throw "Windows did not accept the emergency outbound-Allow policy for profile $($profile.Name)."
+            }
+        }
+        Get-NetFirewallRule -PolicyStore PersistentStore -Group $Group -ErrorAction SilentlyContinue |
+            Remove-NetFirewallRule -ErrorAction Stop
+
+        if (Test-Path -LiteralPath $SnapshotPath) {
+            $archivePath = $SnapshotPath + '.emergency-recovered'
+            if (Test-Path -LiteralPath $archivePath) {
+                $archivePath = $SnapshotPath + '.emergency-recovered.' + [guid]::NewGuid().ToString('N')
+            }
+            Move-Item -LiteralPath $SnapshotPath -Destination $archivePath -Force
+        }
+        Write-Result @{ ok = $true; active = $false; mode = 'emergency'; detail = 'Emergency recovery restored outbound Allow on all profiles, kept Windows Firewall enabled, and removed only TorProxy-owned rules. The previous snapshot was preserved when present.' }
+    }
     elseif ($Action -eq 'status') {
         if (-not (Test-Path -LiteralPath $SnapshotPath)) {
             $orphanedGroup = @(Get-NetFirewallRule -PolicyStore ActiveStore -Group $Group -ErrorAction SilentlyContinue)
@@ -405,16 +476,43 @@ def _run_elevated(script_path: Path, action: str, snapshot_path: Path,
         if error == 1223:
             raise KillSwitchError("Administrator approval was cancelled; no firewall change was confirmed.")
         raise KillSwitchError(f"Windows could not request administrator privileges (error {error}).")
+    # Declare native signatures explicitly: HANDLE is pointer-sized on 64-bit Windows.
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    kernel32.TerminateProcess.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
     try:
-        wait_result = ctypes.windll.kernel32.WaitForSingleObject(info.hProcess, 120000)
-        if wait_result != 0:
-            raise KillSwitchError("The elevated Windows firewall operation timed out.")
+        wait_result = kernel32.WaitForSingleObject(info.hProcess, 60000)
+        if wait_result == 0x00000102:  # WAIT_TIMEOUT
+            if not kernel32.TerminateProcess(info.hProcess, 1):
+                error = ctypes.get_last_error()
+                raise KillSwitchError(
+                    "The elevated firewall operation exceeded 60 seconds and Windows could not stop "
+                    f"the helper process (error {error}). Use Emergency network recovery."
+                )
+            kernel32.WaitForSingleObject(info.hProcess, 5000)
+            raise KillSwitchError(
+                "The elevated firewall operation exceeded 60 seconds. The helper was terminated; "
+                "use Restore saved firewall or Emergency network recovery to reconcile any partial changes."
+            )
+        if wait_result == 0xFFFFFFFF:  # WAIT_FAILED
+            error = ctypes.get_last_error()
+            raise KillSwitchError(f"Waiting for the elevated firewall helper failed (Windows error {error}).")
+        if wait_result != 0:  # WAIT_OBJECT_0
+            raise KillSwitchError(f"Unexpected Windows wait result: {wait_result}.")
         exit_code = wintypes.DWORD()
-        if not ctypes.windll.kernel32.GetExitCodeProcess(info.hProcess, ctypes.byref(exit_code)):
-            raise KillSwitchError("Windows could not read the elevated firewall process exit code.")
+        if not kernel32.GetExitCodeProcess(info.hProcess, ctypes.byref(exit_code)):
+            error = ctypes.get_last_error()
+            raise KillSwitchError(f"Windows could not read the elevated helper exit code (error {error}).")
         return int(exit_code.value)
     finally:
-        ctypes.windll.kernel32.CloseHandle(info.hProcess)
+        kernel32.CloseHandle(info.hProcess)
 
 
 class WindowsFirewallBackend:
@@ -452,6 +550,14 @@ class WindowsFirewallBackend:
         # The elevated helper also checks for orphaned TorProxy rules when a
         # snapshot is missing; silently skipping would leave an unknown policy.
         self._invoke("deactivate")
+
+    def recover(self) -> None:
+        """Restore the saved pre-Kill-Switch firewall state, including partial installs."""
+        self._invoke("recover")
+
+    def emergency_recover(self) -> None:
+        """Restore ordinary outbound access while keeping Defender Firewall enabled."""
+        self._invoke("emergency")
 
     def status(self) -> dict[str, object]:
         try:
