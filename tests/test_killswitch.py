@@ -165,6 +165,8 @@ def test_windows_firewall_helper_is_strict_about_outbound_exceptions():
     assert "GroupPolicy" in _POWERSHELL
     assert "-PolicyStore ActiveStore -TracePolicyStore -Direction Outbound" in _POWERSHELL
     assert "PolicyStoreSourceType" in _POWERSHELL
+    assert "([string]$_.PolicyStoreSourceType -ne 'Local' -or" in _POWERSHELL
+    assert "Enabled outbound Allow rules are enforced by Group Policy" in _POWERSHELL
     assert "PolicyStoreSource" in _POWERSHELL
     assert "Enabled outbound Allow rules outside the local firewall store" in _POWERSHELL
     assert "Set-NetFirewallRule" in _POWERSHELL

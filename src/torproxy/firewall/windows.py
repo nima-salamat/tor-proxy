@@ -85,14 +85,19 @@ try {
             $activeAllow = @(Get-NetFirewallRule -PolicyStore ActiveStore -TracePolicyStore -Direction Outbound -Action Allow -Enabled True -ErrorAction SilentlyContinue)
             $gpoRules = @($activeAllow | Where-Object { [string]$_.PolicyStoreSourceType -eq 'GroupPolicy' })
             if ($gpoRules.Count -gt 0) {
-                throw 'Enabled outbound allow rules are enforced by Group Policy. TorProxy cannot safely override them.'
+                $gpoDetails = @($gpoRules | Select-Object -First 8 | ForEach-Object {
+                    "$([string]$_.Name) [$([string]$_.PolicyStoreSource)]"
+                }) -join '; '
+                throw "Enabled outbound Allow rules are enforced by Group Policy and cannot be safely disabled: $gpoDetails"
             }
             $localAllow = @(Get-NetFirewallRule -PolicyStore PersistentStore -Direction Outbound -Action Allow -Enabled True -ErrorAction SilentlyContinue)
             $localNames = @($localAllow | ForEach-Object { [string]$_.Name } | Sort-Object -Unique)
             $localSet = @{}
             foreach ($name in $localNames) { $localSet[$name] = $true }
             $unmanaged = @($activeAllow | Where-Object {
-                -not $localSet.ContainsKey([string]$_.Name) -and [string]$_.Group -ne $Group
+                ([string]$_.PolicyStoreSourceType -ne 'Local' -or
+                 -not $localSet.ContainsKey([string]$_.Name)) -and
+                [string]$_.Group -ne $Group
             })
             if ($unmanaged.Count -gt 0) {
                 $details = @($unmanaged | Select-Object -First 8 | ForEach-Object {
