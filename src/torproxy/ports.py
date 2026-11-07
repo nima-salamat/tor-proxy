@@ -18,6 +18,54 @@ class PortAllocationError(RuntimeError):
     """A configured listener port cannot be used safely."""
 
 
+def describe_port_owner(port: int, protocol: str = "tcp") -> str | None:
+    """Return a best-effort local process identity for an occupied listener port."""
+    try:
+        import psutil
+    except ImportError:
+        return None
+
+    normalized_protocol = "udp" if protocol.lower() == "udp" else "tcp"
+    try:
+        connections = psutil.net_connections(kind=normalized_protocol)
+    except (OSError, psutil.Error):
+        return None
+
+    for connection in connections:
+        address = connection.laddr
+        local_port = getattr(address, "port", None)
+        if local_port != int(port):
+            continue
+        if normalized_protocol == "tcp" and connection.status != psutil.CONN_LISTEN:
+            continue
+
+        pid = connection.pid
+        if pid is None:
+            return "a process whose PID is unavailable (try running TorProxy with appropriate permissions)"
+        try:
+            process = psutil.Process(pid)
+            name = process.name()
+            executable = process.exe()
+        except (psutil.Error, OSError):
+            return f"PID {pid} (process details are not accessible)"
+
+        identity = name or "unknown process"
+        if executable:
+            identity = f"{identity}, {executable}"
+        return f"{identity} (PID {pid})"
+    return None
+
+
+def _port_owner_hint(key: str, port: int) -> str:
+    protocols = ("tcp", "udp") if key == "dns_port" else ("tcp",)
+    owners = []
+    for protocol in protocols:
+        owner = describe_port_owner(port, protocol)
+        if owner:
+            owners.append(f"{protocol.upper()}: {owner}")
+    return f" Detected owner: {'; '.join(owners)}." if owners else ""
+
+
 def can_bind_loopback(host: str | int, port: int | None = None) -> bool:
     """Return whether a TCP listener can bind a loopback port.
 
@@ -234,9 +282,14 @@ def resolve_listener_ports(
                     messages.append(reason + f" A temporary port {selected} is used only to keep the UI available.")
                     continue
                 if not port_is_available(key, saved):
-                    reason = f"{label}: manually selected port {saved} is already in use."
+                    owner_hint = _port_owner_hint(key, saved)
+                    reason = f"{label}: manually selected port {saved} is already in use.{owner_hint}"
                     if strict_manual:
-                        raise PortAllocationError(reason + " Free it or choose another port in Settings → Ports.")
+                        raise PortAllocationError(
+                            reason
+                            + " Stop the process using it, or uncheck Fixed for this listener in Settings → Ports "
+                              "to let TorProxy choose and remember another available port."
+                        )
                     selected = pick_ephemeral(key, label)
                     assigned[key] = selected
                     used.add(selected)

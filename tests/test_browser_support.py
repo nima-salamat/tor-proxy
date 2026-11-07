@@ -18,6 +18,7 @@ from torproxy.browsers import (
 from torproxy.ports import (
     PortAllocationError,
     can_bind_loopback,
+    describe_port_owner,
     can_bind_loopback_udp,
     resolve_listener_ports,
 )
@@ -134,6 +135,37 @@ def test_dns_listener_reallocates_saved_port_when_udp_is_occupied():
     assert allocated["dns_port"] == 43004
     assert config["dns_port"] == 43004
     assert any("saved port 42004 is unavailable" in message for message in messages)
+
+
+def test_manual_port_conflict_reports_the_process_using_the_listener(monkeypatch):
+    import psutil
+    from types import SimpleNamespace
+
+    connection = SimpleNamespace(
+        laddr=SimpleNamespace(port=9155),
+        status=psutil.CONN_LISTEN,
+        pid=4242,
+    )
+
+    class FakeProcess:
+        def __init__(self, pid):
+            assert pid == 4242
+
+        def name(self):
+            return "tor.exe"
+
+        def exe(self):
+            return r"C:\\TorProxy\\Tor\\tor.exe"
+
+    monkeypatch.setattr(psutil, "net_connections", lambda kind: [connection])
+    monkeypatch.setattr(psutil, "Process", FakeProcess)
+
+    owner = describe_port_owner(9155)
+
+    assert owner is not None
+    assert "tor.exe" in owner
+    assert "PID 4242" in owner
+    assert "C:\\TorProxy" in owner
 
 
 def test_manual_port_collision_fails_without_overwriting_user_choice():
