@@ -18,11 +18,17 @@ class PortAllocationError(RuntimeError):
     """A configured listener port cannot be used safely."""
 
 
-def can_bind_loopback(port: int, host: str = "127.0.0.1") -> bool:
-    """Return whether a TCP listener can currently bind the requested loopback port."""
+def can_bind_loopback(host: str | int, port: int | None = None) -> bool:
+    """Return whether a TCP listener can bind a loopback port.
+
+    Accept both can_bind_loopback(port) for public callers and
+    can_bind_loopback(host, port) for allocator probes.
+    """
+    if port is None:
+        host, port = "127.0.0.1", int(host)
     probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        probe.bind((host, int(port)))
+        probe.bind((str(host), int(port)))
         return True
     except OSError:
         return False
@@ -30,11 +36,16 @@ def can_bind_loopback(port: int, host: str = "127.0.0.1") -> bool:
         probe.close()
 
 
-def can_bind_loopback_udp(port: int, host: str = "127.0.0.1") -> bool:
-    """Return whether a UDP listener can currently bind the requested loopback port."""
+def can_bind_loopback_udp(host: str | int, port: int | None = None) -> bool:
+    """Return whether a UDP listener can bind a loopback port.
+
+    Accept both can_bind_loopback_udp(port) and can_bind_loopback_udp(host, port).
+    """
+    if port is None:
+        host, port = "127.0.0.1", int(host)
     probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        probe.bind((host, int(port)))
+        probe.bind((str(host), int(port)))
         return True
     except OSError:
         return False
