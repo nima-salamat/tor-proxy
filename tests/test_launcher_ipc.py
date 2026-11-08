@@ -35,8 +35,9 @@ def test_notify_launcher_sends_authenticated_ready_message(monkeypatch):
     server_name = "torproxy-test-" + uuid.uuid4().hex
     token = uuid.uuid4().hex
     assert server.listen(server_name)
+    connect_name = server.fullServerName() or server_name
 
-    monkeypatch.setenv("TORPROXY_LAUNCHER_SERVER", server_name)
+    monkeypatch.setenv("TORPROXY_LAUNCHER_SERVER", connect_name)
     monkeypatch.setenv("TORPROXY_LAUNCHER_TOKEN", token)
     try:
         assert notify_launcher("ready", "Window displayed")
