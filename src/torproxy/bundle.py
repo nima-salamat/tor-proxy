@@ -225,6 +225,39 @@ def _find_gpg_executable() -> Path:
     )
 
 
+def _gpg_compatible_path(path: str | Path, gpg: Path) -> str:
+    """Convert paths for MSYS GnuPG shipped with Git for Windows.
+
+    That build expects POSIX paths such as /c/Users/... even when launched
+    from native Windows Python. Native GnuPG builds keep regular Windows paths.
+    """
+    resolved = Path(path).resolve()
+    cygpath = Path(gpg).with_name("cygpath.exe")
+    if os.name == "nt" and cygpath.is_file():
+        try:
+            converted = subprocess.run(
+                [str(cygpath), "-u", str(resolved)],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise BundleVerificationError(
+                "Could not convert a Windows path for the Git-for-Windows GnuPG runtime."
+            ) from exc
+        value = converted.stdout.strip()
+        if converted.returncode != 0 or not value:
+            detail = (converted.stderr or converted.stdout or "").strip()
+            raise BundleVerificationError(
+                "Git-for-Windows cygpath could not convert a GnuPG path."
+                + (f" {detail[-500:]}" if detail else "")
+            )
+        return value
+    return str(resolved)
+
+
 def verify_tor_signature(
     artifact: str | Path,
     signature: str | Path,
@@ -260,9 +293,9 @@ def verify_tor_signature(
                 cancel_event=cancel_event, proxy_url=proxy_url, allow_direct=allow_direct,
             )
             env = os.environ.copy()
-            env["GNUPGHOME"] = str(home_path)
+            env["GNUPGHOME"] = _gpg_compatible_path(home_path, gpg)
             imported = subprocess.run(
-                [str(gpg), "--batch", "--no-tty", "--import", str(key_file)],
+                [str(gpg), "--batch", "--no-tty", "--import", _gpg_compatible_path(key_file, gpg)],
                 env=env, stdin=subprocess.DEVNULL, capture_output=True,
                 text=True, timeout=20, check=False,
             )
@@ -288,7 +321,7 @@ def verify_tor_signature(
                 )
             verified = subprocess.run(
                 [str(gpg), "--batch", "--no-tty", "--status-fd", "1",
-                 "--verify", str(signature), str(artifact)],
+                 "--verify", _gpg_compatible_path(signature, gpg), _gpg_compatible_path(artifact, gpg)],
                 env=env, stdin=subprocess.DEVNULL, capture_output=True,
                 text=True, timeout=30, check=False,
             )
