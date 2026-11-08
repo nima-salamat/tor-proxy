@@ -396,7 +396,6 @@ class SystemTunnelManager:
         return hashes
 
     @classmethod
-    @classmethod
     def _archive_runtime_file_hashes(
         cls, archive: Path, archive_type: str, filename: str
     ) -> dict[str, str]:

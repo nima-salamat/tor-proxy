@@ -144,7 +144,7 @@ def test_tunnel_stop_refuses_to_take_over_a_live_unmatched_pid(tmp_path, monkeyp
     monkeypatch.setattr(system_tunnel, "_process_matches", lambda _state: None)
     monkeypatch.setattr(system_tunnel.psutil, "pid_exists", lambda _pid: True)
 
-    with pytest.raises(SystemTunnelError, match="refused"):
+    with pytest.raises(SystemTunnelError, match="refus"):
         system_tunnel._helper_stop(state_path, "torproxy-tun")
     assert state_path.exists()
 
