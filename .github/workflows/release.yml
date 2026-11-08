@@ -107,6 +107,7 @@ jobs:
         run: python -m PyInstaller --noconfirm --clean packaging/torproxy.spec
 
       - name: Install Qt 6 desktop SDK for native launcher
+        if: runner.os == 'Linux'
         uses: jurplel/install-qt-action@v4
         with:
           version: "6.8.3"
@@ -118,6 +119,7 @@ jobs:
       # the application's Python 3.12 environment so the later package smoke
       # tests can import the same dependencies installed above.
       - name: Restore application Python for package smoke tests
+        if: runner.os == 'Linux'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -127,16 +129,11 @@ jobs:
         shell: pwsh
         run: |
           $deployRoot = Join-Path $env:RUNNER_TEMP "torproxy-launcher-deploy"
-          cmake -S launcher -B build/launcher -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR" "-DCMAKE_INSTALL_PREFIX=$deployRoot"
+          cmake -S launcher -B build/launcher -DCMAKE_BUILD_TYPE=Release "-DCMAKE_INSTALL_PREFIX=$deployRoot"
           cmake --build build/launcher --config Release --parallel 2
           cmake --install build/launcher --config Release
-          $platforms = Join-Path $deployRoot "launcher-runtime\bin\plugins\platforms"
-          New-Item -ItemType Directory -Path $platforms -Force | Out-Null
-          Copy-Item (Join-Path $env:QT_ROOT_DIR "plugins\platforms\qoffscreen.dll") $platforms -Force
           Copy-Item -Path (Join-Path $deployRoot "*") -Destination "dist/TorProxy" -Recurse -Force
-          if (Test-Path (Join-Path $env:QT_ROOT_DIR "licenses")) {
-            Copy-Item -Path (Join-Path $env:QT_ROOT_DIR "licenses") -Destination "dist/TorProxy/launcher-licenses" -Recurse -Force
-          }
+          Copy-Item scripts/Create-TorProxyShortcut.ps1 dist/TorProxy/Create-TorProxyShortcut.ps1
           python scripts/launcher_smoke_test.py dist/TorProxy/TorProxyLauncher.exe
 
       - name: Build and deploy native splash launcher on Linux

@@ -23,6 +23,7 @@ def _ensure_qt_application():
 
 def test_notify_launcher_is_a_noop_for_direct_launch(monkeypatch):
     monkeypatch.delenv("TORPROXY_LAUNCHER_SERVER", raising=False)
+    monkeypatch.delenv("TORPROXY_LAUNCHER_STATUS_FILE", raising=False)
     monkeypatch.delenv("TORPROXY_LAUNCHER_TOKEN", raising=False)
 
     assert notify_launcher("ready") is False
@@ -72,8 +73,22 @@ def test_notify_launcher_sends_authenticated_ready_message(monkeypatch):
         qt_network.QLocalServer.removeServer(server_name)
 
 
+def test_notify_launcher_writes_atomic_windows_status_file(tmp_path, monkeypatch):
+    status_file = tmp_path / "startup.status"
+    token = "per-launch-random-token"
+    monkeypatch.setenv("TORPROXY_LAUNCHER_STATUS_FILE", str(status_file))
+    monkeypatch.setenv("TORPROXY_LAUNCHER_TOKEN", token)
+    monkeypatch.delenv("TORPROXY_LAUNCHER_SERVER", raising=False)
+
+    assert notify_launcher("starting", "Loading Python…") is True
+    lines = status_file.read_text(encoding="ascii").splitlines()
+    assert lines[:2] == [token, "starting"]
+    assert bytes.fromhex(lines[2]).decode("utf-8") == "Loading Python…"
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
 def test_notify_launcher_rejects_unknown_status(monkeypatch):
     monkeypatch.setenv("TORPROXY_LAUNCHER_SERVER", "unused-channel")
     monkeypatch.setenv("TORPROXY_LAUNCHER_TOKEN", "unused-token")
 
-    assert notify_launcher("starting") is False
+    assert notify_launcher("unknown") is False

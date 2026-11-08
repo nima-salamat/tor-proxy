@@ -222,7 +222,7 @@ void SplashWindow::paintEvent(QPaintEvent *event) {
                          : QStringLiteral("Private connections, simplified"));
 
     if (!m_errorState) {
-        const QRectF spinnerRect(width() / 2.0 - 11.0, 224.0, 22.0, 22.0);
+        const QRectF spinnerRect(width() / 2.0 - 11.0, 213.0, 22.0, 22.0);
         painter.setPen(QPen(QColor(134, 169, 181, 45), 2.5, Qt::SolidLine, Qt::RoundCap));
         painter.drawEllipse(spinnerRect);
         painter.setPen(QPen(QColor("#41D5BE"), 2.8, Qt::SolidLine, Qt::RoundCap));
@@ -231,8 +231,11 @@ void SplashWindow::paintEvent(QPaintEvent *event) {
         QFont statusFont(QStringLiteral("Arial"), 9, QFont::Medium);
         painter.setFont(statusFont);
         painter.setPen(QColor("#C4D4DA"));
-        painter.drawText(QRectF(88, 221, width() - 176, 28),
-                         Qt::AlignLeft | Qt::AlignVCenter, m_status);
+        const QString visibleStatus = QFontMetrics(statusFont).elidedText(
+            m_status, Qt::ElideRight, width() - 96
+        );
+        painter.drawText(QRectF(42, 243, width() - 84, 27),
+                         Qt::AlignHCenter | Qt::AlignVCenter, visibleStatus);
 
         const QRectF track(40, 286, width() - 80, 3);
         QPainterPath trackPath;

@@ -46,6 +46,16 @@ def configure_launcher_streams() -> None:
 
 configure_launcher_streams()
 
+# A dependency-free heartbeat lets the native Windows splash acknowledge that
+# Python has begun executing, even while PySide6 is still importing.
+try:
+    from torproxy.launcher_ipc import notify_launcher as _notify_launcher
+
+    if os.environ.get("TORPROXY_LAUNCHER_STATUS_FILE"):
+        _notify_launcher("starting", "Starting the Python runtime…")
+except Exception:
+    _notify_launcher = None
+
 LOGGER = logging.getLogger(__name__)
 _CRASH_LOG_HANDLE = None
 
@@ -103,7 +113,10 @@ def configure_logging() -> None:
 
 
 def main() -> int:
-    # Heavy imports happen only after the external native splash is already visible.
+    # Keep the splash informed while dependencies and the application UI load.
+    from torproxy.launcher_ipc import notify_launcher
+
+    notify_launcher("starting", "Loading Python and desktop components…")
     import portalocker
     import qdarkstyle
     from PySide6.QtCore import QTimer, Qt
@@ -113,7 +126,6 @@ def main() -> int:
     from qdarkstyle.light.palette import LightPalette
 
     from config import CONFIG
-    from torproxy.launcher_ipc import notify_launcher
     from torproxy.paths import user_directories
     from ui import Window
     from ui_.window.dialogs import QMessageBox
@@ -133,8 +145,16 @@ def main() -> int:
             QMessageBox.critical(None, "TorProxy configuration error", str(exc))
         return 2
     configure_logging()
+    notify_launcher("starting", "Preparing TorProxy settings…")
     app.setApplicationName("TorProxy")
     app.setApplicationDisplayName("TorProxy")
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("TorProxy.Desktop")
+        except (AttributeError, OSError):
+            LOGGER.debug("Could not set the Windows taskbar application identity.", exc_info=True)
 
     directories = user_directories().ensure()
     lock_path = directories.state / "application.lock"
@@ -145,6 +165,7 @@ def main() -> int:
             else:
                 app.setStyleSheet(qdarkstyle.load_stylesheet(palette=DarkPalette()))
             app.setWindowIcon(QIcon(resource_path("assets/icon.png")))
+            notify_launcher("starting", "Building the TorProxy window…")
             win = Window()
             # Keep the normal Windows DWM presentation path. Display-affinity
             # restrictions are not needed for Tor operation and can interfere
@@ -152,7 +173,8 @@ def main() -> int:
             win.show()
             # Process the initial show/paint events before closing the external splash.
             app.processEvents()
-            notify_launcher("ready")
+            if not notify_launcher("ready"):
+                LOGGER.error("The launcher readiness signal could not be delivered; the application will continue running.")
             signal.signal(signal.SIGINT, lambda *_: QTimer.singleShot(0, app.quit))
             try:
                 return app.exec()

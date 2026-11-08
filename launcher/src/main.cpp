@@ -22,7 +22,7 @@
 #include <cstdio>
 
 namespace {
-constexpr int kStartupTimeoutMs = 90000;
+constexpr int kStartupTimeoutMs = 180000;
 
 QString applicationRoot() {
     QDir candidate(QCoreApplication::applicationDirPath());
@@ -85,7 +85,7 @@ public:
         m_timeout.setInterval(kStartupTimeoutMs);
         connect(&m_timeout, &QTimer::timeout, this, [this]() {
             showError(QStringLiteral(
-                "TorProxy did not report that its main window was ready within 90 seconds."
+                "TorProxy did not report that its main window was ready within 180 seconds."
             ));
         });
 
@@ -220,7 +220,16 @@ private:
 
                 const QString status = message.value(QStringLiteral("status")).toString();
                 bool accepted = false;
-                if (status == QStringLiteral("ready")) {
+                if (status == QStringLiteral("starting")) {
+                    accepted = true;
+                    const QString detail = message.value(QStringLiteral("message")).toString();
+                    if (!detail.isEmpty()) {
+                        m_splash->setStatus(detail);
+                    }
+                    // Progress messages refresh the inactivity watchdog. A slow
+                    // but healthy cold start is not treated as a failed launch.
+                    m_timeout.start();
+                } else if (status == QStringLiteral("ready")) {
                     accepted = true;
                     onReady();
                 } else if (status == QStringLiteral("failed")) {

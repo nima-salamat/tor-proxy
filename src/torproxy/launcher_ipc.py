@@ -1,21 +1,57 @@
-"""Small authenticated IPC bridge used by the optional native startup launcher."""
+"""Small authenticated startup-status bridge used by the native launcher."""
 
 from __future__ import annotations
 
 import json
 import os
+import uuid
+from pathlib import Path
+
+
+def _write_status_file(path_value: str, token: str, status: str, message: str) -> bool:
+    """Atomically publish a tiny status record for the dependency-free Windows launcher."""
+    path = Path(path_value)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Hex keeps this wire format line-oriented and trivial to parse from Win32.
+        payload = f"{token}\n{status}\n{str(message or '').encode('utf-8').hex()}\n"
+        with temporary.open("x", encoding="ascii", newline="\n") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        return True
+    except OSError:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
 
 
 def notify_launcher(status: str, message: str = "") -> bool:
-    """Notify the native launcher that TorProxy is ready or failed to start.
+    """Notify the native launcher about startup progress, readiness, or failure.
 
     Direct Python launches have no launcher environment and are intentionally
-    unaffected. The socket name is random per attempt and the token prevents
-    unrelated same-user local clients from spoofing startup state.
+    unaffected. Windows uses an authenticated atomic status file so the
+    launcher does not need Qt or another IPC runtime. Linux keeps its existing
+    authenticated QLocalSocket channel.
     """
-    server_name = os.environ.get("TORPROXY_LAUNCHER_SERVER", "").strip()
+    if status not in {"starting", "ready", "failed"}:
+        return False
+
     token = os.environ.get("TORPROXY_LAUNCHER_TOKEN", "").strip()
-    if not server_name or not token or status not in {"ready", "failed"}:
+    if not token:
+        return False
+
+    status_file = os.environ.get("TORPROXY_LAUNCHER_STATUS_FILE", "").strip()
+    if status_file:
+        if _write_status_file(status_file, token, status, str(message or "")[:1800]):
+            return True
+
+    server_name = os.environ.get("TORPROXY_LAUNCHER_SERVER", "").strip()
+    if not server_name:
         return False
 
     try:
@@ -65,6 +101,5 @@ def notify_launcher(status: str, message: str = "") -> bool:
             except (RuntimeError, TypeError):
                 pass
     except Exception:
-        # Reporting is best-effort; a failed launcher channel must never stop
-        # the actual application from starting or running.
+        # Reporting is diagnostic only and must never prevent app startup.
         return False
