@@ -451,6 +451,11 @@ void updateMonitorLayout(State &s, UINT dpi) {
     const int y = monitorInfo.rcWork.top + (availableHeight - s.height) / 2;
     SetWindowPos(s.window, HWND_TOPMOST, x, y, s.width, s.height,
                  SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+    const int corner = static_cast<int>(std::lround(46.0f * s.scale));
+    HRGN roundedRegion = CreateRoundRectRgn(0, 0, s.width + 1, s.height + 1,
+                                             corner, corner);
+    if (roundedRegion && !SetWindowRgn(s.window, roundedRegion, TRUE))
+        DeleteObject(roundedRegion);
     InvalidateRect(s.window, nullptr, FALSE);
 }
 
