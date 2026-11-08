@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import faulthandler
 import logging
+import os
 import signal
 import sys
 from logging.handlers import RotatingFileHandler
@@ -24,19 +25,26 @@ if sys.platform.startswith("linux") and sys.argv[1:2] == ["--killswitch-helper"]
     from torproxy.firewall.linux_helper import main as killswitch_helper_main
     raise SystemExit(killswitch_helper_main(sys.argv[2:]))
 
-import portalocker
-import qdarkstyle
-from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication
-from qdarkstyle.dark.palette import DarkPalette
-from qdarkstyle.light.palette import LightPalette
+_STARTUP_STREAM = None
 
-from ui_.window.dialogs import QMessageBox
-from config import CONFIG
-from torproxy.paths import user_directories
-from ui import Window
-from utils import resource_path
+
+def configure_launcher_streams() -> None:
+    """Capture early Python startup errors for the native launcher, if present."""
+    global _STARTUP_STREAM
+    log_path = os.environ.get("TORPROXY_LAUNCHER_LOG", "").strip()
+    if not log_path:
+        return
+    try:
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+        _STARTUP_STREAM = Path(log_path).open("a", encoding="utf-8", buffering=1)
+        sys.stdout = _STARTUP_STREAM
+        sys.stderr = _STARTUP_STREAM
+    except OSError:
+        # Log redirection is diagnostic only and must not block application startup.
+        return
+
+
+configure_launcher_streams()
 
 LOGGER = logging.getLogger(__name__)
 _CRASH_LOG_HANDLE = None
@@ -48,13 +56,16 @@ def enable_crash_reporting() -> None:
     if _CRASH_LOG_HANDLE is not None:
         return
     try:
+        from torproxy.paths import user_directories
+
         directories = user_directories().ensure()
         handle = (directories.logs / "torproxy-crash.log").open("ab", buffering=0)
         faulthandler.enable(file=handle, all_threads=True)
         _CRASH_LOG_HANDLE = handle
     except Exception:
         # Crash reporting must never prevent TorProxy from starting.
-        sys.stderr.write("TorProxy: could not enable native crash diagnostics.\n")
+        if sys.stderr is not None:
+            sys.stderr.write("TorProxy: could not enable native crash diagnostics.\n")
 
 
 def _log_uncaught_exception(exc_type, exc_value, exc_traceback) -> None:
@@ -69,6 +80,9 @@ def _log_uncaught_exception(exc_type, exc_value, exc_traceback) -> None:
 
 
 def configure_logging() -> None:
+    from config import CONFIG
+    from torproxy.paths import user_directories
+
     directories = user_directories().ensure()
     level_name = str(CONFIG["log_level"] or "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)
@@ -89,6 +103,22 @@ def configure_logging() -> None:
 
 
 def main() -> int:
+    # Heavy imports happen only after the external native splash is already visible.
+    import portalocker
+    import qdarkstyle
+    from PySide6.QtCore import QTimer, Qt
+    from PySide6.QtGui import QIcon
+    from PySide6.QtWidgets import QApplication
+    from qdarkstyle.dark.palette import DarkPalette
+    from qdarkstyle.light.palette import LightPalette
+
+    from config import CONFIG
+    from torproxy.launcher_ipc import notify_launcher
+    from torproxy.paths import user_directories
+    from ui import Window
+    from ui_.window.dialogs import QMessageBox
+    from utils import resource_path
+
     enable_crash_reporting()
     # Preserve each display's actual DPI ratio when moving between monitors.
     QApplication.setHighDpiScaleFactorRoundingPolicy(
@@ -98,7 +128,9 @@ def main() -> int:
     try:
         CONFIG.load()
     except Exception as exc:
-        QMessageBox.critical(None, "TorProxy configuration error", str(exc))
+        message = f"Configuration error: {exc}"
+        if not notify_launcher("failed", message):
+            QMessageBox.critical(None, "TorProxy configuration error", str(exc))
         return 2
     configure_logging()
     app.setApplicationName("TorProxy")
@@ -118,6 +150,9 @@ def main() -> int:
             # restrictions are not needed for Tor operation and can interfere
             # with capture/restore behavior for frameless Qt windows.
             win.show()
+            # Process the initial show/paint events before closing the external splash.
+            app.processEvents()
+            notify_launcher("ready")
             signal.signal(signal.SIGINT, lambda *_: QTimer.singleShot(0, app.quit))
             try:
                 return app.exec()
@@ -127,7 +162,9 @@ def main() -> int:
                 except Exception:
                     LOGGER.exception("Error during application shutdown.")
     except portalocker.exceptions.LockException:
-        QMessageBox.information(None, "TorProxy is already running", "Close the existing TorProxy instance first.")
+        message = "TorProxy is already running. Close the existing instance first."
+        if not notify_launcher("failed", message):
+            QMessageBox.information(None, "TorProxy is already running", message)
         return 1
 
 

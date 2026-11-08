@@ -56,9 +56,9 @@ The matrix describes intended CI coverage, not a claim that every platform has b
 
 Portable builds are published on the [GitHub Releases page](https://github.com/nima-salamat/tor-proxy/releases). They include the Python runtime and application dependencies, so a separate Python installation is not needed.
 
-- **Windows x64, without Tor:** `TorProxy-windows-x64.zip`. Extract the complete `TorProxy` folder and launch `TorProxy.exe`; keep `_internal` beside the executable.
+- **Windows x64, without Tor:** `TorProxy-windows-x64.zip`. Extract the complete `TorProxy` folder and launch `TorProxyLauncher.exe`; keep `_internal` beside the launcher and `TorProxy.exe`.
 - **Windows x64, with Tor:** `TorProxy-windows-x64-with-tor-bundle.zip`. Includes one current, signature-verified Tor Expert Bundle and selects it automatically on a fresh install.
-- **Linux x86_64, without Tor:** `TorProxy-linux-x64.tar.gz`. Extract it and run `./TorProxy/TorProxy`; the archive preserves executable permissions.
+- **Linux x86_64, without Tor:** `TorProxy-linux-x64.tar.gz`. Extract it and run `./TorProxy/TorProxyLauncher`; the archive preserves executable permissions.
 - **Linux x86_64, with Tor:** `TorProxy-linux-x64-with-tor-bundle.tar.gz`. Includes one current, signature-verified Tor Expert Bundle and selects it automatically on a fresh install.
 - Linux builds are produced on Ubuntu 22.04 and target Ubuntu 22.04 or compatible newer glibc-based distributions; other distributions may need system Qt display/runtime libraries.
 - On minimal Linux installations, Qt may need system graphics/display libraries. The bundled Linux Tor executable also requires the system `libevent-2.1.so.7` runtime. On Ubuntu 22.04, install these with `sudo apt-get install libegl1 libgl1 libxcb-cursor0 libxkbcommon-x11-0 libevent-2.1-7`.
@@ -70,6 +70,14 @@ Portable builds are published on the [GitHub Releases page](https://github.com/n
 Pushing a version tag such as `v2.0.1` builds four portable packages (Windows/Linux, each with and without Tor) and publishes them with `SHA256SUMS.txt`. The release build discovers the current stable-first Tor version separately on each runner, chooses the first release that has that runner's exact x86_64 Expert Bundle and detached signature, and downloads only that one archive. Running **Build and release → Run workflow** from Actions builds and smoke-tests all package variants as workflow artifacts, without publishing a release.
 
 ## Install and run
+
+### Native startup launcher
+
+The portable Windows and Linux packages start through a small C++17/Qt 6 launcher. It displays an animated, frameless splash before starting the existing PyInstaller application, then waits for an authenticated local IPC message from Python after the main window has been shown and its first paint events have been processed. The launcher exits after that acknowledgement; the original `TorProxy.exe` / `TorProxy` process continues independently.
+
+The launcher does not replace or rename the main application executable. Running `TorProxy.exe` (Windows) or `TorProxy` (Linux) directly remains supported and bypasses the splash. Startup failures are shown in the splash with actions to retry, open the per-user startup log, or close. The IPC channel uses a per-launch random local socket name and token; no TCP port is opened.
+
+The launcher uses a separate Qt 6.8.3 runtime deployed beside the application. Its Qt license notices are included in `launcher-licenses/`. Linux packages still require the normal system graphics libraries documented above; the launcher ships its Qt libraries and platform plugins.
 
 ### Prerequisites
 
