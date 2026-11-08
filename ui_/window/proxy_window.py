@@ -807,18 +807,18 @@ class ProxyWindow(QWidget):
 
     def _run_kill_switch_recovery(self, *, emergency: bool = False) -> str:
         """Restore firewall connectivity without racing Tor startup or another policy change."""
+        tunnel_manager = getattr(self, "system_tunnel_manager", None)
+        if tunnel_manager is not None:
+            tunnel_state = tunnel_manager.status()
+            if tunnel_state.get("active") or not tunnel_state.get("verified", True):
+                raise KillSwitchError("Stop or reconcile the system-wide tunnel before recovering the Kill Switch.")
+
         with self._operation_lock:
             if self._connect_operation_busy or self.running or self._stopping:
                 raise KillSwitchError("Disconnect Tor before recovering the system firewall.")
             if self._killswitch_operation_active:
                 raise KillSwitchError("A Kill Switch operation is still running; recovery will be queued by Settings.")
             self._killswitch_operation_active = True
-
-        tunnel_manager = getattr(self, "system_tunnel_manager", None)
-        if tunnel_manager is not None:
-            tunnel_state = tunnel_manager.status()
-            if tunnel_state.get("active") or not tunnel_state.get("verified", True):
-                raise KillSwitchError("Stop or reconcile the system-wide tunnel before recovering the Kill Switch.")
         try:
             manager = getattr(self, "killswitch_manager", None)
             if manager is None:
