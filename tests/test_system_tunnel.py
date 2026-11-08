@@ -71,6 +71,7 @@ def test_windows_archive_extracts_only_allowlisted_regular_runtime_files(tmp_pat
     with zipfile.ZipFile(archive, "w") as bundle:
         bundle.writestr("sing-box-1.14.4-windows-amd64/sing-box.exe", b"engine")
         bundle.writestr("sing-box-1.14.4-windows-amd64/libcronet.dll", b"runtime")
+        bundle.writestr("sing-box-1.14.4-windows-amd64/wintun.dll", b"wintun runtime")
         bundle.writestr("sing-box-1.14.4-windows-amd64/LICENSE", b"GPL text")
         bundle.writestr("sing-box-1.14.4-windows-amd64/unexpected.txt", b"ignore")
     destination = tmp_path / "engine"
@@ -78,8 +79,9 @@ def test_windows_archive_extracts_only_allowlisted_regular_runtime_files(tmp_pat
 
     hashes = SystemTunnelManager._extract_zip_runtime(archive, destination, "sing-box.exe")
 
-    assert set(hashes) == {"sing-box.exe", "libcronet.dll", "LICENSE"}
+    assert set(hashes) == {"sing-box.exe", "libcronet.dll", "wintun.dll", "LICENSE"}
     assert (destination / "sing-box.exe").read_bytes() == b"engine"
+    assert (destination / "wintun.dll").read_bytes() == b"wintun runtime"
     assert not (destination / "unexpected.txt").exists()
 
 
@@ -145,3 +147,45 @@ def test_tunnel_stop_refuses_to_take_over_a_live_unmatched_pid(tmp_path, monkeyp
     with pytest.raises(SystemTunnelError, match="refused"):
         system_tunnel._helper_stop(state_path, "torproxy-tun")
     assert state_path.exists()
+
+
+def test_pinned_archive_hashes_all_runtime_files_not_only_the_executable(tmp_path):
+    archive = tmp_path / "sing-box.zip"
+    payloads = {
+        "sing-box-1.14.4-windows-amd64/sing-box.exe": b"engine",
+        "sing-box-1.14.4-windows-amd64/libcronet.dll": b"runtime",
+        "sing-box-1.14.4-windows-amd64/wintun.dll": b"wintun",
+        "sing-box-1.14.4-windows-amd64/LICENSE": b"license",
+    }
+    with zipfile.ZipFile(archive, "w") as bundle:
+        for name, data in payloads.items():
+            bundle.writestr(name, data)
+    hashes = SystemTunnelManager._archive_runtime_file_hashes(archive, "zip", "sing-box.exe")
+    assert set(hashes) == {"sing-box.exe", "libcronet.dll", "wintun.dll", "LICENSE"}
+    assert hashes["wintun.dll"] == hashlib.sha256(b"wintun").hexdigest()
+
+
+def test_install_state_rejects_extra_runtime_files_next_to_elevated_engine(tmp_path, monkeypatch):
+    manager = _manager(tmp_path)
+    manager.engine_dir.mkdir(parents=True)
+    manager.engine_path.write_bytes(b"engine")
+    manager.archive_path.write_bytes(b"archive")
+    engine_hash = hashlib.sha256(b"engine").hexdigest()
+    archive_hash = manager.platform_asset["sha256"]
+    manager.install_manifest.write_text(
+        json.dumps({
+            "version": system_tunnel.SING_BOX_VERSION,
+            "archive_sha256": archive_hash,
+            "files": {manager.engine_path.name: engine_hash},
+        }),
+        encoding="utf-8",
+    )
+    real_hash = system_tunnel._sha256
+    def fake_hash(path):
+        if Path(path) == manager.archive_path:
+            return archive_hash
+        return real_hash(Path(path))
+    monkeypatch.setattr(system_tunnel, "_sha256", fake_hash)
+    assert manager.is_installed() is True
+    (manager.engine_dir / "unexpected.dll").write_bytes(b"untrusted side-load")
+    assert manager.is_installed() is False
