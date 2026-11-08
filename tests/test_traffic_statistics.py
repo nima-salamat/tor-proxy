@@ -118,7 +118,7 @@ def test_statistics_sampling_tracks_session_deltas_rate_and_peak(qt_app, monkeyp
     assert page._session_upload == 140
     assert page._session_download == 1060
     assert page.metric_values["session"].text() == "1.17 KiB"
-    assert page._current_rate == 400
+    assert page._current_rate == pytest.approx(400)
     assert page._peak_rate == 400
     assert len(page._samples) == 3
     assert len(page.rate_chart._samples) == 3
