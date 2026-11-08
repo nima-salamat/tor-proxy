@@ -140,8 +140,8 @@ jobs:
           cmake -S launcher -B build/launcher -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" -DCMAKE_INSTALL_PREFIX="$deploy_root"
           cmake --build build/launcher --parallel 2
           cmake --install build/launcher
-          mkdir -p "$deploy_root/plugins/platforms"
-          cp "$QT_ROOT_DIR/plugins/platforms/libqoffscreen.so" "$deploy_root/plugins/platforms/"
+          mkdir -p "$deploy_root/launcher-runtime/bin/plugins/platforms"
+          cp "$QT_ROOT_DIR/plugins/platforms/libqoffscreen.so" "$deploy_root/launcher-runtime/bin/plugins/platforms/"
           cp -a "$deploy_root/." dist/TorProxy/
           if [ -d "$QT_ROOT_DIR/licenses" ]; then
             mkdir -p dist/TorProxy/launcher-licenses
