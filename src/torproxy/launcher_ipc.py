@@ -19,7 +19,7 @@ def notify_launcher(status: str, message: str = "") -> bool:
         return False
 
     try:
-        from PySide6.QtCore import QIODevice
+        from PySide6.QtCore import QEventLoop, QIODevice, QTimer
         from PySide6.QtNetwork import QLocalSocket
 
         socket = QLocalSocket()
@@ -33,9 +33,36 @@ def notify_launcher(status: str, message: str = "") -> bool:
             "message": str(message or "")[:1800],
         }
         encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        if socket.write(encoded + b"\n") < 0:
-            return False
-        return bool(socket.waitForBytesWritten(1200))
+        message = encoded + b"\n"
+        loop = QEventLoop()
+        timer = QTimer()
+        timer.setSingleShot(True)
+
+        def finish_after_write(_written=0):
+            if socket.bytesToWrite() == 0:
+                loop.quit()
+
+        def finish_after_error(_error):
+            loop.quit()
+
+        socket.bytesWritten.connect(finish_after_write)
+        socket.errorOccurred.connect(finish_after_error)
+        try:
+            if socket.write(message) != len(message):
+                return False
+            socket.flush()
+            if socket.bytesToWrite() > 0:
+                timer.timeout.connect(loop.quit)
+                timer.start(1200)
+                loop.exec(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+            return socket.bytesToWrite() == 0 and socket.isValid()
+        finally:
+            timer.stop()
+            try:
+                socket.bytesWritten.disconnect(finish_after_write)
+                socket.errorOccurred.disconnect(finish_after_error)
+            except (RuntimeError, TypeError):
+                pass
     except Exception:
         # Reporting is best-effort; a failed launcher channel must never stop
         # the actual application from starting or running.
