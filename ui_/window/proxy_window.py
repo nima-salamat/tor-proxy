@@ -647,6 +647,9 @@ class ProxyWindow(QWidget):
             self._update_proxy_mode_status()
 
     def _toggle(self):
+        if getattr(self, "_system_tunnel_busy", False):
+            self.logs_widget.update_log("Tor connect/disconnect is temporarily disabled while the system tunnel changes.")
+            return
         with self._operation_lock:
             if self._killswitch_operation_active:
                 QMessageBox.information(
@@ -997,7 +1000,10 @@ class ProxyWindow(QWidget):
 
     def _stop_services(self):
         if self._stopping:
-            return
+            return False
+        if getattr(self, "_system_tunnel_busy", False):
+            self.logs_widget.update_log("Disconnect was blocked because the system tunnel operation is still running.")
+            return False
         self._stopping = True
         self.connect_btn.set_disconnecting()
         self.btn_status.setText("DISCONNECTING…")

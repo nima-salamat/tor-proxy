@@ -163,7 +163,10 @@ class SystemTunnelManager:
     def _allowed_archive_files(self) -> set[str]:
         executable = str(self.platform_asset["executable"])
         companion = "libcronet.dll" if os.name == "nt" else "libcronet.so"
-        return {executable, companion, "LICENSE", "LICENSE.txt", "COPYING"}
+        runtime_files = {executable, companion, "LICENSE", "LICENSE.txt", "COPYING"}
+        if os.name == "nt":
+            runtime_files.add("wintun.dll")
+        return runtime_files
 
     @property
     def engine_sha256(self) -> str:
@@ -188,6 +191,7 @@ class SystemTunnelManager:
                 or not isinstance(files, dict)
                 or self.engine_path.name not in files
                 or not set(files).issubset(self._allowed_archive_files())
+                or self.engine_path.name not in files
             ):
                 self._install_state_cache = None
                 self._install_state_result = False
@@ -195,6 +199,14 @@ class SystemTunnelManager:
 
             paths = [self.install_manifest, self.archive_path]
             paths.extend(self.engine_dir / name for name in files)
+            actual_engine_files = {
+                path.name for path in self.engine_dir.iterdir()
+                if path.is_file() or path.is_symlink()
+            }
+            if actual_engine_files != set(files):
+                self._install_state_cache = None
+                self._install_state_result = False
+                return False
             signature: list[tuple[str, int, int]] = []
             for path in paths:
                 if path.is_symlink() or not path.is_file():
@@ -323,7 +335,7 @@ class SystemTunnelManager:
 
     @classmethod
     def _extract_zip_runtime(cls, archive: Path, destination: Path, filename: str) -> dict[str, str]:
-        allowed = {filename, "libcronet.dll", "LICENSE", "LICENSE.txt", "COPYING"}
+        allowed = {filename, "libcronet.dll", "wintun.dll", "LICENSE", "LICENSE.txt", "COPYING"}
         found_executable = 0
         hashes: dict[str, str] = {}
         with zipfile.ZipFile(archive) as bundle:
@@ -384,41 +396,78 @@ class SystemTunnelManager:
         return hashes
 
     @classmethod
-    def _archive_executable_sha256(cls, archive: Path, archive_type: str, filename: str) -> str:
-        """Hash the executable entry in the already-pinned archive without extracting it."""
-        digest = hashlib.sha256()
-        count = 0
+    @classmethod
+    def _archive_runtime_file_hashes(
+        cls, archive: Path, archive_type: str, filename: str
+    ) -> dict[str, str]:
+        """Hash all supported runtime/license files inside a pinned archive."""
+        if archive_type == "zip":
+            allowed = {filename, "libcronet.dll", "wintun.dll", "LICENSE", "LICENSE.txt", "COPYING"}
+        elif archive_type == "tar.gz":
+            allowed = {filename, "libcronet.so", "LICENSE", "LICENSE.txt", "COPYING"}
+        else:
+            raise SystemTunnelError("Unsupported pinned sing-box archive type.")
+        hashes: dict[str, str] = {}
+        executable_count = 0
+
+        def consume(name: str, source, *, size: int) -> None:
+            nonlocal executable_count
+            if name not in allowed:
+                return
+            if size <= 0 or size > (100 * 1024 * 1024 if name == filename else 32 * 1024 * 1024):
+                raise SystemTunnelError(f"The pinned archive member {name} has an unsafe size.")
+            if name in hashes:
+                raise SystemTunnelError(f"The pinned archive contains duplicate runtime file {name}.")
+            digest = hashlib.sha256()
+            total = 0
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                total += len(chunk)
+                if total > size or total > (100 * 1024 * 1024 if name == filename else 32 * 1024 * 1024):
+                    raise SystemTunnelError(f"The pinned archive member {name} exceeded its declared size.")
+                digest.update(chunk)
+            if total != size:
+                raise SystemTunnelError(f"The pinned archive member {name} was truncated.")
+            hashes[name] = digest.hexdigest()
+            if name == filename:
+                executable_count += 1
+
         if archive_type == "zip":
             with zipfile.ZipFile(archive) as bundle:
                 for info in bundle.infolist():
-                    if info.is_dir() or cls._safe_archive_member(info.filename).name != filename:
+                    if info.is_dir():
+                        continue
+                    name = cls._safe_archive_member(info.filename).name
+                    if name not in allowed:
                         continue
                     mode = (info.external_attr >> 16) & 0o170000
-                    if mode not in {0, stat.S_IFREG} or info.file_size <= 0:
-                        raise SystemTunnelError("The pinned archive contains an unsafe executable entry.")
-                    count += 1
+                    if mode not in {0, stat.S_IFREG}:
+                        raise SystemTunnelError(f"The pinned archive member {name} is not a regular file.")
                     with bundle.open(info) as source:
-                        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                            digest.update(chunk)
+                        consume(name, source, size=info.file_size)
         elif archive_type == "tar.gz":
             with tarfile.open(archive, "r:gz") as bundle:
                 for item in bundle.getmembers():
-                    if cls._safe_archive_member(item.name).name != filename:
+                    name = cls._safe_archive_member(item.name).name
+                    if name not in allowed:
                         continue
                     if not item.isfile() or item.issym() or item.islnk():
-                        raise SystemTunnelError("The pinned archive contains an unsafe executable entry.")
-                    count += 1
+                        raise SystemTunnelError(f"The pinned archive member {name} is not a regular file.")
                     source = bundle.extractfile(item)
                     if source is None:
-                        raise SystemTunnelError("The pinned archive executable could not be read.")
+                        raise SystemTunnelError(f"The pinned archive member {name} could not be read.")
                     with source:
-                        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                            digest.update(chunk)
+                        consume(name, source, size=item.size)
         else:
             raise SystemTunnelError("Unsupported pinned sing-box archive type.")
-        if count != 1:
-            raise SystemTunnelError("The pinned sing-box archive must contain exactly one engine executable.")
-        return digest.hexdigest()
+
+        if executable_count != 1:
+            raise SystemTunnelError("The pinned archive must contain exactly one engine executable.")
+        return hashes
+
+    @classmethod
+    def _archive_executable_sha256(cls, archive: Path, archive_type: str, filename: str) -> str:
+        """Compatibility helper for tests and diagnostics."""
+        return cls._archive_runtime_file_hashes(archive, archive_type, filename)[filename]
 
     def build_config(
         self,
@@ -721,13 +770,21 @@ def _helper_start(args: Any) -> dict[str, Any]:
         raise SystemTunnelError("The privileged helper rejected an unexpected sing-box archive path.")
     if _sha256(archive) != expected_asset["sha256"]:
         raise SystemTunnelError("The privileged helper rejected the sing-box archive checksum.")
-    archive_engine_hash = SystemTunnelManager._archive_executable_sha256(
+    archive_files = SystemTunnelManager._archive_runtime_file_hashes(
         archive, expected_asset["archive"], expected_executable
     )
+    archive_engine_hash = archive_files[expected_executable]
     if not engine.is_file() or engine.is_symlink() or _sha256(engine) != archive_engine_hash:
         raise SystemTunnelError("The privileged helper rejected the engine: it does not match the pinned archive.")
     if args.sha256 != archive_engine_hash:
         raise SystemTunnelError("The privileged helper rejected the engine SHA-256 argument.")
+    actual_engine_files = {path.name for path in engine.parent.iterdir() if path.is_file() or path.is_symlink()}
+    if actual_engine_files != set(archive_files):
+        raise SystemTunnelError("The privileged helper rejected extra or missing runtime files beside sing-box.")
+    for name, expected_hash in archive_files.items():
+        runtime_file = engine.parent / name
+        if runtime_file.is_symlink() or not runtime_file.is_file() or _sha256(runtime_file) != expected_hash:
+            raise SystemTunnelError(f"The privileged helper rejected modified runtime file {name}.")
     config = _read_json(config_path)
     if not isinstance(config, dict) or set(config) != {"log", "dns", "inbounds", "outbounds", "route"}:
         raise SystemTunnelError("The privileged helper rejected unexpected top-level tunnel configuration.")
@@ -862,19 +919,22 @@ def _helper_start(args: Any) -> dict[str, Any]:
                 tail = ""
             raise SystemTunnelError(f"sing-box exited during TUN startup ({code}). {tail.strip()}")
         if _interface_exists(args.interface):
+            if process.poll() is not None:
+                raise SystemTunnelError("sing-box exited while its TUN interface was being created.")
             state_path.parent.mkdir(parents=True, exist_ok=True)
-            _atomic_json(
-                state_path,
-                {
-                    "pid": process.pid,
-                    "create_time": psutil.Process(process.pid).create_time(),
-                    "engine": str(engine),
-                    "config": str(config_path),
-                    "interface": args.interface,
-                    "sha256": args.sha256,
-                },
-                mode=0o644,
-            )
+            record = {
+                "pid": process.pid,
+                "create_time": psutil.Process(process.pid).create_time(),
+                "engine": str(engine),
+                "config": str(config_path),
+                "interface": args.interface,
+                "sha256": args.sha256,
+            }
+            _atomic_json(state_path, record, mode=0o644)
+            time.sleep(0.2)
+            if process.poll() is not None or _process_matches(record) is None:
+                state_path.unlink(missing_ok=True)
+                raise SystemTunnelError("sing-box did not remain healthy after creating its TUN interface.")
             return {"ok": True, "active": True, "pid": process.pid, "detail": "System TUN interface is active."}
         time.sleep(0.25)
 
