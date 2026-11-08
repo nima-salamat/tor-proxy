@@ -18,14 +18,16 @@ def _listing(*names: str) -> BeautifulSoup:
     return BeautifulSoup(f"<html><body>{links}</body></html>", "html.parser")
 
 
-def test_version_parser_recognizes_stable_and_alpha():
+def test_version_parser_recognizes_two_and_three_component_stable_and_alpha():
+    assert updater.parse_tor_version("16.0") == (16, 0, 0, "stable", 0)
     assert updater.parse_tor_version("15.0.26") == (15, 0, 26, "stable", 0)
     assert updater.parse_tor_version("16.0a14") == (16, 0, 0, "alpha", 14)
+    assert updater.tor_version_channel("16.0").startswith("Stable")
     assert updater.tor_version_channel("16.0a14").startswith("Alpha")
 
 
 @pytest.mark.parametrize("name", [
-    "", "latest", "15.0", "16.0b3", "../16.0a14", "15.0.20/evil",
+    "", "latest", "15.0b1", "16.0b3", "../16.0a14", "15.0.20/evil",
     "15.0.26.tar.gz", "16.0a", "016.0a14",
 ])
 def test_version_parser_rejects_unrecognized_names(name):
@@ -34,13 +36,14 @@ def test_version_parser_rejects_unrecognized_names(name):
 
 
 def test_release_sorting_is_numeric_and_stables_are_prioritized():
-    versions = ["15.0.9", "15.0.25", "15.0.26", "16.0a14", "15.0.20"]
+    versions = ["15.0.9", "15.0.25", "15.0.26", "16.0a14", "15.0.20", "16.0"]
     assert sorted(versions, key=updater.tor_version_sort_key, reverse=True) == [
-        "15.0.26", "15.0.25", "15.0.20", "15.0.9", "16.0a14"
+        "16.0", "15.0.26", "15.0.25", "15.0.20", "15.0.9", "16.0a14"
     ]
 
 
 @pytest.mark.parametrize(("filename", "expected"), [
+    ("tor-expert-bundle-windows-x86_64-16.0.tar.gz", "16.0"),
     ("tor-expert-bundle-windows-x86_64-16.0a14.tar.gz", "16.0a14"),
     ("tor-expert-bundle-linux-x86_64-15.0.26.tar.gz", "15.0.26"),
 ])
@@ -57,11 +60,11 @@ def test_version_extraction_rejects_wrong_artifact():
 def test_release_directory_discovery_includes_alpha_and_does_not_truncate(monkeypatch):
     monkeypatch.setattr(
         updater, "_fetch_listing",
-        lambda _url, *_args, **_kwargs: _listing("15.0.20/", "15.0.25/", "15.0.26/", "16.0a14/",
-                              "not-a-version/", "../", "tor-browser-16.0a14.exe"),
+        lambda _url, *_args, **_kwargs: _listing("15.0.20/", "15.0.25/", "15.0.26/", "16.0/",
+                              "16.0a14/", "not-a-version/", "../", "tor-browser-16.0a14.exe"),
     )
     assert updater.get_tor_versions() == [
-        "15.0.26/", "15.0.25/", "15.0.20/", "16.0a14/"
+        "16.0/", "15.0.26/", "15.0.25/", "15.0.20/", "16.0a14/"
     ]
 
 
@@ -619,3 +622,62 @@ def test_download_file_never_falls_back_after_signature_failure(monkeypatch, tmp
     with pytest.raises(BundleVerificationError, match="signature is missing or invalid"):
         updater.download_file(archive_name, "16.0.0", allow_direct=True)
     assert calls == [True]
+
+
+def test_frozen_app_auto_selects_verified_packaged_tor_bundle(tmp_path, monkeypatch):
+    import hashlib
+    import json
+    import sys
+
+    import updater
+    import tor
+
+    platform_name = updater._platform_name()
+    architecture = updater._architecture_name()
+    app_root = tmp_path / "portable"
+    executable = app_root / ("TorProxy.exe" if platform_name == "windows" else "TorProxy")
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"frozen app")
+    user_data = tmp_path / "user-data" / "bundles"
+    user_data.mkdir(parents=True)
+
+    bundle = app_root / "bundles" / (
+        f"tor-expert-bundle-{platform_name}-{architecture}-16.0"
+    )
+    tor_executable = bundle / "tor" / ("tor.exe" if platform_name == "windows" else "tor")
+    _make_executable(tor_executable)
+    archive = bundle.with_name(bundle.name + ".tar.gz")
+    archive.write_bytes(b"verified release archive")
+    archive.with_name(archive.name + ".asc").write_text(
+        "detached signature sidecar", encoding="utf-8"
+    )
+    marker = {
+        "signature_verified": True,
+        "verification_method": "openpgp",
+        "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+    }
+    (bundle / ".torproxy-verified.json").write_text(
+        json.dumps(marker), encoding="utf-8"
+    )
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(executable))
+    monkeypatch.setattr(updater, "BUNDLE_DIR", str(user_data))
+    monkeypatch.setattr(updater, "resource_path", lambda _path: str(user_data))
+    monkeypatch.setattr(tor, "BUNDLE_DIR", str(user_data))
+    monkeypatch.setattr(tor, "resource_path", lambda _path: str(user_data))
+
+    resolved, resolved_root = tor._find_executable(None)
+
+    assert resolved == tor_executable.resolve()
+    assert resolved_root == bundle.resolve()
+
+
+def test_packaged_bundle_discovery_is_disabled_for_source_runs(tmp_path, monkeypatch):
+    import sys
+
+    import updater
+
+    monkeypatch.setattr(sys, "frozen", False, raising=False)
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "python.exe"))
+    assert updater.get_packaged_bundles() == []

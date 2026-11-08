@@ -7,6 +7,7 @@ import os
 import platform
 import re
 import shutil
+import sys
 import uuid
 from pathlib import Path
 from threading import Event
@@ -33,7 +34,7 @@ REQUEST_TIMEOUT = (8.0, 20.0)
 
 # Tor currently publishes stable versions as X.Y.Z and alpha releases as X.YaN.
 # A future naming convention must be added deliberately rather than accepted generically.
-STABLE_VERSION = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+STABLE_VERSION = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\.(0|[1-9]\d*))?$")
 ALPHA_VERSION = re.compile(
     r"^(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\.(0|[1-9]\d*))?a(0|[1-9]\d*)$"
 )
@@ -48,8 +49,8 @@ def parse_tor_version(version: str) -> tuple[int, int, int, str, int]:
     value = str(version).strip().strip("/")
     stable = STABLE_VERSION.fullmatch(value)
     if stable:
-        major, minor, patch = (int(part) for part in stable.groups())
-        return major, minor, patch, "stable", 0
+        major, minor, patch = stable.groups()
+        return int(major), int(minor), int(patch or 0), "stable", 0
     alpha = ALPHA_VERSION.fullmatch(value)
     if alpha:
         major, minor, patch, alpha_number = alpha.groups()
@@ -273,7 +274,7 @@ def get_bundle_links(
 
 def get_version_by_bundle(filename: str, with_slash: bool = False) -> str:
     name = Path(filename).name
-    match = re.fullmatch(r"tor-expert-bundle-(?:windows|linux)-(?:x86_64|i686)-((?:\d+\.\d+\.\d+)|(?:\d+\.\d+(?:\.\d+)?a\d+))\.tar\.gz", name)
+    match = re.fullmatch(r"tor-expert-bundle-(?:windows|linux)-(?:x86_64|i686)-((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*))?(?:a(?:0|[1-9]\d*))?)\.tar\.gz", name)
     if not match:
         raise ValueError("Not a supported Tor Expert Bundle filename: {}".format(name))
     version = match.group(1)
@@ -505,11 +506,29 @@ def check_bundle_compatibility(filename: str) -> bool:
 
 
 def get_own_bundles() -> list[str]:
+    """Return verified bundles installed in the user's writable data directory."""
     root = Path(resource_path(BUNDLE_DIR))
     if not root.is_dir():
         return []
     return [
         str(path) for path in sorted(root.glob("tor-expert-bundle-*"))
+        if path.is_dir() and check_bundle_compatibility(str(path))
+    ]
+
+
+def get_packaged_bundles() -> list[str]:
+    """Return verified, read-only bundles shipped next to a frozen application."""
+    if not getattr(sys, "frozen", False):
+        return []
+    try:
+        root = Path(sys.executable).resolve().parent / "bundles"
+    except (OSError, RuntimeError):
+        return []
+    if not root.is_dir():
+        return []
+    return [
+        str(path.resolve())
+        for path in sorted(root.glob("tor-expert-bundle-*"))
         if path.is_dir() and check_bundle_compatibility(str(path))
     ]
 
