@@ -573,6 +573,12 @@ class SystemTunnelManager:
     def status(self) -> dict[str, Any]:
         state = _read_json(self.process_state_path)
         if not state:
+            if _interface_exists(self.interface_name):
+                return {
+                    "active": False,
+                    "verified": False,
+                    "detail": f"An untracked {self.interface_name} adapter exists; refusing to assume it is safe to reuse.",
+                }
             return {"active": False, "verified": True, "detail": "System tunnel is stopped."}
         process = _process_matches(state)
         if process is None:
@@ -580,6 +586,13 @@ class SystemTunnelManager:
                 "active": False,
                 "verified": False,
                 "detail": "A stale or unverified tunnel process record exists; use Stop to reconcile it.",
+            }
+        if not _interface_exists(self.interface_name):
+            return {
+                "active": False,
+                "verified": False,
+                "pid": process.pid,
+                "detail": "The sing-box process is alive but its TUN interface is missing; use Stop to reconcile it.",
             }
         return {
             "active": True,
@@ -951,7 +964,12 @@ def _helper_start(args: Any) -> dict[str, Any]:
 def _helper_stop(state_path: Path, interface_name: str) -> dict[str, Any]:
     state = _read_json(state_path)
     if not state:
-        return {"ok": True, "active": False, "detail": "No system tunnel process is recorded."}
+        if _interface_exists(interface_name):
+            raise SystemTunnelError(
+                f"The {interface_name} interface exists without a verified sing-box process record. "
+                "The helper refused to claim that the system routes were restored."
+            )
+        return {"ok": True, "active": False, "detail": "No system tunnel process or TUN interface is recorded."}
     process = _process_matches(state)
     if process is None:
         try:
@@ -960,6 +978,11 @@ def _helper_stop(state_path: Path, interface_name: str) -> dict[str, Any]:
             saved_pid = 0
         if saved_pid <= 0 or psutil.pid_exists(saved_pid):
             raise SystemTunnelError("The saved tunnel PID still identifies another process; refusing to terminate it.")
+        if _interface_exists(interface_name):
+            raise SystemTunnelError(
+                f"The {interface_name} adapter remains after its process exited. "
+                "The helper retained the stale record instead of claiming that routes were restored."
+            )
         state_path.unlink(missing_ok=True)
         return {"ok": True, "active": False, "detail": "Removed a stale tunnel record; its process has already exited."}
     try:
@@ -974,6 +997,14 @@ def _helper_stop(state_path: Path, interface_name: str) -> dict[str, Any]:
         process.wait(timeout=5)
     except psutil.NoSuchProcess:
         pass
+    deadline = time.monotonic() + 5.0
+    while _interface_exists(interface_name) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    if _interface_exists(interface_name):
+        raise SystemTunnelError(
+            f"sing-box stopped, but the {interface_name} adapter is still present. "
+            "TorProxy retained the process record and Kill Switch so the adapter is not treated as a safe disconnect."
+        )
     state_path.unlink(missing_ok=True)
     return {"ok": True, "active": False, "detail": "System tunnel stopped; sing-box released its TUN routes."}
 

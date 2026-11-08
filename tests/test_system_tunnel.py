@@ -189,3 +189,33 @@ def test_install_state_rejects_extra_runtime_files_next_to_elevated_engine(tmp_p
     assert manager.is_installed() is True
     (manager.engine_dir / "unexpected.dll").write_bytes(b"untrusted side-load")
     assert manager.is_installed() is False
+
+
+def test_status_flags_an_untracked_tun_interface_as_unverified(tmp_path, monkeypatch):
+    manager = _manager(tmp_path)
+    monkeypatch.setattr(system_tunnel, "_interface_exists", lambda _name: True)
+
+    status = manager.status()
+
+    assert status["active"] is False
+    assert status["verified"] is False
+    assert "untracked" in status["detail"]
+
+
+def test_stop_refuses_to_claim_success_when_an_untracked_tun_interface_remains(tmp_path, monkeypatch):
+    state_path = tmp_path / "tunnel-state.json"
+    monkeypatch.setattr(system_tunnel, "_interface_exists", lambda _name: True)
+
+    with pytest.raises(SystemTunnelError, match="unverified sing-box process record"):
+        system_tunnel._helper_stop(state_path, "torproxy-tun")
+
+
+def test_stop_refuses_to_clear_a_stale_process_record_when_tun_adapter_remains(tmp_path, monkeypatch):
+    state_path = tmp_path / "tunnel-state.json"
+    state_path.write_text(json.dumps({"pid": 2_000_000_000}), encoding="utf-8")
+    monkeypatch.setattr(system_tunnel.psutil, "pid_exists", lambda _pid: False)
+    monkeypatch.setattr(system_tunnel, "_interface_exists", lambda _name: True)
+
+    with pytest.raises(SystemTunnelError, match="adapter remains"):
+        system_tunnel._helper_stop(state_path, "torproxy-tun")
+    assert state_path.exists()
