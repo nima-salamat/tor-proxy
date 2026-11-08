@@ -80,6 +80,26 @@ def test_configured_gpg_executable_is_discovered_and_smoke_tested(tmp_path, monk
     assert bundle_module._find_gpg_executable() == candidate.resolve()
 
 
+def test_msys_gpg_paths_are_converted_to_posix(tmp_path, monkeypatch):
+    gpg = tmp_path / "gpg.exe"
+    cygpath = tmp_path / "cygpath.exe"
+    gpg.write_bytes(b"stub")
+    cygpath.write_bytes(b"stub")
+    calls = []
+
+    def convert(command, **_kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout="/d/a/work/temp/torproxy-gpg", stderr="")
+
+    monkeypatch.setattr(bundle_module.subprocess, "run", convert)
+    result = bundle_module._gpg_compatible_path(
+        tmp_path / "torproxy-gpg", gpg
+    )
+
+    assert result == "/d/a/work/temp/torproxy-gpg"
+    assert calls == [[str(cygpath), "-u", str((tmp_path / "torproxy-gpg").resolve())]]
+
+
 def test_valid_detached_signature_requires_pinned_key_and_validsig(tmp_path, monkeypatch):
     archive, signature = _configure_gpg_mocks(monkeypatch, tmp_path)
     assert bundle_module.verify_tor_signature(archive, signature) is None

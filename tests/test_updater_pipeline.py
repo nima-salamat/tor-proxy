@@ -18,14 +18,16 @@ def _listing(*names: str) -> BeautifulSoup:
     return BeautifulSoup(f"<html><body>{links}</body></html>", "html.parser")
 
 
-def test_version_parser_recognizes_stable_and_alpha():
+def test_version_parser_recognizes_two_and_three_component_stable_and_alpha():
+    assert updater.parse_tor_version("16.0") == (16, 0, 0, "stable", 0)
     assert updater.parse_tor_version("15.0.26") == (15, 0, 26, "stable", 0)
     assert updater.parse_tor_version("16.0a14") == (16, 0, 0, "alpha", 14)
+    assert updater.tor_version_channel("16.0").startswith("Stable")
     assert updater.tor_version_channel("16.0a14").startswith("Alpha")
 
 
 @pytest.mark.parametrize("name", [
-    "", "latest", "15.0", "16.0b3", "../16.0a14", "15.0.20/evil",
+    "", "latest", "15.0b1", "16.0b3", "../16.0a14", "15.0.20/evil",
     "15.0.26.tar.gz", "16.0a", "016.0a14",
 ])
 def test_version_parser_rejects_unrecognized_names(name):
@@ -34,13 +36,14 @@ def test_version_parser_rejects_unrecognized_names(name):
 
 
 def test_release_sorting_is_numeric_and_stables_are_prioritized():
-    versions = ["15.0.9", "15.0.25", "15.0.26", "16.0a14", "15.0.20"]
+    versions = ["15.0.9", "15.0.25", "15.0.26", "16.0a14", "15.0.20", "16.0"]
     assert sorted(versions, key=updater.tor_version_sort_key, reverse=True) == [
-        "15.0.26", "15.0.25", "15.0.20", "15.0.9", "16.0a14"
+        "16.0", "15.0.26", "15.0.25", "15.0.20", "15.0.9", "16.0a14"
     ]
 
 
 @pytest.mark.parametrize(("filename", "expected"), [
+    ("tor-expert-bundle-windows-x86_64-16.0.tar.gz", "16.0"),
     ("tor-expert-bundle-windows-x86_64-16.0a14.tar.gz", "16.0a14"),
     ("tor-expert-bundle-linux-x86_64-15.0.26.tar.gz", "15.0.26"),
 ])
@@ -57,11 +60,11 @@ def test_version_extraction_rejects_wrong_artifact():
 def test_release_directory_discovery_includes_alpha_and_does_not_truncate(monkeypatch):
     monkeypatch.setattr(
         updater, "_fetch_listing",
-        lambda _url, *_args, **_kwargs: _listing("15.0.20/", "15.0.25/", "15.0.26/", "16.0a14/",
-                              "not-a-version/", "../", "tor-browser-16.0a14.exe"),
+        lambda _url, *_args, **_kwargs: _listing("15.0.20/", "15.0.25/", "15.0.26/", "16.0/",
+                              "16.0a14/", "not-a-version/", "../", "tor-browser-16.0a14.exe"),
     )
     assert updater.get_tor_versions() == [
-        "15.0.26/", "15.0.25/", "15.0.20/", "16.0a14/"
+        "16.0/", "15.0.26/", "15.0.25/", "15.0.20/", "16.0a14/"
     ]
 
 

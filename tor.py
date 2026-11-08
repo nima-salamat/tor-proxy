@@ -33,11 +33,19 @@ def _bundle_root_for_path(path: Path, managed_root: Path) -> Path | None:
 
 
 def _verified_managed_bundles(managed_root: Path) -> list[Path]:
-    """List managed bundles whose marker, archive digest, executable and platform pass checks."""
+    """List verified user-installed and application-packaged Tor bundles."""
     try:
-        from updater import get_own_bundles, get_version_by_bundle, tor_version_sort_key
+        from updater import (
+            get_own_bundles,
+            get_packaged_bundles,
+            get_version_by_bundle,
+            tor_version_sort_key,
+        )
 
-        paths = [Path(item).resolve() for item in get_own_bundles()]
+        paths = list(dict.fromkeys(
+            Path(item).resolve()
+            for item in (*get_own_bundles(), *get_packaged_bundles())
+        ))
         return sorted(
             paths,
             key=lambda item: tor_version_sort_key(get_version_by_bundle(item.name + ".tar.gz")),

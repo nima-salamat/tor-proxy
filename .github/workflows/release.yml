@@ -6,6 +6,9 @@ on:
       - "main"
     tags:
       - "v*"
+  pull_request:
+    branches:
+      - "main"
   workflow_dispatch:
 
 permissions:
@@ -13,12 +16,13 @@ permissions:
 
 concurrency:
   group: torproxy-release-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build:
     name: Build ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -27,10 +31,12 @@ jobs:
             label: Windows x64
             target: windows
             archive: TorProxy-windows-x64.zip
+            bundle_archive: TorProxy-windows-x64-with-tor-bundle.zip
           - os: ubuntu-22.04
             label: Linux x64
             target: linux
             archive: TorProxy-linux-x64.tar.gz
+            bundle_archive: TorProxy-linux-x64-with-tor-bundle.tar.gz
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -41,11 +47,46 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Install Linux Qt runtime libraries
+      - name: Prepare GnuPG for signature verification on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # GitHub's Windows image already ships GnuPG with Git for Windows.
+          # Detached-signature verification uses only the public key; it does
+          # not require starting gpg-agent (which is broken in this runner's
+          # Git-for-Windows gpgconf environment).
+          $candidates = @(
+            (Join-Path $env:ProgramFiles "GnuPG\bin\gpg.exe"),
+            "C:\Program Files (x86)\GnuPG\bin\gpg.exe",
+            (Join-Path $env:ProgramFiles "Git\usr\bin\gpg.exe"),
+            "C:\Program Files (x86)\Git\usr\bin\gpg.exe",
+            (Join-Path $env:LOCALAPPDATA "Programs\GnuPG\bin\gpg.exe")
+          )
+          $command = Get-Command gpg.exe -ErrorAction SilentlyContinue
+          $gpg = if ($command) { $command.Source } else { $null }
+          if (-not $gpg) {
+            $gpg = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          }
+          if (-not $gpg) {
+            throw "No GnuPG executable is available on this Windows runner."
+          }
+
+          $gpgDirectory = Split-Path -Parent $gpg
+          $env:PATH = "$gpgDirectory;$env:PATH"
+
+          & $gpg --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "The runner's GnuPG executable failed its --version check."
+          }
+
+          "TORPROXY_GPG_EXECUTABLE=$gpg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "$gpgDirectory" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install Linux Qt runtime libraries and GnuPG
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libegl1 libgl1 libglib2.0-0 libdbus-1-3 libxcb-cursor0 libxkbcommon-x11-0
+          sudo apt-get install -y gnupg libegl1 libgl1 libglib2.0-0 libdbus-1-3 libxcb-cursor0 libxkbcommon-x11-0 libevent-2.1-7
 
       - name: Install application, tests, and packager
         run: |
@@ -59,36 +100,69 @@ jobs:
           ruff check src/torproxy tests scripts --select E,F,UP --ignore E501
           pytest --cov=torproxy.host_rules --cov=torproxy.ip_check --cov-report=term-missing --cov-fail-under=75
 
+      - name: Download and verify the newest supported Tor Expert Bundle
+        run: python scripts/prepare_release_bundle.py --output-dir release-bundle
+
       - name: Build one-directory application
         run: python -m PyInstaller --noconfirm --clean packaging/torproxy.spec
 
-      - name: Smoke-test frozen Windows app
+      - name: Smoke-test frozen application without Tor
         if: runner.os == 'Windows'
         run: python scripts/package_smoke_test.py dist/TorProxy/TorProxy.exe
 
-      - name: Smoke-test frozen Linux app
+      - name: Smoke-test frozen application without Tor
         if: runner.os == 'Linux'
         run: python scripts/package_smoke_test.py dist/TorProxy/TorProxy
 
-      - name: Create Windows portable archive
+      - name: Create Windows package without Tor
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive -Path "dist/TorProxy" -DestinationPath "TorProxy-windows-x64.zip" -CompressionLevel Optimal -Force
-          Get-Item "TorProxy-windows-x64.zip" | Select-Object Name, Length
+          Compress-Archive -Path "dist/TorProxy" -DestinationPath "${{ matrix.archive }}" -CompressionLevel Optimal -Force
+          Get-Item "${{ matrix.archive }}" | Select-Object Name, Length
 
-      - name: Create Linux portable archive
+      - name: Create Linux package without Tor
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          tar -cf - -C dist TorProxy | gzip -9 > TorProxy-linux-x64.tar.gz
-          ls -lh TorProxy-linux-x64.tar.gz
+          tar -cf - -C dist TorProxy | gzip -9 > "${{ matrix.archive }}"
+          ls -lh "${{ matrix.archive }}"
 
-      - name: Upload portable archive
+      - name: Assemble and smoke-test Windows package with Tor
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $stageRoot = Join-Path $env:RUNNER_TEMP "torproxy-with-bundle"
+          $bundleDestination = Join-Path $stageRoot "TorProxy\bundles"
+          if (Test-Path $stageRoot) { Remove-Item $stageRoot -Recurse -Force }
+          New-Item -ItemType Directory -Path $stageRoot | Out-Null
+          Copy-Item -Path "dist/TorProxy" -Destination $stageRoot -Recurse
+          New-Item -ItemType Directory -Path $bundleDestination -Force | Out-Null
+          Copy-Item -Path "release-bundle/bundles/*" -Destination $bundleDestination -Recurse
+          python scripts/package_bundle_smoke_test.py (Join-Path $stageRoot "TorProxy\TorProxy.exe")
+          Compress-Archive -Path (Join-Path $stageRoot "TorProxy") -DestinationPath "${{ matrix.bundle_archive }}" -CompressionLevel Optimal -Force
+          Get-Item "${{ matrix.bundle_archive }}" | Select-Object Name, Length
+
+      - name: Assemble and smoke-test Linux package with Tor
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          stage_root="$RUNNER_TEMP/torproxy-with-bundle"
+          rm -rf "$stage_root"
+          mkdir -p "$stage_root/TorProxy/bundles"
+          cp -a dist/TorProxy/. "$stage_root/TorProxy/"
+          cp -a release-bundle/bundles/. "$stage_root/TorProxy/bundles/"
+          python scripts/package_bundle_smoke_test.py "$stage_root/TorProxy/TorProxy"
+          tar -czf "${{ matrix.bundle_archive }}" -C "$stage_root" TorProxy
+          ls -lh "${{ matrix.bundle_archive }}"
+
+      - name: Upload portable archives
         uses: actions/upload-artifact@v4
         with:
           name: torproxy-package-${{ matrix.target }}
-          path: ${{ matrix.archive }}
+          path: |
+            ${{ matrix.archive }}
+            ${{ matrix.bundle_archive }}
           if-no-files-found: error
           retention-days: 14
 
@@ -109,7 +183,7 @@ jobs:
       - name: Generate release checksums
         shell: bash
         run: |
-          sha256sum TorProxy-windows-x64.zip TorProxy-linux-x64.tar.gz > SHA256SUMS.txt
+          sha256sum TorProxy-windows-x64.zip TorProxy-windows-x64-with-tor-bundle.zip TorProxy-linux-x64.tar.gz TorProxy-linux-x64-with-tor-bundle.tar.gz > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: Publish release assets
@@ -119,7 +193,9 @@ jobs:
           target_commitish: ${{ github.sha }}
           files: |
             TorProxy-windows-x64.zip
+            TorProxy-windows-x64-with-tor-bundle.zip
             TorProxy-linux-x64.tar.gz
+            TorProxy-linux-x64-with-tor-bundle.tar.gz
             SHA256SUMS.txt
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
