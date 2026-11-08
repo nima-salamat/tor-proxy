@@ -131,7 +131,9 @@ jobs:
           $deployRoot = Join-Path $env:RUNNER_TEMP "torproxy-launcher-deploy"
           cmake -S launcher -B build/launcher -DCMAKE_BUILD_TYPE=Release "-DCMAKE_INSTALL_PREFIX=$deployRoot"
           cmake --build build/launcher --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw "Native Windows launcher compilation failed." }
           cmake --install build/launcher --config Release
+          if ($LASTEXITCODE -ne 0) { throw "Native Windows launcher installation failed." }
           Copy-Item -Path (Join-Path $deployRoot "*") -Destination "dist/TorProxy" -Recurse -Force
           Copy-Item scripts/Create-TorProxyShortcut.ps1 dist/TorProxy/Create-TorProxyShortcut.ps1
           python scripts/launcher_smoke_test.py dist/TorProxy/TorProxyLauncher.exe

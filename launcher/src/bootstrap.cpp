@@ -299,11 +299,11 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_CREATE:
         s->retry = CreateWindowW(L"BUTTON", L"Try again", WS_CHILD | BS_PUSHBUTTON,
-            54, 280, 138, 34, hwnd, reinterpret_cast<HMENU>(kRetry), nullptr, nullptr);
+            54, 280, 138, 34, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kRetry)), nullptr, nullptr);
         s->logs = CreateWindowW(L"BUTTON", L"Open logs", WS_CHILD | BS_PUSHBUTTON,
-            211, 280, 138, 34, hwnd, reinterpret_cast<HMENU>(kLogs), nullptr, nullptr);
+            211, 280, 138, 34, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kLogs)), nullptr, nullptr);
         s->close = CreateWindowW(L"BUTTON", L"Close", WS_CHILD | BS_PUSHBUTTON,
-            368, 280, 138, 34, hwnd, reinterpret_cast<HMENU>(kClose), nullptr, nullptr);
+            368, 280, 138, 34, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kClose)), nullptr, nullptr);
         SetTimer(hwnd, kTimer, 32, nullptr); return 0;
     case WM_TIMER:
         s->angle = (s->angle + 11) % 360; s->progress = (s->progress + 5) % 500;
@@ -333,7 +333,7 @@ bool createWindow(State &s, HINSTANCE instance) {
     WNDCLASSEXW wc{}; wc.cbSize = sizeof(wc); wc.lpfnWndProc = windowProc;
     wc.hInstance = instance; wc.hIcon = static_cast<HICON>(LoadImageW(instance,
         MAKEINTRESOURCEW(101), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE | LR_SHARED));
-    wc.hIconSm = wc.hIcon; wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    wc.hIconSm = wc.hIcon; wc.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
     wc.hbrBackground = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
     wc.lpszClassName = kClassName;
     if (!RegisterClassExW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return false;

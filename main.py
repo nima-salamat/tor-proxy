@@ -173,7 +173,11 @@ def main() -> int:
             win.show()
             # Process the initial show/paint events before closing the external splash.
             app.processEvents()
-            if not notify_launcher("ready"):
+            launcher_expected = bool(
+                os.environ.get("TORPROXY_LAUNCHER_STATUS_FILE")
+                or os.environ.get("TORPROXY_LAUNCHER_SERVER")
+            )
+            if launcher_expected and not notify_launcher("ready"):
                 LOGGER.error("The launcher readiness signal could not be delivered; the application will continue running.")
             signal.signal(signal.SIGINT, lambda *_: QTimer.singleShot(0, app.quit))
             try:
