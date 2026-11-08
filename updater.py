@@ -32,7 +32,7 @@ from utils import resource_path
 logger = logging.getLogger(__name__)
 REQUEST_TIMEOUT = (8.0, 20.0)
 
-# Tor currently publishes stable versions as X.Y.Z and alpha releases as X.YaN.
+# Tor stable releases may use X.Y or X.Y.Z; alpha releases use X.YaN.
 # A future naming convention must be added deliberately rather than accepted generically.
 STABLE_VERSION = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\.(0|[1-9]\d*))?$")
 ALPHA_VERSION = re.compile(
