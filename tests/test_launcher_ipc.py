@@ -6,9 +6,9 @@ import uuid
 
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
 from torproxy.launcher_ipc import notify_launcher
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
 _QT_APP = None
