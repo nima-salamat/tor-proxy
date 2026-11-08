@@ -370,7 +370,7 @@ def test_linux_chain_verification_rejects_missing_rules_and_unexpected_allow_rul
         'oifname "lo" accept', 'oifname "lo" accept\n        oifname "torproxy-tun" accept'
     ))
     assert not _chain_is_safe(safe_chain.replace(
-        'oifname "lo" accept', 'oifname "lo" accept\\n        oifname "eth0" accept'
+        'oifname "lo" accept', 'oifname "lo" accept\n        oifname "eth0" accept'
     ))
     assert not _chain_is_safe(safe_chain.replace("policy drop", "policy accept"))
 
