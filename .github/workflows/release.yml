@@ -69,7 +69,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gnupg libegl1 libgl1 libglib2.0-0 libdbus-1-3 libxcb-cursor0 libxkbcommon-x11-0
+          sudo apt-get install -y gnupg libegl1 libgl1 libglib2.0-0 libdbus-1-3 libxcb-cursor0 libxkbcommon-x11-0 libevent-2.1-7
 
       - name: Install application, tests, and packager
         run: |
