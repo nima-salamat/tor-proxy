@@ -52,6 +52,10 @@ def test_notify_launcher_sends_authenticated_ready_message(monkeypatch):
             peer.disconnectFromServer()
 
         peer.readyRead.connect(acknowledge)
+        # The peer may already have received bytes before the newConnection
+        # callback attaches readyRead (especially with Windows named pipes).
+        if peer.canReadLine():
+            acknowledge()
 
     server.newConnection.connect(accept_client)
     monkeypatch.setenv("TORPROXY_LAUNCHER_SERVER", connect_name)
