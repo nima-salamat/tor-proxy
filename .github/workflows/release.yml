@@ -22,6 +22,7 @@ jobs:
   build:
     name: Build ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -46,39 +47,49 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Install official GnuPG on Windows
+      - name: Prepare GnuPG from the Windows runner
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          # GitHub's Windows image already ships GnuPG with Git for Windows.
+          # Add its directory to PATH as well, so gpg.exe can locate gpg-agent.exe.
           $candidates = @(
             (Join-Path $env:ProgramFiles "GnuPG\bin\gpg.exe"),
             "C:\Program Files (x86)\GnuPG\bin\gpg.exe",
+            (Join-Path $env:ProgramFiles "Git\usr\bin\gpg.exe"),
+            "C:\Program Files (x86)\Git\usr\bin\gpg.exe",
             (Join-Path $env:LOCALAPPDATA "Programs\GnuPG\bin\gpg.exe")
           )
-          $gpg = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          $command = Get-Command gpg.exe -ErrorAction SilentlyContinue
+          $gpg = if ($command) { $command.Source } else { $null }
           if (-not $gpg) {
-            $installer = Join-Path $env:RUNNER_TEMP "gnupg-w32-2.5.24_20260923.exe"
-            $uri = "https://gnupg.org/ftp/gcrypt/binary/gnupg-w32-2.5.24_20260923.exe"
-            $expectedSha256 = "ea6f9dee2cccd83287432625b8b399173805add81d27067fcaf019c0c4da1ad8"
-            Invoke-WebRequest -Uri $uri -OutFile $installer -TimeoutSec 60
-            $actualSha256 = (Get-FileHash -Path $installer -Algorithm SHA256).Hash.ToLowerInvariant()
-            if ($actualSha256 -ne $expectedSha256) {
-              throw "Official GnuPG installer SHA-256 mismatch: $actualSha256"
-            }
-            $process = Start-Process -FilePath $installer -ArgumentList "/S" -Wait -PassThru
-            if ($process.ExitCode -ne 0) {
-              throw "The official GnuPG installer failed with exit code $($process.ExitCode)."
-            }
             $gpg = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
           }
           if (-not $gpg) {
-            throw "The official GnuPG installer completed but gpg.exe could not be located."
+            throw "No GnuPG executable is available on this Windows runner."
           }
+
+          $gpgDirectory = Split-Path -Parent $gpg
+          $agent = Join-Path $gpgDirectory "gpg-agent.exe"
+          if (-not (Test-Path $agent)) {
+            throw "GnuPG agent was not found beside gpg.exe: $agent"
+          }
+          $env:PATH = "$gpgDirectory;$env:PATH"
+
           & $gpg --version
           if ($LASTEXITCODE -ne 0) {
-            throw "The installed official GnuPG executable failed its --version check."
+            throw "The runner's GnuPG executable failed its --version check."
           }
+          $gpgconf = Join-Path $gpgDirectory "gpgconf.exe"
+          if (Test-Path $gpgconf) {
+            & $gpgconf --launch gpg-agent
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not launch the GnuPG agent required for signature verification."
+            }
+          }
+
           "TORPROXY_GPG_EXECUTABLE=$gpg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "$gpgDirectory" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install Linux Qt runtime libraries and GnuPG
         if: runner.os == 'Linux'
