@@ -34,25 +34,35 @@ def test_notify_launcher_sends_authenticated_ready_message(monkeypatch):
     server = qt_network.QLocalServer()
     server_name = "torproxy-test-" + uuid.uuid4().hex
     token = uuid.uuid4().hex
+    received = []
     assert server.listen(server_name)
     connect_name = server.fullServerName() or server_name
 
+    def accept_client():
+        peer = server.nextPendingConnection()
+        assert peer is not None
+
+        def acknowledge():
+            if not peer.canReadLine():
+                return
+            payload = json.loads(bytes(peer.readLine()).decode("utf-8").strip())
+            received.append(payload)
+            peer.write(b"ACK\n")
+            peer.flush()
+            peer.disconnectFromServer()
+
+        peer.readyRead.connect(acknowledge)
+
+    server.newConnection.connect(accept_client)
     monkeypatch.setenv("TORPROXY_LAUNCHER_SERVER", connect_name)
     monkeypatch.setenv("TORPROXY_LAUNCHER_TOKEN", token)
     try:
         assert notify_launcher("ready", "Window displayed")
-        assert server.waitForNewConnection(1500)
-        peer = server.nextPendingConnection()
-        assert peer is not None
-        assert peer.waitForReadyRead(1500)
-        payload = json.loads(bytes(peer.readAll()).decode("utf-8").strip())
-        assert payload == {
+        assert received == [{
             "token": token,
             "status": "ready",
             "message": "Window displayed",
-        }
-        peer.disconnectFromServer()
-        peer.deleteLater()
+        }]
     finally:
         server.close()
         qt_network.QLocalServer.removeServer(server_name)
