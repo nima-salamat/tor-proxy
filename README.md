@@ -18,6 +18,7 @@ The project is being modernized from a flat desktop utility into a testable Pyth
 - Home-page **Open Browser** launcher for detected Chromium and Firefox-family browsers, using isolated per-browser profiles and the existing TorProxy HTTP proxy.
 - Listener ports are allocated once, persisted in the per-user configuration, and reused on later launches; automatic ports are repaired only when a conflict is detected.
 - Optional system-wide Kill Switch using Windows Defender Firewall or Linux nftables/cgroup v2. The firewall remains default-deny until explicitly disabled; applications must still use TorProxy’s loopback HTTP proxy.
+- Experimental system-wide Tor tunnel on Windows x64 and glibc-based Linux x86_64. It downloads a pinned sing-box runtime on demand, verifies the upstream archive and extracted files, and uses a dedicated TUN interface rather than changing each application's proxy settings.
 - Tor Expert Bundle downloads use Tor's live SOCKS5H route whenever Tor is READY, are restricted to official distribution hosts, and are safely extracted. OpenPGP publisher-signature verification is enabled by default and checks the pinned Tor signing-key fingerprint.
 - Versioned configuration, per-user writable data paths, atomic settings writes, tests, and CI.
 
@@ -198,6 +199,21 @@ The system-proxy control currently supports Windows Internet Settings and GNOME 
 
 Applications configured manually to use `127.0.0.1:<shown-proxy-port>` do not require system-wide proxy changes.
 
+## System-wide Tor tunnel (experimental)
+
+The Home page includes a **System-wide Tor tunnel** card. The engine is installed on demand from the official sing-box release; TorProxy pins the supported version and verifies the downloaded archive and extracted executable/runtime files before use. Windows requests administrator approval for TUN routing; Linux uses PolicyKit (pkexec).
+
+1. Install the tunnel engine from the Home card.
+2. Disconnect Tor and enable the existing **Kill Switch** in Settings.
+3. Reconnect Tor and wait for READY, then choose **Start system tunnel** on Home.
+4. Stop the system tunnel before disabling Kill Switch or changing its firewall policy.
+
+The TUN routes system TCP connections through Tor's local SOCKS listener. DNS is hijacked to TorProxy's TUN DNS endpoint and resolved with DNS-over-HTTPS through Tor. The Tor process itself is excluded from the TUN to prevent a routing loop; its network access remains governed by the Kill Switch. The firewall allows only the dedicated TorProxy (Windows) or torproxy-tun (Linux) interface in addition to the existing narrow Tor exceptions.
+
+**This is a TCP-only Tor tunnel, not a general-purpose UDP VPN.** Tor's SOCKS interface cannot carry arbitrary UDP: unsupported UDP traffic is rejected rather than sent directly. Apps that require UDP/QUIC, real-time media, games, or other unsupported protocols may fail. Strict routing can also affect virtual machines, containers, local-network discovery, or access to LAN devices. The first version supports Windows x64 and glibc-based Linux x86_64 only; it does not enable this feature on macOS, Android, ARM, or musl-based Linux.
+
+If the tunnel cannot be stopped or its process identity cannot be verified, TorProxy keeps Tor and Kill Switch running and blocks application exit rather than leaving the system in an uncertain routing state.
+
 ## Configuration and data paths
 
 Settings, application state, logs, and downloaded bundles live in per-user locations rather than the source checkout. Defaults and supported legacy keys are described in [Configuration](docs/CONFIGURATION.md).
@@ -213,7 +229,7 @@ Traffic usage counts bytes observed in both directions for proxied HTTP requests
 - Logs avoid recording request URLs and query strings, but local logs and host-rule lists should still be treated as user data.
 - Direct exclusions intentionally bypass Tor.
 - System-proxy restoration can fail safely if another program changes settings.
-- The loopback HTTP proxy by itself is not a firewall: applications can ignore it. The optional system-wide Kill Switch adds outbound firewall enforcement, but blocks direct traffic rather than transparently redirecting applications into Tor.
+- The loopback HTTP proxy by itself is not a firewall: applications can ignore it. The optional system-wide Kill Switch adds outbound firewall enforcement. The experimental System-wide Tor tunnel adds TUN routing for TCP and explicitly blocks unsupported UDP rather than falling back to a direct connection.
 - CI tests use fakes/local servers; they do not prove real-world anonymity or verify every OS integration.
 
 Read [Security](docs/SECURITY.md) and [Troubleshooting](docs/TROUBLESHOOTING.md) before reporting an issue.

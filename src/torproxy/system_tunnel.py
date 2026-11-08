@@ -140,6 +140,8 @@ class SystemTunnelManager:
         self.config_path = self.state_dir / "sing-box.json"
         self.process_state_path = self.state_dir / "sing-box-process.json"
         self.log_path = self.directories.logs / "system-tunnel.log"
+        self._install_state_cache: tuple[tuple[str, int, int], ...] | None = None
+        self._install_state_result = False
 
     @property
     def platform_asset(self) -> dict[str, str]:
@@ -175,26 +177,51 @@ class SystemTunnelManager:
     def is_installed(self) -> bool:
         manifest = _read_json(self.install_manifest)
         if not manifest or manifest.get("version") != SING_BOX_VERSION:
+            self._install_state_cache = None
+            self._install_state_result = False
             return False
         try:
             asset = self.platform_asset
-            if manifest.get("archive_sha256") != asset["sha256"]:
-                return False
-            if not self.archive_path.is_file() or _sha256(self.archive_path) != asset["sha256"]:
-                return False
             files = manifest.get("files")
-            if not isinstance(files, dict) or self.engine_path.name not in files:
+            if (
+                manifest.get("archive_sha256") != asset["sha256"]
+                or not isinstance(files, dict)
+                or self.engine_path.name not in files
+                or not set(files).issubset(self._allowed_archive_files())
+            ):
+                self._install_state_cache = None
+                self._install_state_result = False
                 return False
-            if not self.engine_path.is_file() or self.engine_path.is_symlink():
-                return False
-            if not set(files).issubset(self._allowed_archive_files()):
+
+            paths = [self.install_manifest, self.archive_path]
+            paths.extend(self.engine_dir / name for name in files)
+            signature: list[tuple[str, int, int]] = []
+            for path in paths:
+                if path.is_symlink() or not path.is_file():
+                    self._install_state_cache = None
+                    self._install_state_result = False
+                    return False
+                info = path.stat()
+                signature.append((str(path), info.st_size, info.st_mtime_ns))
+            cache_key = tuple(signature)
+            if self._install_state_cache == cache_key:
+                return self._install_state_result
+
+            if _sha256(self.archive_path) != asset["sha256"]:
+                self._install_state_cache = cache_key
+                self._install_state_result = False
                 return False
             for name, expected in files.items():
-                path = self.engine_dir / name
-                if path.is_symlink() or not path.is_file() or _sha256(path) != expected:
+                if _sha256(self.engine_dir / name) != expected:
+                    self._install_state_cache = cache_key
+                    self._install_state_result = False
                     return False
+            self._install_state_cache = cache_key
+            self._install_state_result = True
             return True
         except (OSError, SystemTunnelError):
+            self._install_state_cache = None
+            self._install_state_result = False
             return False
 
     def install_engine(self) -> str:
@@ -275,6 +302,8 @@ class SystemTunnelManager:
                 raise
             if backup_dir.exists():
                 shutil.rmtree(backup_dir, ignore_errors=True)
+            self._install_state_cache = None
+            self._install_state_result = False
             return f"sing-box {SING_BOX_VERSION} installed; archive and runtime files verified."
         except requests.RequestException as exc:
             raise SystemTunnelError(f"Could not download sing-box: {exc}") from exc
