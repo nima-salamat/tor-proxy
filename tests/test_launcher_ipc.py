@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 import uuid
 
-from PySide6.QtCore import QCoreApplication
 from PySide6.QtNetwork import QLocalServer
+from PySide6.QtWidgets import QApplication
 
 from torproxy.launcher_ipc import notify_launcher
 
@@ -14,7 +14,7 @@ _QT_APP = None
 
 def _ensure_qt_application():
     global _QT_APP
-    _QT_APP = QCoreApplication.instance() or QCoreApplication([])
+    _QT_APP = QApplication.instance() or QCoreApplication([])
     return _QT_APP
 
 
