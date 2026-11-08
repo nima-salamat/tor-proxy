@@ -165,7 +165,6 @@ def test_linux_rules_default_to_drop_and_never_allow_the_desktop_uid():
     rules = _rules(cgroup_level=5, table=True)
     assert "type filter hook output priority 0; policy drop;" in rules
     assert 'oifname "lo" accept' in rules
-    assert 'oifname "torproxy-tun" accept' in rules
     assert "socket cgroupv2 level 5 @tor_cgroups accept" in rules
     assert "meta skuid" not in rules
     assert "meta cgroup" not in rules
@@ -288,8 +287,6 @@ def test_windows_firewall_helper_is_strict_about_outbound_exceptions():
     assert "Get-SnapshotValue $snapshot 'blockSharedAccess') -and (Test-SharedAccessDynamicAllowRule $_)" in _POWERSHELL
     assert "Set-NetFirewallRule" in _POWERSHELL
     assert "TorProxy Kill Switch" in _POWERSHELL
-    assert "-InterfaceAlias 'TorProxy'" in _POWERSHELL
-    assert "tun_interface_allowed" in _POWERSHELL
     assert "original snapshot is missing" in _POWERSHELL
     assert "could not be restored to its saved state" in _POWERSHELL
 

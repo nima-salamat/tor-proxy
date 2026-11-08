@@ -874,8 +874,25 @@ class Window(QMainWindow):
         except Exception:
             pass
         try:
-            self.proxyWidget._stop_services()
+            stopped = self.proxyWidget._stop_services()
         except Exception:
             logger.exception("Failed while stopping services during application shutdown.")
+            stopped = False
+        tunnel_manager = getattr(self.proxyWidget, "system_tunnel_manager", None)
+        tunnel_status = tunnel_manager.status() if tunnel_manager is not None else {"active": False}
+        if stopped is False or tunnel_status.get("active") or not tunnel_status.get("verified", True):
+            self._closing = False
+            self._exit_authorized = False
+            try:
+                self.tray_icon.show()
+            except Exception:
+                pass
+            if hasattr(self, "_state_timer"):
+                self._state_timer.start()
+            hotkey_start = getattr(getattr(self, "hotkey_manager", None), "start", None)
+            if callable(hotkey_start):
+                hotkey_start()
+            event.ignore()
+            return
         logger.info("TorProxy application exit accepted.")
         event.accept()

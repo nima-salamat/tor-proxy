@@ -268,9 +268,6 @@ try {
         New-NetFirewallRule -PolicyStore PersistentStore -Name 'TorProxy_KS_DHCPv4' -DisplayName 'TorProxy Kill Switch DHCPv4' -Group $Group -Direction Outbound -Action Allow -Protocol UDP -LocalPort 68 -RemotePort 67 -RemoteAddress Any -Profile Any | Out-Null
         New-NetFirewallRule -PolicyStore PersistentStore -Name 'TorProxy_KS_DHCPv6' -DisplayName 'TorProxy Kill Switch DHCPv6' -Group $Group -Direction Outbound -Action Allow -Protocol UDP -LocalPort 546 -RemotePort 547 -RemoteAddress Any -Profile Any | Out-Null
         New-NetFirewallRule -PolicyStore PersistentStore -Name 'TorProxy_KS_NDP' -DisplayName 'TorProxy Kill Switch IPv6 Neighbor Discovery' -Group $Group -Direction Outbound -Action Allow -Protocol ICMPv6 -IcmpType 133,135,136 -RemoteAddress Any -Profile Any | Out-Null
-        # Only packets routed to sing-box's dedicated Wintun adapter may enter the TUN.
-        # Physical-interface traffic remains subject to the default outbound Block policy.
-        New-NetFirewallRule -PolicyStore PersistentStore -Name 'TorProxy_KS_TUN' -DisplayName 'TorProxy Kill Switch System Tunnel' -Group $Group -Direction Outbound -Action Allow -InterfaceAlias 'TorProxy' -Profile Any -Enabled True | Out-Null
         if ([bool](Get-SnapshotValue $snapshot 'blockSharedAccess')) {
             $sharedAccessProgram = [string](Get-SnapshotValue $snapshot 'sharedAccessProgram')
             if (-not $sharedAccessProgram) {
@@ -467,14 +464,7 @@ try {
                 return $true
             })
             $verified = $remaining.Count -eq 0
-            $tunRule = Get-NetFirewallRule -PolicyStore ActiveStore -Name 'TorProxy_KS_TUN' -ErrorAction SilentlyContinue
-            $tunAllowed = $false
-            if ($null -ne $tunRule -and [string]$tunRule.Enabled -eq 'True' -and
-                [string]$tunRule.Direction -eq 'Outbound' -and [string]$tunRule.Action -eq 'Allow') {
-                $tunFilter = Get-NetFirewallInterfaceFilter -AssociatedNetFirewallRule $tunRule -ErrorAction SilentlyContinue
-                $tunAllowed = @($tunFilter.InterfaceAlias) -contains 'TorProxy'
-            }
-            Write-Result @{ ok = $true; active = $verified; verified = $verified; tun_interface_allowed = $tunAllowed; detail = 'Windows Firewall policy inspected.' }
+            Write-Result @{ ok = $true; active = $verified; verified = $verified; detail = 'Windows Firewall policy inspected.' }
         }
     }
     else {
