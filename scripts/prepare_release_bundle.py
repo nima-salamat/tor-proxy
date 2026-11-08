@@ -13,9 +13,9 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-import updater
-from torproxy.bundle import BundleVerificationError
-from utils import extract_tar_gz_file
+import updater  # noqa: E402
+from torproxy.bundle import BundleVerificationError  # noqa: E402
+from utils import extract_tar_gz_file  # noqa: E402
 
 
 def main() -> int:
