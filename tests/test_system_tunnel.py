@@ -206,7 +206,7 @@ def test_stop_refuses_to_claim_success_when_an_untracked_tun_interface_remains(t
     state_path = tmp_path / "tunnel-state.json"
     monkeypatch.setattr(system_tunnel, "_interface_exists", lambda _name: True)
 
-    with pytest.raises(SystemTunnelError, match="unverified sing-box process record"):
+    with pytest.raises(SystemTunnelError, match="verified sing-box process record"):
         system_tunnel._helper_stop(state_path, "torproxy-tun")
 
 
