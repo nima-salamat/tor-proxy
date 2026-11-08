@@ -913,10 +913,14 @@ def _helper_start(args: Any) -> dict[str, Any]:
             "close_fds": True,
         }
         if os.name == "nt":
-            kwargs["creationflags"] = (
-                getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
-                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
-            )
+            # Keep the console/process relationship so the elevated helper can
+            # send a shutdown control event later. Hide the console instead of
+            # detaching the process from it; DETACHED_PROCESS breaks TUN cleanup.
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = 0  # SW_HIDE
+            kwargs["startupinfo"] = startupinfo
+            kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
         else:
             kwargs["start_new_session"] = True
         process = subprocess.Popen([str(engine), "run", "-c", str(config_path)], **kwargs)
@@ -961,6 +965,87 @@ def _helper_start(args: Any) -> dict[str, Any]:
     raise SystemTunnelError(f"sing-box did not create the {args.interface} interface in time.")
 
 
+def _send_windows_ctrl_break(pid: int) -> bool:
+    """Ask a console-attached sing-box process to shut down and release Wintun cleanly."""
+    if os.name != "nt":
+        return False
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.AttachConsole.argtypes = [wintypes.DWORD]
+    kernel32.AttachConsole.restype = wintypes.BOOL
+    kernel32.GenerateConsoleCtrlEvent.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    kernel32.GenerateConsoleCtrlEvent.restype = wintypes.BOOL
+    kernel32.SetConsoleCtrlHandler.argtypes = [ctypes.c_void_p, wintypes.BOOL]
+    kernel32.SetConsoleCtrlHandler.restype = wintypes.BOOL
+    kernel32.FreeConsole.argtypes = []
+    kernel32.FreeConsole.restype = wintypes.BOOL
+
+    if not kernel32.AttachConsole(pid):
+        return False
+    ignored = False
+    try:
+        ignored = bool(kernel32.SetConsoleCtrlHandler(None, True))
+        # CTRL_BREAK_EVENT to all processes in the child's console. The helper
+        # ignores it; sing-box receives the same graceful shutdown event.
+        return bool(kernel32.GenerateConsoleCtrlEvent(1, 0))
+    finally:
+        kernel32.FreeConsole()
+        if ignored:
+            kernel32.SetConsoleCtrlHandler(None, False)
+
+
+def _stop_verified_process(process: psutil.Process, state: dict[str, Any]) -> None:
+    """Stop only the exact recorded sing-box process, preferring graceful cleanup."""
+    if os.name == "nt":
+        _send_windows_ctrl_break(process.pid)
+        try:
+            process.wait(timeout=8)
+            return
+        except psutil.TimeoutExpired:
+            pass
+
+        # This is the same non-/F Windows shutdown path used by desktop launchers
+        # when the child has no visible console window.
+        taskkill = shutil.which("taskkill.exe") or shutil.which("taskkill")
+        if taskkill:
+            try:
+                subprocess.run(
+                    [taskkill, "/PID", str(process.pid)],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=8,
+                    check=False,
+                )
+                process.wait(timeout=5)
+                return
+            except (OSError, subprocess.TimeoutExpired, psutil.TimeoutExpired, psutil.NoSuchProcess):
+                pass
+    else:
+        try:
+            process.terminate()
+            process.wait(timeout=HELPER_STOP_TIMEOUT_SECONDS)
+            return
+        except psutil.TimeoutExpired:
+            pass
+        except psutil.NoSuchProcess:
+            return
+
+    # Last resort is deliberately identity-checked and followed by a TUN
+    # interface disappearance check before the Kill Switch can be released.
+    current = _process_matches(state)
+    if current is None or current.pid != process.pid:
+        raise SystemTunnelError("The tunnel process identity changed while stopping; refusing to terminate it.")
+    try:
+        current.kill()
+        current.wait(timeout=5)
+    except psutil.NoSuchProcess:
+        return
+    except psutil.TimeoutExpired as exc:
+        raise SystemTunnelError("The verified sing-box process could not be stopped.") from exc
+
+
 def _helper_stop(state_path: Path, interface_name: str) -> dict[str, Any]:
     state = _read_json(state_path)
     if not state:
@@ -986,15 +1071,7 @@ def _helper_stop(state_path: Path, interface_name: str) -> dict[str, Any]:
         state_path.unlink(missing_ok=True)
         return {"ok": True, "active": False, "detail": "Removed a stale tunnel record; its process has already exited."}
     try:
-        process.terminate()
-        process.wait(timeout=HELPER_STOP_TIMEOUT_SECONDS)
-    except psutil.TimeoutExpired:
-        # Revalidate identity before the only forced-termination path.
-        process = _process_matches(state)
-        if process is None:
-            raise SystemTunnelError("The tunnel process identity changed while stopping; refusing to kill it.")
-        process.kill()
-        process.wait(timeout=5)
+        _stop_verified_process(process, state)
     except psutil.NoSuchProcess:
         pass
     deadline = time.monotonic() + 5.0

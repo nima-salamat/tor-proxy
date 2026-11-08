@@ -219,3 +219,26 @@ def test_stop_refuses_to_clear_a_stale_process_record_when_tun_adapter_remains(t
     with pytest.raises(SystemTunnelError, match="adapter remains"):
         system_tunnel._helper_stop(state_path, "torproxy-tun")
     assert state_path.exists()
+
+
+def test_tunnel_process_uses_graceful_termination_on_linux(monkeypatch):
+    class FakeProcess:
+        pid = 4321
+        terminated = False
+        killed = False
+        def terminate(self):
+            self.terminated = True
+        def wait(self, timeout=None):
+            assert timeout == system_tunnel.HELPER_STOP_TIMEOUT_SECONDS
+            return 0
+        def kill(self):
+            self.killed = True
+
+    fake = FakeProcess()
+    monkeypatch.setattr(system_tunnel.os, "name", "posix")
+    monkeypatch.setattr(system_tunnel, "_process_matches", lambda _state: fake)
+
+    system_tunnel._stop_verified_process(fake, {"pid": fake.pid})
+
+    assert fake.terminated is True
+    assert fake.killed is False
