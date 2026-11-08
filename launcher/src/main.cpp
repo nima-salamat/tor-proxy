@@ -213,18 +213,34 @@ private:
 
                 const QJsonObject message = document.object();
                 if (message.value(QStringLiteral("token")).toString() != m_token) {
+                    socket->disconnectFromServer();
+                    socket->deleteLater();
                     return;
                 }
 
                 const QString status = message.value(QStringLiteral("status")).toString();
+                bool accepted = false;
                 if (status == QStringLiteral("ready")) {
+                    accepted = true;
                     onReady();
                 } else if (status == QStringLiteral("failed")) {
+                    accepted = true;
                     const QString detail = message.value(QStringLiteral("message")).toString();
                     showError(detail.isEmpty()
                         ? QStringLiteral("TorProxy reported a startup failure.")
                         : detail);
                 }
+
+                if (accepted) {
+                    // ACK means the launcher has actually parsed and authenticated
+                    // the message, not merely that the sender's local buffer drained.
+                    socket->write("ACK\n");
+                    socket->flush();
+                    socket->disconnectFromServer();
+                } else {
+                    socket->disconnectFromServer();
+                }
+                socket->deleteLater();
             });
         }
     }
