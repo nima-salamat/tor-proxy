@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 
-from PySide6.QtNetwork import QLocalServer
-from PySide6.QtWidgets import QApplication
+import pytest
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from torproxy.launcher_ipc import notify_launcher
 
@@ -14,7 +16,8 @@ _QT_APP = None
 
 def _ensure_qt_application():
     global _QT_APP
-    _QT_APP = QApplication.instance() or QApplication([])
+    qt_widgets = pytest.importorskip("PySide6.QtWidgets")
+    _QT_APP = qt_widgets.QApplication.instance() or qt_widgets.QApplication([])
     return _QT_APP
 
 
@@ -27,7 +30,8 @@ def test_notify_launcher_is_a_noop_for_direct_launch(monkeypatch):
 
 def test_notify_launcher_sends_authenticated_ready_message(monkeypatch):
     _ensure_qt_application()
-    server = QLocalServer()
+    qt_network = pytest.importorskip("PySide6.QtNetwork")
+    server = qt_network.QLocalServer()
     server_name = "torproxy-test-" + uuid.uuid4().hex
     token = uuid.uuid4().hex
     assert server.listen(server_name)
@@ -50,7 +54,7 @@ def test_notify_launcher_sends_authenticated_ready_message(monkeypatch):
         peer.deleteLater()
     finally:
         server.close()
-        QLocalServer.removeServer(server_name)
+        qt_network.QLocalServer.removeServer(server_name)
 
 
 def test_notify_launcher_rejects_unknown_status(monkeypatch):
