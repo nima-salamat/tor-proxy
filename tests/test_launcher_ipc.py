@@ -14,7 +14,7 @@ _QT_APP = None
 
 def _ensure_qt_application():
     global _QT_APP
-    _QT_APP = QApplication.instance() or QCoreApplication([])
+    _QT_APP = QApplication.instance() or QApplication([])
     return _QT_APP
 
 
