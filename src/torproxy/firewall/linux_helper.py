@@ -11,6 +11,8 @@ from pathlib import Path
 
 TABLE = "torproxy_killswitch"
 SET_NAME = "tor_cgroups"
+TUN_INTERFACE = "torproxy-tun"
+TUN_RULE = f'oifname "{TUN_INTERFACE}" accept'
 UNIT = "torproxy-killswitch.service"
 CONFIG_PATH = Path("/etc/torproxy-killswitch.nft")
 UNIT_PATH = Path("/etc/systemd/system") / UNIT
@@ -58,6 +60,7 @@ def _chain_is_safe(chain: str) -> bool:
         "udp sport 546 udp dport 547 accept",
         "ip6 daddr { fe80::/10, ff02::/16 } icmpv6 type { nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert } accept",
     }
+    allowed_optional = {TUN_RULE}
     observed: set[str] = set()
     cgroup_rules: list[str] = []
     policy_seen = False
@@ -72,7 +75,7 @@ def _chain_is_safe(chain: str) -> bool:
                 return False
             policy_seen = True
             continue
-        if line in expected:
+        if line in expected or line in allowed_optional:
             observed.add(line)
             continue
         if line.startswith("socket cgroupv2 level ") and line.endswith(f" @{SET_NAME} accept"):
@@ -80,7 +83,7 @@ def _chain_is_safe(chain: str) -> bool:
             continue
         # No jump, return, queue, accept or opaque rule can be allowed here.
         return False
-    return policy_seen and observed == expected and len(cgroup_rules) <= 1
+    return policy_seen and expected <= observed and observed <= expected | allowed_optional and len(cgroup_rules) <= 1
 
 
 def _owned_installation() -> bool:
@@ -103,6 +106,7 @@ def _rules(cgroup_level: int | None = None, *, table: bool = False) -> str:
         lines.append(f"flush chain inet {TABLE} output")
     lines.extend((
         '  oifname "lo" accept',
+        f'  {TUN_RULE}',
         "  udp sport 68 udp dport 67 accept",
         "  udp sport 546 udp dport 547 accept",
         "  ip6 daddr { fe80::/10, ff02::/16 } icmpv6 type { nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert } accept",
@@ -194,7 +198,7 @@ def install() -> dict[str, object]:
     verified_chain = _run(["nft", "list", "chain", "inet", TABLE, "output"])
     if not _chain_is_safe(verified_chain):
         raise HelperError("The installed nftables output chain failed strict verification.")
-    return {"ok": True, "active": True, "detail": "nftables drop policy installed; Tor cgroup is not yet allowed."}
+    return {"ok": True, "active": True, "tun_interface_allowed": True, "detail": "nftables drop policy installed; only the Tor cgroup and TorProxy TUN interface are allowed."}
 
 
 def set_cgroup(cgroup_id: int | None, cgroup_level: int | None = None) -> dict[str, object]:
@@ -241,6 +245,7 @@ def status() -> dict[str, object]:
     chain = _run(["nft", "list", "chain", "inet", TABLE, "output"])
     verified = active and _chain_is_safe(chain)
     return {"ok": True, "active": verified, "verified": verified,
+            "tun_interface_allowed": TUN_RULE in chain,
             "detail": "Persistent nftables kill switch." if verified else "Unknown or permissive nftables output rules were detected."}
 
 
