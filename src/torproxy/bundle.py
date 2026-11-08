@@ -267,7 +267,11 @@ def verify_tor_signature(
                 text=True, timeout=20, check=False,
             )
             if imported.returncode != 0:
-                raise BundleVerificationError("The Tor OpenPGP signing key could not be imported.")
+                detail = (imported.stderr or imported.stdout or "").strip()
+                message = "The Tor OpenPGP signing key could not be imported."
+                if detail:
+                    message += f" GnuPG reported: {detail[-1200:]}"
+                raise BundleVerificationError(message)
             listing = subprocess.run(
                 [str(gpg), "--batch", "--with-colons", "--fingerprint", "--list-keys"],
                 env=env, stdin=subprocess.DEVNULL, capture_output=True,
