@@ -233,7 +233,7 @@ def _gpg_compatible_path(path: str | Path, gpg: Path) -> str:
     """
     resolved = Path(path).resolve()
     cygpath = Path(gpg).with_name("cygpath.exe")
-    if os.name == "nt" and cygpath.is_file():
+    if cygpath.is_file():
         try:
             converted = subprocess.run(
                 [str(cygpath), "-u", str(resolved)],
