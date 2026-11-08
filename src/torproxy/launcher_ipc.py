@@ -33,33 +33,34 @@ def notify_launcher(status: str, message: str = "") -> bool:
             "message": str(message or "")[:1800],
         }
         encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        message = encoded + b"\n"
+        wire_message = encoded + b"\n"
         loop = QEventLoop()
         timer = QTimer()
         timer.setSingleShot(True)
 
-        def finish_after_write(_written=0):
-            if socket.bytesToWrite() == 0:
+        def finish_after_ack():
+            if socket.canReadLine():
                 loop.quit()
 
         def finish_after_error(_error):
             loop.quit()
 
-        socket.bytesWritten.connect(finish_after_write)
+        socket.readyRead.connect(finish_after_ack)
         socket.errorOccurred.connect(finish_after_error)
         try:
-            if socket.write(message) != len(message):
+            if socket.write(wire_message) != len(wire_message):
                 return False
             socket.flush()
-            if socket.bytesToWrite() > 0:
+            if not socket.canReadLine():
                 timer.timeout.connect(loop.quit)
-                timer.start(2500)
+                timer.start(3000)
                 loop.exec(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
-            return socket.bytesToWrite() == 0 and socket.isValid()
+            acknowledgement = bytes(socket.readAll()).strip()
+            return acknowledgement == b"ACK"
         finally:
             timer.stop()
             try:
-                socket.bytesWritten.disconnect(finish_after_write)
+                socket.readyRead.disconnect(finish_after_ack)
                 socket.errorOccurred.disconnect(finish_after_error)
             except (RuntimeError, TypeError):
                 pass
