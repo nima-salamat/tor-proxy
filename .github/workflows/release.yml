@@ -123,7 +123,7 @@ jobs:
           cmake -S launcher -B build/launcher -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR" "-DCMAKE_INSTALL_PREFIX=$deployRoot"
           cmake --build build/launcher --config Release --parallel 2
           cmake --install build/launcher --config Release
-          $platforms = Join-Path $deployRoot "plugins\platforms"
+          $platforms = Join-Path $deployRoot "launcher-runtime\bin\plugins\platforms"
           New-Item -ItemType Directory -Path $platforms -Force | Out-Null
           Copy-Item (Join-Path $env:QT_ROOT_DIR "plugins\platforms\qoffscreen.dll") $platforms -Force
           Copy-Item -Path (Join-Path $deployRoot "*") -Destination "dist/TorProxy" -Recurse -Force
