@@ -165,10 +165,14 @@ class OpenBrowserDialog(_FramelessDialog):
             "#287db5",
             width=620,
         )
-        self.setMinimumSize(600, 520)
+        self.setMinimumSize(560, 460)
         self.setMaximumSize(1100, 1000)
-        self.resize(760, 720)
+        self.resize(760, 660)
         self._remember_preferred_size()
+        # The shared dialog shell is intentionally spacious for other prompts;
+        # this picker keeps its controls compact to prioritize the browser list.
+        self.body_layout.setContentsMargins(18, 10, 18, 10)
+        self.body_layout.setSpacing(7)
 
         self.proxy_port = int(proxy_port)
         self.detector = detector or BrowserDetector()
@@ -188,76 +192,79 @@ class OpenBrowserDialog(_FramelessDialog):
         self._scan_worker = None
         self._closing = False
 
-        heading = QHBoxLayout()
-        heading.setSpacing(10)
-        intro = QLabel(
-            "Choose an installed browser. TorProxy opens it with a dedicated profile and the active local proxy.",
-            self.body_host,
-        )
-        intro.setObjectName("dialogMessage")
-        intro.setWordWrap(True)
-        heading.addWidget(intro, 1)
+        # One compact toolbar combines proxy status and discovery controls.
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(7)
+        proxy_caption = QLabel("HTTP", self.body_host)
+        proxy_caption.setObjectName("dialogHint")
+        proxy_caption.setToolTip("Local HTTP proxy")
+        toolbar.addWidget(proxy_caption)
+        self.endpoint_label = QLabel(f"127.0.0.1:{self.proxy_port}", self.body_host)
+        self.endpoint_label.setObjectName("browserProxyEndpoint")
+        toolbar.addWidget(self.endpoint_label)
 
         self.ready_badge = QLabel("TOR READY", self.body_host)
         self.ready_badge.setObjectName("browserReadyBadge")
-        heading.addWidget(self.ready_badge, 0, Qt.AlignmentFlag.AlignTop)
-        self.body_layout.addLayout(heading)
+        toolbar.addWidget(self.ready_badge)
+        toolbar.addStretch(1)
 
-        connection_row = QHBoxLayout()
-        connection_row.setSpacing(8)
-        local_label = QLabel("Local HTTP proxy", self.body_host)
-        local_label.setObjectName("dialogHint")
-        connection_row.addWidget(local_label)
-        connection_row.addStretch(1)
-        self.endpoint_label = QLabel(f"127.0.0.1:{self.proxy_port}", self.body_host)
-        self.endpoint_label.setObjectName("browserProxyEndpoint")
-        connection_row.addWidget(self.endpoint_label)
-        self.body_layout.addLayout(connection_row)
-
-        scan_row = QHBoxLayout()
-        scan_row.setSpacing(8)
         self.scan_spinner = _BrowserScanSpinner(self._accent, self.body_host)
         self.scan_spinner.start()
-        scan_row.addWidget(self.scan_spinner)
+        toolbar.addWidget(self.scan_spinner)
         self.scan_status = QLabel("Loading saved browsers…", self.body_host)
         self.scan_status.setObjectName("dialogHint")
-        scan_row.addWidget(self.scan_status, 1)
-        self.refresh_button = QPushButton("Refresh", self.body_host)
+        self.scan_status.setWordWrap(False)
+        self.scan_status.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        toolbar.addWidget(self.scan_status, 1)
+
+        self.refresh_button = QPushButton(self.body_host)
         self.refresh_button.setObjectName("browserRefreshButton")
         self.refresh_button.setIcon(qta.icon("fa6s.rotate", color=self._colors["text"]))
         self.refresh_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.refresh_button.setFixedSize(30, 30)
+        self.refresh_button.setToolTip("Refresh installed browsers")
         self.refresh_button.clicked.connect(self._start_scan)
-        scan_row.addWidget(self.refresh_button)
-        self.body_layout.addLayout(scan_row)
+        toolbar.addWidget(self.refresh_button)
+        self.body_layout.addLayout(toolbar)
 
+        # Search and start-page controls share a single row instead of stacking.
         search_row = QHBoxLayout()
         search_row.setSpacing(8)
         self.search = QLineEdit(self.body_host)
         self.search.setObjectName("browserSearch")
         self.search.setClearButtonEnabled(True)
-        self.search.setPlaceholderText("Search installed browsers…")
+        self.search.setPlaceholderText("Search browsers…")
+        self.search.setMinimumWidth(120)
         self.search.addAction(
             qta.icon("fa6s.magnifying-glass", color=self._colors["muted"]),
             QLineEdit.ActionPosition.LeadingPosition,
         )
         self.search.textChanged.connect(self._filter_cards)
-        search_row.addWidget(self.search, 1)
-        self.count_label = QLabel(self.body_host)
-        self.count_label.setObjectName("dialogHint")
-        search_row.addWidget(self.count_label)
-        self.body_layout.addLayout(search_row)
+        search_row.addWidget(self.search, 3)
 
-        start_row = QHBoxLayout()
-        start_label = QLabel("Start page", self.body_host)
-        start_label.setObjectName("dialogHint")
-        start_row.addWidget(start_label)
         self.start_page_input = QLineEdit(self.body_host)
         self.start_page_input.setObjectName("browserStartPage")
         self.start_page_input.setText("https://check.torproject.org/")
-        self.start_page_input.setPlaceholderText("https://example.com/")
+        self.start_page_input.setPlaceholderText("Start page URL")
+        self.start_page_input.setToolTip("URL to open in the selected browser")
         self.start_page_input.setClearButtonEnabled(True)
-        start_row.addWidget(self.start_page_input, 1)
-        self.body_layout.addLayout(start_row)
+        self.start_page_input.setMinimumWidth(150)
+        self.start_page_input.addAction(
+            qta.icon("fa6s.globe", color=self._colors["muted"]),
+            QLineEdit.ActionPosition.LeadingPosition,
+        )
+        search_row.addWidget(self.start_page_input, 2)
+
+        self.count_label = QLabel(self.body_host)
+        self.count_label.setObjectName("dialogHint")
+        self.count_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.count_label.setMinimumWidth(70)
+        search_row.addWidget(self.count_label)
+        self.body_layout.addLayout(search_row)
 
         self.scroll = QScrollArea(self.body_host)
         self.scroll.setObjectName("dialogScroll")
@@ -267,18 +274,21 @@ class OpenBrowserDialog(_FramelessDialog):
         self.content = QWidget(self.scroll)
         self.content.setObjectName("browserListContent")
         self.content_layout = QVBoxLayout(self.content)
-        self.content_layout.setContentsMargins(1, 2, 7, 2)
-        self.content_layout.setSpacing(8)
+        self.content_layout.setContentsMargins(1, 0, 7, 0)
+        self.content_layout.setSpacing(5)
         self.scroll.setWidget(self.content)
         self.body_layout.addWidget(self.scroll, 1)
 
         self.notice = QLabel(
-            "Each browser uses a separate TorProxy profile. A normal browser does not provide Tor Browser's "
-            "anti-fingerprinting protections; some WebRTC media features may also be restricted.",
+            "Regular browsers do not include Tor Browser's anti-fingerprinting protections.",
             self.body_host,
         )
         self.notice.setObjectName("dialogHint")
-        self.notice.setWordWrap(True)
+        self.notice.setWordWrap(False)
+        self.notice.setToolTip(
+            "Each browser uses a separate TorProxy profile. A normal browser does not provide Tor Browser's "
+            "anti-fingerprinting protections; some WebRTC media features may also be restricted."
+        )
         self.body_layout.addWidget(self.notice)
 
         self.add_button("Add custom browser", primary=False, callback=self._add_custom_browser).setIcon(
@@ -288,7 +298,7 @@ class OpenBrowserDialog(_FramelessDialog):
         self.add_button("Close", primary=True, callback=self.accept)
         self.setStyleSheet(self.styleSheet() + self._extra_styles())
         self.adjustSize()
-        self.resize(760, max(600, self.sizeHint().height()))
+        self.resize(760, 660)
         self._remember_preferred_size()
         self._build_cards()
         # Let Qt paint the dialog and its cached rows before the OS scan begins.
@@ -301,8 +311,8 @@ class OpenBrowserDialog(_FramelessDialog):
                 background: rgba(31, 157, 104, 0.12);
                 border: 1px solid rgba(31, 157, 104, 0.28);
                 border-radius: 8px;
-                padding: 5px 9px;
-                font-size: 8pt;
+                padding: 3px 7px;
+                font-size: 7.5pt;
                 font-weight: 800;
                 letter-spacing: 0.4px;
             }}
@@ -311,7 +321,7 @@ class OpenBrowserDialog(_FramelessDialog):
                 background: {self._colors["panel"]};
                 border: 1px solid {self._colors["border"]};
                 border-radius: 7px;
-                padding: 5px 9px;
+                padding: 3px 7px;
                 font-family: Consolas, monospace;
                 font-weight: 700;
             }}
@@ -320,8 +330,8 @@ class OpenBrowserDialog(_FramelessDialog):
                 background: {self._colors["panel"]};
                 border: 1px solid {self._colors["border"]};
                 border-radius: 8px;
-                padding: 7px 9px;
-                min-height: 28px;
+                padding: 5px 8px;
+                min-height: 25px;
                 selection-background-color: {self._accent};
             }}
             QLineEdit#browserSearch:focus, QLineEdit#browserStartPage:focus {{
@@ -332,8 +342,9 @@ class OpenBrowserDialog(_FramelessDialog):
                 background: {self._colors["panel"]};
                 border: 1px solid {self._colors["border"]};
                 border-radius: 7px;
-                padding: 0 10px;
-                min-height: 29px;
+                padding: 0;
+                min-height: 0;
+                min-width: 0;
                 font-weight: 650;
             }}
             QPushButton#browserRefreshButton:hover {{
@@ -346,14 +357,14 @@ class OpenBrowserDialog(_FramelessDialog):
             QLabel#browserGroupHeading {{
                 color: {self._accent};
                 background: transparent;
-                font-size: 8.5pt;
+                font-size: 8pt;
                 font-weight: 800;
-                padding: 7px 2px 1px;
+                padding: 4px 2px 0;
             }}
             QFrame#browserCard {{
                 background: {self._colors["panel"]};
                 border: 1px solid {self._colors["border"]};
-                border-radius: 10px;
+                border-radius: 8px;
             }}
             QFrame#browserCard:hover {{
                 border-color: {self._accent};
@@ -362,7 +373,7 @@ class OpenBrowserDialog(_FramelessDialog):
             QFrame#browserIconFrame {{
                 background: {self._colors["surface"]};
                 border: 1px solid {self._colors["border"]};
-                border-radius: 9px;
+                border-radius: 8px;
             }}
             QLabel#browserName {{
                 color: {self._colors["text"]};
@@ -380,8 +391,8 @@ class OpenBrowserDialog(_FramelessDialog):
                 background: {self._accent};
                 border: 1px solid {self._accent};
                 border-radius: 7px;
-                padding: 0 15px;
-                min-height: 31px;
+                padding: 0 12px;
+                min-height: 28px;
                 font-weight: 750;
             }}
             QPushButton#browserOpenButton:hover {{ background: #236b9b; }}
@@ -389,8 +400,8 @@ class OpenBrowserDialog(_FramelessDialog):
                 color: {self._colors["muted"]};
                 background: {self._colors["panel"]};
                 border: 1px dashed {self._colors["border"]};
-                border-radius: 10px;
-                padding: 18px;
+                border-radius: 9px;
+                padding: 12px;
             }}
             QLabel#browserErrorNotice {{
                 color: #dc5656;
@@ -476,29 +487,29 @@ class OpenBrowserDialog(_FramelessDialog):
         card = QFrame(self.content)
         card.setObjectName("browserCard")
         row = QHBoxLayout(card)
-        row.setContentsMargins(11, 9, 11, 9)
-        row.setSpacing(11)
+        row.setContentsMargins(9, 5, 9, 5)
+        row.setSpacing(8)
 
         icon_frame = QFrame(card)
         icon_frame.setObjectName("browserIconFrame")
-        icon_frame.setFixedSize(48, 48)
+        icon_frame.setFixedSize(40, 40)
         icon_layout = QHBoxLayout(icon_frame)
-        icon_layout.setContentsMargins(5, 5, 5, 5)
+        icon_layout.setContentsMargins(3, 3, 3, 3)
         icon_label = QLabel(icon_frame)
         icon_label.setObjectName("browserIconLabel")
         icon_label.setProperty("browserId", browser.id)
         icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon_label.setPixmap(self._browser_icon(browser).pixmap(QSize(36, 36)))
+        icon_label.setPixmap(self._browser_icon(browser).pixmap(QSize(28, 28)))
         icon_layout.addWidget(icon_label)
         row.addWidget(icon_frame)
 
         text_column = QVBoxLayout()
-        text_column.setSpacing(3)
+        text_column.setSpacing(1)
         name = QLabel(browser.name, card)
         name.setObjectName("browserName")
         source = QLabel(self._source_label(browser), card)
         source.setObjectName("browserSource")
-        source.setWordWrap(True)
+        source.setWordWrap(False)
         text_column.addWidget(name)
         text_column.addWidget(source)
         row.addLayout(text_column, 1)
@@ -546,7 +557,7 @@ class OpenBrowserDialog(_FramelessDialog):
         self._scan_pending = False
         self._scan_running = True
         self.scan_spinner.start()
-        self.scan_status.setText("Checking installed browsers in the background…")
+        self.scan_status.setText("Scanning…")
         self.refresh_button.setEnabled(False)
         if not self.browsers:
             self._build_cards()
@@ -566,12 +577,12 @@ class OpenBrowserDialog(_FramelessDialog):
         self.refresh_button.setEnabled(True)
         count = len(self.browsers)
         self.scan_status.setText(
-            f"System check complete · {count} browser{'s' if count != 1 else ''} found"
+            f"{count} browser{'s' if count != 1 else ''} found"
         )
         self.notice.setText(
-            "Each browser uses a separate TorProxy profile. A normal browser does not provide Tor Browser's "
-            "anti-fingerprinting protections; some WebRTC media features may also be restricted."
+            "Regular browsers do not include Tor Browser's anti-fingerprinting protections."
         )
+        self.notice.setWordWrap(False)
         self.notice.setObjectName("dialogHint")
         self.notice.style().unpolish(self.notice)
         self.notice.style().polish(self.notice)
@@ -585,7 +596,7 @@ class OpenBrowserDialog(_FramelessDialog):
         self._scan_worker = None
         self.scan_spinner.stop()
         self.refresh_button.setEnabled(True)
-        self.scan_status.setText("System scan failed · saved browser list retained")
+        self.scan_status.setText("Scan failed · using saved list")
         self._show_error(
             "Could not refresh the installed browser list. The last saved list is still available. "
             f"Details: {message}"
@@ -628,6 +639,7 @@ class OpenBrowserDialog(_FramelessDialog):
 
     def _show_error(self, message: str) -> None:
         self.notice.setText(message)
+        self.notice.setWordWrap(True)
         self.notice.setObjectName("browserErrorNotice")
         self.notice.style().unpolish(self.notice)
         self.notice.style().polish(self.notice)
@@ -701,7 +713,8 @@ class OpenBrowserDialog(_FramelessDialog):
             item for item in self.browsers
             if item.id != browser.id
         ] + [browser]
-        self.notice.setText("Custom browser saved. It will remain available in this list.")
+        self.notice.setText("Custom browser saved to this list.")
+        self.notice.setWordWrap(False)
         self.notice.setObjectName("dialogHint")
         self.notice.style().unpolish(self.notice)
         self.notice.style().polish(self.notice)

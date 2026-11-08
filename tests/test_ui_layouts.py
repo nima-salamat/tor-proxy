@@ -1246,6 +1246,11 @@ def test_open_browser_dialog_lists_installed_browsers_and_filters_search(qt_app,
         assert dialog.title_bar is not None
         assert len(dialog._cards) == 2
         assert dialog.start_page_input.text() == "https://check.torproject.org/"
+        assert dialog.body_layout.spacing() <= 7
+        assert dialog.body_layout.contentsMargins().top() <= 10
+        assert dialog.notice.wordWrap() is False
+        assert dialog.refresh_button.toolTip() == "Refresh installed browsers"
+        assert dialog.findChild(QLabel, "dialogMessage") is None
         browser_icon = dialog.findChild(QLabel, "browserIconLabel")
         assert browser_icon is not None
         assert browser_icon.property("browserId") == "chrome"
