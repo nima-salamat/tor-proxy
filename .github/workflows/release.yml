@@ -111,7 +111,6 @@ jobs:
         with:
           version: "6.8.3"
           archives: qtbase
-          modules: ${{ runner.os == 'Linux' && 'qtwayland' || '' }}
           install-deps: true
           cache: true
 
