@@ -1,0 +1,147 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import zipfile
+from pathlib import Path
+
+import pytest
+
+from torproxy import system_tunnel
+from torproxy.system_tunnel import SystemTunnelError, SystemTunnelManager
+
+
+class FakeDirectories:
+    def __init__(self, root: Path):
+        self.data = root / "data"
+        self.state = root / "state"
+        self.cache = root / "cache"
+        self.logs = root / "logs"
+
+
+def _manager(tmp_path: Path) -> SystemTunnelManager:
+    return SystemTunnelManager(FakeDirectories(tmp_path))
+
+
+def test_system_tunnel_config_uses_tcp_tor_socks_and_hijacks_dns(tmp_path, monkeypatch):
+    monkeypatch.setattr(system_tunnel.platform, "system", lambda: "Linux")
+    manager = _manager(tmp_path)
+    manager.engine_dir.mkdir(parents=True)
+    manager.engine_path.write_bytes(b"pinned test engine")
+    tor = tmp_path / ("tor.exe" if os.name == "nt" else "tor")
+    tor.write_bytes(b"test tor executable")
+
+    config = manager.build_config(9150, tor_executables=[tor])
+    inbound = config["inbounds"][0]
+    outbound = next(item for item in config["outbounds"] if item["tag"] == "tor-socks")
+    rules = config["route"]["rules"]
+
+    assert inbound["type"] == "tun"
+    assert inbound["auto_route"] is True
+    assert inbound["strict_route"] is True
+    assert inbound["dns_mode"] == "hijack"
+    assert inbound["auto_redirect"] is True
+    assert outbound["server"] == "127.0.0.1"
+    assert outbound["server_port"] == 9150
+    assert outbound["network"] == "tcp"
+    assert config["dns"]["servers"][0]["detour"] == "tor-socks"
+    assert rules[0]["outbound"] == "direct"
+    assert str(manager.engine_path.resolve()) in rules[0]["process_path"]
+    assert str(tor.resolve()) in rules[0]["process_path"]
+    assert rules[1] == {"action": "hijack-dns"}
+    assert rules[2] == {"network": "udp", "action": "reject", "method": "default"}
+    assert config["route"]["final"] == "tor-socks"
+
+
+def test_system_tunnel_config_requires_a_valid_tor_executable(tmp_path):
+    manager = _manager(tmp_path)
+    with pytest.raises(SystemTunnelError, match="Tor executable"):
+        manager.build_config(9150, tor_executables=[])
+
+
+@pytest.mark.parametrize("member", ["../sing-box", "/sing-box", "folder/../../sing-box", r"..\\sing-box.exe"])
+def test_system_tunnel_rejects_unsafe_archive_paths(member):
+    with pytest.raises(SystemTunnelError, match="unsafe"):
+        SystemTunnelManager._safe_archive_member(member)
+
+
+def test_windows_archive_extracts_only_allowlisted_regular_runtime_files(tmp_path):
+    archive = tmp_path / "sing-box.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("sing-box-1.14.4-windows-amd64/sing-box.exe", b"engine")
+        bundle.writestr("sing-box-1.14.4-windows-amd64/libcronet.dll", b"runtime")
+        bundle.writestr("sing-box-1.14.4-windows-amd64/LICENSE", b"GPL text")
+        bundle.writestr("sing-box-1.14.4-windows-amd64/unexpected.txt", b"ignore")
+    destination = tmp_path / "engine"
+    destination.mkdir()
+
+    hashes = SystemTunnelManager._extract_zip_runtime(archive, destination, "sing-box.exe")
+
+    assert set(hashes) == {"sing-box.exe", "libcronet.dll", "LICENSE"}
+    assert (destination / "sing-box.exe").read_bytes() == b"engine"
+    assert not (destination / "unexpected.txt").exists()
+
+
+def test_archive_engine_checksum_is_derived_from_verified_member(tmp_path):
+    archive = tmp_path / "sing-box.zip"
+    payload = b"pinned executable payload"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("sing-box-1.14.4-windows-amd64/sing-box.exe", payload)
+
+    digest = SystemTunnelManager._archive_executable_sha256(archive, "zip", "sing-box.exe")
+
+    assert digest == hashlib.sha256(payload).hexdigest()
+
+
+def test_system_tunnel_install_state_checks_both_archive_and_executable_hashes(tmp_path, monkeypatch):
+    manager = _manager(tmp_path)
+    manager.engine_dir.mkdir(parents=True)
+    manager.engine_path.write_bytes(b"engine")
+    manager.archive_path.parent.mkdir(parents=True, exist_ok=True)
+    manager.archive_path.write_bytes(b"archive")
+    engine_hash = hashlib.sha256(b"engine").hexdigest()
+    archive_hash = manager.platform_asset["sha256"]
+    manager.install_manifest.write_text(
+        json.dumps({
+            "version": system_tunnel.SING_BOX_VERSION,
+            "archive_sha256": archive_hash,
+            "files": {manager.engine_path.name: engine_hash},
+        }),
+        encoding="utf-8",
+    )
+    real_hash = system_tunnel._sha256
+
+    def fake_hash(path):
+        if Path(path) == manager.archive_path:
+            return archive_hash
+        return real_hash(Path(path))
+
+    monkeypatch.setattr(system_tunnel, "_sha256", fake_hash)
+    assert manager.is_installed() is True
+    assert manager.engine_sha256 == engine_hash
+
+    manager.engine_path.write_bytes(b"modified engine")
+    assert manager.is_installed() is False
+
+
+def test_tunnel_stop_clears_only_a_dead_stale_pid_record(tmp_path, monkeypatch):
+    state_path = tmp_path / "tunnel-state.json"
+    state_path.write_text(json.dumps({"pid": 2_000_000_000}), encoding="utf-8")
+    monkeypatch.setattr(system_tunnel.psutil, "pid_exists", lambda _pid: False)
+
+    result = system_tunnel._helper_stop(state_path, "torproxy-tun")
+
+    assert result["active"] is False
+    assert not state_path.exists()
+
+
+def test_tunnel_stop_refuses_to_take_over_a_live_unmatched_pid(tmp_path, monkeypatch):
+    state_path = tmp_path / "tunnel-state.json"
+    state_path.write_text(json.dumps({"pid": 321}), encoding="utf-8")
+    monkeypatch.setattr(system_tunnel, "_process_matches", lambda _state: None)
+    monkeypatch.setattr(system_tunnel.psutil, "pid_exists", lambda _pid: True)
+
+    with pytest.raises(SystemTunnelError, match="refused"):
+        system_tunnel._helper_stop(state_path, "torproxy-tun")
+    assert state_path.exists()
