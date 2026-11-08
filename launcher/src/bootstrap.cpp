@@ -316,7 +316,7 @@ void paint(State &s, HDC dc) {
     addRoundedPath(panel, canvas, 25.0f);
     LinearGradientBrush background(
         canvas, Color(255, 20, 34, 47), Color(255, 10, 19, 29),
-        LinearGradientModeForward
+        LinearGradientModeForwardDiagonal
     );
     graphics.FillPath(&background, &panel);
 
