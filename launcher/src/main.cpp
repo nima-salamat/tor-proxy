@@ -205,9 +205,9 @@ private:
 
                 const QByteArray payload = buffer.left(newline);
                 const QJsonDocument document = QJsonDocument::fromJson(payload);
-                socket->disconnectFromServer();
-                socket->deleteLater();
                 if (!document.isObject()) {
+                    socket->disconnectFromServer();
+                    socket->deleteLater();
                     return;
                 }
 
