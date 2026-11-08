@@ -23,8 +23,8 @@ def notify_launcher(status: str, message: str = "") -> bool:
         from PySide6.QtNetwork import QLocalSocket
 
         socket = QLocalSocket()
-        socket.connectToServer(server_name, QIODevice.OpenModeFlag.WriteOnly)
-        if not socket.waitForConnected(1200):
+        socket.connectToServer(server_name, QIODevice.OpenModeFlag.ReadWrite)
+        if not socket.waitForConnected(2500):
             return False
 
         payload = {
@@ -53,7 +53,7 @@ def notify_launcher(status: str, message: str = "") -> bool:
             socket.flush()
             if socket.bytesToWrite() > 0:
                 timer.timeout.connect(loop.quit)
-                timer.start(1200)
+                timer.start(2500)
                 loop.exec(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
             return socket.bytesToWrite() == 0 and socket.isValid()
         finally:
