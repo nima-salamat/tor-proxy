@@ -52,7 +52,7 @@ jobs:
         run: |
           $candidates = @(
             (Join-Path $env:ProgramFiles "GnuPG\bin\gpg.exe"),
-            (Join-Path \${env:ProgramFiles(x86)} "GnuPG\bin\gpg.exe"),
+            "C:\Program Files (x86)\GnuPG\bin\gpg.exe",
             (Join-Path $env:LOCALAPPDATA "Programs\GnuPG\bin\gpg.exe")
           )
           $gpg = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
