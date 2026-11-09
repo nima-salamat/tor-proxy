@@ -166,11 +166,11 @@ class ProxyWindow(QWidget):
         proxy_row.addWidget(self.system_proxy_mode, 1)
         proxy_controls_layout.addLayout(proxy_row)
 
+        # Keep status text available to accessibility/debugging and existing
+        # state transitions, but do not consume Home space with explanatory copy.
         self.proxy_status_label = QLabel(proxy_controls)
         self.proxy_status_label.setObjectName("proxyStatusLabel")
-        self.proxy_status_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        self.proxy_status_label.setWordWrap(True)
-        proxy_controls_layout.addWidget(self.proxy_status_label)
+        self.proxy_status_label.setVisible(False)
 
         self.system_tunnel_hint = QFrame(self.home_content)
         self.system_tunnel_hint.setObjectName("systemTunnelHint")
@@ -399,8 +399,8 @@ class ProxyWindow(QWidget):
         border = "#3b4552" if dark else "#d7dee7"
         muted = "#aab4c1" if dark else "#667386"
         accent = "#47a3f2" if dark else "#1876bf"
-        surface = "#202630" if dark else "#ffffff"
-        field = "#151b24" if dark else "#f4f6f8"
+        surface = "transparent"
+        field = "transparent"
         hover = "#2b3643" if dark else "#eaf0f5"
         text = "#e8edf3" if dark else "#253041"
         self.home_content.setStyleSheet(f"""
@@ -417,7 +417,7 @@ class ProxyWindow(QWidget):
             QPushButton#statisticsLink:hover {{ color: {text}; border-bottom: 1px solid {accent}; }}
             QLabel#systemProxyTitle {{ color: {muted}; background: transparent; border: none; font-size: 10px; font-weight: 750; letter-spacing: 1px; }}
             QFrame#homeMetricSeparator {{ color: {border}; background: {border}; max-width: 1px; }}
-            QComboBox#systemProxyMode {{ min-height: 34px; padding: 0 12px; border: 1px solid {border}; border-radius: 8px; background: {surface}; color: {text}; }}
+            QComboBox#systemProxyMode {{ min-height: 34px; padding: 0 12px; border: 1px solid {border}; border-radius: 8px; background: transparent; color: {text}; }}
             QComboBox#systemProxyMode:hover {{ border-color: {accent}; }}
             QComboBox#systemProxyMode QAbstractItemView {{ background: {surface}; color: {text}; selection-background-color: {accent}; selection-color: #ffffff; outline: none; border: 1px solid {border}; }}
             QComboBox#systemProxyMode QAbstractItemView::item {{ background: {surface}; color: {text}; padding: 8px 10px; min-height: 22px; }}
