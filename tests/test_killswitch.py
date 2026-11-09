@@ -268,7 +268,7 @@ def test_windows_wfp_source_uses_persistent_filters_and_one_transaction():
     assert "FWPM_CONDITION_IP_LOCAL_INTERFACE" in source
     assert "FWPM_CONDITION_FLAGS" in source
     assert "FWPM_SESSION_FLAG_DYNAMIC" not in source
-    assert "CLEAR_ACTION_RIGHT" not in source
+    assert "FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT" not in source
 
 
 def test_windows_wfp_cmake_target_is_installed_with_the_desktop_package():
