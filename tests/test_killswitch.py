@@ -371,7 +371,9 @@ def test_windows_saved_local_allow_rules_map_internal_ids_to_com_friendly_names(
     assert "Set-NetFirewallRule -PolicyStore PersistentStore -Name ($duplicateChangeIds.ToArray()) -Enabled $enabledValue" in helper
     assert "Get-NetFirewallRule -PolicyStore PersistentStore -Name $duplicateIds" in helper
     assert "FinalReleaseComObject" in helper
-    assert "Set-NetFirewallRule" in helper
+    assert helper.count("Set-NetFirewallRule -PolicyStore PersistentStore -Name") == 1
+    assert "if ($duplicateRuleIds.Count -gt 0)" in helper
+    assert "if ($uniqueFriendlyNames.Count" not in helper
     assert "Multiple saved firewall rules share the COM friendly name" not in helper
 
     activation_start = _POWERSHELL.index("if ($Action -eq 'activate')")
