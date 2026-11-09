@@ -10,6 +10,59 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
+
+def test_exit_button_icon_tracks_hover_foreground_and_theme(monkeypatch):
+    import ui
+
+    calls = []
+    monkeypatch.setattr(
+        ui.qta, "icon",
+        lambda name, color: calls.append((name, color)) or (name, color),
+    )
+
+    class _ButtonState:
+        _icon_name = "fa6s.right-from-bracket"
+        _normal_icon_color = "#202832"
+        _hover_icon_color = "#ffffff"
+        _hovered = False
+
+        def setIcon(self, icon):
+            self.icon = icon
+
+    button = _ButtonState()
+    ui.HoverIconButton._sync_icon(button)
+    assert button.icon == ("fa6s.right-from-bracket", "#202832")
+
+    # Hover uses the same white foreground configured by the Exit QSS rule.
+    ui.HoverIconButton._set_hovered(button, True)
+    assert button.icon == ("fa6s.right-from-bracket", "#ffffff")
+
+    # A theme change while hovered must not make the icon disagree with text.
+    ui.HoverIconButton.setNormalIconColor(button, "#eff1f4")
+    assert button.icon == ("fa6s.right-from-bracket", "#ffffff")
+
+    ui.HoverIconButton._set_hovered(button, False)
+    assert button.icon == ("fa6s.right-from-bracket", "#eff1f4")
+    assert calls == [
+        ("fa6s.right-from-bracket", "#202832"),
+        ("fa6s.right-from-bracket", "#ffffff"),
+        ("fa6s.right-from-bracket", "#ffffff"),
+        ("fa6s.right-from-bracket", "#eff1f4"),
+    ]
+
+
+def test_exit_button_hover_event_handlers_sync_the_icon():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui.py").read_text(encoding="utf-8")
+    assert "class HoverIconButton(QPushButton):" in source
+    assert "def enterEvent(self, event):" in source
+    assert "self._set_hovered(True)" in source
+    assert "def leaveEvent(self, event):" in source
+    assert "self._set_hovered(False)" in source
+    assert 'color: #ffffff; background: #b83336; border-color: #b83336;' in source
+    assert 'self.exit_nav_button.setNormalIconColor(icon_color)' in source
+
+
 @pytest.fixture(scope="module")
 def qt_app():
     pytest.importorskip("PySide6")
