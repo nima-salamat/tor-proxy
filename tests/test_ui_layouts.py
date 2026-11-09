@@ -1155,7 +1155,7 @@ def test_home_places_system_proxy_and_tunnel_controls_in_one_row():
 
     assert "service_controls_row = QHBoxLayout()" in source
     assert "service_controls_row.addWidget(proxy_controls, 1)" in source
-    assert "service_controls_row.addWidget(self.system_tunnel_hint, 2)" in source
+    assert "service_controls_row.addWidget(self.system_tunnel_hint, 1)" in source
     assert "self.home_layout.addLayout(service_controls_row)" in source
     assert "self.home_layout.addWidget(self.system_tunnel_hint)" not in source
     assert "self.home_layout.addLayout(proxy_row)" not in source
@@ -1167,8 +1167,9 @@ def test_home_proxy_controls_hide_explanatory_copy_and_blend_with_home_surface()
 
     assert "self.proxy_status_label.setVisible(False)" in source
     assert "proxy_controls_layout.addWidget(self.proxy_status_label)" not in source
-    assert "background: transparent; color: {text};" in source
-    assert "QFrame#systemProxyControls" not in source
+    assert "QFrame#systemProxyControls {{ background: transparent; border: none; }}" in source
+    assert "QFrame#systemTunnelHint {{ background: transparent; border: 1px solid {border}; border-radius: 8px; }}" in source
+    assert "QFrame#systemTunnelHint {{ background: {surface};" not in source
 
 
 def test_home_tunnel_controls_start_and_stop_installed_engine_without_showing_manage():
