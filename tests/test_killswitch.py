@@ -376,6 +376,15 @@ def test_windows_saved_local_allow_rules_are_processed_as_a_batch():
     assert "Restoring saved local outbound Allow rules in one batch" in recovery_script
 
 
+def test_windows_netsecurity_updates_use_enum_values_not_python_booleans():
+    assert "$enabledValue = if ($enabled) { 'True' } else { 'False' }" in _POWERSHELL
+    assert "-Name $changeNames -Enabled $enabledValue -ErrorAction Stop" in _POWERSHELL
+    assert "function Set-SnapshotProfile($saved)" in _POWERSHELL
+    assert "$enabledValue = if ([bool]$saved.Enabled) { 'True' } else { 'False' }" in _POWERSHELL
+    assert "Set-NetFirewallProfile -PolicyStore PersistentStore -Profile ([string]$saved.Name) -Enabled ([bool]$saved.Enabled)" not in _POWERSHELL
+    assert _POWERSHELL.count("Set-SnapshotProfile $saved") == 2
+
+
 def test_windows_helper_reports_the_current_phase_without_affecting_firewall_work():
     assert "function Set-Phase([string]$phase)" in _POWERSHELL
     assert "Progress reporting must never prevent a firewall operation." in _POWERSHELL
