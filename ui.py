@@ -665,8 +665,15 @@ class Window(QMainWindow):
                 border-bottom: 2px solid transparent; border-radius: 7px;
                 color: {text}; background: transparent; font-size: 9pt; font-weight: 650;
             }}
-            QToolButton#updatesNavButton:hover {{ background: {hover}; border-color: {border}; }}
-            QToolButton#updatesNavButton:checked {{ background: {accent}; color: #ffffff; border: 1px solid {accent}; }}
+            QToolButton#updatesNavButton:hover {{
+                color: {text}; background: {hover}; border-color: {border};
+            }}
+            QToolButton#updatesNavButton:checked {{
+                background: {accent}; color: #ffffff; border: 1px solid {accent};
+            }}
+            QToolButton#updatesNavButton:checked:hover {{
+                background: {accent}; color: #ffffff; border-color: {accent};
+            }}
             QPushButton#topNavExitButton {{
                 min-height: 32px; padding: 0 9px; margin: 0 1px; border: 1px solid {border};
                 border-radius: 7px; color: {text}; background: transparent; font-size: 9pt; font-weight: 700;
