@@ -537,16 +537,15 @@ def test_stale_tor_cleanup_targets_only_process_using_exact_managed_torrc(tmp_pa
         "tor.exe",
         [str(manager.settings.executable), "-f", str(tmp_path / "other-torrc")],
     )
-    other_tor_executable = tmp_path / "other-install" / "tor.exe"
-    wrong_executable = FakeProcess(
+    other_bundle = FakeProcess(
         4569,
         "tor.exe",
-        [str(other_tor_executable), "-f", str(manager.torrc_path)],
+        [str(tmp_path / "old-bundle" / "tor.exe"), "-f", str(manager.torrc_path)],
     )
     monkeypatch.setattr(
         tor_manager_module.psutil,
         "process_iter",
-        lambda _attrs: [stale, unrelated, wrong_executable],
+        lambda _attrs: [stale, unrelated, other_bundle],
     )
     monkeypatch.setattr(
         tor_manager_module.psutil,
@@ -560,8 +559,10 @@ def test_stale_tor_cleanup_targets_only_process_using_exact_managed_torrc(tmp_pa
     assert stale.killed is False
     assert unrelated.terminated is False
     assert unrelated.killed is False
-    assert wrong_executable.terminated is False
-    assert wrong_executable.killed is False
+    # A previous TorProxy bundle may still be running after an update; the
+    # dedicated torrc, not the currently selected bundle path, establishes ownership.
+    assert other_bundle.terminated is True
+    assert other_bundle.killed is False
 
 
 
