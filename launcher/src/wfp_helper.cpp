@@ -226,7 +226,10 @@ void addDhcpPermit(HANDLE engine, const GUID& layer, UINT16 localPort, UINT16 re
 void addIcmpv6Permit(HANDLE engine, UINT16 type) {
     std::vector<Condition> conditions;
     conditions.push_back(uint8Condition(FWPM_CONDITION_IP_PROTOCOL, IPPROTO_ICMPV6));
-    conditions.push_back(uint16Condition(FWPM_CONDITION_ICMP_TYPE, type));
+    // ALE_AUTH_CONNECT exposes the ICMP type as ORIGINAL_ICMP_TYPE. The
+    // generic ICMP_TYPE condition belongs to the packet/transport layers and
+    // is not valid for this ALE layer.
+    conditions.push_back(uint16Condition(FWPM_CONDITION_ORIGINAL_ICMP_TYPE, type));
     addFilter(engine, FWPM_LAYER_ALE_AUTH_CONNECT_V6,
               L"TorProxy WFP permit IPv6 neighbor discovery",
               FWP_ACTION_PERMIT, conditions, 850);
