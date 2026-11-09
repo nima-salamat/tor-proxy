@@ -2062,3 +2062,23 @@ def test_system_theme_selector_and_live_os_updates_are_wired_into_the_app():
     assert 'theme_preference = CONFIG.get("theme_preference", "system")' in main_source
     assert "resolve_system_theme(app)" in main_source
     assert main_source.index("resolve_system_theme(app)") < main_source.index("app.setStyleSheet")
+
+
+def test_tunnel_download_icon_uses_the_same_foreground_as_its_button():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/tunnel_window.py").read_text(encoding="utf-8")
+
+    assert 'self.btn_install.setObjectName("primaryButton")' in source
+    assert 'QPushButton#primaryButton {{ font-weight: 650; color: {text}; }}' in source
+    assert 'self.btn_install.setIcon(qta.icon("fa6s.download", color=text))' in source
+    assert 'self.btn_install.setIcon(qta.icon("fa6s.download", color="#ffffff"))' not in source
+
+
+def test_live_tor_log_viewport_uses_a_theme_appropriate_background():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/tor_log_dialog.py").read_text(encoding="utf-8")
+
+    assert 'log_background = "#111820" if self._dark else "#f6f8fb"' in source
+    assert 'QTextEdit#torLogText {{' in source
+    assert 'color: {self._colors["text"]}; background: {log_background};' in source
+    assert 'background: #111820;' not in source
