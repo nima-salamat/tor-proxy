@@ -304,7 +304,7 @@ class UpdaterWindow(QWidget):
             QListWidget#releaseList::item:hover {{ background: rgba(61, 174, 233, 0.10); }}
             QListWidget#releaseList::item:selected {{ background: {accent}; color: #ffffff; }}
             QPushButton {{ min-height: 28px; padding: 0 9px; border-radius: 6px; }}
-            QPushButton#primaryButton {{ font-weight: 650; }}
+            QPushButton#primaryButton {{ font-weight: 650; color: {text}; }}
             QPushButton#dangerButton {{ color: #d94c4c; }}
             QPushButton#quietButton {{ min-height: 25px; }}
             QLineEdit {{
@@ -325,14 +325,14 @@ class UpdaterWindow(QWidget):
             palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(placeholder))
             widget.setPalette(palette)
         self._title_icon.setPixmap(qta.icon("fa6s.boxes-stacked", color=accent).pixmap(22, 22))
-        self.btn_get_versions.setIcon(qta.icon("fa6s.arrows-rotate", color="#ffffff" if dark else "#ffffff"))
+        self.btn_get_versions.setIcon(qta.icon("fa6s.arrows-rotate", color=text))
         self.btn_copy_bundle_source.setIcon(qta.icon("fa6s.copy", color=icon_color))
         self.btn_import_bundle.setIcon(qta.icon("fa6s.file-import", color=icon_color))
         self.btn_refresh_version.setIcon(qta.icon("fa6s.rotate", color=icon_color))
-        self.btn_set_default_version.setIcon(qta.icon("fa6s.check", color="#ffffff"))
+        self.btn_set_default_version.setIcon(qta.icon("fa6s.check", color=text))
         self.btn_delete_version.setIcon(qta.icon("fa6s.trash", color="#d94c4c"))
         self.btn_cancel.setIcon(qta.icon("fa6s.xmark", color=icon_color))
-        self.btn_retry.setIcon(qta.icon("fa6s.rotate-right", color="#ffffff"))
+        self.btn_retry.setIcon(qta.icon("fa6s.rotate-right", color=text))
         self.btn_gpg_help.setIcon(qta.icon("fa6s.download", color=icon_color))
 
     def _copy_bundle_source_url(self) -> None:
