@@ -121,7 +121,7 @@ def _host_rule_route_fields(rule) -> dict[str, list[str]]:
         }
     if rule.mode is MatchMode.GLOB:
         labels = [
-            re.escape(label).replace(r"\*", ".*")
+            re.escape(label).replace(r"\*", "[^.]*")
             for label in rule.host.split(".")
         ]
         return {"domain_regex": ["^" + r"\.".join(labels) + "$"]}
