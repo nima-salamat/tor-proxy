@@ -154,23 +154,27 @@ def _apply_wfp_tun_exception(
     return True
 
 
-def _enable_windows_wfp_tun_exception() -> bool:
+def _enable_windows_wfp_tun_exception(
+    *,
+    helper_path: Path | None = None,
+    legacy_snapshot: Path | None = None,
+) -> bool:
     """Add the current TorProxy adapter LUID to the active WFP policy, if present."""
     if os.name != "nt":
         return False
 
-    helper = (
-        user_directories().state
-        / "killswitch"
-        / "native"
-        / "TorProxyWfpHelper.exe"
+    state_root = user_directories().state
+    helper = helper_path or (
+        state_root / "killswitch" / "native" / "TorProxyWfpHelper.exe"
+    )
+    snapshot = legacy_snapshot or (
+        state_root / "killswitch" / "windows-firewall-snapshot.json"
     )
     # Older releases use a persistent Windows Firewall interface-alias rule.
     # They do not have the native WFP helper, so leave that legacy rule alone.
     if not helper.is_file():
         return False
-    legacy_snapshot = user_directories().state / "killswitch" / "windows-firewall-snapshot.json"
-    return _apply_wfp_tun_exception(helper, legacy_snapshot=legacy_snapshot)
+    return _apply_wfp_tun_exception(helper, legacy_snapshot=snapshot)
 
 
 def _interface_exists(name: str) -> bool:
@@ -1032,7 +1036,12 @@ def _helper_start(args: Any) -> dict[str, Any]:
                 state_path.unlink(missing_ok=True)
                 raise SystemTunnelError("sing-box did not remain healthy after creating its TUN interface.")
             try:
-                _enable_windows_wfp_tun_exception()
+                if os.name == "nt":
+                    state_root = Path(args.state).resolve().parent.parent
+                    _enable_windows_wfp_tun_exception(
+                        helper_path=state_root / "killswitch" / "native" / "TorProxyWfpHelper.exe",
+                        legacy_snapshot=state_root / "killswitch" / "windows-firewall-snapshot.json",
+                    )
             except SystemTunnelError as exc:
                 # This helper already runs with the administrator token. Install
                 # the interface-LUID exception here, after Wintun has created the
