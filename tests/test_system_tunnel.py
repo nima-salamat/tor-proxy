@@ -76,6 +76,22 @@ def test_system_tunnel_config_uses_tcp_tor_socks_and_hijacks_dns(tmp_path, monke
 
 
 
+
+
+def test_host_policy_route_fields_accept_ipv4_and_ipv6_addresses():
+    blocked = system_tunnel.HostRules.from_values(["192.0.2.9", "2001:db8::9"])
+
+    routes = [
+        system_tunnel._host_rule_route_fields(rule)
+        for rule in blocked.rules
+    ]
+
+    assert routes == [
+        {"ip_cidr": ["192.0.2.9/32"]},
+        {"ip_cidr": ["2001:db8::9/128"]},
+    ]
+
+
 def test_system_tunnel_config_applies_saved_host_policy_before_default_tor_route(tmp_path, monkeypatch):
     monkeypatch.setattr(system_tunnel.platform, "system", lambda: "Linux")
     manager = _manager(tmp_path)
