@@ -1949,3 +1949,32 @@ def test_tray_menu_uses_compact_vertical_spacing():
     assert "padding: 7px 14px 7px 12px;" in theme
     assert "margin: 1px 4px;" in theme
     assert "margin: 4px 12px;" in theme
+
+
+def test_open_browser_action_button_colors_follow_the_active_theme():
+    from types import SimpleNamespace
+
+    pytest.importorskip("qtawesome")
+    from ui_.window.open_browser_dialog import OpenBrowserDialog
+
+    colors = {
+        "text": "#253041",
+        "panel": "#f6f8fb",
+        "border": "#d7dee7",
+        "hover": "rgba(24, 118, 191, 0.09)",
+        "muted": "#657386",
+    }
+    light_css = OpenBrowserDialog._extra_styles(
+        SimpleNamespace(_dark=False, _accent="#287db5", _colors=colors)
+    )
+    dark_css = OpenBrowserDialog._extra_styles(
+        SimpleNamespace(_dark=True, _accent="#287db5", _colors=colors)
+    )
+
+    assert "color: #287db5;" in light_css
+    assert "background: #eaf3fc;" in light_css
+    assert "background: #dcecfb;" in light_css
+    assert "color: #ffffff;" not in light_css
+    assert "color: #ffffff;" in dark_css
+    assert "background: #287db5;" in dark_css
+    assert "background: #236b9b;" in dark_css
