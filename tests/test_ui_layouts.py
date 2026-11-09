@@ -231,10 +231,13 @@ def test_updates_navigation_keeps_theme_text_color_on_hover():
     assert "color: {text}; background: {hover}; border-color: {border};" in source
     assert "QToolButton#updatesNavButton:checked:hover {{" in source
     assert "background: {accent}; color: #ffffff; border-color: {accent};" in source
-    # Use the native Qt dropdown indicator; custom split-button geometry caused
-    # a mismatched rectangular patch in the lower-right corner.
+    # Suppress the platform-colored native indicator and draw a chevron with
+    # the exact foreground used by the Updates label.
     assert "QToolButton#updatesNavButton::menu-button" not in source
-    assert "QToolButton#updatesNavButton::menu-indicator" not in source
+    assert "QToolButton#updatesNavButton::menu-indicator {{" in source
+    assert "image: none;" in source
+    assert "class UpdatesMenuButton(QToolButton):" in source
+    assert "self.updates_nav_button.setMenuIndicatorColor(color)" in source
     assert "QPushButton#topNavButton, QToolButton#updatesNavButton {{" in source
 
 
@@ -305,6 +308,7 @@ def test_updates_nav_icon_and_text_follow_only_the_active_updates_page(monkeypat
     ui.Window._on_updates_menu_about_to_hide(fake)
     assert fake.updates_nav_button.checked is True
     assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-down", "#ffffff")
+    assert fake.updates_nav_button.indicator_color == "#ffffff"
 
     # Leaving Updates restores the normal theme text/icon/caret color.
     fake.stack.page = 0
@@ -312,6 +316,7 @@ def test_updates_nav_icon_and_text_follow_only_the_active_updates_page(monkeypat
     assert fake.updates_nav_button.checked is False
     ui.Window._sync_updates_nav_icon(fake, "dark")
     assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-down", "#eff1f4")
+    assert fake.updates_nav_button.indicator_color == "#eff1f4"
 
 
 def test_updates_dropdown_chevron_uses_explicit_theme_foreground(qt_app):
