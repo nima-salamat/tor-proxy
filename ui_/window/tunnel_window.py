@@ -149,8 +149,8 @@ class TunnelManagerWindow(QWidget):
         route_title = QLabel("WHAT THE TUNNEL DOES")
         route_title.setObjectName("tunnelSectionLabel")
         route_body = QLabel(
-            "System TCP traffic is routed through Tor. DNS uses HTTPS over Tor. UDP is rejected "
-            "rather than sent directly. Tor must already be connected before the tunnel can start."
+            "TCP traffic is explicitly routed through Tor. Client DNS uses local FakeIP mapping, "
+            "then Tor resolves the original hostname through SOCKS. UDP and unmatched traffic are blocked."
         )
         route_body.setWordWrap(True)
         route_body.setObjectName("tunnelRouteDescription")
