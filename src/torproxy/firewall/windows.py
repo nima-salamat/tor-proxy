@@ -50,6 +50,20 @@ function Get-ActiveProfiles {
     # ActiveStore is the merged policy Windows Firewall currently enforces.
     return @(Get-NetFirewallProfile -PolicyStore ActiveStore -Profile Domain,Private,Public | Select-Object Name,Enabled,DefaultOutboundAction,DisabledInterfaceAliases)
 }
+function Get-GroupRulesOrEmpty([string]$policyStore) {
+    # NetSecurity reports an empty -Group query as a CIM NotFound error instead
+    # of returning an empty collection. Treat only that precise condition as
+    # the expected first-run state; provider/permission failures must still stop.
+    $queryErrors = @()
+    $rules = @(Get-NetFirewallRule -PolicyStore $policyStore -Group $Group -ErrorAction SilentlyContinue -ErrorVariable queryErrors)
+    $unexpectedErrors = @($queryErrors | Where-Object {
+        [string]$_.FullyQualifiedErrorId -notlike 'CmdletizationQuery_NotFound_RuleGroup*'
+    })
+    if ($unexpectedErrors.Count -gt 0) {
+        throw $unexpectedErrors[0]
+    }
+    return $rules
+}
 function Get-PersistentProfiles {
     # PersistentStore is the local configuration TorProxy snapshots and restores.
     return @(Get-NetFirewallProfile -PolicyStore PersistentStore -Profile Domain,Private,Public | Select-Object Name,Enabled,DefaultOutboundAction)
@@ -294,7 +308,7 @@ try {
             Assert-ManagedState $snapshot $false
         } else {
             Set-Phase 'Checking policy ownership and saving the original firewall configuration...'
-            $orphanedGroup = @(Get-NetFirewallRule -PolicyStore ActiveStore -Group $Group -ErrorAction Stop)
+            $orphanedGroup = @(Get-GroupRulesOrEmpty 'ActiveStore')
             if ($orphanedGroup.Count -gt 0) {
                 throw 'TorProxy firewall rules exist but the original snapshot is missing. Refusing to guess the original firewall policy; manual recovery is required.'
             }
