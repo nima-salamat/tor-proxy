@@ -751,9 +751,9 @@ class SettingWindow(QWidget):
                 status.setText("AUTO")
 
     def initialize_advanced_page(self):
-        self.advanced_page_layout.addWidget(self._section_title("Optional security verification"))
+        self.advanced_page_layout.addWidget(self._section_title("Optional publisher signature verification"))
         self.advanced_page_layout.addWidget(
-            self._description("Choose whether to authenticate the Tor publisher using its signed release metadata.")
+            self._description("OpenPGP verification is OFF by default. Enable it only when you explicitly want the additional publisher-signature check.")
         )
         self.chk_verify_tor_signatures = QCheckBox(
             "Verify Tor bundle signatures with OpenPGP (GnuPG)", self
@@ -763,11 +763,10 @@ class SettingWindow(QWidget):
         self.advanced_page_layout.addWidget(self.chk_verify_tor_signatures)
 
         details = QLabel(
-            "ON (default): TorProxy requires the matching detached .asc signature and checks it against Tor's "
-            "pinned signing key. A working GnuPG installation is required; missing or invalid signatures stop installation.\n\n"
-            "OFF: TorProxy downloads from the official HTTPS host and checks archive structure, but does not "
-            "authenticate the publisher's cryptographic signature. This is less secure if the distribution host, "
-            "connection or archive is compromised.\n\n"
+            "OFF (default): TorProxy downloads from the official HTTPS host and safely extracts the archive, "
+            "but does not authenticate the publisher's cryptographic signature.\n\n"
+            "ON: TorProxy requires the matching detached .asc signature and checks it against Tor's pinned signing key. "
+            "A working GnuPG installation is required; missing or invalid signatures stop installation.\n\n"
             "The same preference applies to manually imported bundles when a matching .asc file is available."
         )
         details.setWordWrap(True)
