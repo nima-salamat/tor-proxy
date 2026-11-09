@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <fwpmu.h>
 #include <fwpmtypes.h>
+#include <rpc.h>
 #include <iphlpapi.h>
 #include <netioapi.h>
 #include <ws2tcpip.h>
@@ -312,8 +313,8 @@ void activate(const std::vector<std::wstring>& programs) {
 
     Engine engine;
     Transaction transaction(engine.get());
-    removeOwnedFilters(engine.get());
     addProviderAndSublayer(engine.get());
+    removeOwnedFilters(engine.get());
 
     for (const auto& path : programs) {
         addAppPermit(engine.get(), path, FWPM_LAYER_ALE_AUTH_CONNECT_V4,
