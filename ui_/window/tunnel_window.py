@@ -117,7 +117,7 @@ class TunnelManagerWindow(QWidget):
         self.versions_list.setUniformItemSizes(True)
         self.versions_list.currentItemChanged.connect(self._on_version_changed)
         release_layout.addWidget(self.versions_list, 1)
-        content.addWidget(self.release_panel, 2)
+        content.addWidget(self.release_panel, 1)
 
         details_panel = QFrame(self)
         details_panel.setObjectName("contentCard")
@@ -204,7 +204,7 @@ class TunnelManagerWindow(QWidget):
         details_layout.addWidget(self.status)
         details_layout.addStretch(1)
 
-        content.addWidget(details_panel, 1)
+        content.addWidget(details_panel, 2)
         root.addLayout(content, 1)
 
         self.progress_changed.connect(self._on_progress)
@@ -765,6 +765,7 @@ class TunnelManagerWindow(QWidget):
         self.btn_install.setIcon(qta.icon("fa6s.download", color="#ffffff"))
         self.btn_start_stop.setIcon(qta.icon("fa6s.play", color=icon_color))
         self.btn_test_connection.setIcon(qta.icon("fa6s.flask", color=icon_color))
+        self._refresh_state()
 
 
 
