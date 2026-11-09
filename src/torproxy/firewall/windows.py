@@ -14,7 +14,7 @@ from ..paths import user_directories
 
 GROUP = "TorProxy Kill Switch"
 SNAPSHOT_NAME = "windows-firewall-snapshot.json"
-ELEVATED_HELPER_TIMEOUT_MS = 180_000
+ELEVATED_HELPER_TIMEOUT_MS = 30_000
 
 _POWERSHELL = r"""
 param(
@@ -102,6 +102,36 @@ function Set-SnapshotValue($snapshot, [string]$name, $value) {
         $snapshot | Add-Member -NotePropertyName $name -NotePropertyValue $value
     } else {
         $property.Value = $value
+    }
+}
+function Set-SnapshotLocalRulesEnabled($snapshot, [bool]$enabled) {
+    # Local outbound Allow rules can number in the hundreds. Resolve and update
+    # them as arrays; invoking Set/Get-NetFirewallRule once per rule is extremely
+    # slow because each call crosses the NetSecurity CIM provider boundary.
+    $names = @($snapshot.disabledRules | ForEach-Object { [string]$_ } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
+    if ($names.Count -eq 0) { return }
+
+    $existing = @(Get-NetFirewallRule -PolicyStore PersistentStore -Name $names -ErrorAction SilentlyContinue)
+    $changeNames = @($existing | Where-Object {
+        [string]$_.Enabled -ne ([string]$enabled)
+    } | ForEach-Object { [string]$_.Name } | Sort-Object -Unique)
+    if ($changeNames.Count -gt 0) {
+        Set-NetFirewallRule -PolicyStore PersistentStore -Name $changeNames -Enabled $enabled -ErrorAction Stop | Out-Null
+    }
+
+    # Re-read once and verify the batch. Missing rules are tolerated because an
+    # administrator may have removed one while TorProxy was active.
+    $verified = @(Get-NetFirewallRule -PolicyStore PersistentStore -Name $names -ErrorAction SilentlyContinue)
+    $notApplied = @($verified | Where-Object {
+        [string]$_.Enabled -ne ([string]$enabled)
+    })
+    if ($notApplied.Count -gt 0) {
+        $first = [string]$notApplied[0].Name
+        if ($enabled) {
+            throw "Outbound firewall rule $first could not be restored to its saved enabled state."
+        }
+        throw "Outbound firewall rule $first could not be disabled for Kill Switch protection."
     }
 }
 function Format-FilterValue($value) {
@@ -328,9 +358,8 @@ try {
         # Apply the restrictive default before removing old exceptions.
         Set-Phase 'Applying outbound default-deny policy to all firewall profiles...'
         Set-NetFirewallProfile -PolicyStore PersistentStore -Profile Domain,Private,Public -Enabled True -DefaultOutboundAction Block
-        foreach ($name in @($snapshot.disabledRules)) {
-            Set-NetFirewallRule -PolicyStore PersistentStore -Name ([string]$name) -Enabled False
-        }
+        Set-Phase 'Disabling saved local outbound Allow rules in one batch...'
+        Set-SnapshotLocalRulesEnabled $snapshot $false
         Get-NetFirewallRule -PolicyStore PersistentStore -Group $Group -ErrorAction SilentlyContinue | Remove-NetFirewallRule
 
         Set-Phase 'Installing Tor, DHCP, IPv6 and tunnel firewall exceptions...'
@@ -396,12 +425,8 @@ try {
                     Set-NetFirewallProfile -PolicyStore PersistentStore -Profile ([string]$saved.Name) -Enabled ([bool]$saved.Enabled) -DefaultOutboundAction ([string]$saved.DefaultOutboundAction)
                 }
             }
-            foreach ($name in @($snapshot.disabledRules)) {
-                $rule = Get-NetFirewallRule -PolicyStore PersistentStore -Name ([string]$name) -ErrorAction SilentlyContinue
-                if ($null -ne $rule -and [string]$rule.Enabled -eq 'False') {
-                    Set-NetFirewallRule -PolicyStore PersistentStore -Name ([string]$name) -Enabled True
-                }
-            }
+            Set-Phase 'Restoring saved local outbound Allow rules in one batch...'
+            Set-SnapshotLocalRulesEnabled $snapshot $true
             $restoredProfiles = Get-PersistentProfiles
             foreach ($saved in $snapshot.profiles) {
                 $current = $restoredProfiles | Where-Object { $_.Name -eq $saved.Name } | Select-Object -First 1
@@ -410,12 +435,7 @@ try {
                     throw "Windows Firewall profile $($saved.Name) could not be restored to its saved state."
                 }
             }
-            foreach ($name in @($snapshot.disabledRules)) {
-                $rule = Get-NetFirewallRule -PolicyStore PersistentStore -Name ([string]$name) -ErrorAction SilentlyContinue
-                if ($null -ne $rule -and [string]$rule.Enabled -ne 'True') {
-                    throw "Outbound firewall rule $name could not be restored to its saved enabled state."
-                }
-            }
+
             Remove-Item -LiteralPath $SnapshotPath -Force
             Write-Result @{ ok = $true; active = $false; detail = 'TorProxy rules removed and the saved firewall policy restored and verified.' }
         }
@@ -467,12 +487,8 @@ try {
             # Delete only TorProxy-owned persistent rules and re-enable only
             # the local rules recorded as enabled in the original snapshot.
             Get-NetFirewallRule -PolicyStore PersistentStore -Group $Group -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction Stop
-            foreach ($name in @($snapshot.disabledRules)) {
-                $rule = Get-NetFirewallRule -PolicyStore PersistentStore -Name ([string]$name) -ErrorAction SilentlyContinue
-                if ($null -ne $rule -and [string]$rule.Enabled -ne 'True') {
-                    Set-NetFirewallRule -PolicyStore PersistentStore -Name ([string]$name) -Enabled True
-                }
-            }
+            Set-Phase 'Restoring saved local outbound Allow rules in one batch...'
+            Set-SnapshotLocalRulesEnabled $snapshot $true
 
             $restoredProfiles = Get-PersistentProfiles
             foreach ($saved in $snapshot.profiles) {
@@ -490,12 +506,7 @@ try {
                     throw "Firewall profile $name could not be restored to its saved state."
                 }
             }
-            foreach ($name in @($snapshot.disabledRules)) {
-                $rule = Get-NetFirewallRule -PolicyStore PersistentStore -Name ([string]$name) -ErrorAction SilentlyContinue
-                if ($null -ne $rule -and [string]$rule.Enabled -ne 'True') {
-                    throw "Firewall rule $name could not be restored to its saved enabled state."
-                }
-            }
+
 
             $archivePath = $SnapshotPath + '.recovered'
             if (Test-Path -LiteralPath $archivePath) {
