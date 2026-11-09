@@ -119,37 +119,71 @@ function Set-SnapshotValue($snapshot, [string]$name, $value) {
     }
 }
 function Set-SnapshotLocalRulesEnabled($snapshot, [bool]$enabled) {
-    # Local outbound Allow rules can number in the hundreds. Resolve and update
-    # them as arrays; invoking Set/Get-NetFirewallRule once per rule is extremely
-    # slow because each call crosses the NetSecurity CIM provider boundary.
+    # Use the native Windows Firewall COM collection rather than the NetSecurity
+    # CIM provider. The latter can spend a long time materializing and updating
+    # hundreds of rule objects even when passed a single -Name array.
     $names = @($snapshot.disabledRules | ForEach-Object { [string]$_ } |
         Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
     if ($names.Count -eq 0) { return }
 
-    $existing = @(Get-NetFirewallRule -PolicyStore PersistentStore -Name $names -ErrorAction SilentlyContinue)
-    $changeNames = @($existing | Where-Object {
-        [string]$_.Enabled -ne ([string]$enabled)
-    } | ForEach-Object { [string]$_.Name } | Sort-Object -Unique)
-    if ($changeNames.Count -gt 0) {
-        # NetSecurity's -Enabled parameter is an enum (True/False), not Boolean.
-        $enabledValue = if ($enabled) { 'True' } else { 'False' }
-        Set-NetFirewallRule -PolicyStore PersistentStore -Name $changeNames -Enabled $enabledValue -ErrorAction Stop | Out-Null
-    }
+    $wanted = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($name in $names) { [void]$wanted.Add([string]$name) }
 
-    # Re-read once and verify the batch. Missing rules are tolerated because an
-    # administrator may have removed one while TorProxy was active.
-    $verified = @(Get-NetFirewallRule -PolicyStore PersistentStore -Name $names -ErrorAction SilentlyContinue)
-    $notApplied = @($verified | Where-Object {
-        [string]$_.Enabled -ne ([string]$enabled)
-    })
-    if ($notApplied.Count -gt 0) {
-        $first = [string]$notApplied[0].Name
-        if ($enabled) {
-            throw "Outbound firewall rule $first could not be restored to its saved enabled state."
+    $policy = $null
+    $rules = $null
+    $matched = 0
+    $changed = 0
+    $timer = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        $policy = New-Object -ComObject HNetCfg.FwPolicy2
+        $rules = $policy.Rules
+        $totalRules = [int]$rules.Count
+        Set-Phase ("Updating {0} saved local firewall rules through COM (firewall contains {1} rules)..." -f $names.Count, $totalRules)
+
+        foreach ($rule in $rules) {
+            $ruleName = [string]$rule.Name
+            if (-not $wanted.Contains($ruleName)) { continue }
+
+            # A snapshot entry must still identify an enabled outbound Allow rule.
+            # Do not modify an unrelated rule if Windows policy has drifted.
+            if ([int]$rule.Direction -ne 2 -or [int]$rule.Action -ne 1) {
+                throw "Saved firewall rule $ruleName no longer matches an outbound Allow rule; refusing to modify it."
+            }
+
+            $matched++
+            if ([bool]$rule.Enabled -ne $enabled) {
+                # INetFwRule.Enabled is a VARIANT_BOOL COM property. Passing a
+                # PowerShell Boolean is correct here (unlike NetSecurity's enum parameter).
+                $rule.Enabled = [bool]$enabled
+                if ([bool]$rule.Enabled -ne $enabled) {
+                    throw "Outbound firewall rule $ruleName could not be changed through the Windows Firewall COM API."
+                }
+                $changed++
+            }
+
+            if (($matched % 100) -eq 0) {
+                Set-Phase ("Updated {0}/{1} saved firewall rules through COM ({2:N1}s)..." -f $matched, $names.Count, $timer.Elapsed.TotalSeconds)
+            }
         }
-        throw "Outbound firewall rule $first could not be disabled for Kill Switch protection."
+        $timer.Stop()
+
+        # A missing rule may have been removed by the administrator since the
+        # snapshot was taken. That is safe to skip; zero matches is not verifiable.
+        if ($matched -eq 0 -and $names.Count -gt 0) {
+            throw "None of the {0} saved firewall rules were found in the Windows Firewall COM collection; the update could not be verified." -f $names.Count
+        }
+        Set-Phase ("Windows Firewall COM updated {0} rules ({1} matched) in {2:N1}s." -f $changed, $matched, $timer.Elapsed.TotalSeconds)
+    }
+    finally {
+        if ($null -ne $rules -and [System.Runtime.InteropServices.Marshal]::IsComObject($rules)) {
+            [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($rules)
+        }
+        if ($null -ne $policy -and [System.Runtime.InteropServices.Marshal]::IsComObject($policy)) {
+            [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($policy)
+        }
     }
 }
+
 function Set-SnapshotProfile($saved) {
     # Set-NetFirewallProfile uses the GpoBoolean enum, not System.Boolean.
     $enabledValue = if ([bool]$saved.Enabled) { 'True' } else { 'False' }
