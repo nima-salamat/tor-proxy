@@ -399,7 +399,7 @@ class ProxyWindow(QWidget):
         border = "#3b4552" if dark else "#d7dee7"
         muted = "#aab4c1" if dark else "#667386"
         accent = "#47a3f2" if dark else "#1876bf"
-        surface = "transparent"
+        surface = "#202630" if dark else "#ffffff"
         field = "transparent"
         hover = "#2b3643" if dark else "#eaf0f5"
         text = "#e8edf3" if dark else "#253041"
