@@ -3,7 +3,15 @@
 
 ### Windows system tunnel starts but traffic times out
 
-TorProxy uses sing-box's `gvisor` TUN stack on Windows as a compatibility fallback, but this cannot bypass host-level filtering. If Tor SOCKS preflight passes but all post-start TLS probes fail, check the Windows security product's network-shield/firewall history and the sing-box process/TUN adapter allow rules. A sing-box issue with the same symptom was traced to Avast's network filtering rather than sing-box itself: https://github.com/SagerNet/sing-box/issues/4348. Do not disable the system firewall globally; use the security product's per-app or interface allow controls and retest. TorProxy tests SOCKS before installing system routes and automatically stops the tunnel if no post-start TLS probe works.
+For sing-box versions before 1.15, TorProxy automatically tests `gvisor`, `system`, and `mixed` stacks. It first proves a complete TLS handshake through Tor SOCKS, then checks the same destination through the TUN; failed stacks are stopped before the next is tried. With sing-box 1.15+, the new built-in TUN stack is used instead of the deprecated stack setting.
+
+If the SOCKS TLS preflight succeeds but every TUN stack fails, the Tor exit is reachable and the failure is isolated to Windows TUN forwarding or a host network filter. Check Windows Security/third-party antivirus network shield and firewall history; allow the installed `sing-box.exe` and the TorProxy TUN adapter in the security product. A sing-box report with similar Windows symptoms identified Avast's network filtering as the cause rather than sing-box itself: https://github.com/SagerNet/sing-box/issues/4348. Do not disable Windows Firewall globally. A read-only adapter-binding overview can be collected with:
+```powershell
+Get-NetAdapterBinding -Name "*" |
+    Where-Object Enabled |
+    Format-Table Name, DisplayName, ComponentID -AutoSize
+```
+TorProxy stops each failed TUN attempt and restores routes before trying another stack.
 
 ## Tor does not start
 
