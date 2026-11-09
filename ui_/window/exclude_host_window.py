@@ -1,10 +1,8 @@
 """Modern UI for host bypass/exclusion rules."""
 from __future__ import annotations
 
-import logging
-
 import qtawesome as qta
-from PySide6.QtCore import Qt, QThreadPool, QSize
+from PySide6.QtCore import Qt, QSize
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -20,10 +18,7 @@ from PySide6.QtWidgets import (
 
 from config import CONFIG
 from ui_.window.dialogs import QMessageBox
-from proxy import load_exclude, remove_exclude, save_exclude, add_to_exclude_hosts, get_exclude
-from ui_.worker.worker import Worker
-
-logger = logging.getLogger(__name__)
+from proxy import load_exclude, remove_exclude, add_to_exclude_hosts, get_exclude
 
 
 class ExcludeHostsWindow(QWidget):
@@ -32,8 +27,6 @@ class ExcludeHostsWindow(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._parent = parent
-        self.threadpool = QThreadPool(self)
-
         load_exclude()
         self._rule_icon_name = "fa6s.route"
 
@@ -203,7 +196,8 @@ class ExcludeHostsWindow(QWidget):
         menu = QMenu(self)
         remove_action = menu.addAction(qta.icon("fa6s.trash", color="#d95d67"), "Remove rule")
         chosen = menu.exec(self.hosts_list.mapToGlobal(pos))
-        if chosen == remove_action:            self._confirm_remove(item.text())
+        if chosen == remove_action:
+            self._confirm_remove(item.text())
 
     def _confirm_remove(self, host):
         reply = QMessageBox.question(
@@ -214,13 +208,15 @@ class ExcludeHostsWindow(QWidget):
         )
         if reply != QMessageBox.StandardButton.Yes:
             return
-        remove_exclude(host)
+        try:
+            remove_exclude(host)
+        except (ValueError, OSError) as exc:
+            QMessageBox.warning(self, "Could not remove rule", str(exc))
+            return
         self._update_hosts_list()
-        self.status_label.setText(f"Removed {host}. Saving changes…")
-        worker = Worker(save_exclude)
-        worker.signals.finished.connect(lambda *_: self.status_label.setText("Excluded-host rules saved."))
-        worker.signals.error.connect(lambda error: logger.warning("Could not save excluded hosts: %s", error))
-        self.threadpool.start(worker)
+        self.status_label.setText(
+            f"Removed {host}. Saved. The HTTP proxy applies it immediately; System Tunnel reloads it on its next start."
+        )
 
     def add_to_list(self):
         host = self.inp_host.text().strip()
@@ -238,10 +234,8 @@ class ExcludeHostsWindow(QWidget):
             self._update_hosts_list()
             self.inp_host.clear()
             self.inp_host.setFocus()
-            self.status_label.setText(f"Added {host}. Saving changes…")
-            worker = Worker(save_exclude)
-            worker.signals.finished.connect(lambda *_: self.status_label.setText("Excluded-host rules saved."))
-            worker.signals.error.connect(lambda error: logger.warning("Could not save excluded hosts: %s", error))
-            self.threadpool.start(worker)
+            self.status_label.setText(
+                f"Added {host}. Saved. The HTTP proxy applies it immediately; System Tunnel loads it on its next start."
+            )
         else:
             self.status_label.setText(f"{host} is already in the excluded-host list.")
