@@ -114,6 +114,8 @@ class Window(QMainWindow):
         self._prewarm_theme_stylesheets()
 
         self._exit_authorized = False
+        self._shutdown_in_progress = False
+        self._shutdown_complete = False
         self.tray_icon = QSystemTrayIcon(self)
         self.tray_icon.setIcon(QIcon(resource_path("assets/icon.png")))
         self.tray_icon.setToolTip("TorProxy")
@@ -879,11 +881,6 @@ class Window(QMainWindow):
                 return
         self._exit_authorized = True
         self.close()
-        # A window hidden to the tray is no longer a visible "last window".
-        # Quit explicitly so Exit works identically from the tray menu.
-        app = QApplication.instance()
-        if app is not None:
-            app.quit()
             
     
     def _show_help(self):
@@ -917,13 +914,22 @@ class Window(QMainWindow):
         self.tray_icon.showMessage(title, message, QSystemTrayIcon.Information, 2000)
 
     def closeEvent(self, event):
-        # OS taskbar close and the titlebar × are hide actions, not application
-        # exits. Only one of the explicit Exit commands sets this flag.
+        # Ordinary window closes only hide to the tray. Explicit Exit performs
+        # cleanup asynchronously, then closes again when the worker completes.
         if not getattr(self, "_exit_authorized", False):
             event.ignore()
             self.hide_to_tray()
             return
 
+        if getattr(self, "_shutdown_complete", False):
+            event.accept()
+            return
+
+        event.ignore()
+        if self._shutdown_in_progress:
+            return
+
+        self._shutdown_in_progress = True
         self._closing = True
         if hasattr(self, "_state_timer"):
             self._state_timer.stop()
@@ -933,26 +939,40 @@ class Window(QMainWindow):
             self.tray_icon.hide()
         except Exception:
             pass
-        try:
-            stopped = self.proxyWidget._stop_services()
-        except Exception:
-            logger.exception("Failed while stopping services during application shutdown.")
-            stopped = False
-        tunnel_manager = getattr(self.proxyWidget, "system_tunnel_manager", None)
-        tunnel_status = tunnel_manager.status() if tunnel_manager is not None else {"active": False}
-        if stopped is False or tunnel_status.get("active") or not tunnel_status.get("verified", True):
-            self._closing = False
-            self._exit_authorized = False
-            try:
-                self.tray_icon.show()
-            except Exception:
-                pass
-            if hasattr(self, "_state_timer"):
-                self._state_timer.start()
-            hotkey_start = getattr(getattr(self, "hotkey_manager", None), "start", None)
-            if callable(hotkey_start):
-                hotkey_start()
-            event.ignore()
+
+        if not self.proxyWidget._request_stop_services(final_status="APPLICATION EXIT"):
+            self._on_proxy_shutdown_complete(
+                False,
+                "Application exit could not start asynchronous cleanup. "
+                "Resolve the active tunnel operation and try again.",
+            )
+
+    def _on_proxy_shutdown_complete(self, success: bool, error: str = "") -> None:
+        """Finish or roll back an explicit asynchronous application shutdown."""
+        self._shutdown_in_progress = False
+        if success:
+            self._shutdown_complete = True
+            self._exit_authorized = True
+            self.close()
+            app = QApplication.instance()
+            if app is not None:
+                app.quit()
             return
-        logger.info("TorProxy application exit accepted.")
-        event.accept()
+
+        self._closing = False
+        self._exit_authorized = False
+        self._shutdown_complete = False
+        try:
+            self.tray_icon.show()
+        except Exception:
+            pass
+        if hasattr(self, "_state_timer"):
+            self._state_timer.start()
+        hotkey_start = getattr(getattr(self, "hotkey_manager", None), "start", None)
+        if callable(hotkey_start):
+            hotkey_start()
+        QMessageBox.warning(
+            self,
+            "Could not exit TorProxy",
+            str(error or "Cleanup failed; the app remains open for network-state inspection."),
+        )

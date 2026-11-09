@@ -812,6 +812,9 @@ class SystemTunnelManager:
                     "server_port": socks_port,
                     "version": "5",
                     "network": "tcp",
+                    # Keep the Tor SOCKS connection on loopback even though
+                    # route.auto_detect_interface binds other outbounds to the WAN NIC.
+                    "inet4_bind_address": "127.0.0.1",
                 },
                 {"type": "direct", "tag": "direct"},
                 {"type": "block", "tag": "block"},
@@ -828,6 +831,11 @@ class SystemTunnelManager:
                         "process_path": sorted(bypass_paths),
                         "action": "route",
                         "outbound": "direct",
+                    },
+                    {
+                        "ip_cidr": ["172.19.0.1/32", "fdfe:dcba:9876::1/128"],
+                        "action": "reject",
+                        "method": "drop",
                     },
                     {"action": "hijack-dns"},
                     {"network": "udp", "action": "reject", "method": "default"},
@@ -1292,8 +1300,12 @@ def _helper_start(args: Any) -> dict[str, Any]:
         raise SystemTunnelError("The privileged helper only permits the local Tor SOCKS listener.")
     if set(outbounds) != {"tor-socks", "direct", "block"}:
         raise SystemTunnelError("The privileged helper rejected unexpected outbound definitions.")
-    if set(proxy) != {"type", "tag", "server", "server_port", "version", "network"}:
-        raise SystemTunnelError("The privileged helper rejected extra SOCKS outbound options.")
+    if set(proxy) != {
+        "type", "tag", "server", "server_port", "version", "network", "inet4_bind_address"
+    } or proxy.get("inet4_bind_address") != "127.0.0.1":
+        raise SystemTunnelError(
+            "The privileged helper requires the Tor SOCKS outbound to bind to the local loopback address."
+        )
     if proxy.get("version") != "5" or outbounds.get("direct") != {"type": "direct", "tag": "direct"} or outbounds.get("block") != {"type": "block", "tag": "block"}:
         raise SystemTunnelError("The privileged helper rejected an unexpected outbound configuration.")
     dns = config.get("dns", {})
@@ -1312,9 +1324,14 @@ def _helper_start(args: Any) -> dict[str, Any]:
         raise SystemTunnelError("The privileged helper rejected the routing defaults.")
     route_rules = route.get("rules", [])
     if (
-        len(route_rules) != 4
-        or route_rules[2] != {"action": "hijack-dns"}
-        or route_rules[3] != {"network": "udp", "action": "reject", "method": "default"}
+        len(route_rules) != 5
+        or route_rules[2] != {
+            "ip_cidr": ["172.19.0.1/32", "fdfe:dcba:9876::1/128"],
+            "action": "reject",
+            "method": "drop",
+        }
+        or route_rules[3] != {"action": "hijack-dns"}
+        or route_rules[4] != {"network": "udp", "action": "reject", "method": "default"}
     ):
         raise SystemTunnelError("The privileged helper rejected the DNS/UDP route ordering.")
 
@@ -1472,54 +1489,54 @@ def _send_windows_ctrl_break(pid: int) -> bool:
 
 
 def _stop_verified_process(process: psutil.Process, state: dict[str, Any]) -> None:
-    """Stop only the exact recorded sing-box process, preferring graceful cleanup."""
+    """Stop only the recorded sing-box process with a short graceful window."""
     if os.name == "nt":
-        _send_windows_ctrl_break(process.pid)
+        # Prefer Ctrl-Break so sing-box releases its Wintun session normally.
+        signaled = _send_windows_ctrl_break(process.pid)
+        if signaled:
+            try:
+                process.wait(timeout=3)
+                return
+            except psutil.TimeoutExpired:
+                pass
+            except psutil.NoSuchProcess:
+                return
+
+        # The previous taskkill /PID path could consume another 13 seconds.
+        # Verify process identity again and use a bounded native terminate instead.
+        current = _process_matches(state)
+        if current is None or current.pid != process.pid:
+            raise SystemTunnelError("The tunnel process identity changed while stopping; refusing to terminate it.")
         try:
-            process.wait(timeout=8)
+            current.terminate()
+            current.wait(timeout=3)
+            return
+        except psutil.NoSuchProcess:
             return
         except psutil.TimeoutExpired:
             pass
-
-        # This is the same non-/F Windows shutdown path used by desktop launchers
-        # when the child has no visible console window.
-        taskkill = shutil.which("taskkill.exe") or shutil.which("taskkill")
-        if taskkill:
-            try:
-                subprocess.run(
-                    [taskkill, "/PID", str(process.pid)],
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=8,
-                    check=False,
-                )
-                process.wait(timeout=5)
-                return
-            except (OSError, subprocess.TimeoutExpired, psutil.TimeoutExpired, psutil.NoSuchProcess):
-                pass
+        except OSError as exc:
+            raise SystemTunnelError(f"Could not terminate the verified sing-box process: {exc}") from exc
     else:
         try:
             process.terminate()
-            process.wait(timeout=HELPER_STOP_TIMEOUT_SECONDS)
+            process.wait(timeout=6)
             return
         except psutil.TimeoutExpired:
             pass
         except psutil.NoSuchProcess:
             return
 
-    # Last resort is deliberately identity-checked and followed by a TUN
-    # interface disappearance check before reporting the tunnel stopped.
     current = _process_matches(state)
     if current is None or current.pid != process.pid:
         raise SystemTunnelError("The tunnel process identity changed while stopping; refusing to terminate it.")
     try:
         current.kill()
-        current.wait(timeout=5)
+        current.wait(timeout=2)
     except psutil.NoSuchProcess:
         return
     except psutil.TimeoutExpired as exc:
-        raise SystemTunnelError("The verified sing-box process could not be stopped.") from exc
+        raise SystemTunnelError("The verified sing-box process could not be stopped after termination.") from exc
 
 
 def _helper_stop(state_path: Path, interface_name: str) -> dict[str, Any]:
@@ -1550,7 +1567,7 @@ def _helper_stop(state_path: Path, interface_name: str) -> dict[str, Any]:
         _stop_verified_process(process, state)
     except psutil.NoSuchProcess:
         pass
-    deadline = time.monotonic() + 5.0
+    deadline = time.monotonic() + 3.0
     while _interface_exists(interface_name) and time.monotonic() < deadline:
         time.sleep(0.1)
     if _interface_exists(interface_name):

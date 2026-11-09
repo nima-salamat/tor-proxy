@@ -45,16 +45,34 @@ def test_system_tunnel_config_uses_tcp_tor_socks_and_hijacks_dns(tmp_path, monke
     assert outbound["server"] == "127.0.0.1"
     assert outbound["server_port"] == 9150
     assert outbound["network"] == "tcp"
+    assert outbound["inet4_bind_address"] == "127.0.0.1"
     assert config["dns"]["servers"][0]["detour"] == "tor-socks"
     assert rules[0]["outbound"] == "direct"
     expected_names = {manager.engine_path.name.casefold(), tor.name.casefold()}
     assert expected_names.issubset(set(rules[0]["process_name"]))
     assert str(manager.engine_path.resolve()) in rules[1]["process_path"]
     assert str(tor.resolve()) in rules[1]["process_path"]
-    assert rules[2] == {"action": "hijack-dns"}
-    assert rules[3] == {"network": "udp", "action": "reject", "method": "default"}
+    assert rules[2] == {
+        "ip_cidr": ["172.19.0.1/32", "fdfe:dcba:9876::1/128"],
+        "action": "reject",
+        "method": "drop",
+    }
+    assert rules[3] == {"action": "hijack-dns"}
+    assert rules[4] == {"network": "udp", "action": "reject", "method": "default"}
     assert config["route"]["final"] == "tor-socks"
 
+
+
+def test_tor_socks_dialer_binds_to_loopback_even_with_default_interface_detection(tmp_path):
+    manager = _manager(tmp_path)
+    tor = tmp_path / ("tor.exe" if os.name == "nt" else "tor")
+    tor.write_bytes(b"tor")
+    config = manager.build_config(9150, tor_executables=[tor])
+
+    assert config["route"]["auto_detect_interface"] is True
+    outbound = next(item for item in config["outbounds"] if item["tag"] == "tor-socks")
+    assert outbound["server"] == "127.0.0.1"
+    assert outbound["inet4_bind_address"] == "127.0.0.1"
 
 
 def test_windows_and_linux_helpers_share_one_complete_argument_builder(tmp_path, monkeypatch):

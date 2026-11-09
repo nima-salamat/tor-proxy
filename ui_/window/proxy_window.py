@@ -49,6 +49,8 @@ class ProxyWindow(QWidget):
         self.failed = False
         self.proxy_set = has_proxy_snapshot()  # also recover safely after an unclean previous exit
         self._stopping = False
+        self._disconnect_worker = None
+        self._disconnect_final_status = "NOT CONNECTED"
         self._identity_busy = False
         self._exit_ip_check_busy = False
         self._exit_ip_worker = None
@@ -564,25 +566,31 @@ class ProxyWindow(QWidget):
 
     def dataValueChanged(self, v):
         if v == "100%":
-            if self._parent.isHidden():
+            if self._parent is not None and self._parent.isHidden():
                 self._parent._notify("TorProxy", "Tor bootstrap completed")
             try:
-                self.controller = Controller.from_port(address="127.0.0.1", port=self.tor_control_port)
-                self.controller.authenticate()
-            except Exception as e:
-                logger.exception("Could not authenticate to the managed Tor ControlPort: %s", e)
-                self.logs_widget.update_log(f"Tor bootstrap completed but ControlPort authentication failed: {e}")
+                controller = Controller.from_port(address="127.0.0.1", port=self.tor_control_port)
+                controller.authenticate()
+                self.controller = controller
+            except Exception as exc:
+                logger.exception("Could not authenticate to the managed Tor ControlPort: %s", exc)
+                self.logs_widget.update_log(
+                    f"Tor bootstrap completed but ControlPort authentication failed: {exc}"
+                )
                 self.connected = False
                 self.failed = True
                 self.connect_btn.set_connected(False)
                 if self.running:
-                    self._stop_services()
-                self.btn_status.setText("CONTROL AUTHENTICATION FAILED · SEE EVENT LOG")
-                self.set_btn_status_style("disconnected")
+                    self._request_stop_services(
+                        final_status="CONTROL AUTHENTICATION FAILED · SEE EVENT LOG"
+                    )
+                else:
+                    self.btn_status.setText("CONTROL AUTHENTICATION FAILED · SEE EVENT LOG")
+                    self.set_btn_status_style("disconnected")
                 if self._parent is not None and hasattr(self._parent, "notify_user"):
                     self._parent.notify_user(
                         "Tor control authentication failed",
-                        str(e),
+                        str(exc),
                         level="warning",
                     )
                 self._update_proxy_buttons()
@@ -595,25 +603,67 @@ class ProxyWindow(QWidget):
             self._apply_system_proxy_mode()
             self.timer_data_usage.start()
 
-        self.lbl_percent.setText(str(v)+"")
-
+        self.lbl_percent.setText(str(v))
     def _on_tor_failed(self, message):
         self.failed = True
         self.logs_widget.update_log(f"Tor supervisor reported a failure: {message}")
         logger.error("Tor supervisor failed: %s", message)
         if self._parent is not None and hasattr(self._parent, "notify_user"):
             self._parent.notify_user("Tor startup failed", str(message), level="warning")
+
         if self.running:
-            self._stop_services()
-        self.connect_btn.set_connected(False)
-        self.btn_status.setText("TOR STARTUP FAILED · SEE EVENT LOG")
-        self.set_btn_status_style("disconnected")
-        # Keep the error close to the failed action: return to Home and open
-        # the Event Log drawer so the Tor-side diagnostic is immediately visible.
+            self._request_stop_services(final_status="TOR STARTUP FAILED · SEE EVENT LOG")
+        else:
+            self.connect_btn.set_connected(False)
+            self.btn_status.setText("TOR STARTUP FAILED · SEE EVENT LOG")
+            self.set_btn_status_style("disconnected")
+
         if self._parent is not None and hasattr(self._parent, "_show_home"):
             self._parent._show_home()
         if not self.logs_open:
             self.show_logs()
+    def _on_services_stopped(self, result: str) -> None:
+        try:
+            payload = json.loads(result)
+            messages = payload.get("messages", []) if isinstance(payload, dict) else []
+        except (TypeError, ValueError):
+            messages = [str(result)]
+        for message in messages:
+            self.logs_widget.update_log(str(message))
+
+        self.running = False
+        self.connected = False
+        self._stopping = False
+        self._disconnect_worker = None
+        self.lbl_percent.setText("0%")
+        self.btn_status.setText(self._disconnect_final_status)
+        self.set_btn_status_style("disconnected")
+        self.connect_btn.set_connected(False)
+        self.connect_btn.setEnabled(True)
+        self.timer_data_usage.stop()
+        self._update_proxy_buttons()
+        self._update_proxy_mode_status()
+        self._update_tunnel_hint()
+
+        if self._parent is not None and getattr(self._parent, "_shutdown_in_progress", False):
+            self._parent._on_proxy_shutdown_complete(True, "")
+
+    def _on_services_stop_failed(self, error: str) -> None:
+        detail = str(error or "Unknown disconnect error.")
+        self._stopping = False
+        self._disconnect_worker = None
+        self.connect_btn.set_connected(bool(self.connected))
+        self.connect_btn.setEnabled(True)
+        self.btn_status.setText("TUNNEL STILL ACTIVE · TOR LEFT RUNNING")
+        self.set_btn_status_style("connected" if self.connected else "disconnected")
+        self.logs_widget.update_log(detail, level="error")
+        self._update_proxy_buttons()
+        self._update_tunnel_hint()
+
+        if self._parent is not None and getattr(self._parent, "_shutdown_in_progress", False):
+            self._parent._on_proxy_shutdown_complete(False, detail)
+            return
+        QMessageBox.warning(self, "Disconnect", detail)
 
     def set_btn_status_style(self, stmt):
         self.btn_status.setProperty("connectionState", stmt)
@@ -635,17 +685,16 @@ class ProxyWindow(QWidget):
 
     def _toggle(self):
         if getattr(self, "_system_tunnel_busy", False):
-            self.logs_widget.update_log("Tor connect/disconnect is temporarily disabled while the system tunnel changes.")
+            self.logs_widget.update_log(
+                "Tor connect/disconnect is temporarily disabled while the system tunnel changes."
+            )
             return
         with self._operation_lock:
             if self.running:
-                self.connect_btn.set_disconnecting()
-                self._stop_services()
+                self._request_stop_services()
                 return
-            if self._connect_operation_busy:
+            if self._connect_operation_busy or self._stopping:
                 return
-            # Claim the connection transition synchronously on the GUI thread.
-            # Settings must not arm/disarm the firewall between preflight and Tor start.
             self._connect_operation_busy = True
 
         self.failed = False
@@ -658,7 +707,6 @@ class ProxyWindow(QWidget):
         worker.signals.finished.connect(self._on_ports_checked)
         worker.signals.error.connect(self._on_port_check_error)
         self.thread_pool.start(worker)
-
     def _on_port_check_error(self, error):
         with self._operation_lock:
             self._connect_operation_busy = False
@@ -782,43 +830,45 @@ class ProxyWindow(QWidget):
         messages.append("All four persistent listener ports are available.")
         return json.dumps([True, ports, messages])
 
-    def _stop_services(self):
+    def _request_stop_services(self, *, final_status: str = "NOT CONNECTED") -> bool:
+        """Queue disconnect work; never wait for OS helpers or child processes on the GUI thread."""
         if self._stopping:
-            return False
+            return bool(self._parent is not None and getattr(self._parent, "_shutdown_in_progress", False))
         if getattr(self, "_system_tunnel_busy", False):
-            self.logs_widget.update_log("Disconnect was blocked because the system tunnel operation is still running.")
+            message = "Disconnect was blocked because the system tunnel operation is still running."
+            self.logs_widget.update_log(message)
+            if self._parent is not None and getattr(self._parent, "_shutdown_in_progress", False):
+                self._parent._on_proxy_shutdown_complete(False, message)
             return False
+
         self._stopping = True
+        self._disconnect_final_status = final_status
         self.connect_btn.set_disconnecting()
+        self.connect_btn.setEnabled(False)
         self.btn_status.setText("DISCONNECTING…")
         self.set_btn_status_style("disconnecting")
+        self._update_proxy_buttons()
 
-        # Release system routes before stopping Tor. If elevated cleanup fails,
-        # keep Tor running until the TUN routes can be reconciled safely.
+        worker = Worker(self._stop_services_worker)
+        worker.signals.finished.connect(self._on_services_stopped)
+        worker.signals.error.connect(self._on_services_stop_failed)
+        self._disconnect_worker = worker
+        self.thread_pool.start(worker)
+        return True
+
+    def _stop_services_worker(self) -> str:
+        """Perform blocking OS cleanup away from Qt's GUI thread; never touch widgets."""
+        messages: list[str] = []
         tunnel_status = self.system_tunnel_manager.status()
         if tunnel_status.get("active") or not tunnel_status.get("verified", True):
             try:
-                message = self.system_tunnel_manager.stop()
-                self.logs_widget.update_log(message)
+                messages.append(self.system_tunnel_manager.stop())
             except Exception as exc:
-                logger.exception("Could not stop the system-wide tunnel safely.")
-                self._stopping = False
-                self.connect_btn.set_connected(bool(self.connected))
-                self.connect_btn.setEnabled(True)
-                self.btn_status.setText("TUNNEL STILL ACTIVE · TOR LEFT RUNNING")
-                self.set_btn_status_style("connected" if self.connected else "disconnected")
-                self.logs_widget.update_log(f"System tunnel cleanup failed; Tor was not stopped: {exc}", level="error")
-                QMessageBox.warning(
-                    self, "System tunnel is still active",
-                    "TorProxy kept Tor running because it could not confirm that the system TUN routes were removed. "
-                    "Resolve the tunnel stop error before disconnecting.",
-                )
-                self._update_tunnel_hint()
-                return False
-        self._update_tunnel_hint()
+                raise RuntimeError(
+                    "System tunnel cleanup failed; Tor and its SOCKS listener were kept running: "
+                    + str(exc)
+                ) from exc
 
-        # Restore a policy-managed proxy when the app disconnects in Set mode.
-        # Explicit app exit also cleans up TorProxy's own proxy assignment.
         should_restore_proxy = (
             CONFIG["system_proxy_mode"] == "set"
             or bool(getattr(self._parent, "_closing", False))
@@ -829,51 +879,41 @@ class ProxyWindow(QWidget):
                 if restored:
                     self.proxy_set = False
                     self._system_proxy_is_cleared = False
-                    self.proxy_status_label.setText("Previous system proxy settings restored.")
+                    messages.append("Previous system proxy settings restored.")
                 else:
-                    self.proxy_status_label.setText("System proxy changed externally or could not be restored; inspect settings manually")
-                    self.logs_widget.update_log("System proxy was not overwritten during shutdown because safe restoration could not be confirmed.")
-            except Exception as e:
-                logger.exception("Error restoring system proxy during stop: %s", e)
-                self.logs_widget.update_log(f"System proxy restoration failed: {e}")
+                    messages.append(
+                        "System proxy changed externally or could not be restored; inspect settings manually."
+                    )
+            except Exception as exc:
+                logger.exception("Error restoring system proxy during stop.")
+                messages.append(f"System proxy restoration failed: {exc}")
 
-        try:
-            if self.proxy:
+        if self.proxy:
+            try:
                 self.proxy.stop()
-                self.logs_widget.update_log("Proxy stopped.")
-        except Exception as e:
-            logger.exception("Error stopping the HTTP proxy: %s", e)
-            self.logs_widget.update_log(f"Error while stopping the HTTP proxy: {e}")
-        try:
-            controller = getattr(self, "controller", None)
-            if controller is not None:
+                messages.append("Local HTTP proxy stopped.")
+            except Exception as exc:
+                logger.exception("Error stopping the local HTTP proxy.")
+                messages.append(f"Error stopping the HTTP proxy: {exc}")
+
+        controller = getattr(self, "controller", None)
+        if controller is not None:
+            try:
                 controller.close()
+            except Exception as exc:
+                logger.warning("Closing the GUI Tor ControlPort connection failed: %s", exc)
+            finally:
                 self.controller = None
-        except Exception as e:
-            logger.warning("Closing the GUI Tor ControlPort connection failed: %s", e)
-        try:
-            if self.tor:
+
+        if self.tor:
+            try:
                 self.tor.stop()
-                self.logs_widget.update_log("Tor stopped.")
-        except Exception as e:
-            logger.exception("Error stopping Tor: %s", e)
-            self.logs_widget.update_log(f"Error while stopping Tor: {e}")
+                messages.append("Tor stopped.")
+            except Exception as exc:
+                logger.exception("Error stopping Tor.")
+                messages.append(f"Error stopping Tor: {exc}")
 
-        self.running = False
-        self.connected = False
-        self.lbl_percent.setText("0%")
-        self.btn_status.setText("NOT CONNECTED")
-        self.set_btn_status_style("disconnected")
-        self.connect_btn.set_connected(False)
-        self.connect_btn.setEnabled(True)
-        self.timer_data_usage.stop()
-        self._update_proxy_buttons()
-        self._update_proxy_mode_status()
-        self._stopping = False
-        self._update_tunnel_hint()
-        return True
-
-    # ----- proxy manual control handlers (new) -----
+        return json.dumps({"messages": messages})
     def set_proxy_clicked(self):
         # Used by the Set-system-proxy policy after Tor bootstrap has succeeded.
         if not self.running or not self.connected:

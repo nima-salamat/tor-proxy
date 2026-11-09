@@ -260,6 +260,10 @@ def test_connect_button_exposes_actual_lifecycle_states_and_white_theme_explicit
     assert 'self.setText("DISCONNECT")' in pulse_source
     assert "self.connect_btn.set_connecting()" in home_source
     assert "self.connect_btn.set_disconnecting()" in home_source
+    assert "def _request_stop_services(" in home_source
+    assert "worker = Worker(self._stop_services_worker)" in home_source
+    assert "def _stop_services_worker(self)" in home_source
+    assert "self._parent._on_proxy_shutdown_complete(True, \"\")" in home_source
     assert "Tor startup failed" in home_source
     assert "Tor rejected its configuration" in manager_source
     assert "Recent Tor log" in manager_source
@@ -390,7 +394,9 @@ def test_close_event_hides_to_tray_unless_exit_was_explicitly_authorized():
     close_event = source[source.index("    def closeEvent(self, event):"):]
     assert close_event.index("event.ignore()") < close_event.index("event.accept()")
     assert 'self.hide_to_tray()' in close_event
-    assert 'self.proxyWidget._stop_services()' in close_event
+    assert 'self.proxyWidget._request_stop_services(final_status="APPLICATION EXIT")' in close_event
+    assert "def _on_proxy_shutdown_complete(" in source
+    assert "_shutdown_in_progress" in close_event
 
 
 def test_dialog_recalculates_size_and_styles_after_screen_change():
