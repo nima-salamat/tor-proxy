@@ -305,6 +305,12 @@ class OpenBrowserDialog(_FramelessDialog):
         QTimer.singleShot(0, self._start_scan)
 
     def _extra_styles(self) -> str:
+        # Keep the primary action vivid in dark mode, but avoid a white label
+        # on the pale surface used by the light theme.
+        open_button_background = self._accent if self._dark else "#eaf3fc"
+        open_button_foreground = "#ffffff" if self._dark else self._accent
+        open_button_hover = "#236b9b" if self._dark else "#dcecfb"
+        open_button_border = self._accent if self._dark else "#c7def3"
         return f"""
             QLabel#browserReadyBadge {{
                 color: #1f9d68;
@@ -387,15 +393,19 @@ class OpenBrowserDialog(_FramelessDialog):
                 font-size: 7.5pt;
             }}
             QPushButton#browserOpenButton {{
-                color: #ffffff;
-                background: {self._accent};
-                border: 1px solid {self._accent};
+                color: {open_button_foreground};
+                background: {open_button_background};
+                border: 1px solid {open_button_border};
                 border-radius: 7px;
                 padding: 0 12px;
                 min-height: 28px;
                 font-weight: 750;
             }}
-            QPushButton#browserOpenButton:hover {{ background: #236b9b; }}
+            QPushButton#browserOpenButton:hover {{
+                color: {open_button_foreground};
+                background: {open_button_hover};
+                border-color: {self._accent};
+            }}
             QLabel#browserEmptyState {{
                 color: {self._colors["muted"]};
                 background: {self._colors["panel"]};
