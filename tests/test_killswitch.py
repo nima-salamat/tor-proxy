@@ -394,19 +394,26 @@ def test_windows_profile_updates_use_netsecurity_enum_strings():
     assert _POWERSHELL.count("Set-SnapshotProfile $saved") == 2
 
 
-def test_windows_saved_rule_updates_handle_duplicate_friendly_names_by_guid():
+def test_windows_saved_rule_updates_handle_duplicate_and_com_missing_names_by_guid():
+    fallback_start = _POWERSHELL.index("function Set-SnapshotRulesByInternalIds")
+    fallback_end = _POWERSHELL.index("function Set-SnapshotLocalRulesEnabled", fallback_start)
+    fallback = _POWERSHELL[fallback_start:fallback_end]
+    assert "Get-NetFirewallRule -PolicyStore PersistentStore -Name $ruleIds" in fallback
+    assert "Set-NetFirewallRule -PolicyStore PersistentStore -Name ($changeIds.ToArray()) -Enabled $enabledValue" in fallback
+    assert "Get-NetFirewallRule -PolicyStore PersistentStore -Name $ruleIds -ErrorAction Stop" in fallback
+    assert "did not reach the requested Enabled state during $reason fallback" in fallback
+
     start = _POWERSHELL.index("function Set-SnapshotLocalRulesEnabled")
     end = _POWERSHELL.index("function Set-SnapshotProfile", start)
     helper = _POWERSHELL[start:end]
-
     assert "$expectedByFriendlyName[$friendlyName]" in helper
     assert "$comNameCounts" in helper
     assert "$comCount -ne 1" in helper
-    assert "NetSecurity-only" in helper
     assert "$duplicateRuleIds.Add([string]$entry.InternalName)" in helper
-    assert "Set-NetFirewallRule -PolicyStore PersistentStore -Name ($duplicateChangeIds.ToArray())" in helper
-    assert "$enabledValue = if ($enabled) { 'True' } else { 'False' }" in helper
-    assert "Duplicate-name firewall rule $id did not reach the requested Enabled state." in helper
+    assert "$fallbackRuleIds.Add([string]$expected.InternalName)" in helper
+    assert "[int]$exception.HResult -eq -2147024894" in helper
+    assert "if (-not $isMissing) { throw }" in helper
+    assert "Set-SnapshotRulesByInternalIds $fallbackRuleIds.ToArray()" in helper
     assert "$rules.Item([string]$friendlyName)" in helper
     assert "[int]$rule.Direction -ne 2" in helper
     assert "[int]$rule.Action -ne 1" in helper
