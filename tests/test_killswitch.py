@@ -361,20 +361,24 @@ def test_windows_saved_local_allow_rules_map_internal_ids_to_com_friendly_names(
     start = _POWERSHELL.index("function Set-SnapshotLocalRulesEnabled")
     end = _POWERSHELL.index("function Set-SnapshotProfile", start)
     helper = _POWERSHELL[start:end]
+    fallback_start = _POWERSHELL.index("function Set-SnapshotRulesByInternalIds")
+    fallback_end = _POWERSHELL.index("function Set-SnapshotLocalRulesEnabled", fallback_start)
+    fallback = _POWERSHELL[fallback_start:fallback_end]
+
     assert "Get-NetFirewallRule -PolicyStore PersistentStore -Name $names" in helper
     assert "$netRule.DisplayName" in helper
     assert "$rules.Item([string]$friendlyName)" in helper
     assert "$rule.Name -ine [string]$friendlyName" in helper
     assert "$rule.Enabled = [bool]$enabled" in helper
     assert "$comNameCounts[$candidateName]++" in helper
-    assert "$duplicateChangeIds.ToArray()" in helper
-    assert "Set-NetFirewallRule -PolicyStore PersistentStore -Name ($duplicateChangeIds.ToArray()) -Enabled $enabledValue" in helper
-    assert "Get-NetFirewallRule -PolicyStore PersistentStore -Name $duplicateIds" in helper
+    assert "$duplicateRuleIds.Add([string]$entry.InternalName)" in helper
+    assert "$fallbackRuleIds.Add([string]$expected.InternalName)" in helper
+    assert "$comCount -ne 1" in helper
+    assert "Set-SnapshotRulesByInternalIds $fallbackRuleIds.ToArray()" in helper
+    assert "Set-NetFirewallRule" not in helper
+    assert "Set-NetFirewallRule -PolicyStore PersistentStore -Name ($changeIds.ToArray()) -Enabled $enabledValue" in fallback
+    assert "Get-NetFirewallRule -PolicyStore PersistentStore -Name $ruleIds" in fallback
     assert "FinalReleaseComObject" in helper
-    assert helper.count("Set-NetFirewallRule -PolicyStore PersistentStore -Name") == 1
-    assert "if ($duplicateRuleIds.Count -gt 0)" in helper
-    assert "if ($uniqueFriendlyNames.Count" not in helper
-    assert "Multiple saved firewall rules share the COM friendly name" not in helper
 
     activation_start = _POWERSHELL.index("if ($Action -eq 'activate')")
     activation_end = _POWERSHELL.index("elseif ($Action -eq 'deactivate')", activation_start)
