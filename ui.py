@@ -639,7 +639,7 @@ class Window(QMainWindow):
         empty.setEnabled(False)
 
     def _on_updates_menu_about_to_show(self):
-        """Mark the Updates popup open so its separate chevron points upward."""
+        """Track popup visibility without treating the menu as an active page."""
         self._updates_menu_open = True
         # The blue checked state represents navigation to Bundles/Tunnel only.
         self.updates_nav_button.setChecked(self.stack.currentIndex() in {4, 5})
@@ -657,8 +657,7 @@ class Window(QMainWindow):
         selected = self.stack.currentIndex() in {4, 5}
         menu_open = bool(getattr(self, "_updates_menu_open", False))
         color = "#ffffff" if selected or menu_open else ("#eff1f4" if dark else "#202832")
-        # Keep the cloud glyph unchanged; the separate menu-indicator chevron
-        # communicates the popup direction and is styled by the QSS :open state.
+        # Keep the cloud glyph unchanged; only its contrast follows popup visibility.
         self.updates_nav_button.setIcon(qta.icon("fa6s.cloud-arrow-down", color=color))
     def _apply_shell_styles(self, mode=None):
         dark = (mode or CONFIG["mode"]) == "dark"
