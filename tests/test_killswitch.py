@@ -136,7 +136,7 @@ def test_windows_elevated_runner_has_a_bounded_wait_and_terminates_timeouts():
     from torproxy.firewall.windows import ELEVATED_HELPER_TIMEOUT_MS, _run_elevated
 
     source = inspect.getsource(_run_elevated)
-    assert ELEVATED_HELPER_TIMEOUT_MS == 180_000
+    assert ELEVATED_HELPER_TIMEOUT_MS == 30_000
     assert "WaitForSingleObject(info.hProcess, ELEVATED_HELPER_TIMEOUT_MS)" in source
     assert "TerminateProcess" in source
     assert "ctypes.POINTER(wintypes.DWORD)" in source
@@ -338,6 +338,25 @@ def test_windows_activation_reuses_a_single_traced_active_store_scan():
     assert "$sharedAccessRuleNames.ContainsKey([string]$_.Name)" in activation_script
     assert "$finalActiveAllow = @(Get-NetFirewallRule -PolicyStore ActiveStore -Direction Outbound" in activation_script
     assert "-ErrorAction Stop" in activation_script
+
+
+def test_windows_saved_local_allow_rules_are_processed_as_a_batch():
+    assert "function Set-SnapshotLocalRulesEnabled($snapshot, [bool]$enabled)" in _POWERSHELL
+    assert "-Name $changeNames -Enabled $enabled -ErrorAction Stop" in _POWERSHELL
+    assert "-Name $names -ErrorAction SilentlyContinue" in _POWERSHELL
+    assert "foreach ($name in @($snapshot.disabledRules))" not in _POWERSHELL
+
+    activation_start = _POWERSHELL.index("if ($Action -eq 'activate')")
+    activation_end = _POWERSHELL.index("elseif ($Action -eq 'deactivate')", activation_start)
+    activation_script = _POWERSHELL[activation_start:activation_end]
+    assert "Set-SnapshotLocalRulesEnabled $snapshot $false" in activation_script
+    assert "Disabling saved local outbound Allow rules in one batch" in activation_script
+
+    recovery_start = _POWERSHELL.index("elseif ($Action -eq 'recover')")
+    recovery_end = _POWERSHELL.index("elseif ($Action -eq 'emergency')", recovery_start)
+    recovery_script = _POWERSHELL[recovery_start:recovery_end]
+    assert "Set-SnapshotLocalRulesEnabled $snapshot $true" in recovery_script
+    assert "Restoring saved local outbound Allow rules in one batch" in recovery_script
 
 
 def test_windows_helper_reports_the_current_phase_without_affecting_firewall_work():
