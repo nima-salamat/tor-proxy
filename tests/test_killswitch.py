@@ -115,6 +115,13 @@ def test_windows_recovery_preserves_external_profile_changes():
     assert "Assert-ManagedState $snapshot $false" not in recovery_script
 
 
+def test_windows_helper_scopes_system_tunnel_allow_rule_to_the_exact_tun_interface():
+    assert "TorProxy_KS_TUN" in _POWERSHELL
+    assert "-InterfaceAlias 'TorProxy'" in _POWERSHELL
+    assert "Test-TunInterfaceAllowRule" in _POWERSHELL
+    assert "tun_interface_allowed" in _POWERSHELL
+
+
 def test_windows_helper_exposes_saved_and_emergency_recovery_paths():
     assert "elseif ($Action -eq 'recover')" in _POWERSHELL
     assert "elseif ($Action -eq 'emergency')" in _POWERSHELL
@@ -165,6 +172,7 @@ def test_linux_rules_default_to_drop_and_never_allow_the_desktop_uid():
     rules = _rules(cgroup_level=5, table=True)
     assert "type filter hook output priority 0; policy drop;" in rules
     assert 'oifname "lo" accept' in rules
+    assert 'oifname "torproxy-tun" accept' in rules
     assert "socket cgroupv2 level 5 @tor_cgroups accept" in rules
     assert "meta skuid" not in rules
     assert "meta cgroup" not in rules
@@ -358,6 +366,12 @@ def test_linux_chain_verification_rejects_missing_rules_and_unexpected_allow_rul
     assert not _chain_is_safe(safe_chain.replace('oifname "lo" accept', "oifname eth0 accept"))
     assert not _chain_is_safe(safe_chain.replace("socket cgroupv2 level 5 @tor_cgroups accept", "ip daddr 0.0.0.0/0 accept"))
     assert not _chain_is_safe(safe_chain + "\n ip daddr 198.51.100.1 accept")
+    assert _chain_is_safe(safe_chain.replace(
+        'oifname "lo" accept', 'oifname "lo" accept\n        oifname "torproxy-tun" accept'
+    ))
+    assert not _chain_is_safe(safe_chain.replace(
+        'oifname "lo" accept', 'oifname "lo" accept\n        oifname "eth0" accept'
+    ))
     assert not _chain_is_safe(safe_chain.replace("policy drop", "policy accept"))
 
 

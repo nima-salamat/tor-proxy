@@ -13,11 +13,12 @@ if(WIN32)
     # Python starts, and the embedded icon is available to Explorer/taskbar.
     add_executable(TorProxyLauncher WIN32 src/bootstrap.cpp)
     target_compile_features(TorProxyLauncher PRIVATE cxx_std_17)
+    target_compile_definitions(TorProxyLauncher PRIVATE _WIN32_WINNT=0x0A00 WINVER=0x0A00)
+    target_link_libraries(TorProxyLauncher PRIVATE Shell32 Ole32 Gdiplus Dwmapi)
     set(TORPROXY_ICON_RESOURCE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../assets/icon.ico")
     file(TO_CMAKE_PATH "${TORPROXY_ICON_RESOURCE_PATH}" TORPROXY_ICON_RESOURCE_PATH)
     configure_file(src/torproxy.rc.in "${CMAKE_CURRENT_BINARY_DIR}/torproxy.rc" @ONLY)
     target_sources(TorProxyLauncher PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/torproxy.rc")
-    target_link_libraries(TorProxyLauncher PRIVATE Shell32 Ole32)
     install(TARGETS TorProxyLauncher RUNTIME DESTINATION .)
 else()
     # Linux keeps the Qt splash UI, isolated from the PySide6 runtime used by

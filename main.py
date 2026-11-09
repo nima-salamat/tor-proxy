@@ -25,6 +25,16 @@ if sys.platform.startswith("linux") and sys.argv[1:2] == ["--killswitch-helper"]
     from torproxy.firewall.linux_helper import main as killswitch_helper_main
     raise SystemExit(killswitch_helper_main(sys.argv[2:]))
 
+# The system TUN helper is shared by Windows (UAC) and Linux (PolicyKit).
+# It must run before the Qt application, tray, workers or normal startup hooks.
+if sys.argv[1:2] == ["--system-tunnel-helper"]:
+    if sys.stdout is None:
+        sys.stdout = open("/dev/stdout" if os.name != "nt" else os.devnull, "w", encoding="utf-8", buffering=1)
+    if sys.stderr is None:
+        sys.stderr = open("/dev/stderr" if os.name != "nt" else os.devnull, "w", encoding="utf-8", buffering=1)
+    from torproxy.system_tunnel import system_tunnel_helper_main
+    raise SystemExit(system_tunnel_helper_main(sys.argv[2:]))
+
 _STARTUP_STREAM = None
 
 

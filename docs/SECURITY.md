@@ -57,3 +57,14 @@ The Kill Switch remains active after Tor stops, TorProxy exits, or the machine r
 Direct Exclude Host rules are treated as blocked while the Kill Switch preference is enabled. TorProxy's bundle manager uses Tor's live SOCKS5H route whenever Tor is READY. Direct bootstrap requires explicit per-operation consent and is refused while the Kill Switch is active; disable the Kill Switch deliberately before performing bootstrap outside Tor.
 
 The Kill Switch does not promise anonymity, protect against application-layer identification, block every non-IP link-layer protocol, or make a manually configured application safe if it ignores the HTTP proxy. Firewall policies may also be constrained by enterprise management or other firewall software. Verify the actual firewall state on the target machine before relying on it.
+
+
+## System-wide tunnel boundaries
+
+The optional TUN feature is TCP-only because TorProxy uses Tor's local SOCKS5 listener and Tor SOCKS does not provide an arbitrary UDP transport. sing-box rejects user UDP traffic in the route table; DNS is the explicit exception because TUN DNS packets are hijacked into the DNS module and its HTTPS resolver is dialed over the Tor SOCKS outbound. This is intentionally fail-closed rather than allowing QUIC, game, VoIP, or other UDP traffic to escape directly.
+
+The sing-box process and the managed Tor/bridge executables must bypass TUN routing so Tor can establish its own relay connections without being fed back into itself. This is not a general direct-network exception: the Windows firewall continues to use its exact executable allowlist and only permits packets leaving through the dedicated TorProxy TUN interface; Linux continues to allow the Tor cgroup and the exact torproxy-tun output interface, with the rest of physical egress blocked. The desktop user's UID is not exempted.
+
+The sing-box helper accepts only the pinned release archive for the current supported platform and verifies that the executable it will launch is byte-for-byte the executable in that archive. It validates the generated configuration before starting the privileged process, records PID/image/start-time identity, and refuses to terminate a process whose identity does not match. A dead stale PID record may be removed; a live mismatched PID is never killed or adopted. The GUI must not disconnect Tor, disable Kill Switch, or exit while a tunnel process remains active or unverified.
+
+System-wide routing can affect private LAN access, virtual-machine/container adapters, and applications that need UDP. This feature does not promise that all IP protocols work over Tor; the UI and README explicitly describe the TCP-only limitation.

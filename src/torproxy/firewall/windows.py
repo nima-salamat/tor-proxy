@@ -147,6 +147,18 @@ function Get-UnmanagedRuleDiagnostic($rule) {
     if ($details.Length -gt 620) { return $details.Substring(0, 617) + '...' }
     return $details
 }
+function Test-TunInterfaceAllowRule {
+    $rules = @(Get-NetFirewallRule -PolicyStore ActiveStore -Name 'TorProxy_KS_TUN' -ErrorAction SilentlyContinue)
+    if ($rules.Count -ne 1) { return $false }
+    $rule = $rules[0]
+    if ([string]$rule.Enabled -ne 'True' -or
+        [string]$rule.Direction -ne 'Outbound' -or
+        [string]$rule.Action -ne 'Allow') { return $false }
+    $filters = @(Get-NetFirewallInterfaceFilter -AssociatedNetFirewallRule $rule -ErrorAction SilentlyContinue)
+    if ($filters.Count -ne 1) { return $false }
+    $aliases = @($filters[0].InterfaceAlias | Where-Object { $_ })
+    return ($aliases.Count -eq 1 -and [string]$aliases[0] -eq 'TorProxy')
+}
 function Assert-ManagedState($snapshot, $requireRules = $true) {
     $profiles = Get-ActiveProfiles
     foreach ($saved in $snapshot.profiles) {
@@ -268,6 +280,10 @@ try {
         New-NetFirewallRule -PolicyStore PersistentStore -Name 'TorProxy_KS_DHCPv4' -DisplayName 'TorProxy Kill Switch DHCPv4' -Group $Group -Direction Outbound -Action Allow -Protocol UDP -LocalPort 68 -RemotePort 67 -RemoteAddress Any -Profile Any | Out-Null
         New-NetFirewallRule -PolicyStore PersistentStore -Name 'TorProxy_KS_DHCPv6' -DisplayName 'TorProxy Kill Switch DHCPv6' -Group $Group -Direction Outbound -Action Allow -Protocol UDP -LocalPort 546 -RemotePort 547 -RemoteAddress Any -Profile Any | Out-Null
         New-NetFirewallRule -PolicyStore PersistentStore -Name 'TorProxy_KS_NDP' -DisplayName 'TorProxy Kill Switch IPv6 Neighbor Discovery' -Group $Group -Direction Outbound -Action Allow -Protocol ICMPv6 -IcmpType 133,135,136 -RemoteAddress Any -Profile Any | Out-Null
+        # Only system traffic already routed to the exact TorProxy TUN adapter
+        # may leave that virtual interface. Physical NICs remain default-deny.
+        New-NetFirewallRule -PolicyStore PersistentStore -Name 'TorProxy_KS_TUN' -DisplayName 'TorProxy Kill Switch System Tunnel' -Group $Group -Direction Outbound -Action Allow -InterfaceAlias 'TorProxy' -Profile Any -Enabled True | Out-Null
+        if (-not (Test-TunInterfaceAllowRule)) { throw 'The dedicated TorProxy TUN firewall exception could not be verified.' }
         if ([bool](Get-SnapshotValue $snapshot 'blockSharedAccess')) {
             $sharedAccessProgram = [string](Get-SnapshotValue $snapshot 'sharedAccessProgram')
             if (-not $sharedAccessProgram) {
@@ -295,7 +311,7 @@ try {
         if ([bool](Get-SnapshotValue $snapshot 'blockSharedAccess')) {
             Assert-SharedAccessBlockRule
         }
-        Write-Result @{ ok = $true; active = $true; detail = 'Outbound default block verified; TorProxy exceptions and the SharedAccess deny override are active.' }
+        Write-Result @{ ok = $true; active = $true; tun_interface_allowed = (Test-TunInterfaceAllowRule); detail = 'Outbound default block verified; TorProxy exceptions, the dedicated TUN interface, and the SharedAccess deny override are active.' }
     }
     elseif ($Action -eq 'deactivate') {
         if (-not (Test-Path -LiteralPath $SnapshotPath)) {
@@ -454,7 +470,7 @@ try {
         if (-not (Test-Path -LiteralPath $SnapshotPath)) {
             $orphanedGroup = @(Get-NetFirewallRule -PolicyStore ActiveStore -Group $Group -ErrorAction SilentlyContinue)
             $orphaned = $orphanedGroup.Count -gt 0
-            Write-Result @{ ok = $true; active = $false; verified = (-not $orphaned); detail = $(if ($orphaned) { 'TorProxy rules exist without the original snapshot; manual recovery is required.' } else { 'No saved Kill Switch policy.' }) }
+            Write-Result @{ ok = $true; active = $false; verified = (-not $orphaned); tun_interface_allowed = $false; detail = $(if ($orphaned) { 'TorProxy rules exist without the original snapshot; manual recovery is required.' } else { 'No saved Kill Switch policy.' }) }
         } else {
             $snapshot = Get-Content -LiteralPath $SnapshotPath -Raw | ConvertFrom-Json
             Assert-ManagedState $snapshot
@@ -464,7 +480,8 @@ try {
                 return $true
             })
             $verified = $remaining.Count -eq 0
-            Write-Result @{ ok = $true; active = $verified; verified = $verified; detail = 'Windows Firewall policy inspected.' }
+            $tunAllowed = Test-TunInterfaceAllowRule
+            Write-Result @{ ok = $true; active = $verified; verified = $verified; tun_interface_allowed = $tunAllowed; detail = 'Windows Firewall policy inspected.' }
         }
     }
     else {

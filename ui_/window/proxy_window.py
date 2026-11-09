@@ -29,6 +29,7 @@ from config import CONFIG
 from torproxy.killswitch import KillSwitchManager, KillSwitchError
 from ui_.window.dialogs import QMessageBox
 from torproxy.paths import user_directories
+from torproxy.system_tunnel import SystemTunnelManager
 from ui_.window.tor_log_dialog import TorLogDialog
 from ui_.window.open_browser_dialog import OpenBrowserDialog
 import json
@@ -69,6 +70,9 @@ class ProxyWindow(QWidget):
         self.tor_control_port = self.listener_ports["control_port"]
         self.tor_dns_port = self.listener_ports["dns_port"]
         self.tor = TorRunner(self.tor_socks_port, self.tor_control_port, self.tor_dns_port)
+        self.system_tunnel_manager = SystemTunnelManager()
+        self._system_tunnel_busy = False
+        self._system_tunnel_worker = None
         try:
             self.killswitch_manager = KillSwitchManager()
             self._killswitch_unavailable = None
@@ -169,6 +173,34 @@ class ProxyWindow(QWidget):
         self.proxy_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.proxy_status_label.setWordWrap(True)
         self.home_layout.addWidget(self.proxy_status_label)
+
+        self.system_tunnel_card = QFrame(self.home_content)
+        self.system_tunnel_card.setObjectName("systemTunnelCard")
+        tunnel_card_layout = QHBoxLayout(self.system_tunnel_card)
+        tunnel_card_layout.setContentsMargins(14, 10, 14, 10)
+        tunnel_card_layout.setSpacing(14)
+        tunnel_text_layout = QVBoxLayout()
+        tunnel_text_layout.setContentsMargins(0, 0, 0, 0)
+        tunnel_text_layout.setSpacing(3)
+        self.system_tunnel_title = QLabel("SYSTEM-WIDE TOR TUNNEL")
+        self.system_tunnel_title.setObjectName("systemTunnelTitle")
+        self.system_tunnel_description = QLabel(
+            "Route system TCP traffic through Tor. DNS is sent over Tor; unsupported UDP is blocked."
+        )
+        self.system_tunnel_description.setObjectName("systemTunnelDescription")
+        self.system_tunnel_description.setWordWrap(True)
+        self.system_tunnel_status = QLabel("Engine not installed")
+        self.system_tunnel_status.setObjectName("systemTunnelStatus")
+        tunnel_text_layout.addWidget(self.system_tunnel_title)
+        tunnel_text_layout.addWidget(self.system_tunnel_description)
+        tunnel_text_layout.addWidget(self.system_tunnel_status)
+        tunnel_card_layout.addLayout(tunnel_text_layout, 1)
+        self.btn_system_tunnel = QPushButton("Install engine", self.system_tunnel_card)
+        self.btn_system_tunnel.setObjectName("systemTunnelAction")
+        self.btn_system_tunnel.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_system_tunnel.clicked.connect(self.toggle_system_tunnel)
+        tunnel_card_layout.addWidget(self.btn_system_tunnel, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.home_layout.addWidget(self.system_tunnel_card)
 
         self.tor_ip_label = QLabel("Exit IP: not checked")
         self.tor_ip_label.setObjectName("exitIpLabel")
@@ -389,6 +421,13 @@ class ProxyWindow(QWidget):
             QPushButton#secondaryAction {{ min-height: 36px; padding: 0 14px; border-radius: 8px; background: transparent; color: {text}; border: 1px solid {border}; font-weight: 600; }}
             QPushButton#secondaryAction:hover {{ background: rgba(71, 163, 242, 0.12); border-color: {accent}; }}
             QPushButton#secondaryAction:checked {{ background: rgba(71, 163, 242, 0.18); border-color: {accent}; }}
+            QFrame#systemTunnelCard {{ background: {surface}; border: 1px solid {border}; border-radius: 11px; }}
+            QLabel#systemTunnelTitle {{ color: {text}; background: transparent; border: none; font-size: 10px; font-weight: 800; letter-spacing: 0.8px; }}
+            QLabel#systemTunnelDescription {{ color: {muted}; background: transparent; border: none; font-size: 10px; }}
+            QLabel#systemTunnelStatus {{ color: {accent}; background: transparent; border: none; font-size: 10px; font-weight: 700; }}
+            QPushButton#systemTunnelAction {{ min-height: 34px; padding: 0 13px; border-radius: 8px; background: {accent}; color: #ffffff; border: none; font-weight: 700; }}
+            QPushButton#systemTunnelAction:hover {{ background: #2989d0; }}
+            QPushButton#systemTunnelAction:disabled {{ background: {border}; color: {muted}; }}
         """)
         self.logs_widget.apply_theme(CONFIG["mode"])
         icon_color = "#eff1f4" if dark else "#202832"
@@ -608,6 +647,9 @@ class ProxyWindow(QWidget):
             self._update_proxy_mode_status()
 
     def _toggle(self):
+        if getattr(self, "_system_tunnel_busy", False):
+            self.logs_widget.update_log("Tor connect/disconnect is temporarily disabled while the system tunnel changes.")
+            return
         with self._operation_lock:
             if self._killswitch_operation_active:
                 QMessageBox.information(
@@ -750,6 +792,10 @@ class ProxyWindow(QWidget):
     # ===== helper worker (runs in background) =====
     def set_kill_switch_enabled(self, enabled: bool) -> str:
         """Serialize firewall changes against Tor connection transitions."""
+        if not enabled:
+            tunnel_state = self.system_tunnel_manager.status()
+            if tunnel_state.get("active") or not tunnel_state.get("verified", True):
+                raise KillSwitchError("Stop or reconcile the system-wide tunnel before disabling Kill Switch.")
         with self._operation_lock:
             if self._connect_operation_busy or self.running or self._stopping:
                 raise KillSwitchError("Finish connecting or disconnecting Tor before changing Kill Switch.")
@@ -764,13 +810,18 @@ class ProxyWindow(QWidget):
 
     def _run_kill_switch_recovery(self, *, emergency: bool = False) -> str:
         """Restore firewall connectivity without racing Tor startup or another policy change."""
+        tunnel_manager = getattr(self, "system_tunnel_manager", None)
+        if tunnel_manager is not None:
+            tunnel_state = tunnel_manager.status()
+            if tunnel_state.get("active") or not tunnel_state.get("verified", True):
+                raise KillSwitchError("Stop or reconcile the system-wide tunnel before recovering the Kill Switch.")
+
         with self._operation_lock:
             if self._connect_operation_busy or self.running or self._stopping:
                 raise KillSwitchError("Disconnect Tor before recovering the system firewall.")
             if self._killswitch_operation_active:
                 raise KillSwitchError("A Kill Switch operation is still running; recovery will be queued by Settings.")
             self._killswitch_operation_active = True
-
         try:
             manager = getattr(self, "killswitch_manager", None)
             if manager is None:
@@ -949,11 +1000,39 @@ class ProxyWindow(QWidget):
 
     def _stop_services(self):
         if self._stopping:
-            return
+            return False
+        if getattr(self, "_system_tunnel_busy", False):
+            self.logs_widget.update_log("Disconnect was blocked because the system tunnel operation is still running.")
+            return False
         self._stopping = True
         self.connect_btn.set_disconnecting()
         self.btn_status.setText("DISCONNECTING…")
         self.set_btn_status_style("disconnecting")
+
+        # Release system routes before stopping Tor. If elevated cleanup fails,
+        # preserve the Tor process and default-deny Kill Switch.
+        tunnel_status = self.system_tunnel_manager.status()
+        if tunnel_status.get("active") or not tunnel_status.get("verified", True):
+            try:
+                message = self.system_tunnel_manager.stop()
+                self.logs_widget.update_log(message)
+            except Exception as exc:
+                logger.exception("Could not stop the system-wide tunnel safely.")
+                self._stopping = False
+                self.connect_btn.set_connected(bool(self.connected))
+                self.connect_btn.setEnabled(True)
+                self.btn_status.setText("TUNNEL STILL ACTIVE · TOR LEFT RUNNING")
+                self.set_btn_status_style("connected" if self.connected else "disconnected")
+                self.system_tunnel_status.setText("Tunnel stop failed — Kill Switch retained")
+                self.logs_widget.update_log(f"System tunnel cleanup failed; Tor was not stopped: {exc}", level="error")
+                QMessageBox.warning(
+                    self, "System tunnel is still active",
+                    "TorProxy kept Tor and the Kill Switch running because it could not confirm "
+                    "that the system TUN routes were removed. Resolve the tunnel stop error before disconnecting.",
+                )
+                self._update_system_tunnel_controls()
+                return False
+        self._update_system_tunnel_controls()
 
         # Restore a policy-managed proxy when the app disconnects in Set mode.
         # Explicit app exit also cleans up TorProxy's own proxy assignment.
@@ -1008,6 +1087,8 @@ class ProxyWindow(QWidget):
         self._update_proxy_buttons()
         self._update_proxy_mode_status()
         self._stopping = False
+        self._update_system_tunnel_controls()
+        return True
 
     # ----- proxy manual control handlers (new) -----
     def set_proxy_clicked(self):
@@ -1092,3 +1173,134 @@ class ProxyWindow(QWidget):
                 "Connect to Tor and wait for the verified bootstrap to finish first."
             )
         self._update_proxy_mode_status()
+        self._update_system_tunnel_controls()
+
+
+    def _update_system_tunnel_controls(self):
+        """Refresh the Home tunnel card from verified local engine/process state."""
+        if not hasattr(self, "btn_system_tunnel"):
+            return
+        if self._system_tunnel_busy:
+            self.btn_system_tunnel.setEnabled(False)
+            self.btn_system_tunnel.setText("Working…")
+            self.system_tunnel_status.setText("Applying system tunnel changes")
+            return
+
+        status = self.system_tunnel_manager.status()
+        installed = self.system_tunnel_manager.is_installed()
+        self.btn_system_tunnel.setEnabled(True)
+        if status.get("active"):
+            self.btn_system_tunnel.setText("Stop tunnel")
+            self.system_tunnel_status.setText("Active · system TCP routed through Tor")
+            self.system_tunnel_description.setText(
+                "System TCP uses Tor. DNS uses DoH over Tor; UDP is blocked to prevent direct leaks."
+            )
+            return
+        if not status.get("verified", True):
+            self.btn_system_tunnel.setText("Reconcile tunnel")
+            self.system_tunnel_status.setText("Tunnel process state needs recovery")
+            self.system_tunnel_description.setText(
+                "TorProxy only stops a process whose PID, executable and start time match its saved record."
+            )
+            return
+        if not installed:
+            self.btn_system_tunnel.setText("Install engine")
+            self.system_tunnel_status.setText("Engine not installed")
+            self.system_tunnel_description.setText(
+                "Downloads and verifies the official sing-box 1.14.4 engine."
+            )
+            return
+        self.btn_system_tunnel.setText("Start system tunnel")
+        if not self.running or not self.connected:
+            self.system_tunnel_status.setText("Ready · waiting for Tor")
+            self.system_tunnel_description.setText(
+                "Install the engine now; connect to Tor before starting system-wide routing."
+            )
+        elif not bool(CONFIG["kill_switch_enabled"]):
+            self.system_tunnel_status.setText("Kill Switch required")
+            self.system_tunnel_description.setText(
+                "Enable Kill Switch while disconnected, then reconnect Tor before starting the system tunnel."
+            )
+        else:
+            self.system_tunnel_status.setText("Ready to start")
+            self.system_tunnel_description.setText(
+                "System TCP routes through Tor, DNS uses DoH over Tor, and UDP is rejected rather than sent directly."
+            )
+
+    def toggle_system_tunnel(self):
+        """Install, start or stop the verified system tunnel from Home."""
+        if self._system_tunnel_busy:
+            return
+        status = self.system_tunnel_manager.status()
+        if status.get("active") or not status.get("verified", True):
+            self._run_system_tunnel_action("stop", self.system_tunnel_manager.stop)
+            return
+        if not self.system_tunnel_manager.is_installed():
+            self._run_system_tunnel_action("install", self.system_tunnel_manager.install_engine)
+            return
+        if not self.running or not self.connected:
+            QMessageBox.information(
+                self, "System-wide tunnel",
+                "Connect to Tor and wait until its ControlPort and SOCKS listener are verified before starting the tunnel.",
+            )
+            return
+        if not bool(CONFIG["kill_switch_enabled"]):
+            QMessageBox.information(
+                self, "Kill Switch required",
+                "For leak protection, disconnect Tor, enable Kill Switch in Settings, reconnect Tor, "
+                "then start the system-wide tunnel.",
+            )
+            return
+        firewall = self.killswitch_manager.status() if self.killswitch_manager is not None else {}
+        if not firewall.get("active") or not firewall.get("verified"):
+            QMessageBox.warning(
+                self, "Network protection",
+                "TorProxy could not verify the active Kill Switch. The system tunnel was not started.",
+            )
+            return
+        if not firewall.get("tun_interface_allowed"):
+            QMessageBox.information(
+                self, "Update Kill Switch rules",
+                "This Kill Switch policy predates the system tunnel. While disconnected, disable and "
+                "re-enable Kill Switch once, then reconnect Tor.",
+            )
+            return
+        tor_paths = [self.tor.tor_path, self.tor.lyrebird_path]
+        self._run_system_tunnel_action(
+            "start",
+            lambda: self.system_tunnel_manager.start(
+                int(self.tor.socks_port),
+                tor_executables=[path for path in tor_paths if path],
+            ),
+        )
+
+    def _run_system_tunnel_action(self, action: str, operation):
+        self._system_tunnel_busy = True
+        self._update_system_tunnel_controls()
+        worker = Worker(operation)
+        worker.signals.finished.connect(
+            lambda message, operation_name=action:
+                self._on_system_tunnel_action_finished(operation_name, message)
+        )
+        worker.signals.error.connect(
+            lambda error, operation_name=action:
+                self._on_system_tunnel_action_failed(operation_name, error)
+        )
+        self._system_tunnel_worker = worker
+        self.thread_pool.start(worker)
+
+    def _on_system_tunnel_action_finished(self, action: str, message: str):
+        self._system_tunnel_busy = False
+        self._system_tunnel_worker = None
+        self.system_tunnel_status.setText(str(message))
+        self.logs_widget.update_log(f"System tunnel {action}: {message}")
+        self._update_system_tunnel_controls()
+
+    def _on_system_tunnel_action_failed(self, action: str, error: str):
+        self._system_tunnel_busy = False
+        self._system_tunnel_worker = None
+        detail = str(error or "Unknown system tunnel error.")
+        self.system_tunnel_status.setText(f"{action.title()} failed — see Event Log")
+        self.logs_widget.update_log(f"System tunnel {action} failed: {detail}", level="error")
+        self._update_system_tunnel_controls()
+        QMessageBox.warning(self, "System-wide tunnel", detail)
