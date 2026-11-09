@@ -832,6 +832,17 @@ def test_cleanup_previous_session_refuses_untracked_adapter_without_process_reco
     assert calls == []
 
 
+
+def test_helper_persists_process_identity_before_waiting_for_the_tun_adapter():
+    import inspect
+
+    source = inspect.getsource(system_tunnel._helper_start)
+    record_write = source.index("_atomic_json(state_path, record, mode=0o644)")
+    wait_for_interface = source.index("while time.monotonic() < deadline")
+
+    assert record_write < wait_for_interface
+    assert '"create_time": psutil.Process(process.pid).create_time()' in source
+
 def test_stop_removes_corrupt_state_record_only_when_no_tun_adapter_exists(tmp_path, monkeypatch):
     state_path = tmp_path / "tunnel-state.json"
     state_path.write_text("{corrupt", encoding="utf-8")
