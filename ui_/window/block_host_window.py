@@ -220,7 +220,7 @@ class BlcokHostsWindow(QWidget):
             return
         self._update_hosts_list()
         self.status_label.setText(
-            f"Removed {host}. Saved. The HTTP proxy applies it immediately; System Tunnel reloads it on its next start."
+            f"Removed {host}. Saved. New HTTP proxy requests use it immediately; System Tunnel reloads it on its next start."
         )
 
     def add_to_list(self):
@@ -240,7 +240,7 @@ class BlcokHostsWindow(QWidget):
             self.inp_host.clear()
             self.inp_host.setFocus()
             self.status_label.setText(
-                f"Added {host}. Saved. The HTTP proxy applies it immediately; System Tunnel loads it on its next start."
+                f"Added {host}. Saved. New HTTP proxy requests use it immediately; System Tunnel loads it on its next start."
             )
         else:
             self.status_label.setText(f"{host} is already in the blocked-host list.")
