@@ -231,6 +231,10 @@ def test_updates_navigation_keeps_theme_text_color_on_hover():
     assert "color: {text}; background: {hover}; border-color: {border};" in source
     assert "QToolButton#updatesNavButton:checked:hover {{" in source
     assert "background: {accent}; color: #ffffff; border-color: {accent};" in source
+    assert "QToolButton#updatesNavButton::menu-indicator {{" in source
+    assert "QToolButton#updatesNavButton:checked::menu-indicator {{" in source
+    assert "QToolButton#updatesNavButton::menu-indicator:open {{" in source
+    assert "border-bottom: 5px solid #ffffff;" in source
 
 
 
@@ -278,11 +282,11 @@ def test_updates_nav_icon_tracks_active_pages_theme_and_menu_state(monkeypatch):
     ui.Window._on_updates_menu_about_to_show(fake)
     assert fake._updates_menu_open is True
     assert fake.updates_nav_button.checked is True
-    assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-up", "#202832")
+    assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-down", "#ffffff")
 
     fake.stack.page = 4
     ui.Window._sync_updates_nav_icon(fake, "light")
-    assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-up", "#ffffff")
+    assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-down", "#ffffff")
 
     ui.Window._on_updates_menu_about_to_hide(fake)
     assert fake._updates_menu_open is False
