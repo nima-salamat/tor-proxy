@@ -404,12 +404,15 @@ class TunnelManagerWindow(QWidget):
         elif not selected_installed:
             self.btn_start_stop.setText("Install engine first")
             self.btn_start_stop.setEnabled(False)
-        elif not (self.proxy and self.proxy.running and self.proxy.connected):
+        elif proxy_busy:
+            self.btn_start_stop.setText("TorProxy is busy")
+            self.btn_start_stop.setEnabled(False)
+        elif not tor_ready:
             self.btn_start_stop.setText("Waiting for Tor")
             self.btn_start_stop.setEnabled(False)
         else:
             self.btn_start_stop.setText("Start system tunnel")
-            self.btn_start_stop.setEnabled(not self._busy)
+            self.btn_start_stop.setEnabled(not self._busy and not proxy_busy)
 
         if status.get("active"):
             action_icon = "fa6s.stop"
