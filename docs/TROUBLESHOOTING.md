@@ -3,7 +3,7 @@
 
 ### Windows system tunnel starts but traffic times out
 
-TorProxy configures sing-box to use the `gvisor` TUN stack on Windows. This avoids a reported sing-box Windows 11 issue where the `system` and `mixed` stacks can create the interface while silently failing to forward application traffic. Start now performs a Tor SOCKS TCP preflight before installing system routes and tests several independent TLS endpoints after startup. If all checks fail, TorProxy attempts to stop the tunnel and reports the individual probe failures.
+TorProxy uses sing-box's `gvisor` TUN stack on Windows as a compatibility fallback, but this cannot bypass host-level filtering. If Tor SOCKS preflight passes but all post-start TLS probes fail, check the Windows security product's network-shield/firewall history and the sing-box process/TUN adapter allow rules. A sing-box issue with the same symptom was traced to Avast's network filtering rather than sing-box itself: https://github.com/SagerNet/sing-box/issues/4348. Do not disable the system firewall globally; use the security product's per-app or interface allow controls and retest. TorProxy tests SOCKS before installing system routes and automatically stops the tunnel if no post-start TLS probe works.
 
 ## Tor does not start
 
