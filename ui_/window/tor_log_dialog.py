@@ -126,6 +126,10 @@ class TorLogDialog(_FramelessDialog):
         self.clear_button.setIcon(qta.icon("fa6s.trash-can", color=self._colors["text"]))
         self.close_button = self.add_button("Close", primary=True, callback=self.accept)
 
+        # Give the log viewport its own quiet surface in both themes. A
+        # permanently dark editor inside the light dialog looked like a foreign
+        # panel, even though the individual log severity colors were already themed.
+        log_background = "#111820" if self._dark else "#f6f8fb"
         self.setStyleSheet(self.styleSheet() + f"""
             QLabel#torLogPath {{
                 color: {self._colors["muted"]}; background: {self._colors["panel"]};
@@ -152,7 +156,7 @@ class TorLogDialog(_FramelessDialog):
                 color: {self._colors["muted"]}; background: transparent;
             }}
             QTextEdit#torLogText {{
-                color: {self._colors["text"]}; background: #111820;
+                color: {self._colors["text"]}; background: {log_background};
                 border: 1px solid {self._colors["border"]}; border-radius: 9px;
                 padding: 8px; font-family: Consolas, 'Cascadia Mono', monospace; font-size: 9pt;
                 selection-background-color: {self._accent};
