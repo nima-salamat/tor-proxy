@@ -562,7 +562,7 @@ def test_tunnel_process_uses_graceful_termination_on_linux(monkeypatch):
         def terminate(self):
             self.terminated = True
         def wait(self, timeout=None):
-            assert timeout == system_tunnel.HELPER_STOP_TIMEOUT_SECONDS
+            assert timeout == 6
             return 0
         def kill(self):
             self.killed = True
@@ -575,3 +575,42 @@ def test_tunnel_process_uses_graceful_termination_on_linux(monkeypatch):
 
     assert fake.terminated is True
     assert fake.killed is False
+
+
+def test_windows_tunnel_stop_uses_short_graceful_ctrl_break_window(monkeypatch):
+    class FakeProcess:
+        pid = 6543
+        waited = []
+        def wait(self, timeout=None):
+            self.waited.append(timeout)
+            return 0
+
+    fake = FakeProcess()
+    monkeypatch.setattr(system_tunnel.os, "name", "nt")
+    monkeypatch.setattr(system_tunnel, "_send_windows_ctrl_break", lambda pid: pid == fake.pid)
+
+    system_tunnel._stop_verified_process(fake, {"pid": fake.pid})
+
+    assert fake.waited == [3]
+
+
+def test_windows_tunnel_stop_uses_verified_terminate_when_ctrl_break_fails(monkeypatch):
+    class FakeProcess:
+        pid = 9876
+        terminated = False
+        waited = []
+        def terminate(self):
+            self.terminated = True
+        def wait(self, timeout=None):
+            self.waited.append(timeout)
+            return 0
+
+    fake = FakeProcess()
+    monkeypatch.setattr(system_tunnel.os, "name", "nt")
+    monkeypatch.setattr(system_tunnel, "_send_windows_ctrl_break", lambda _pid: False)
+    monkeypatch.setattr(system_tunnel, "_process_matches", lambda _state: fake)
+
+    system_tunnel._stop_verified_process(fake, {"pid": fake.pid})
+
+    assert fake.terminated is True
+    assert fake.waited == [3]
