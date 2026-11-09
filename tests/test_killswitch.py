@@ -340,6 +340,15 @@ def test_windows_activation_reuses_a_single_traced_active_store_scan():
     assert "-ErrorAction Stop" in activation_script
 
 
+def test_windows_first_activation_treats_missing_owned_group_as_empty():
+    assert "function Get-GroupRulesOrEmpty([string]$policyStore)" in _POWERSHELL
+    assert "-ErrorAction SilentlyContinue -ErrorVariable queryErrors" in _POWERSHELL
+    assert "CmdletizationQuery_NotFound_RuleGroup*" in _POWERSHELL
+    assert "throw $unexpectedErrors[0]" in _POWERSHELL
+    assert "$orphanedGroup = @(Get-GroupRulesOrEmpty 'ActiveStore')" in _POWERSHELL
+    assert "Get-NetFirewallRule -PolicyStore ActiveStore -Group $Group -ErrorAction Stop" not in _POWERSHELL
+
+
 def test_windows_saved_local_allow_rules_are_processed_as_a_batch():
     assert "function Set-SnapshotLocalRulesEnabled($snapshot, [bool]$enabled)" in _POWERSHELL
     assert "-Name $changeNames -Enabled $enabled -ErrorAction Stop" in _POWERSHELL
