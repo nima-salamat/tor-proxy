@@ -155,6 +155,15 @@ class SettingWindow(QWidget):
         self.page_setting.setCurrentIndex(index)
         for page_index, button in enumerate(self.settings_nav_buttons):
             button.setChecked(page_index == index)
+        self._sync_settings_nav_icons()
+
+    def _sync_settings_nav_icons(self, mode=None):
+        """Keep every Settings navigation icon in sync with its label state."""
+        dark = (mode or CONFIG.get("mode", "dark")) == "dark"
+        icon_color = "#f3f6fa" if dark else "#243143"
+        for button, icon_name in zip(self.settings_nav_buttons, self.settings_nav_icon_names):
+            color = "#ffffff" if button.isChecked() else icon_color
+            button.setIcon(qta.icon(icon_name, color=color))
 
     def apply_theme(self, mode):
         dark = mode == "dark"
@@ -233,8 +242,7 @@ class SettingWindow(QWidget):
             palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(placeholder))
             palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor(disabled))
             widget.setPalette(palette)
-        for button, icon_name in zip(self.settings_nav_buttons, self.settings_nav_icon_names):
-            button.setIcon(qta.icon(icon_name, color="#ffffff" if button.isChecked() else icon_color))
+        self._sync_settings_nav_icons(mode)
         if hasattr(self, "btn_qrcode"):
             self.btn_qrcode.setIcon(qta.icon("fa6s.qrcode", color=icon_color))
 
