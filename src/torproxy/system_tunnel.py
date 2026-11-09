@@ -93,6 +93,69 @@ def _read_json(path: Path) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _enable_windows_wfp_tun_exception() -> bool:
+    """Add the current TorProxy adapter LUID to the active WFP policy, if present."""
+    if os.name != "nt":
+        return False
+
+    helper = (
+        user_directories().state
+        / "killswitch"
+        / "native"
+        / "TorProxyWfpHelper.exe"
+    )
+    # Older releases use a persistent Windows Firewall interface-alias rule.
+    # They do not have the native WFP helper, so leave that legacy rule alone.
+    if not helper.is_file():
+        return False
+
+    try:
+        status = subprocess.run(
+            [str(helper), "status"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SystemTunnelError(f"Could not inspect the WFP kill switch before enabling the TUN interface: {exc}") from exc
+
+    status_text = (status.stdout or "").strip()
+    if status.returncode != 0:
+        raise SystemTunnelError(f"The WFP kill switch status check failed: {status_text[-1000:]}")
+    if status_text.startswith("INACTIVE"):
+        # The caller already validated the legacy firewall state. No WFP
+        # interface filter should be added when the WFP kill switch is absent.
+        return False
+    if status_text.startswith("INCOMPLETE"):
+        raise SystemTunnelError(f"The WFP kill switch has an incomplete filter set: {status_text}")
+    if not status_text.startswith("ACTIVE"):
+        raise SystemTunnelError(f"The WFP kill switch returned an unknown status: {status_text}")
+
+    try:
+        update = subprocess.run(
+            [str(helper), "allow-tun"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SystemTunnelError(f"Could not add the exact TorProxy TUN interface exception to WFP: {exc}") from exc
+
+    update_text = (update.stdout or "").strip()
+    if update.returncode != 0 or "tun_interface_allowed=true" not in update_text:
+        raise SystemTunnelError(
+            "The TUN adapter exists, but WFP did not confirm its exact interface exception: "
+            f"{update_text[-1000:]}"
+        )
+    return True
+
+
 def _interface_exists(name: str) -> bool:
     if os.name == "nt":
         return any(existing.casefold() == name.casefold() for existing in psutil.net_if_addrs())
@@ -951,6 +1014,29 @@ def _helper_start(args: Any) -> dict[str, Any]:
             if process.poll() is not None or _process_matches(record) is None:
                 state_path.unlink(missing_ok=True)
                 raise SystemTunnelError("sing-box did not remain healthy after creating its TUN interface.")
+            try:
+                _enable_windows_wfp_tun_exception()
+            except SystemTunnelError as exc:
+                # This helper already runs with the administrator token. Install
+                # the interface-LUID exception here, after Wintun has created the
+                # adapter, so startup needs no second UAC prompt.
+                try:
+                    _stop_verified_process(psutil.Process(process.pid), record)
+                    cleanup_deadline = time.monotonic() + 5.0
+                    while _interface_exists(args.interface) and time.monotonic() < cleanup_deadline:
+                        time.sleep(0.1)
+                    if _interface_exists(args.interface):
+                        raise SystemTunnelError(
+                            "WFP rejected the TUN exception and sing-box stopped, but the adapter remains."
+                        )
+                    state_path.unlink(missing_ok=True)
+                except Exception as cleanup_error:
+                    raise SystemTunnelError(
+                        "WFP rejected the TUN exception and the tunnel could not be fully rolled back; "
+                        "the Kill Switch remains active. "
+                        f"Original error: {exc}; cleanup error: {cleanup_error}"
+                    ) from cleanup_error
+                raise
             return {"ok": True, "active": True, "pid": process.pid, "detail": "System TUN interface is active."}
         time.sleep(0.25)
 
