@@ -233,7 +233,7 @@ class TunnelManagerWindow(QWidget):
                 label += "   ·   " + " · ".join(suffix)
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, version)
-            item.setToolTip(f"sing-box {version}\\nReleased {published}\\nTorProxy-pinned SHA-256")
+            item.setToolTip(f"sing-box {version}\nReleased {published}\nTorProxy-pinned SHA-256")
             self.versions_list.addItem(item)
             if version == selected_version and not (
                 installed and installed not in pinned_versions and isinstance(installed_asset, dict)
@@ -421,10 +421,10 @@ class TunnelManagerWindow(QWidget):
                 self,
                 "Install newer upstream sing-box release?",
                 (
-                    f"v{version} is newer than the releases pinned in this TorProxy build.\\n\\n"
+                    f"v{version} is newer than the releases pinned in this TorProxy build.\n\n"
                     "The exact platform archive will be downloaded from the official "
-                    "github.com/SagerNet/sing-box release.\\n\\n"
-                    f"{digest_note}\\n\\n"
+                    "github.com/SagerNet/sing-box release.\n\n"
+                    f"{digest_note}\n\n"
                     "This release has not been independently reviewed or pinned by TorProxy. "
                     "A GitHub API digest is served by the same release service and is not an independent "
                     "publisher signature. Installing this version is your choice and risk. Continue?"
