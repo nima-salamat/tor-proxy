@@ -80,6 +80,40 @@ def test_traffic_history_persists_totals_directional_counters_and_minute_buckets
     restarted.close()
 
 
+def test_system_tun_counter_reader_uses_only_torproxy_adapter(monkeypatch):
+    import proxy
+
+    class Counter:
+        def __init__(self, sent, received):
+            self.bytes_sent = sent
+            self.bytes_recv = received
+
+    monkeypatch.setattr(proxy.psutil, "net_io_counters", lambda *, pernic: {
+        "Ethernet": Counter(9000, 12000),
+        "TorProxy": Counter(1234, 5678),
+    })
+
+    assert proxy._read_system_tun_io_counters() == (1234, 5678)
+
+
+def test_volume_chart_keeps_persistent_upload_and_download_series(qt_app, monkeypatch):
+    pytest.importorskip("qtawesome")
+    import ui_.window.statistics_window as statistics
+
+    monkeypatch.setattr(statistics, "CONFIG", {"mode": "dark"})
+    chart = statistics.TrafficChart("volume")
+    chart.set_history(
+        [{"timestamp": 60, "total_bytes": 500, "upload_bytes": 200, "download_bytes": 300}],
+        3600,
+    )
+
+    assert chart._history_values == [500.0]
+    assert chart._history_upload_values == [200.0]
+    assert chart._history_download_values == [300.0]
+    chart.deleteLater()
+    qt_app.processEvents()
+
+
 def test_statistics_sampling_tracks_session_deltas_rate_and_peak(qt_app, monkeypatch):
     pytest.importorskip("qtawesome")
     import ui_.window.statistics_window as statistics
