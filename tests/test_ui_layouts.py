@@ -1932,3 +1932,20 @@ def test_shortcut_row_icons_remain_transparent_over_the_hover_surface():
     assert "QFrame#shortcutsRow:hover {{ background: {hover}; }}" in source
     # The icon must reveal the row's hover surface, not paint its own light square.
     assert "QLabel#shortcutsRowIcon {{ background:" not in source
+
+
+def test_tray_menu_uses_compact_vertical_spacing():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui.py").read_text(encoding="utf-8")
+
+    assert "header_layout.setContentsMargins(14, 8, 14, 6)" in source
+    assert "header_layout.setSpacing(1)" in source
+    assert "proxy_section_layout.setContentsMargins(14, 3, 12, 0)" in source
+
+    theme_start = source.index("def _sync_tray_menu_theme(self, mode=None):")
+    theme_end = source.index("def _theme_reveal_origin", theme_start)
+    theme = source[theme_start:theme_end]
+    assert "padding: 6px;" in theme
+    assert "padding: 7px 14px 7px 12px;" in theme
+    assert "margin: 1px 4px;" in theme
+    assert "margin: 4px 12px;" in theme
