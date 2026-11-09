@@ -334,7 +334,7 @@ function Set-SnapshotLocalRulesEnabled($snapshot, [bool]$enabled) {
 
         if ($fallbackRuleIds.Count -gt 0) {
             Set-Phase ("Updating {0} COM-unavailable/ambiguous firewall rules by exact saved GUID..." -f $fallbackRuleIds.Count)
-            $fallbackResult = Set-SnapshotRulesByInternalIds $fallbackRuleIds.ToArray() $expectedById $enabled 'COM lookup'
+            $fallbackResult = Set-SnapshotRulesByInternalIds ($fallbackRuleIds.ToArray()) $expectedById $enabled 'COM lookup'
             $matched += [int]$fallbackResult.Matched
             $changed += [int]$fallbackResult.Changed
         }
