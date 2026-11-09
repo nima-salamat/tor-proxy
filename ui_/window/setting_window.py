@@ -954,7 +954,7 @@ class SettingWindow(QWidget):
         self.kill_switch_progress.show()
         self._set_kill_switch_status(
             f"{action} system firewall protection… This may take a moment. "
-            "The privileged firewall helper has a 180-second safety limit. On Windows, the last completed stage is included if the helper stops responding. Recovery remains available.",
+            "Windows firewall rule changes are batched and the elevated helper has a 30-second hard limit after approval. The Linux nftables helper has a 180-second safety limit. On Windows, the last completed stage is included if the helper stops responding. Recovery remains available.",
             "busy",
         )
         worker = Worker(proxy_widget, bool(enabled))
