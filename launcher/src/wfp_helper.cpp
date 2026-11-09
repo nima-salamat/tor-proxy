@@ -42,6 +42,8 @@ std::wstring errorMessage(const wchar_t* operation, DWORD status) {
     return stream.str();
 }
 
+std::string narrow(const std::wstring& value);
+
 void requireSuccess(DWORD status, const wchar_t* operation) {
     if (status != ERROR_SUCCESS) {
         const std::wstring message = errorMessage(operation, status);
@@ -157,7 +159,7 @@ void addFilter(
     const GUID& layer,
     const wchar_t* displayName,
     FWP_ACTION_TYPE action,
-    const std::vector<Condition>& conditions,
+    std::vector<Condition> conditions,
     UINT64 weight) {
 
     std::vector<FWPM_FILTER_CONDITION0> rawConditions;
@@ -180,7 +182,7 @@ void addFilter(
     filter.filterCondition = rawConditions.empty() ? nullptr : rawConditions.data();
 
     const DWORD status = FwpmFilterAdd0(engine, &filter, nullptr, nullptr);
-    for (auto& condition : const_cast<std::vector<Condition>&>(conditions)) {
+    for (auto& condition : conditions) {
         if (condition.blobToFree) {
             FWP_BYTE_BLOB* blob = condition.blobToFree;
             FwpmFreeMemory0(reinterpret_cast<void**>(&blob));
