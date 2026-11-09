@@ -385,6 +385,24 @@ def test_windows_netsecurity_updates_use_enum_values_not_python_booleans():
     assert _POWERSHELL.count("Set-SnapshotProfile $saved") == 2
 
 
+def test_windows_saved_rule_updates_use_native_firewall_com_not_netsecurity_cim():
+    start = _POWERSHELL.index("function Set-SnapshotLocalRulesEnabled")
+    end = _POWERSHELL.index("function Set-SnapshotProfile", start)
+    helper = _POWERSHELL[start:end]
+
+    assert "New-Object -ComObject HNetCfg.FwPolicy2" in helper
+    assert "$rules = $policy.Rules" in helper
+    assert "foreach ($rule in $rules)" in helper
+    assert "$rule.Enabled = [bool]$enabled" in helper
+    assert "[int]$rule.Direction -ne 2" in helper
+    assert "[int]$rule.Action -ne 1" in helper
+    assert "FinalReleaseComObject" in helper
+    assert "Set-NetFirewallRule" not in helper
+    assert "Get-NetFirewallRule" not in helper
+    assert "None of the {0} saved firewall rules were found" in helper
+    assert "Windows Firewall COM updated" in helper
+
+
 def test_windows_helper_reports_the_current_phase_without_affecting_firewall_work():
     assert "function Set-Phase([string]$phase)" in _POWERSHELL
     assert "Progress reporting must never prevent a firewall operation." in _POWERSHELL
