@@ -856,10 +856,37 @@ class WindowsFirewallBackend:
         self.state_dir = Path(state_dir or (user_directories().state / "killswitch"))
         self.snapshot_path = self.state_dir / SNAPSHOT_NAME
         self._runner = runner
-        self.wfp_helper_path = Path(wfp_helper_path) if wfp_helper_path else _find_wfp_helper()
+        helper = Path(wfp_helper_path) if wfp_helper_path else _find_wfp_helper()
+        if helper is None:
+            persisted_helper = self.state_dir / "native" / WFP_HELPER_NAME
+            if persisted_helper.is_file():
+                helper = persisted_helper
+        self.wfp_helper_path = helper
+
+    def _persist_wfp_helper(self) -> Path | None:
+        """Keep a recovery copy outside the portable application directory."""
+        if self.wfp_helper_path is None:
+            return None
+        try:
+            source = self.wfp_helper_path.resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            raise KillSwitchError(f"The native WFP helper cannot be read: {exc}") from exc
+        if not source.is_file():
+            raise KillSwitchError("The native WFP helper path is not a file.")
+
+        destination_dir = self.state_dir / "native"
+        destination_dir.mkdir(parents=True, exist_ok=True)
+        destination = destination_dir / WFP_HELPER_NAME
+        try:
+            if source != destination.resolve(strict=False):
+                shutil.copy2(source, destination)
+        except OSError as exc:
+            raise KillSwitchError(f"Could not preserve the native WFP recovery helper: {exc}") from exc
+        return destination
 
     def _invoke(self, action: str, programs: tuple[str, ...] = ()) -> dict[str, object]:
-        if self._runner is _run_elevated and self.wfp_helper_path is None:
+        helper_path = self._persist_wfp_helper()
+        if self._runner is _run_elevated and helper_path is None:
             raise KillSwitchError(
                 "TorProxyWfpHelper.exe is missing. Install the current Windows package "
                 "or build launcher/src/wfp_helper.cpp with CMake; the slow per-rule "
@@ -876,7 +903,7 @@ class WindowsFirewallBackend:
                 json.dumps(
                     {
                         "programs": list(programs),
-                        "wfp_helper_path": str(self.wfp_helper_path) if self.wfp_helper_path else "",
+                        "wfp_helper_path": str(helper_path) if helper_path else "",
                     }
                 ),
                 encoding="utf-8",
