@@ -73,10 +73,10 @@ def test_bundle_discovery_requires_exact_archive_and_sidecar(monkeypatch):
     monkeypatch.setattr(updater, "_platform_name", lambda: "windows")
     monkeypatch.setattr(updater, "_architecture_name", lambda: "x86_64")
     monkeypatch.setattr(updater, "_fetch_listing", lambda _url, *_args, **_kwargs: _listing(expected, expected + ".asc"))
-    assert updater.get_bundle_links("16.0a14") == [expected]
+    assert updater.get_bundle_links("16.0a14", require_signature=True) == [expected]
 
     monkeypatch.setattr(updater, "_fetch_listing", lambda _url, *_args, **_kwargs: _listing(expected))
-    assert updater.get_bundle_links("16.0a14") == []
+    assert updater.get_bundle_links("16.0a14", require_signature=True) == []
     assert updater.get_bundle_links("16.0a14", require_signature=False) == [expected]
 
 
