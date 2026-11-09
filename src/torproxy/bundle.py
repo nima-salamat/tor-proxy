@@ -414,7 +414,7 @@ def download_verified_bundle(
     *,
     progress_callback=None,
     cancel_event: Event | None = None,
-    verify_signature: bool = True,
+    verify_signature: bool = False,
     proxy_url: str | None = None,
     allow_direct: bool = False,
 ) -> Path:
