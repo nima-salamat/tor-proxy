@@ -843,15 +843,19 @@ class SystemTunnelManager:
                         "action": "route",
                         "outbound": "direct",
                     },
+                    {"action": "hijack-dns"},
                     {
+                        # Windows uses 172.19.0.1/30; Linux also has the IPv6 /126.
+                        # Drop the entire TUN subnet after DNS interception so
+                        # packets to the peer/gateway cannot be emitted back into
+                        # the same adapter as a fresh outbound flow.
                         "ip_cidr": (
-                            ["172.19.0.1/32"]
-                            if windows_tun else ["172.19.0.1/32", "fdfe:dcba:9876::1/128"]
+                            ["172.19.0.0/30"]
+                            if windows_tun else ["172.19.0.0/30", "fdfe:dcba:9876::/126"]
                         ),
                         "action": "reject",
                         "method": "drop",
                     },
-                    {"action": "hijack-dns"},
                     {"network": "udp", "action": "reject", "method": "default"},
                 ],
                 "final": "tor-socks",
@@ -1061,6 +1065,7 @@ class SystemTunnelManager:
             "The TUN process and interface are active, but end-to-end traffic could not be verified. "
             "The tunnel was left running for inspection; no automatic restart or route change was attempted. "
             + " | ".join(failures)
+            + f" | Inspect sing-box flow events in {self.log_path} (look for inbound/tun and outbound/tor-socks)."
         )
 
     def stop(self) -> str:
@@ -1280,11 +1285,11 @@ def _helper_start(args: Any) -> dict[str, Any]:
     windows_tun = platform.system() == "Windows"
     expected_tun_addresses = ["172.19.0.1/30"]
     expected_dns_addresses = ["172.19.0.2"]
-    expected_self_addresses = ["172.19.0.1/32"]
+    expected_tun_networks = ["172.19.0.0/30"]
     if not windows_tun:
         expected_tun_addresses.append("fdfe:dcba:9876::1/126")
         expected_dns_addresses.append("fdfe:dcba:9876::2")
-        expected_self_addresses.append("fdfe:dcba:9876::1/128")
+        expected_tun_networks.append("fdfe:dcba:9876::/126")
     if inbound.get("dns_mode") != "hijack" or inbound.get("dns_address") != expected_dns_addresses:
         raise SystemTunnelError("The privileged helper requires the pinned TUN DNS addresses.")
     version_parts = tuple(int(part) for part in str(args.version).split("."))
@@ -1347,12 +1352,12 @@ def _helper_start(args: Any) -> dict[str, Any]:
     route_rules = route.get("rules", [])
     if (
         len(route_rules) != 5
-        or route_rules[2] != {
-            "ip_cidr": expected_self_addresses,
+        or route_rules[2] != {"action": "hijack-dns"}
+        or route_rules[3] != {
+            "ip_cidr": expected_tun_networks,
             "action": "reject",
             "method": "drop",
         }
-        or route_rules[3] != {"action": "hijack-dns"}
         or route_rules[4] != {"network": "udp", "action": "reject", "method": "default"}
     ):
         raise SystemTunnelError("The privileged helper rejected the DNS/UDP route ordering.")
