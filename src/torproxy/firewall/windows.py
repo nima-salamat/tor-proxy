@@ -580,11 +580,11 @@ try {
     # A WFP-only activation never edits the Windows Firewall profiles or
     # creates a legacy snapshot. Do not "restore" unrelated pre-existing
     # Block defaults just because the WFP snapshot file is absent.
-    if (($Action -eq 'recover' -or $Action -eq 'deactivate') -and
+    if (($Action -eq 'recover' -or $Action -eq 'deactivate' -or $Action -eq 'emergency') -and
         -not (Test-Path -LiteralPath $SnapshotPath)) {
         $legacyRules = @(Get-NetFirewallRule -PolicyStore PersistentStore -Group $Group -ErrorAction SilentlyContinue)
         if ($legacyRules.Count -eq 0) {
-            Write-Result @{ ok = $true; active = $false; verified = $true; backend = 'WFP'; detail = $wfpRecovery }
+            Write-Result @{ ok = $true; active = $false; verified = $true; backend = 'WFP'; mode = $Action; detail = $wfpRecovery }
             return
         }
     }
