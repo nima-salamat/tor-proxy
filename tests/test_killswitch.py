@@ -115,11 +115,16 @@ def test_windows_recovery_preserves_external_profile_changes():
     assert "Assert-ManagedState $snapshot $false" not in recovery_script
 
 
-def test_windows_helper_scopes_system_tunnel_allow_rule_to_the_exact_tun_interface():
-    assert "TorProxy_KS_TUN" in _POWERSHELL
-    assert "-InterfaceAlias 'TorProxy'" in _POWERSHELL
-    assert "Test-TunInterfaceAllowRule" in _POWERSHELL
-    assert "tun_interface_allowed" in _POWERSHELL
+def test_windows_wfp_helper_scopes_system_tunnel_allow_to_the_exact_tun_interface():
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "launcher"
+        / "src"
+        / "wfp_helper.cpp"
+    ).read_text(encoding="utf-8")
+    assert 'ConvertInterfaceNameToLuidW(L"TorProxy"' in source
+    assert "FWPM_CONDITION_IP_LOCAL_INTERFACE" in source
+    assert "TorProxy WFP permit TorProxy tunnel interface" in source
 
 
 def test_windows_helper_exposes_saved_and_emergency_recovery_paths():
@@ -378,7 +383,7 @@ def test_windows_activation_uses_transactional_wfp_without_per_rule_updates():
     assert "Set-NetFirewallProfile" not in activation_script
     assert "Set-SnapshotLocalRulesEnabled" not in activation_script
     assert "Save-Snapshot" not in activation_script
-    assert "does not change existing Windows Firewall rules or profile defaults" in _POWERSHELL
+    assert "do not change existing Windows Firewall rules or profile defaults" in _POWERSHELL
 
 
 def test_windows_legacy_recovery_only_suppresses_missing_owned_rule_groups():
