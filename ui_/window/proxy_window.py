@@ -201,7 +201,7 @@ class ProxyWindow(QWidget):
         service_controls_row.setContentsMargins(0, 0, 0, 0)
         service_controls_row.setSpacing(12)
         service_controls_row.addWidget(proxy_controls, 1)
-        service_controls_row.addWidget(self.system_tunnel_hint, 2)
+        service_controls_row.addWidget(self.system_tunnel_hint, 1)
         self.home_layout.addLayout(service_controls_row)
 
         self.tor_ip_label = QLabel("Exit IP: not checked")
@@ -425,7 +425,8 @@ class ProxyWindow(QWidget):
             QPushButton#secondaryAction {{ min-height: 36px; padding: 0 14px; border-radius: 8px; background: transparent; color: {text}; border: 1px solid {border}; font-weight: 600; }}
             QPushButton#secondaryAction:hover {{ background: rgba(71, 163, 242, 0.12); border-color: {accent}; }}
             QPushButton#secondaryAction:checked {{ background: rgba(71, 163, 242, 0.18); border-color: {accent}; }}
-            QFrame#systemTunnelHint {{ background: {surface}; border: 1px solid {border}; border-radius: 8px; }}
+            QFrame#systemProxyControls {{ background: transparent; border: none; }}
+            QFrame#systemTunnelHint {{ background: transparent; border: 1px solid {border}; border-radius: 8px; }}
             QLabel#systemTunnelHintLabel {{ color: {muted}; background: transparent; border: none; font-size: 10px; }}
             QPushButton#systemTunnelAction {{ min-height: 27px; padding: 0 11px; border-radius: 7px; background: {accent}; color: #ffffff; border: 1px solid {accent}; font-size: 10px; font-weight: 750; }}
             QPushButton#systemTunnelAction:hover {{ background: {hover}; color: {text}; border-color: {accent}; }}
