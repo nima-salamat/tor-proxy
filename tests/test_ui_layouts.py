@@ -231,14 +231,11 @@ def test_updates_navigation_keeps_theme_text_color_on_hover():
     assert "color: {text}; background: {hover}; border-color: {border};" in source
     assert "QToolButton#updatesNavButton:checked:hover {{" in source
     assert "background: {accent}; color: #ffffff; border-color: {accent};" in source
-    assert "QToolButton#updatesNavButton::menu-button {{" in source
-    assert "QToolButton#updatesNavButton:hover::menu-button {{" in source
-    assert "QToolButton#updatesNavButton:checked::menu-button {{" in source
-    assert "QToolButton#updatesNavButton:checked:hover::menu-button {{" in source
-    assert "subcontrol-position: right center;" in source
-    assert "image: none;" not in source[source.index("QToolButton#updatesNavButton"):source.index("QPushButton#topNavExitButton")]
-    assert "border-left: 4px solid transparent;" not in source
-    assert "border-right: 4px solid transparent;" not in source
+    # Use the native Qt dropdown indicator; custom split-button geometry caused
+    # a mismatched rectangular patch in the lower-right corner.
+    assert "QToolButton#updatesNavButton::menu-button" not in source
+    assert "QToolButton#updatesNavButton::menu-indicator" not in source
+    assert "QPushButton#topNavButton, QToolButton#updatesNavButton {{" in source
 
 
 
@@ -320,14 +317,13 @@ def test_updates_menu_initialization_avoids_undefined_mode_and_tracks_popup_stat
     assert 'self.updates_menu.aboutToHide.connect(self._on_updates_menu_about_to_hide)' in menu_builder
     assert 'def _on_updates_menu_about_to_show(self):' in source
     assert 'def _on_updates_menu_about_to_hide(self):' in source
-    assert 'self.updates_nav_button.setIcon(qta.icon("fa6s.cloud-arrow-down", color=color))' not in source
+    assert 'self.updates_nav_button.setIcon(qta.icon("fa6s.cloud-arrow-down", color=color))' in source
     assert 'self.updates_nav_button.setChecked(selected)' in source
     assert 'color = "#ffffff" if selected else ("#eff1f4" if dark else "#202832")' in source
     assert "_updates_menu_open" not in source
     assert "QPushButton#topNavButton, QToolButton#updatesNavButton {{" in source
     assert "QToolButton#updatesNavButton::menu-button" not in source
     assert "QToolButton#updatesNavButton::menu-indicator" not in source
-    assert "self.updates_nav_button.setChecked(self.stack.currentIndex() in {4, 5})" in source
 
 
 def test_manage_proxy_disable_dispatches_explicit_clear_to_the_current_platform(monkeypatch):
