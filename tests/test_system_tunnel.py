@@ -814,7 +814,7 @@ def test_cleanup_previous_session_does_not_request_elevation_when_nothing_is_lef
 
     result = manager.cleanup_previous_session()
 
-    assert result == "System tunnel is stopped."
+    assert result == "No previous TorProxy tunnel state needs cleanup."
     assert calls == []
 
 
