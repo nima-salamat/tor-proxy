@@ -178,7 +178,7 @@ The supervised Tor configuration currently supports circuit dirtiness, new-circu
 
 ## Blocked hosts and exclusions
 
-Blocked-host and excluded-host lists share the same validated hostname-rule engine for HTTP requests and HTTPS `CONNECT` tunnels. Supported examples:
+Blocked-host and excluded-host lists share the same validated hostname-rule engine. They apply to requests through the loopback HTTP proxy (HTTP and HTTPS `CONNECT`) and to supported TCP connections through System Tunnel. The HTTP proxy uses saved rules immediately; System Tunnel reads the same files when it starts, so stop and start the tunnel after changing a rule. Hostname rules in TUN are matched using FakeIP reverse mapping or HTTP/TLS hostname sniffing; IP-literal rules match destination IPs. Supported examples:
 
 - `example.org` matches the hostname and all subdomains.
 - `=example.org` matches only that exact hostname.
@@ -188,7 +188,7 @@ Blocked-host and excluded-host lists share the same validated hostname-rule engi
 
 A `*` wildcard inside a label matches zero or more characters but never crosses a dot. Label-glob patterns match the same number of hostname labels; the special `*.domain` form matches subdomains across any depth. This is **glob syntax, not regex syntax**. Arbitrary regular expressions, `?`, and character classes are not accepted. Hostnames are case-insensitive and Unicode labels are normalized using IDNA. Wildcards embedded within an internationalized label must use its ASCII/IDNA form.
 
-Excluded hosts intentionally connect directly rather than through Tor. Their destination DNS and traffic may be visible to the local network or ISP, and the origin IP can be exposed. Leave exclusions empty unless that bypass is intentional. Block rules take precedence over exclusions.
+Excluded hosts intentionally connect directly rather than through Tor in HTTP-proxy mode. In System Tunnel, matching TCP connections use sing-box's direct outbound; DNS for TUN clients remains handled by the configured FakeIP/Tor-routed resolver. Direct destination connections can expose the origin IP and destination metadata to the local network or ISP. Leave exclusions empty unless that bypass is intentional. Block rules take precedence over exclusions. System Tunnel is TCP-only; unsupported UDP is rejected.
 
 ## System proxy settings
 
