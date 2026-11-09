@@ -155,9 +155,10 @@ def get_blocked() -> list[str]:
 def remove_blocked(host: str) -> None:
     global _blocked_rules
     with _rule_lock:
-        _blocked_rules = _blocked_rules.remove(host)
-        snapshot = _blocked_rules.as_list()
-    _atomic_json(_rules_path(BLOCKED_FILE), snapshot)
+        updated = _blocked_rules.remove(host)
+        # Persist first: a failed disk write must not silently disable a live block rule.
+        _atomic_json(_rules_path(BLOCKED_FILE), updated.as_list())
+        _blocked_rules = updated
 
 
 def save_blocked() -> None:
@@ -191,9 +192,10 @@ def get_exclude() -> list[str]:
 def remove_exclude(host: str) -> None:
     global _excluded_rules
     with _rule_lock:
-        _excluded_rules = _excluded_rules.remove(host)
-        snapshot = _excluded_rules.as_list()
-    _atomic_json(_rules_path(EXCLUDE_FILE), snapshot)
+        updated = _excluded_rules.remove(host)
+        # Keep runtime policy unchanged if the persisted update fails.
+        _atomic_json(_rules_path(EXCLUDE_FILE), updated.as_list())
+        _excluded_rules = updated
 
 
 def save_exclude() -> None:
