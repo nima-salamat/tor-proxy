@@ -1138,6 +1138,26 @@ def test_legacy_kill_switch_ui_and_tunnel_dependency_are_removed():
     assert '("Tunnel"' not in shell_source
     assert "updates_nav_button" in shell_source
     assert "def _show_tunnel_page(self)" in shell_source
+\n
+def test_home_tunnel_controls_start_and_stop_installed_engine_without_showing_manage():
+    repository = Path(__file__).resolve().parents[1]
+    home_source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+    tunnel_source = (repository / "ui_/window/tunnel_window.py").read_text(encoding="utf-8")
+
+    assert 'self.btn_system_tunnel_action = QPushButton("Start"' in home_source
+    assert 'self.btn_system_tunnel_action.clicked.connect(self.toggle_system_tunnel)' in home_source
+    assert 'self.btn_system_tunnel_manage.clicked.connect(self.open_tunnel_manager)' in home_source
+    assert 'manage_button.setVisible(show_manage)' in home_source
+    assert 'action_button.setVisible(show_action)' in home_source
+    assert 'action_text = "Stop"' in home_source
+    assert 'action_text = "Reconcile"' in home_source
+    assert 'action_text = "Start"' in home_source
+    assert 'def toggle_system_tunnel(self):' in home_source
+    assert 'toggle_tunnel_from_home' in home_source
+    assert 'def toggle_tunnel_from_home(self)' in tunnel_source
+    assert 'self.manager.installed_version' in tunnel_source
+    assert 'self.versions_list.setCurrentItem(item)' in tunnel_source
+    assert 'self.toggle_tunnel()' in tunnel_source
 
 
 def test_tunnel_manager_is_a_versioned_updates_page_with_explicit_network_routes():
