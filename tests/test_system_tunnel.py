@@ -61,7 +61,16 @@ def test_windows_and_linux_helpers_share_one_complete_argument_builder(tmp_path,
     manager = _manager(tmp_path)
     monkeypatch.setattr(SystemTunnelManager, "engine_sha256", property(lambda _self: "a" * 64))
     args = manager._helper_action_arguments("start", tmp_path / "helper.json")
-    mapping = {args[i]: args[i + 1] for i in range(0, len(args) - 1, 2) if args[i].startswith("--")}
+    mapping = {}
+    index = 1  # args[0] is the helper action ("start" or "stop").
+    while index < len(args):
+        flag = args[index]
+        if flag == "--unverified-release":
+            mapping[flag] = True
+            index += 1
+        else:
+            mapping[flag] = args[index + 1]
+            index += 2
     assert mapping["--version"] == manager.version
     assert mapping["--source-url"] == manager.platform_asset["url"]
     assert mapping["--archive-type"] == manager.platform_asset["archive"]
