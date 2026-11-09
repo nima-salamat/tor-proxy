@@ -639,7 +639,7 @@ class Window(QMainWindow):
         empty.setEnabled(False)
 
     def _on_updates_menu_about_to_show(self):
-        """Show the opposite-facing cloud arrow while the Updates menu is open."""
+        """Mark the Updates popup open so its separate chevron points upward."""
         self._updates_menu_open = True
         self.updates_nav_button.setChecked(True)
         self._sync_updates_nav_icon()
@@ -651,7 +651,7 @@ class Window(QMainWindow):
         self._sync_updates_nav_icon()
 
     def _sync_updates_nav_icon(self, mode=None):
-        """Keep the Updates icon, direction, and contrast in sync with UI state."""
+        """Keep the cloud icon contrast in sync with page and popup state."""
         dark = (mode or CONFIG.get("mode", "dark")) == "dark"
         selected = self.stack.currentIndex() in {4, 5}
         menu_open = bool(getattr(self, "_updates_menu_open", False))
