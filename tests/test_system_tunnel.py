@@ -104,7 +104,7 @@ def test_socks5_connect_probe_sends_protocol_bytes_and_completes_connect(monkeyp
 
     assert fake.sent == [
         bytes((5, 1, 0)),
-        bytes((5, 1, 0, 1, 1, 1, 1, 1, 187)),
+        bytes((5, 1, 0, 1, 1, 1, 1, 1, 1, 187)),
     ]
 
 
