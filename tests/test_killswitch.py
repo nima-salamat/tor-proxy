@@ -401,6 +401,8 @@ def test_windows_saved_rule_updates_handle_duplicate_friendly_names_by_guid():
 
     assert "$expectedByFriendlyName[$friendlyName]" in helper
     assert "$comNameCounts" in helper
+    assert "$comCount -ne 1" in helper
+    assert "NetSecurity-only" in helper
     assert "$duplicateRuleIds.Add([string]$entry.InternalName)" in helper
     assert "Set-NetFirewallRule -PolicyStore PersistentStore -Name ($duplicateChangeIds.ToArray())" in helper
     assert "$enabledValue = if ($enabled) { 'True' } else { 'False' }" in helper
