@@ -38,7 +38,7 @@ SING_BOX_LATEST_VERSION = "1.14.4"
 # after a warning, using the exact official GitHub asset and its published API digest.
 SUPPORTED_SING_BOX_VERSIONS = ("1.14.4", "1.14.3", "1.14.2")
 SING_BOX_VERSION = SING_BOX_LATEST_VERSION
-SING_BOX_VERSION_PATTERN = re.compile(r"^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$")
+SING_BOX_VERSION_PATTERN = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 SHA256_PATTERN = re.compile(r"^[a-fA-F0-9]{64}$")
 SING_BOX_RELEASES_API = "https://api.github.com/repos/SagerNet/sing-box/releases/latest"
 TUN_INTERFACE_WINDOWS = "TorProxy"
