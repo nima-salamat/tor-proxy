@@ -288,6 +288,86 @@ def test_http_request_is_forwarded_through_socks_with_remote_dns(monkeypatch, ca
 
 
 
+
+def test_blocked_http_proxy_request_is_rejected_before_opening_upstream(monkeypatch):
+    monkeypatch.setattr(
+        proxy_module, "_blocked_rules", HostRules.from_values(["127.0.0.1"])
+    )
+    monkeypatch.setattr(proxy_module, "_excluded_rules", HostRules())
+    proxy_server = proxy_module.ThreadedHTTPServer(
+        ("127.0.0.1", 0), proxy_module.ProxyHandler, 9050
+    )
+    proxy_thread = threading.Thread(target=proxy_server.serve_forever, daemon=True)
+    proxy_thread.start()
+    client = None
+    try:
+        client = socket.create_connection(
+            ("127.0.0.1", proxy_server.server_address[1]), timeout=5
+        )
+        client.settimeout(5)
+        client.sendall(
+            b"GET http://127.0.0.1:18080/blocked HTTP/1.1\\r\\n"
+            b"Host: 127.0.0.1:18080\\r\\nConnection: close\\r\\n\\r\\n"
+        )
+        response = client.recv(4096)
+        assert b"403" in response
+        assert b"Destination blocked by host policy" in response
+    finally:
+        if client is not None:
+            client.close()
+        proxy_server.shutdown()
+        proxy_server.server_close()
+        proxy_thread.join(timeout=2)
+
+
+def test_excluded_http_proxy_request_uses_direct_connection_not_tor(monkeypatch):
+    monkeypatch.setattr(proxy_module, "_blocked_rules", HostRules())
+    monkeypatch.setattr(
+        proxy_module, "_excluded_rules", HostRules.from_values(["127.0.0.1"])
+    )
+    target = TargetServer(("127.0.0.1", 0), _ResponseHandler)
+    target_thread = threading.Thread(target=target.serve_forever, daemon=True)
+    target_thread.start()
+    socks_server = FakeSocksServer()
+    proxy_server = proxy_module.ThreadedHTTPServer(
+        ("127.0.0.1", 0), proxy_module.ProxyHandler, socks_server.port
+    )
+    proxy_thread = threading.Thread(target=proxy_server.serve_forever, daemon=True)
+    proxy_thread.start()
+    client = None
+    try:
+        client = socket.create_connection(
+            ("127.0.0.1", proxy_server.server_address[1]), timeout=5
+        )
+        client.settimeout(5)
+        target_port = target.server_address[1]
+        client.sendall(
+            (
+                f"GET http://127.0.0.1:{target_port}/direct HTTP/1.1\\r\\n"
+                f"Host: 127.0.0.1:{target_port}\\r\\n"
+                "Connection: close\\r\\n\\r\\n"
+            ).encode("ascii")
+        )
+        response = bytearray()
+        while True:
+            chunk = client.recv(65536)
+            if not chunk:
+                break
+            response.extend(chunk)
+        assert b"200 OK" in response
+        assert b"proxied-local-test" in response
+        assert socks_server.address_types == []
+    finally:
+        if client is not None:
+            client.close()
+        proxy_server.shutdown()
+        proxy_server.server_close()
+        proxy_thread.join(timeout=2)
+        socks_server.close()
+        target.shutdown()
+        target.server_close()
+        target_thread.join(timeout=2)
+
 def test_legacy_kill_switch_preference_does_not_change_direct_exclusion_routing(monkeypatch):
     monkeypatch.setattr(proxy_module, "_blocked_rules", HostRules())
     monkeypatch.setattr(
