@@ -1258,13 +1258,15 @@ class ProxyWindow(QWidget):
                 "TorProxy could not verify the active Kill Switch. The system tunnel was not started.",
             )
             return
-        if not firewall.get("tun_interface_allowed"):
+        if not firewall.get("tun_interface_allowed") and firewall.get("backend") != "WFP":
             QMessageBox.information(
                 self, "Update Kill Switch rules",
-                "This Kill Switch policy predates the system tunnel. While disconnected, disable and "
-                "re-enable Kill Switch once, then reconnect Tor.",
+                "This legacy Kill Switch policy has no verified system-tunnel interface exception. "
+                "While disconnected, disable and re-enable Kill Switch once, then reconnect Tor.",
             )
             return
+        # The WFP backend adds the exact adapter-LUID exception from its
+        # already-elevated sing-box helper after the TorProxy TUN adapter exists.
         tor_paths = [self.tor.tor_path, self.tor.lyrebird_path]
         self._run_system_tunnel_action(
             "start",
