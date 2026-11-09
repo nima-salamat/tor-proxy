@@ -373,7 +373,7 @@ try {
             if ($orphanedRules.Count -gt 0) {
                 throw 'TorProxy firewall rules exist but the saved snapshot is missing. Use emergency recovery to restore outbound access.'
             }
-            $currentProfiles = Get-ActiveProfiles
+            $currentProfiles = Get-PersistentProfiles
             $stillBlocked = @($currentProfiles | Where-Object { [string]$_.DefaultOutboundAction -eq 'Block' })
             if ($stillBlocked.Count -gt 0) {
                 throw 'No saved snapshot exists and outbound traffic is still blocked. Use emergency recovery to restore normal outbound access.'
@@ -387,7 +387,7 @@ try {
 
             # Preserve externally changed profile settings while restoring only
             # profiles which still match the exact restrictive state TorProxy applied.
-            $currentProfiles = Get-ActiveProfiles
+            $currentProfiles = Get-PersistentProfiles
             $preservedProfiles = @{}
             $preservedNames = @()
             foreach ($saved in $snapshot.profiles) {
@@ -399,7 +399,7 @@ try {
                 $applied = [bool]$current.Enabled -and [string]$current.DefaultOutboundAction -eq 'Block'
                 if ($original) { continue }
                 if ($applied) {
-                    Set-NetFirewallProfile -Profile ([string]$saved.Name) -Enabled ([bool]$saved.Enabled) -DefaultOutboundAction ([string]$saved.DefaultOutboundAction)
+                    Set-NetFirewallProfile -PolicyStore PersistentStore -Profile ([string]$saved.Name) -Enabled ([bool]$saved.Enabled) -DefaultOutboundAction ([string]$saved.DefaultOutboundAction)
                 } else {
                     $name = [string]$saved.Name
                     $preservedProfiles[$name] = @{
@@ -420,7 +420,7 @@ try {
                 }
             }
 
-            $restoredProfiles = Get-ActiveProfiles
+            $restoredProfiles = Get-PersistentProfiles
             foreach ($saved in $snapshot.profiles) {
                 $name = [string]$saved.Name
                 $current = $restoredProfiles | Where-Object { $_.Name -eq $name } | Select-Object -First 1
