@@ -1632,6 +1632,21 @@ def _helper_start(args: Any) -> dict[str, Any]:
             kwargs["start_new_session"] = True
         process = subprocess.Popen([str(engine), "run", "-c", str(config_path)], **kwargs)
 
+    # Publish process identity immediately after spawn, not only after the
+    # interface appears. If startup is interrupted between those events, the
+    # next Connect can still stop this exact child instead of seeing an
+    # unexplained sing-box process.
+    record = {
+        "pid": process.pid,
+        "create_time": psutil.Process(process.pid).create_time(),
+        "engine": str(engine),
+        "config": str(config_path),
+        "interface": args.interface,
+        "sha256": args.sha256,
+    }
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_json(state_path, record, mode=0o644)
+
     deadline = time.monotonic() + HELPER_START_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
         code = process.poll()
@@ -1640,24 +1655,23 @@ def _helper_start(args: Any) -> dict[str, Any]:
                 tail = log_path.read_text(encoding="utf-8", errors="replace")[-1800:]
             except OSError:
                 tail = ""
+            if not _interface_exists(args.interface):
+                state_path.unlink(missing_ok=True)
             raise SystemTunnelError(f"sing-box exited during TUN startup ({code}). {tail.strip()}")
         if _interface_exists(args.interface):
             if process.poll() is not None:
-                raise SystemTunnelError("sing-box exited while its TUN interface was being created.")
-            state_path.parent.mkdir(parents=True, exist_ok=True)
-            record = {
-                "pid": process.pid,
-                "create_time": psutil.Process(process.pid).create_time(),
-                "engine": str(engine),
-                "config": str(config_path),
-                "interface": args.interface,
-                "sha256": args.sha256,
-            }
-            _atomic_json(state_path, record, mode=0o644)
+                raise SystemTunnelError(
+                    "sing-box exited while its TUN interface was being created; "
+                    "the process record was retained for a later cleanup check."
+                )
             time.sleep(0.2)
             if process.poll() is not None or _process_matches(record) is None:
-                state_path.unlink(missing_ok=True)
-                raise SystemTunnelError("sing-box did not remain healthy after creating its TUN interface.")
+                if not _interface_exists(args.interface):
+                    state_path.unlink(missing_ok=True)
+                raise SystemTunnelError(
+                    "sing-box did not remain healthy after creating its TUN interface; "
+                    "the process record was retained if the adapter still exists."
+                )
             return {"ok": True, "active": True, "pid": process.pid, "detail": "System TUN interface is active."}
         time.sleep(0.25)
 
@@ -1667,9 +1681,15 @@ def _helper_start(args: Any) -> dict[str, Any]:
     except (OSError, subprocess.TimeoutExpired):
         try:
             process.kill()
-        except OSError:
+            process.wait(timeout=3)
+        except (OSError, subprocess.TimeoutExpired):
             pass
-    raise SystemTunnelError(f"sing-box did not create the {args.interface} interface in time.")
+    if process.poll() is not None and not _interface_exists(args.interface):
+        state_path.unlink(missing_ok=True)
+    raise SystemTunnelError(
+        f"sing-box did not create the {args.interface} interface in time. "
+        "Its process record was retained if the child or adapter could not be confirmed stopped."
+    )
 
 
 def _send_windows_ctrl_break(pid: int) -> bool:
