@@ -356,7 +356,10 @@ void activate(const std::vector<std::wstring>& programs) {
 
     const UINT32 installed = enumerateOwnedFilters(engine.get(), nullptr);
     if (installed < 10) {
-        throw std::runtime_error("WFP transaction committed, but the installed filter set is incomplete.");
+        Transaction cleanup(engine.get());
+        removeOwnedFilters(engine.get());
+        cleanup.commit();
+        throw std::runtime_error("WFP transaction committed an incomplete filter set; its TorProxy filters were removed.");
     }
     std::wcout << L"ACTIVE filters=" << installed << L"\n";
 }
@@ -372,8 +375,8 @@ void recover() {
 void status() {
     Engine engine;
     const UINT32 count = enumerateOwnedFilters(engine.get(), nullptr);
-    std::wcout << (count >= 10 ? L"ACTIVE" : L"INACTIVE")
-               << L" filters=" << count << L"\n";
+    const wchar_t* state = count >= 10 ? L"ACTIVE" : (count == 0 ? L"INACTIVE" : L"INCOMPLETE");
+    std::wcout << state << L" filters=" << count << L"\n";
 }
 } // namespace
 
