@@ -1918,3 +1918,17 @@ def test_tray_menu_uses_a_modern_theme_aware_floating_surface():
         source.index("self._sync_tray_system_proxy_actions()"):
         source.index("# Do not give the menu to the shell:")
     ]
+
+
+def test_shortcut_row_icons_remain_transparent_over_the_hover_surface():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/shortcuts_window.py").read_text(encoding="utf-8")
+
+    assert 'icon_label.setObjectName("shortcutsRowIcon")' in source
+    assert (
+        "QLabel#shortcutsRowIcon, QFrame#shortcutsRow:hover QLabel#shortcutsRowIcon "
+        "{{ background: transparent; border: none; }}"
+    ) in source
+    assert "QFrame#shortcutsRow:hover {{ background: {hover}; }}" in source
+    # The icon must reveal the row's hover surface, not paint its own light square.
+    assert "QLabel#shortcutsRowIcon {{ background:" not in source
