@@ -349,49 +349,23 @@ def test_windows_backend_refuses_unverified_helper_result(tmp_path):
         backend.activate((str(executable.resolve()),))
 
 
-def test_windows_firewall_helper_is_strict_about_outbound_exceptions():
-    assert "DefaultOutboundAction Block" in _POWERSHELL
-    assert "GroupPolicy" in _POWERSHELL
-    assert "-PolicyStore ActiveStore -TracePolicyStore -Direction Outbound" in _POWERSHELL
-    assert "PolicyStoreSourceType" in _POWERSHELL
-    assert "([string]$_.PolicyStoreSourceType -ne 'Local' -or" in _POWERSHELL
-    assert "Enabled outbound Allow rules are enforced by Group Policy" in _POWERSHELL
-    assert "PolicyStoreSource" in _POWERSHELL
-    assert "Enabled outbound Allow rules outside the local firewall store" in _POWERSHELL
-    assert "Get-NetFirewallApplicationFilter" in _POWERSHELL
-    assert "Get-NetFirewallServiceFilter" in _POWERSHELL
-    assert "Get-NetFirewallPortFilter" in _POWERSHELL
-    assert "Get-NetFirewallAddressFilter" in _POWERSHELL
-    assert "Get-NetFirewallSecurityFilter" in _POWERSHELL
-    assert "$null -eq $security -or [string]$security.OverrideBlockRules -ne 'False'" in _POWERSHELL
-    assert "authenticated block bypass is disabled" in _POWERSHELL
-    assert "Program=$program" in _POWERSHELL
-    assert "RemotePort=$remotePort" in _POWERSHELL
-    assert "RemoteAddress=$remoteAddress" in _POWERSHELL
-    assert "Rule filters are included to identify their owner and scope" in _POWERSHELL
-    assert "function Get-SnapshotValue($snapshot, [string]$name)" in _POWERSHELL
-    assert "function Set-SnapshotValue($snapshot, [string]$name, $value)" in _POWERSHELL
-    assert "function Test-SharedAccessDynamicAllowRule($rule)" in _POWERSHELL
-    assert "[string]$rule.PolicyStoreSourceType -ne 'Dynamic'" in _POWERSHELL
-    assert "$serviceNames -contains 'SharedAccess'" in _POWERSHELL
-    assert "TorProxy_KS_Block_SharedAccess" in _POWERSHELL
-    assert "-Action Block -Program $sharedAccessProgram -Service SharedAccess -OverrideBlockRules $false" in _POWERSHELL
-    assert "Assert-SharedAccessBlockRule" in _POWERSHELL
-    assert "Get-SnapshotValue $snapshot 'blockSharedAccess' -and" not in _POWERSHELL
-    assert "Get-SnapshotValue $snapshot 'blockSharedAccess') -and $sharedAccessRuleNames.ContainsKey([string]$_.Name)" in _POWERSHELL
-    assert "Set-Phase 'Reading the effective outbound firewall rules...'" in _POWERSHELL
-    assert "$ProgressPath = $ResultPath + '.progress'" in _POWERSHELL
-    # Legacy snapshot restoration may use the bounded GUID-scoped fallback,
-    # but activation must not invoke it until after its own safe snapshot checks.
+def test_windows_firewall_activation_has_no_legacy_per_rule_fallback():
+    activation_start = _POWERSHELL.index("if ($Action -eq 'activate')")
+    activation_end = _POWERSHELL.index("if ($Action -eq 'recover' -or", activation_start)
+    activation_script = _POWERSHELL[activation_start:activation_end]
+
+    assert "Invoke-WfpHelper 'activate' $programs" in activation_script
+    assert "Set-NetFirewallProfile" not in activation_script
+    assert "Set-SnapshotLocalRulesEnabled" not in activation_script
+    assert "Set-NetFirewallRule" not in activation_script
+    assert "Get-NetFirewallRule" not in activation_script
+    assert "TorProxyWfpHelper.exe is missing" in _POWERSHELL
+
     fallback_start = _POWERSHELL.index("function Set-SnapshotRulesByInternalIds")
     fallback_end = _POWERSHELL.index("function Set-SnapshotLocalRulesEnabled", fallback_start)
     assert "Set-NetFirewallRule" in _POWERSHELL[fallback_start:fallback_end]
-    assert "TorProxy Kill Switch" in _POWERSHELL
+    assert "Get-SnapshotValue $snapshot 'blockSharedAccess'" in _POWERSHELL
     assert "original snapshot is missing" in _POWERSHELL
-    assert "could not be restored to its saved state" in _POWERSHELL
-
-
-
 
 
 def test_windows_activation_uses_transactional_wfp_without_per_rule_updates():
@@ -407,13 +381,13 @@ def test_windows_activation_uses_transactional_wfp_without_per_rule_updates():
     assert "does not change existing Windows Firewall rules or profile defaults" in _POWERSHELL
 
 
-def test_windows_first_activation_treats_missing_owned_group_as_empty():
+def test_windows_legacy_recovery_only_suppresses_missing_owned_rule_groups():
     assert "function Get-GroupRulesOrEmpty([string]$policyStore)" in _POWERSHELL
     assert "-ErrorAction SilentlyContinue -ErrorVariable queryErrors" in _POWERSHELL
     assert "CmdletizationQuery_NotFound_RuleGroup*" in _POWERSHELL
     assert "throw $unexpectedErrors[0]" in _POWERSHELL
-    assert "$orphanedGroup = @(Get-GroupRulesOrEmpty 'ActiveStore')" in _POWERSHELL
     assert "Get-NetFirewallRule -PolicyStore ActiveStore -Group $Group -ErrorAction Stop" not in _POWERSHELL
+    assert "Set-SnapshotLocalRulesEnabled $snapshot $false" not in _POWERSHELL
 
 
 def test_optional_firewall_group_query_only_suppresses_expected_not_found():
@@ -485,10 +459,11 @@ def test_windows_saved_rule_updates_handle_duplicate_and_com_missing_names_by_gu
     assert "[int]$rule.Action -ne 1" in helper
     assert "Windows Firewall updated" in helper
 
-def test_windows_helper_reports_the_current_phase_without_affecting_firewall_work():
+def test_windows_helper_reports_wfp_phases_without_affecting_firewall_work():
     assert "function Set-Phase([string]$phase)" in _POWERSHELL
     assert "Progress reporting must never prevent a firewall operation." in _POWERSHELL
-    assert "Verifying effective firewall profiles and TorProxy-owned rules" in _POWERSHELL
+    assert "Installing persistent IPv4/IPv6 WFP filters in one transaction" in _POWERSHELL
+    assert "Removing TorProxy-owned persistent WFP filters in one transaction" in _POWERSHELL
 
 
 def test_linux_install_is_idempotent_without_restarting_the_live_drop_chain(tmp_path, monkeypatch):
