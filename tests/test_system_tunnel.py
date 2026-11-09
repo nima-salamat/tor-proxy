@@ -94,7 +94,7 @@ def test_socks5_connect_probe_sends_protocol_bytes_and_completes_connect(monkeyp
         def settimeout(self, _timeout):
             pass
 
-        def sendall(self, payload):
+            def sendall(self, payload):
             self.sent.append(payload)
 
         def recv(self, size):
@@ -117,6 +117,98 @@ def test_socks5_connect_probe_sends_protocol_bytes_and_completes_connect(monkeyp
     ]
 
 
+def test_windows_legacy_tun_stack_fallback_tries_all_options_until_traffic_works(tmp_path, monkeypatch):
+    monkeypatch.setattr(system_tunnel.platform, "system", lambda: "Windows")
+    manager = _manager(tmp_path)
+    monkeypatch.setattr(manager, "is_installed", lambda: True)
+    monkeypatch.setattr(system_tunnel, "_interface_exists", lambda _name: False)
+    monkeypatch.setattr(
+        manager, "_socks5_connect_probe",
+        lambda *_args, **_kwargs: None,
+    )
+    configured = []
+    monkeypatch.setattr(
+        manager, "_write_and_check_config",
+        lambda _port, _tor, *, tun_stack=None: configured.append(tun_stack),
+    )
+    monkeypatch.setattr(
+        manager, "_invoke_helper",
+        lambda _action: {"ok": True, "active": True},
+    )
+    stopped = []
+    monkeypatch.setattr(manager, "stop", lambda: stopped.append(True) or "stopped")
+    def verify(_target):
+        if configured[-1] != "mixed":
+            raise SystemTunnelError("simulated stack forwarding failure")
+    monkeypatch.setattr(manager, "_verify_tunnel_tcp_tls", verify)
+
+    result = manager.start(9150, tor_executables=[tmp_path / "tor.exe"])
+
+    assert configured == ["gvisor", "system", "mixed"]
+    assert stopped == [True, True]
+    assert "mixed TUN stack" in result
+
+
+def test_system_tunnel_115_uses_native_stack_without_legacy_stack_option(tmp_path, monkeypatch):
+    monkeypatch.setattr(system_tunnel.platform, "system", lambda: "Windows")
+    manager = _manager(tmp_path)
+    manager.version = "1.15.0"
+    tor = tmp_path / "tor.exe"
+    tor.write_bytes(b"test tor")
+    manager.engine_dir.mkdir(parents=True, exist_ok=True)
+    manager.engine_path.write_bytes(b"test sing-box")
+
+    config = manager.build_config(9150, tor_executables=[tor])
+
+    assert "stack" not in config["inbounds"][0]
+    assert manager._windows_tun_stack_candidates() == (None,)
+
+
+def test_socks5_connect_probe_can_verify_tls_before_tun_start(monkeypatch):
+    class FakeSocket:
+        def __init__(self):
+            self.responses = bytearray(bytes((5, 0, 5, 0, 0, 1, 1, 1, 1, 1, 1, 187)))
+            self.sent = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def settimeout(self, _timeout):
+            pass
+
+        def sendall(self, payload):
+            self.sent.append(payload)
+
+        def recv(self, size):
+            result = bytes(self.responses[:size])
+            del self.responses[:size]
+            return result
+
+    class FakeTLS:
+        def __enter__(self):
+            return self
+        def __exit__(self, *_args):
+            return False
+        def getpeercert(self):
+            return {"subject": ((("commonName", "cloudflare-dns.com"),),)}
+
+    class FakeSSLContext:
+        def wrap_socket(self, _sock, *, server_hostname):
+            assert server_hostname == "cloudflare-dns.com"
+            return FakeTLS()
+
+    fake = FakeSocket()
+    monkeypatch.setattr(system_tunnel.socket, "create_connection", lambda *_args, **_kwargs: fake)
+    monkeypatch.setattr(system_tunnel.ssl, "create_default_context", lambda: FakeSSLContext())
+
+    SystemTunnelManager._socks5_connect_probe(
+        9150, "1.1.1.1", 443, server_name="cloudflare-dns.com"
+    )
+
+
 def test_system_tunnel_start_rolls_back_when_tun_has_no_outbound_tcp_tls(tmp_path, monkeypatch):
     manager = _manager(tmp_path)
     monkeypatch.setattr(manager, "is_installed", lambda: True)
@@ -124,7 +216,7 @@ def test_system_tunnel_start_rolls_back_when_tun_has_no_outbound_tcp_tls(tmp_pat
     monkeypatch.setattr(manager, "_write_and_check_config", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(manager, "_invoke_helper", lambda _action: {"ok": True, "active": True})
     monkeypatch.setattr(manager, "_socks5_connect_probe", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(manager, "_verify_tunnel_tcp_tls", lambda: (_ for _ in ()).throw(
+    monkeypatch.setattr(manager, "_verify_tunnel_tcp_tls", lambda _target: (_ for _ in ()).throw(
         SystemTunnelError("probe timeout")
     ))
     real_connect = system_tunnel.socket.create_connection
@@ -158,6 +250,8 @@ def test_windows_tun_config_forces_gvisor_stack_for_known_windows_forwarding_fai
 
     assert config["inbounds"][0]["stack"] == "gvisor"
     assert "auto_redirect" not in config["inbounds"][0]
+    system_config = manager.build_config(9150, tor_executables=[tor], tun_stack="system")
+    assert system_config["inbounds"][0]["stack"] == "system"
 
 
 def test_tunnel_engine_download_refuses_an_unspecified_network_route(tmp_path, monkeypatch):
