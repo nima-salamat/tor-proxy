@@ -315,7 +315,7 @@ def test_windows_firewall_helper_is_strict_about_outbound_exceptions():
     assert "Get-SnapshotValue $snapshot 'blockSharedAccess') -and $sharedAccessRuleNames.ContainsKey([string]$_.Name)" in _POWERSHELL
     assert "Set-Phase 'Reading the effective outbound firewall rules...'" in _POWERSHELL
     assert "$ProgressPath = $ResultPath + '.progress'" in _POWERSHELL
-    assert "Set-NetFirewallRule" in _POWERSHELL
+    assert "Set-NetFirewallRule" not in _POWERSHELL
     assert "TorProxy Kill Switch" in _POWERSHELL
     assert "original snapshot is missing" in _POWERSHELL
     assert "could not be restored to its saved state" in _POWERSHELL
@@ -357,11 +357,17 @@ def test_optional_firewall_group_query_only_suppresses_expected_not_found():
     assert "throw $unexpectedErrors[0]" in _POWERSHELL
 
 
-def test_windows_saved_local_allow_rules_are_processed_as_a_batch():
-    assert "function Set-SnapshotLocalRulesEnabled($snapshot, [bool]$enabled)" in _POWERSHELL
-    assert "-Name $changeNames -Enabled $enabled -ErrorAction Stop" in _POWERSHELL
-    assert "-Name $names -ErrorAction SilentlyContinue" in _POWERSHELL
-    assert "foreach ($name in @($snapshot.disabledRules))" not in _POWERSHELL
+def test_windows_saved_local_allow_rules_are_processed_in_one_com_collection_pass():
+    start = _POWERSHELL.index("function Set-SnapshotLocalRulesEnabled")
+    end = _POWERSHELL.index("function Set-SnapshotProfile", start)
+    helper = _POWERSHELL[start:end]
+    assert "New-Object -ComObject HNetCfg.FwPolicy2" in helper
+    assert "$rules = $policy.Rules" in helper
+    assert "foreach ($rule in $rules)" in helper
+    assert "$wanted.Contains($ruleName)" in helper
+    assert "$rule.Enabled = [bool]$enabled" in helper
+    assert "Set-NetFirewallRule" not in helper
+    assert "Get-NetFirewallRule" not in helper
 
     activation_start = _POWERSHELL.index("if ($Action -eq 'activate')")
     activation_end = _POWERSHELL.index("elseif ($Action -eq 'deactivate')", activation_start)
@@ -376,11 +382,10 @@ def test_windows_saved_local_allow_rules_are_processed_as_a_batch():
     assert "Restoring saved local outbound Allow rules in one batch" in recovery_script
 
 
-def test_windows_netsecurity_updates_use_enum_values_not_python_booleans():
-    assert "$enabledValue = if ($enabled) { 'True' } else { 'False' }" in _POWERSHELL
-    assert "-Name $changeNames -Enabled $enabledValue -ErrorAction Stop" in _POWERSHELL
+def test_windows_profile_updates_use_netsecurity_enum_strings():
     assert "function Set-SnapshotProfile($saved)" in _POWERSHELL
     assert "$enabledValue = if ([bool]$saved.Enabled) { 'True' } else { 'False' }" in _POWERSHELL
+    assert "Set-NetFirewallProfile -PolicyStore PersistentStore -Profile ([string]$saved.Name) -Enabled $enabledValue" in _POWERSHELL
     assert "Set-NetFirewallProfile -PolicyStore PersistentStore -Profile ([string]$saved.Name) -Enabled ([bool]$saved.Enabled)" not in _POWERSHELL
     assert _POWERSHELL.count("Set-SnapshotProfile $saved") == 2
 
