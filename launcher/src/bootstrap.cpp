@@ -25,6 +25,10 @@ constexpr ULONGLONG kIdleTimeout = 180000;
 struct State {
     HWND window = nullptr;
     HICON icon = nullptr;
+    HDC backBufferDc = nullptr;
+    HBITMAP backBufferBitmap = nullptr;
+    HGDIOBJ backBufferPreviousBitmap = nullptr;
+    int backBufferWidth = 0, backBufferHeight = 0;
     HANDLE process = nullptr, thread = nullptr;
     std::wstring root, executable, logPath, statusPath, token;
     std::wstring status = L"Preparing the desktop experience";
@@ -128,7 +132,7 @@ void showError(State &s, const std::wstring &message) {
     s.failed = true; s.status = L"Startup needs attention"; s.error = message;
     const auto tail = logTail(s.logPath);
     if (!tail.empty()) s.error += L"\r\n\r\n" + tail;
-    InvalidateRect(s.window, nullptr, TRUE);
+    InvalidateRect(s.window, nullptr, FALSE);
 }
 void stopChild(State &s) {
     if (s.process) {
@@ -161,7 +165,7 @@ void startApp(State &s) {
     stopChild(s); DeleteFileW(s.statusPath.c_str());
     s.failed = false; s.error.clear(); s.lastPayload.clear();
     s.status = L"Starting TorProxy…"; s.lastProgress = GetTickCount64();
-    InvalidateRect(s.window, nullptr, TRUE);
+    InvalidateRect(s.window, nullptr, FALSE);
     if (!preparePaths(s)) { showError(s, L"Could not prepare TorProxy's per-user startup paths."); return; }
     DeleteFileW(s.logPath.c_str());
     SetEnvironmentVariableW(L"TORPROXY_LAUNCHER_STATUS_FILE", s.statusPath.c_str());
@@ -187,7 +191,7 @@ void startApp(State &s) {
         return;
     }
     s.process = process.hProcess; s.thread = process.hThread;
-    InvalidateRect(s.window, nullptr, TRUE);
+    InvalidateRect(s.window, nullptr, FALSE);
 }
 void readStartupStatus(State &s) {
     const auto text = readFile(s.statusPath);
@@ -205,7 +209,7 @@ void readStartupStatus(State &s) {
     if (status == L"starting") {
         s.status = fromHex(payload);
         if (s.status.empty()) s.status = L"Preparing TorProxy…";
-        s.lastProgress = GetTickCount64(); InvalidateRect(s.window, nullptr, TRUE);
+        s.lastProgress = GetTickCount64(); InvalidateRect(s.window, nullptr, FALSE);
     } else if (status == L"ready") {
         s.ready = true; DeleteFileW(s.statusPath.c_str());
         if (s.thread) { CloseHandle(s.thread); s.thread = nullptr; }
@@ -234,7 +238,7 @@ void poll(State &s) {
         if (s.status.find(L"still starting") == std::wstring::npos) {
             s.status = L"Startup is taking longer than usual — still starting…";
             s.lastProgress = GetTickCount64();
-            InvalidateRect(s.window, nullptr, TRUE);
+            InvalidateRect(s.window, nullptr, FALSE);
         } else {
             showError(s, L"TorProxy did not report startup progress for another three minutes. Check the startup log.");
         }
@@ -299,7 +303,7 @@ int hitAction(const State &s, int x, int y) {
     }
     return -1;
 }
-void paint(State &s, HDC dc) {
+void paintFrame(State &s, HDC dc) {
     using namespace Gdiplus;
     Graphics graphics(dc);
     graphics.Clear(Color(255, 8, 14, 21));
@@ -307,7 +311,8 @@ void paint(State &s, HDC dc) {
     graphics.SetPixelOffsetMode(PixelOffsetModeHighQuality);
     graphics.SetCompositingQuality(CompositingQualityHighQuality);
     graphics.SetInterpolationMode(InterpolationModeHighQualityBicubic);
-    graphics.SetTextRenderingHint(TextRenderingHintClearTypeGridFit);
+    // Grayscale antialiasing avoids ClearType sub-pixel fringes on the off-screen surface.
+    graphics.SetTextRenderingHint(TextRenderingHintAntiAliasGridFit);
     graphics.ScaleTransform(s.scale, s.scale);
 
     const RectF canvas(0.0f, 0.0f, static_cast<float>(kDesignWidth),
@@ -432,6 +437,84 @@ void paint(State &s, HDC dc) {
     graphics.DrawLine(&footerLine, 34.0f, 461.0f, 726.0f, 461.0f);
 }
 
+
+void releaseBackBuffer(State &s) {
+    if (s.backBufferDc && s.backBufferPreviousBitmap) {
+        SelectObject(s.backBufferDc, s.backBufferPreviousBitmap);
+    }
+    if (s.backBufferBitmap) {
+        DeleteObject(s.backBufferBitmap);
+    }
+    if (s.backBufferDc) {
+        DeleteDC(s.backBufferDc);
+    }
+    s.backBufferDc = nullptr;
+    s.backBufferBitmap = nullptr;
+    s.backBufferPreviousBitmap = nullptr;
+    s.backBufferWidth = 0;
+    s.backBufferHeight = 0;
+}
+
+bool ensureBackBuffer(State &s, HDC referenceDc, int width, int height) {
+    if (s.backBufferDc && s.backBufferBitmap &&
+        s.backBufferWidth == width && s.backBufferHeight == height) {
+        return true;
+    }
+
+    releaseBackBuffer(s);
+
+    HDC memoryDc = CreateCompatibleDC(referenceDc);
+    if (!memoryDc) {
+        return false;
+    }
+
+    HBITMAP bitmap = CreateCompatibleBitmap(referenceDc, width, height);
+    if (!bitmap) {
+        DeleteDC(memoryDc);
+        return false;
+    }
+
+    HGDIOBJ previousBitmap = SelectObject(memoryDc, bitmap);
+    if (!previousBitmap || previousBitmap == HGDI_ERROR) {
+        DeleteObject(bitmap);
+        DeleteDC(memoryDc);
+        return false;
+    }
+
+    s.backBufferDc = memoryDc;
+    s.backBufferBitmap = bitmap;
+    s.backBufferPreviousBitmap = previousBitmap;
+    s.backBufferWidth = width;
+    s.backBufferHeight = height;
+    return true;
+}
+
+void paint(State &s, HDC targetDc) {
+    RECT client{};
+    if (!GetClientRect(s.window, &client)) {
+        return;
+    }
+
+    const int width = client.right - client.left;
+    const int height = client.bottom - client.top;
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+
+    if (!ensureBackBuffer(s, targetDc, width, height)) {
+        // Preserve a visible splash if GDI cannot allocate an off-screen surface.
+        paintFrame(s, targetDc);
+        return;
+    }
+
+    // Render a complete frame off-screen, then publish it with one blit.
+    paintFrame(s, s.backBufferDc);
+    if (!BitBlt(targetDc, 0, 0, width, height,
+                s.backBufferDc, 0, 0, SRCCOPY)) {
+        paintFrame(s, targetDc);
+    }
+}
+
 void updateMonitorLayout(State &s, UINT dpi) {
     if (!s.window) return;
     MONITORINFO monitorInfo{};
@@ -489,6 +572,7 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_DISPLAYCHANGE:
+        releaseBackBuffer(*s);
         updateMonitorLayout(*s, GetDpiForWindow(hwnd));
         return 0;
     case WM_NCHITTEST: {
@@ -568,6 +652,7 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_DESTROY:
         KillTimer(hwnd, kTimer);
+        releaseBackBuffer(*s);
         stopChild(*s);
         if (!s->statusPath.empty()) DeleteFileW(s->statusPath.c_str());
         PostQuitMessage(0);
@@ -663,9 +748,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
             (bounds.right - bounds.left) >= 680 &&
             (bounds.bottom - bounds.top) >= 420;
         const bool iconLoaded = state.icon != nullptr;
+        const bool bufferedPaintReady = state.backBufferDc != nullptr &&
+            state.backBufferBitmap != nullptr &&
+            state.backBufferWidth == bounds.right - bounds.left &&
+            state.backBufferHeight == bounds.bottom - bounds.top;
         DestroyWindow(state.window);
         Gdiplus::GdiplusShutdown(gdiplusToken);
-        return (frameless && sizeValid && iconLoaded) ? 0 : 4;
+        return (frameless && sizeValid && iconLoaded && bufferedPaintReady) ? 0 : 4;
     }
 
     startApp(state);
