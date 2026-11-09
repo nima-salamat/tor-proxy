@@ -203,6 +203,25 @@ def test_linux_helper_dispatch_rejects_malformed_cgroup_arguments(capsys):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="The Linux firewall backend requires Linux cgroup v2.")
+
+
+def test_linux_backend_reports_a_bounded_helper_timeout():
+    from torproxy.firewall.linux import HELPER_TIMEOUT_SECONDS, LinuxFirewallBackend
+
+    calls = []
+
+    def timeout_runner(command, **kwargs):
+        calls.append((command, kwargs))
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    backend = LinuxFirewallBackend(runner=timeout_runner)
+    backend._helper_command = lambda action, argument=None: ["pkexec", action]
+    with pytest.raises(KillSwitchError, match="180 seconds.*install"):
+        backend._run_helper("install")
+
+    assert calls[0][1]["timeout"] == HELPER_TIMEOUT_SECONDS == 180
+
+
 def test_linux_backend_passes_numeric_cgroup_id_and_level_without_shell(monkeypatch):
     from torproxy.firewall import linux
 
@@ -227,6 +246,7 @@ def test_linux_backend_passes_numeric_cgroup_id_and_level_without_shell(monkeypa
     assert command[-2:] == ["set-cgroup", "1234:5"]
     assert command[0] == "/usr/bin/pkexec"
     assert Path(command[-3]).name == "linux_helper.py"
+    assert kwargs["timeout"] == linux.HELPER_TIMEOUT_SECONDS == 180
     assert "shell" not in kwargs
 
 

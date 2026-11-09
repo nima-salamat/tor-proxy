@@ -8,6 +8,8 @@ from pathlib import Path
 
 from ..killswitch import KillSwitchError
 
+HELPER_TIMEOUT_SECONDS = 180
+
 
 class LinuxFirewallBackend:
     """Own one nftables table and never exempt the desktop user's general UID."""
@@ -34,8 +36,20 @@ class LinuxFirewallBackend:
 
     def _run_helper(self, action: str, argument: str | None = None) -> dict[str, object]:
         try:
-            result = self._runner(self._helper_command(action, argument), stdin=subprocess.DEVNULL,
-                                  capture_output=True, text=True, timeout=60, check=False)
+            result = self._runner(
+                self._helper_command(action, argument),
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=HELPER_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise KillSwitchError(
+                f"The privileged nftables helper exceeded {HELPER_TIMEOUT_SECONDS} seconds "
+                f"while running '{action}'. The firewall operation may be partially applied; "
+                "inspect Kill Switch recovery state before retrying."
+            ) from exc
         except (OSError, subprocess.SubprocessError) as exc:
             raise KillSwitchError(f"Could not run the privileged nftables helper: {exc}") from exc
         if result.returncode != 0:

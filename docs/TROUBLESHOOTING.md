@@ -87,7 +87,7 @@ When Kill Switch is enabled, direct Exclude Host entries are blocked. Tor bundle
 
 ### Windows activation takes too long
 
-Windows firewall activation reads policy provenance from the merged ActiveStore once, then uses a normal ActiveStore read for final rule membership checks. The elevated helper reports its current stage to the error message and has a bounded 180-second timeout; it does not silently wait forever. A timeout may occur after some firewall changes have been applied, so use **Restore saved firewall** first and **Emergency network recovery** only if the saved-state restore cannot restore connectivity. Do not repeatedly retry activation while a previous operation is still being reconciled.
+Windows firewall activation reads policy provenance from the merged ActiveStore once, then uses a normal ActiveStore read for final rule membership checks. Its elevated helper reports the current stage in timeout errors and has a bounded 180-second limit. The Linux nftables helper uses the same 180-second bound and reports which action timed out. A timeout may occur after some firewall changes have been applied, so use **Restore saved firewall** first and **Emergency network recovery** only if the saved-state restore cannot restore connectivity. Do not repeatedly retry activation while a previous operation is still being reconciled.
 
 ### Windows firewall source detection
 
