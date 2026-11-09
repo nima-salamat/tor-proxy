@@ -258,6 +258,7 @@ def test_updates_nav_icon_and_text_follow_only_the_active_updates_page(monkeypat
         icon = None
         checked = None
         indicator_color = None
+        indicator_open = False
 
         def setIcon(self, icon):
             self.icon = icon
@@ -267,6 +268,9 @@ def test_updates_nav_icon_and_text_follow_only_the_active_updates_page(monkeypat
 
         def setMenuIndicatorColor(self, color):
             self.indicator_color = color
+
+        def setMenuIndicatorOpen(self, opened):
+            self.indicator_open = bool(opened)
 
     fake = SimpleNamespace(
         stack=_Stack(4),
@@ -294,6 +298,7 @@ def test_updates_nav_icon_and_text_follow_only_the_active_updates_page(monkeypat
     assert fake.updates_nav_button.indicator_color == "#202832"
 
     ui.Window._on_updates_menu_about_to_show(fake)
+    assert fake.updates_nav_button.indicator_open is True
     assert fake.updates_nav_button.checked is False
     assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-down", "#202832")
     assert fake.updates_nav_button.indicator_color == "#202832"
@@ -306,6 +311,7 @@ def test_updates_nav_icon_and_text_follow_only_the_active_updates_page(monkeypat
     assert fake.updates_nav_button.indicator_color == "#ffffff"
 
     ui.Window._on_updates_menu_about_to_hide(fake)
+    assert fake.updates_nav_button.indicator_open is False
     assert fake.updates_nav_button.checked is True
     assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-down", "#ffffff")
     assert fake.updates_nav_button.indicator_color == "#ffffff"
@@ -337,20 +343,22 @@ def test_updates_dropdown_chevron_uses_explicit_theme_foreground(qt_app):
     button.show()
     qt_app.processEvents()
 
-    def rendered_chevron_pixel():
+    def rendered_chevron_pixel(vertical_offset):
         image = QImage(button.size(), QImage.Format.Format_ARGB32)
         image.fill(Qt.GlobalColor.transparent)
         button.render(image)
-        return image.pixelColor(button.width() - 12, button.rect().center().y() + 2)
+        return image.pixelColor(button.width() - 15, button.rect().center().y() + vertical_offset)
 
-    dark_text_pixel = rendered_chevron_pixel()
+    button.setMenuIndicatorOpen(False)
+    dark_text_pixel = rendered_chevron_pixel(2)
     assert dark_text_pixel.red() < 70
     assert dark_text_pixel.green() < 80
     assert dark_text_pixel.blue() < 90
 
     button.setMenuIndicatorColor("#ffffff")
+    button.setMenuIndicatorOpen(True)
     qt_app.processEvents()
-    white_text_pixel = rendered_chevron_pixel()
+    white_text_pixel = rendered_chevron_pixel(-2)
     assert white_text_pixel.red() > 230
     assert white_text_pixel.green() > 230
     assert white_text_pixel.blue() > 230
