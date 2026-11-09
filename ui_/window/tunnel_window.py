@@ -170,7 +170,6 @@ class TunnelManagerWindow(QWidget):
         self.btn_install = QPushButton("Install selected version")
         self.btn_install.setObjectName("primaryButton")
         self.btn_install.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_install.setIcon(qta.icon("fa6s.download", color=text))
         self.btn_install.clicked.connect(self.install_selected)
         buttons.addWidget(self.btn_install)
 
@@ -787,7 +786,7 @@ class TunnelManagerWindow(QWidget):
         self.title_icon.setPixmap(qta.icon("fa6s.network-wired", color=accent).pixmap(22, 22))
         self.btn_open_release.setIcon(qta.icon("fa6s.arrow-up-right-from-square", color=icon_color))
         self.btn_check_latest.setIcon(qta.icon("fa6s.rotate", color=icon_color))
-        self.btn_install.setIcon(qta.icon("fa6s.download", color="#ffffff"))
+        self.btn_install.setIcon(qta.icon("fa6s.download", color=text))
         self.btn_start_stop.setIcon(qta.icon("fa6s.play", color=icon_color))
         self.btn_test_connection.setIcon(qta.icon("fa6s.flask", color=icon_color))
         self._refresh_state()
