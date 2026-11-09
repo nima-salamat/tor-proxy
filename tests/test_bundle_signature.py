@@ -168,6 +168,7 @@ def test_missing_gpg_is_detected_before_downloading_bundle(monkeypatch, tmp_path
         bundle_module.download_verified_bundle(
             "16.0a14", "windows", "x86_64", tmp_path / "tor-expert-bundle-windows-x86_64-16.0a14.tar.gz",
             progress_callback=events.append,
+            verify_signature=True,
         )
 
     assert events[0].stage == "checking_verification_runtime"
