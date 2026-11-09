@@ -1167,6 +1167,7 @@ def test_home_proxy_controls_hide_explanatory_copy_and_blend_with_home_surface()
 
     assert "self.proxy_status_label.setVisible(False)" in source
     assert "proxy_controls_layout.addWidget(self.proxy_status_label)" not in source
+    assert "QComboBox#systemProxyMode {{ min-height: 34px; padding: 0 12px; border: 1px solid {border}; border-radius: 8px; background: transparent; color: {text}; }}" in source
     assert "QFrame#systemProxyControls {{ background: transparent; border: none; }}" in source
     assert "QFrame#systemTunnelHint {{ background: transparent; border: 1px solid {border}; border-radius: 8px; }}" in source
     assert "QFrame#systemTunnelHint {{ background: {surface};" not in source
