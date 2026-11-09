@@ -93,6 +93,33 @@ def test_block_and_bypass_rules_are_consistent_and_block_takes_precedence(monkey
     assert proxy_module._route_for_host("other.net") == "tor"
 
 
+
+@pytest.mark.parametrize(
+    ("rules_attribute", "remove_rule", "host"),
+    [
+        ("_blocked_rules", proxy_module.remove_blocked, "blocked.example"),
+        ("_excluded_rules", proxy_module.remove_exclude, "excluded.example"),
+    ],
+)
+def test_host_rule_removal_keeps_live_policy_when_disk_write_fails(
+    tmp_path, monkeypatch, rules_attribute, remove_rule, host
+):
+    original = HostRules.from_values([host])
+    monkeypatch.setattr(proxy_module, rules_attribute, original)
+    monkeypatch.setattr(
+        proxy_module, "_rules_path", lambda filename: tmp_path / filename
+    )
+
+    def fail_write(*_args, **_kwargs):
+        raise OSError("simulated disk failure")
+
+    monkeypatch.setattr(proxy_module, "_atomic_json", fail_write)
+
+    with pytest.raises(OSError, match="simulated disk failure"):
+        remove_rule(host)
+
+    assert getattr(proxy_module, rules_attribute).matches(host)
+
 def test_glob_patterns_apply_to_block_and_exclude_routes_with_block_precedence(monkeypatch):
     monkeypatch.setattr(
         proxy_module,
