@@ -29,9 +29,10 @@ BUNDLE_DIR = str(user_directories().data / "bundles")
 CHECKSUM_FILE = "sha256sums.txt"
 TOR_BUNDLE_BASE_URL = "https://dist.torproject.org/torbrowser/"
 TOR_BUNDLE_FALLBACK_URL = "https://archive.torproject.org/tor-package-archive/torbrowser/"
+CURRENT_CONFIG_SCHEMA = 2
 
 DEFAULT_DATA: dict[str, Any] = {
-    "schema_version": 1,
+    "schema_version": CURRENT_CONFIG_SCHEMA,
     "bridges": "",
     "bridge": False,
     "auto_prune_bridges": False,
@@ -53,7 +54,7 @@ DEFAULT_DATA: dict[str, Any] = {
     "system_proxy_auto": False,
     "system_proxy_mode": "unchanged",
     "log_level": "INFO",
-    "verify_tor_signatures": True,
+    "verify_tor_signatures": False,
     "kill_switch_enabled": False,
     "confirm_exit": True,
     "global_shortcut": "Ctrl+Alt+P",
@@ -149,7 +150,7 @@ class Config:
     def _save_data(self, data: dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = dict(data)
-        payload["schema_version"] = 1
+        payload["schema_version"] = CURRENT_CONFIG_SCHEMA
         fd, temp_name = tempfile.mkstemp(prefix=".config-", suffix=".tmp", dir=self.path.parent)
         try:
             with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
@@ -187,6 +188,9 @@ class Config:
             with self._lock:
                 merged = dict(DEFAULT_DATA)
                 merged.update(payload)
+                schema_version = payload.get("schema_version", 1)
+                if type(schema_version) is not int or schema_version < CURRENT_CONFIG_SCHEMA:
+                    merged["verify_tor_signatures"] = False
                 self._validate(merged)
                 self._save_data(merged)
                 self.data = merged
@@ -224,6 +228,10 @@ class Config:
                     merged.update({key: value for key, value in raw.items() if key in LEGACY_KEYS})
                 else:
                     merged = dict(DEFAULT_DATA)
+                if source is not None:
+                    legacy_schema = raw.get("schema_version", 1)
+                    if type(legacy_schema) is not int or legacy_schema < CURRENT_CONFIG_SCHEMA:
+                        merged["verify_tor_signatures"] = False
                 self._validate(merged)
                 self._save_data(merged)
                 self.data = merged
@@ -236,7 +244,13 @@ class Config:
                 raise ConfigError("Configuration root must be a JSON object.")
             merged = dict(DEFAULT_DATA)
             merged.update({key: value for key, value in raw.items() if key in LEGACY_KEYS})
-            self._validate(merged)
+            schema_version = raw.get("schema_version", 1)
+            if type(schema_version) is not int or schema_version < CURRENT_CONFIG_SCHEMA:
+                merged["verify_tor_signatures"] = False
+                self._validate(merged)
+                self._save_data(merged)
+            else:
+                self._validate(merged)
             self.data = merged
             return dict(self.data)
 
