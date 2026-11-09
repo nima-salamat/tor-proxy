@@ -1,10 +1,8 @@
 """Modern UI for blocked host rules."""
 from __future__ import annotations
 
-import logging
-
 import qtawesome as qta
-from PySide6.QtCore import Qt, QThreadPool
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -20,10 +18,7 @@ from PySide6.QtWidgets import (
 
 from config import CONFIG
 from ui_.window.dialogs import QMessageBox
-from proxy import load_blocked, remove_blocked, save_blocked, add_to_blocked_hosts, get_blocked
-from ui_.worker.worker import Worker
-
-logger = logging.getLogger(__name__)
+from proxy import load_blocked, remove_blocked, add_to_blocked_hosts, get_blocked
 
 
 class BlcokHostsWindow(QWidget):
@@ -32,8 +27,6 @@ class BlcokHostsWindow(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._parent = parent
-        self.threadpool = QThreadPool(self)
-
         load_blocked()
         self._rule_icon_name = "fa6s.shield-halved"
 
@@ -220,13 +213,15 @@ class BlcokHostsWindow(QWidget):
         )
         if reply != QMessageBox.StandardButton.Yes:
             return
-        remove_blocked(host)
+        try:
+            remove_blocked(host)
+        except (ValueError, OSError) as exc:
+            QMessageBox.warning(self, "Could not remove rule", str(exc))
+            return
         self._update_hosts_list()
-        self.status_label.setText(f"Removed {host}. Saving changes…")
-        worker = Worker(save_blocked)
-        worker.signals.finished.connect(lambda *_: self.status_label.setText("Blocked-host rules saved."))
-        worker.signals.error.connect(lambda error: logger.warning("Could not save blocked hosts: %s", error))
-        self.threadpool.start(worker)
+        self.status_label.setText(
+            f"Removed {host}. Saved. The HTTP proxy applies it immediately; System Tunnel reloads it on its next start."
+        )
 
     def add_to_list(self):
         host = self.inp_host.text().strip()
@@ -244,10 +239,8 @@ class BlcokHostsWindow(QWidget):
             self._update_hosts_list()
             self.inp_host.clear()
             self.inp_host.setFocus()
-            self.status_label.setText(f"Added {host}. Saving changes…")
-            worker = Worker(save_blocked)
-            worker.signals.finished.connect(lambda *_: self.status_label.setText("Blocked-host rules saved."))
-            worker.signals.error.connect(lambda error: logger.warning("Could not save blocked hosts: %s", error))
-            self.threadpool.start(worker)
+            self.status_label.setText(
+                f"Added {host}. Saved. The HTTP proxy applies it immediately; System Tunnel loads it on its next start."
+            )
         else:
             self.status_label.setText(f"{host} is already in the blocked-host list.")
