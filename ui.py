@@ -641,7 +641,8 @@ class Window(QMainWindow):
     def _on_updates_menu_about_to_show(self):
         """Mark the Updates popup open so its separate chevron points upward."""
         self._updates_menu_open = True
-        self.updates_nav_button.setChecked(True)
+        # The blue checked state represents navigation to Bundles/Tunnel only.
+        self.updates_nav_button.setChecked(self.stack.currentIndex() in {4, 5})
         self._sync_updates_nav_icon()
 
     def _on_updates_menu_about_to_hide(self):
@@ -670,51 +671,20 @@ class Window(QMainWindow):
         self.setStyleSheet(f"""
             QWidget#topMenuBar, QWidget#menuBarCorner {{ background-color: {menu_surface}; }}
             QWidget#topMenuBar {{ border: none; border-bottom: 1px solid {border}; }}
-            QPushButton#topNavButton {{
+            QPushButton#topNavButton, QToolButton#updatesNavButton {{
                 min-height: 32px; padding: 0 8px; margin: 0 1px; border: 1px solid transparent;
                 border-bottom: 2px solid transparent; border-radius: 7px;
                 color: {text}; background: transparent; font-size: 9pt; font-weight: 650;
             }}
-            QPushButton#topNavButton:hover {{ background: {hover}; border-color: {border}; }}
-            QPushButton#topNavButton:checked {{
+            QPushButton#topNavButton:hover, QToolButton#updatesNavButton:hover {{
+                color: {text}; background: {hover}; border-color: {border};
+            }}
+            QPushButton#topNavButton:checked, QToolButton#updatesNavButton:checked {{
                 background: {accent}; color: #ffffff; border: 1px solid {accent};
                 border-bottom: 2px solid #9bd8ff; font-weight: 750;
             }}
-            QPushButton#topNavButton:checked:hover {{ background: {accent}; color: #ffffff; }}
-            QToolButton#updatesNavButton {{
-                min-height: 32px; padding: 0 8px; margin: 0 1px; border: 1px solid transparent;
-                border-bottom: 2px solid transparent; border-radius: 7px;
-                color: {text}; background: transparent; font-size: 9pt; font-weight: 650;
-            }}
-            QToolButton#updatesNavButton:hover {{
-                color: {text}; background: {hover}; border-color: {border};
-            }}
-            QToolButton#updatesNavButton:checked {{
-                background: {accent}; color: #ffffff; border: 1px solid {accent};
-            }}
-            QToolButton#updatesNavButton:checked:hover {{
+            QPushButton#topNavButton:checked:hover, QToolButton#updatesNavButton:checked:hover {{
                 background: {accent}; color: #ffffff; border-color: {accent};
-            }}
-            /* Keep Qt's native caret; only remove the split-button seam. */
-            QToolButton#updatesNavButton::menu-button {{
-                border: none;
-                background: transparent;
-                width: 13px;
-                border-top-right-radius: 7px;
-                border-bottom-right-radius: 7px;
-            }}
-            QToolButton#updatesNavButton:hover::menu-button {{
-                background: {hover};
-            }}
-            QToolButton#updatesNavButton:checked::menu-button {{
-                background: {accent};
-            }}
-            QToolButton#updatesNavButton:checked:hover::menu-button {{
-                background: {accent};
-            }}
-            QToolButton#updatesNavButton::menu-indicator {{
-                subcontrol-origin: padding;
-                subcontrol-position: right center;
             }}
             QPushButton#topNavExitButton {{
                 min-height: 32px; padding: 0 9px; margin: 0 1px; border: 1px solid {border};
