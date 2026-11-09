@@ -53,6 +53,7 @@ class TunnelManagerWindow(QWidget):
         self._latest_info: dict | None = None
         self._upstream_unpinned_version: str | None = None
         self._selected_release_asset: dict | None = None
+        self._style_icon_color = "#dce8f4" if CONFIG.get("mode", "dark") == "dark" else "#334155"
 
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 7, 12, 8)
