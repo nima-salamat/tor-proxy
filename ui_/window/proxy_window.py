@@ -708,6 +708,10 @@ class ProxyWindow(QWidget):
         worker.signals.error.connect(self._on_port_check_error)
         self.thread_pool.start(worker)
     def _on_port_check_error(self, error):
+        if self._stopping or bool(getattr(self._parent, "_closing", False)):
+            with self._operation_lock:
+                self._connect_operation_busy = False
+            return
         with self._operation_lock:
             self._connect_operation_busy = False
         self.failed = True
@@ -725,6 +729,13 @@ class ProxyWindow(QWidget):
         result == (ok, ports, messages)
         This runs in the GUI thread so it's safe to touch UI and self.proxy/self.tor.
         """
+
+        # An explicit Exit may start async cleanup while the preflight worker is
+        # still resolving ports. Never start Tor after shutdown has been requested.
+        if self._stopping or bool(getattr(self._parent, "_closing", False)):
+            with self._operation_lock:
+                self._connect_operation_busy = False
+            return
 
         try:
             ok, ports, messages = json.loads(result)
