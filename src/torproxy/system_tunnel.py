@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import socket
 import stat
@@ -23,6 +24,7 @@ import uuid
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import urlsplit
 
 import psutil
 import requests
@@ -32,10 +34,12 @@ from .paths import user_directories
 
 
 SING_BOX_LATEST_VERSION = "1.14.4"
-# Only stable releases with reviewed platform SHA-256 digests can be installed.
-# New upstream versions remain visible in the UI but cannot execute until pinned here.
+# Releases reviewed and shipped with TorProxy. Newer stable releases are installable
+# after a warning, using the exact official GitHub asset and its published API digest.
 SUPPORTED_SING_BOX_VERSIONS = ("1.14.4", "1.14.3", "1.14.2")
 SING_BOX_VERSION = SING_BOX_LATEST_VERSION
+SING_BOX_VERSION_PATTERN = re.compile(r"^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$")
+SHA256_PATTERN = re.compile(r"^[a-fA-F0-9]{64}$")
 SING_BOX_RELEASES_API = "https://api.github.com/repos/SagerNet/sing-box/releases/latest"
 TUN_INTERFACE_WINDOWS = "TorProxy"
 TUN_INTERFACE_LINUX = "torproxy-tun"
@@ -92,6 +96,95 @@ _ENGINE_ASSETS = _ENGINE_RELEASES[SING_BOX_VERSION]
 
 class SystemTunnelError(RuntimeError):
     """The system-wide Tor tunnel could not be installed, started, or stopped."""
+
+
+def _normalize_upstream_asset(
+    version: str,
+    raw_asset: dict[str, Any],
+    *,
+    system: str | None = None,
+    machine: str | None = None,
+    require_size: bool = True,
+) -> dict[str, Any]:
+    """Validate an exact sing-box GitHub release asset and optional API digest."""
+    if not SING_BOX_VERSION_PATTERN.fullmatch(str(version)):
+        raise SystemTunnelError("The upstream sing-box release version is not a stable numeric version.")
+    system = system or platform.system()
+    machine = (machine or platform.machine()).lower()
+    if system == "Windows" and machine in {"amd64", "x86_64"}:
+        archive, executable = "zip", "sing-box.exe"
+        filename = f"sing-box-{version}-windows-amd64.zip"
+    elif system == "Linux" and machine in {"x86_64", "amd64"}:
+        archive, executable = "tar.gz", "sing-box"
+        filename = f"sing-box-{version}-linux-amd64-glibc.tar.gz"
+    else:
+        raise SystemTunnelError(f"Upstream sing-box releases are not packaged for {system} / {machine}.")
+
+    url = str(raw_asset.get("url") or raw_asset.get("browser_download_url") or "")
+    parsed = urlsplit(url)
+    expected_path = f"/SagerNet/sing-box/releases/download/v{version}/{filename}"
+    if (
+        parsed.scheme != "https" or parsed.hostname != "github.com"
+        or parsed.username or parsed.password or parsed.port not in (None, 443)
+        or parsed.path != expected_path or parsed.query or parsed.fragment
+    ):
+        raise SystemTunnelError("The upstream asset URL is not the exact official SagerNet GitHub release asset.")
+    if str(raw_asset.get("archive") or archive) != archive:
+        raise SystemTunnelError("The upstream release archive type does not match this platform.")
+    if str(raw_asset.get("filename") or filename) != filename:
+        raise SystemTunnelError("The upstream release filename does not match the selected version/platform.")
+
+    raw_digest = str(raw_asset.get("sha256") or raw_asset.get("digest") or "").strip()
+    if raw_digest.startswith("sha256:"):
+        raw_digest = raw_digest.split(":", 1)[1]
+    if raw_digest and not SHA256_PATTERN.fullmatch(raw_digest):
+        raise SystemTunnelError("GitHub returned an invalid SHA-256 digest for the sing-box asset.")
+    try:
+        size = int(raw_asset.get("size", 0) or 0)
+    except (TypeError, ValueError) as exc:
+        raise SystemTunnelError("GitHub returned an invalid sing-box asset size.") from exc
+    if require_size and not 0 < size <= MAX_ENGINE_ARCHIVE_BYTES:
+        raise SystemTunnelError("The GitHub release asset size is missing or exceeds the safe download limit.")
+
+    return {
+        "url": url,
+        "sha256": raw_digest.lower(),
+        "archive": archive,
+        "executable": executable,
+        "filename": filename,
+        "size": size,
+        "release_url": str(raw_asset.get("release_url") or f"https://github.com/SagerNet/sing-box/releases/tag/v{version}"),
+        "published_at": str(raw_asset.get("published_at") or ""),
+        "verification": "github-release-api-digest" if raw_digest else "github-release-https-only",
+    }
+
+
+def _find_upstream_platform_asset(version: str, release: dict[str, Any]) -> dict[str, Any] | None:
+    """Select only the exact official Windows/Linux x64 asset from the API response."""
+    if platform.system() == "Windows" and platform.machine().lower() in {"amd64", "x86_64"}:
+        expected = f"sing-box-{version}-windows-amd64.zip"
+    elif platform.system() == "Linux" and platform.machine().lower() in {"x86_64", "amd64"}:
+        expected = f"sing-box-{version}-linux-amd64-glibc.tar.gz"
+    else:
+        return None
+    assets = release.get("assets")
+    if not isinstance(assets, list):
+        return None
+    for asset in assets:
+        if not isinstance(asset, dict) or str(asset.get("name", "")) != expected:
+            continue
+        try:
+            return _normalize_upstream_asset(version, {
+                "url": asset.get("browser_download_url"),
+                "digest": asset.get("digest"),
+                "size": asset.get("size"),
+                "filename": asset.get("name"),
+                "release_url": release.get("html_url"),
+                "published_at": release.get("published_at"),
+            })
+        except SystemTunnelError:
+            return None
+    return None
 
 
 def _sha256(path: Path) -> str:
@@ -177,21 +270,41 @@ class SystemTunnelManager:
         self.log_path = self.directories.logs / "system-tunnel.log"
         manifest = _read_json(self.install_manifest)
         saved_version = str(manifest.get("version", "")) if manifest else ""
+        self._release_asset: dict[str, Any] | None = None
+        if manifest and saved_version not in _ENGINE_RELEASES and isinstance(manifest.get("release_asset"), dict):
+            try:
+                self._release_asset = _normalize_upstream_asset(saved_version, manifest["release_asset"])
+            except SystemTunnelError:
+                self._release_asset = None
+        saved_version_is_usable = saved_version in _ENGINE_RELEASES or self._release_asset is not None
         self.version = version or (
-            saved_version if saved_version in SUPPORTED_SING_BOX_VERSIONS else SING_BOX_LATEST_VERSION
+            saved_version if saved_version_is_usable else SING_BOX_LATEST_VERSION
         )
         self.archive_path = self._archive_path_for(self.version)
         self._install_state_cache: tuple[tuple[str, int, int], ...] | None = None
         self._install_state_result = False
 
     def _archive_path_for(self, version: str) -> Path:
+        if not SING_BOX_VERSION_PATTERN.fullmatch(str(version)):
+            raise SystemTunnelError("Invalid sing-box version for an engine archive path.")
         return self.runtime_dir / f"sing-box-{version}-{platform.system().lower()}.archive"
 
     @property
     def installed_version(self) -> str | None:
         manifest = _read_json(self.install_manifest)
         version = str(manifest.get("version", "")) if manifest else ""
-        return version if version in SUPPORTED_SING_BOX_VERSIONS else None
+        if version in _ENGINE_RELEASES:
+            return version
+        archive_digest = str((manifest or {}).get("archive_sha256", ""))
+        if self._release_asset is not None and version == self.version and SHA256_PATTERN.fullmatch(archive_digest):
+            return version
+        return None
+
+    @property
+    def installed_release_asset(self) -> dict[str, Any] | None:
+        if self.installed_version and self.installed_version not in _ENGINE_RELEASES and self._release_asset:
+            return dict(self._release_asset)
+        return None
 
     @staticmethod
     def supported_versions() -> tuple[str, ...]:
@@ -203,14 +316,26 @@ class SystemTunnelManager:
             raise SystemTunnelError(f"Unsupported sing-box version: {version}")
         return {"version": version, **_SING_BOX_RELEASE_METADATA[version]}
 
-    def select_version(self, version: str) -> None:
-        if version not in SUPPORTED_SING_BOX_VERSIONS:
-            raise SystemTunnelError(
-                "That sing-box version has not been pinned and verified by this TorProxy release."
-            )
+    def select_version(
+        self,
+        version: str,
+        *,
+        release_asset: dict[str, Any] | None = None,
+        allow_unpinned: bool = False,
+    ) -> None:
+        version = str(version)
+        if version in _ENGINE_RELEASES:
+            selected_asset = None
+        else:
+            if not allow_unpinned or not isinstance(release_asset, dict):
+                raise SystemTunnelError(
+                    "This sing-box version is not pinned in TorProxy. Check the official GitHub release and explicitly accept its warning first."
+                )
+            selected_asset = _normalize_upstream_asset(version, release_asset)
         if self.is_running() and version != self.version:
             raise SystemTunnelError("Stop the active system tunnel before changing its engine version.")
         self.version = version
+        self._release_asset = selected_asset
         self.archive_path = self._archive_path_for(version)
         self._install_state_cache = None
         self._install_state_result = False
@@ -240,27 +365,35 @@ class SystemTunnelManager:
             if session is not None:
                 session.close()
         tag = str(release.get("tag_name", "")).removeprefix("v")
-        if release.get("draft") or release.get("prerelease") or not tag:
-            raise SystemTunnelError("GitHub did not return a stable sing-box release.")
+        if (
+            release.get("draft") or release.get("prerelease")
+            or not SING_BOX_VERSION_PATTERN.fullmatch(tag)
+        ):
+            raise SystemTunnelError("GitHub did not return a stable numeric sing-box release.")
+        platform_asset = _find_upstream_platform_asset(tag, release)
         return {
             "version": tag,
             "published_at": str(release.get("published_at", "")),
             "url": str(release.get("html_url", "https://github.com/SagerNet/sing-box/releases")),
             "supported": tag in SUPPORTED_SING_BOX_VERSIONS,
+            "platform_asset": platform_asset,
+            "installable": platform_asset is not None,
         }
 
     @property
-    def platform_asset(self) -> dict[str, str]:
+    def platform_asset(self) -> dict[str, Any]:
         system = platform.system()
         machine = platform.machine().lower()
         asset = _ENGINE_RELEASES.get(self.version, {}).get((system, machine))
-        if asset is None:
-            supported = "Windows x64 and glibc-based Linux x86_64"
-            raise SystemTunnelError(
-                f"System-wide TUN is currently packaged for {supported}; "
-                f"this device reports {system} / {machine}."
-            )
-        return asset
+        if asset is not None:
+            return dict(asset)
+        if self._release_asset is not None:
+            return dict(self._release_asset)
+        supported = "Windows x64 and glibc-based Linux x86_64"
+        raise SystemTunnelError(
+            f"System-wide TUN is currently packaged for {supported}; "
+            f"this device reports {system} / {machine}. Check the latest official release to install an upstream version."
+        )
 
     @property
     def interface_name(self) -> str:
@@ -292,12 +425,13 @@ class SystemTunnelManager:
         try:
             asset = self.platform_asset
             files = manifest.get("files")
+            recorded_archive_digest = str(manifest.get("archive_sha256", ""))
             if (
-                manifest.get("archive_sha256") != asset["sha256"]
+                not SHA256_PATTERN.fullmatch(recorded_archive_digest)
+                or (asset.get("sha256") and recorded_archive_digest != asset["sha256"])
                 or not isinstance(files, dict)
                 or self.engine_path.name not in files
                 or not set(files).issubset(self._allowed_archive_files())
-                or self.engine_path.name not in files
             ):
                 self._install_state_cache = None
                 self._install_state_result = False
@@ -325,7 +459,7 @@ class SystemTunnelManager:
             if self._install_state_cache == cache_key:
                 return self._install_state_result
 
-            if _sha256(self.archive_path) != asset["sha256"]:
+            if _sha256(self.archive_path) != recorded_archive_digest:
                 self._install_state_cache = cache_key
                 self._install_state_result = False
                 return False
@@ -349,10 +483,12 @@ class SystemTunnelManager:
         *,
         proxy_url: str | None = None,
         allow_direct: bool = False,
+        release_asset: dict[str, Any] | None = None,
+        allow_unpinned: bool = False,
     ) -> str:
-        """Download a pinned release through Tor or an explicitly authorized direct route."""
+        """Install a pinned release or a user-approved exact GitHub release asset."""
         if version is not None:
-            self.select_version(version)
+            self.select_version(version, release_asset=release_asset, allow_unpinned=allow_unpinned)
         if self.is_running():
             raise SystemTunnelError("Stop the active system tunnel before updating its engine.")
         asset = self.platform_asset
@@ -389,8 +525,8 @@ class SystemTunnelManager:
                     output.flush()
                     os.fsync(output.fileno())
             archive_digest = digest.hexdigest()
-            if archive_digest != asset["sha256"]:
-                raise SystemTunnelError("sing-box archive SHA-256 verification failed.")
+            if asset.get("sha256") and archive_digest != asset["sha256"]:
+                raise SystemTunnelError("sing-box archive SHA-256 does not match the digest published by GitHub.")
             if progress_callback:
                 progress_callback("verify", total, total, "Archive SHA-256 verified; checking runtime files…")
 
@@ -428,6 +564,12 @@ class SystemTunnelManager:
                         "version": self.version,
                         "archive_sha256": archive_digest,
                         "source": asset["url"],
+                        "release_asset": asset if self.version not in _ENGINE_RELEASES else None,
+                        "verification_method": (
+                            "torproxy-pinned-sha256" if self.version in _ENGINE_RELEASES
+                            else "github-api-sha256" if asset.get("sha256")
+                            else "github-release-https-only"
+                        ),
                         "files": files,
                     },
                 )
@@ -664,6 +806,11 @@ class SystemTunnelManager:
                 "auto_detect_interface": True,
                 "rules": [
                     {
+                        "process_name": sorted({Path(path).name.casefold() for path in bypass_paths}),
+                        "action": "route",
+                        "outbound": "direct",
+                    },
+                    {
                         "process_path": sorted(bypass_paths),
                         "action": "route",
                         "outbound": "direct",
@@ -781,8 +928,11 @@ class SystemTunnelManager:
             "--log", str(self.log_path),
             "--sha256", self.engine_sha256 if action == "start" else "",
             "--archive", str(self.archive_path),
-            "--archive-sha256", self.platform_asset["sha256"],
+            "--archive-sha256", str((_read_json(self.install_manifest) or {}).get("archive_sha256") or self.platform_asset.get("sha256") or ""),
+            "--release-sha256", str(self.platform_asset.get("sha256") or ""),
+            "--source-url", str(self.platform_asset["url"]),
             "--archive-type", self.platform_asset["archive"],
+            *(["--unverified-release"] if self.version not in _ENGINE_RELEASES else []),
             "--interface", self.interface_name,
             "--result", str(result_path),
         ]
@@ -900,29 +1050,49 @@ def _helper_start(args: Any) -> dict[str, Any]:
     config_path = Path(args.config).resolve()
     state_path = Path(args.state).resolve()
     log_path = Path(args.log).resolve()
-    expected_asset = _ENGINE_RELEASES.get(str(getattr(args, "version", "")), {}).get(
+    version = str(getattr(args, "version", ""))
+    expected_asset = _ENGINE_RELEASES.get(version, {}).get(
         (platform.system(), platform.machine().lower())
     )
+    unpinned = bool(getattr(args, "unverified_release", False))
     if expected_asset is None:
-        raise SystemTunnelError("The privileged helper rejected an unsupported or unpinned sing-box version/platform.")
+        if not unpinned:
+            raise SystemTunnelError("The privileged helper rejected an upstream release without explicit user approval.")
+        expected_asset = _normalize_upstream_asset(
+            version,
+            {
+                "url": getattr(args, "source_url", ""),
+                "sha256": getattr(args, "release_sha256", ""),
+                "archive": getattr(args, "archive_type", ""),
+            },
+            require_size=False,
+        )
+        if args.release_sha256 and args.archive_sha256 != args.release_sha256:
+            raise SystemTunnelError("The downloaded archive does not match the GitHub API asset digest.")
+    else:
+        if (
+            unpinned
+            or str(getattr(args, "source_url", "")) != expected_asset["url"]
+            or args.archive_sha256 != expected_asset["sha256"]
+            or args.archive_type != expected_asset["archive"]
+        ):
+            raise SystemTunnelError("The privileged helper rejected modified pinned release metadata.")
     expected_executable = expected_asset["executable"]
     expected_interface = TUN_INTERFACE_WINDOWS if os.name == "nt" else TUN_INTERFACE_LINUX
     if args.interface != expected_interface or engine.name != expected_executable or engine.parent.name != "engine":
         raise SystemTunnelError("The privileged helper rejected an unexpected engine or interface path.")
-    if args.archive_type != expected_asset["archive"] or args.archive_sha256 != expected_asset["sha256"]:
-        raise SystemTunnelError("The privileged helper rejected unpinned archive metadata.")
     archive = Path(args.archive).resolve()
-    expected_archive_name = f"sing-box-{args.version}-{platform.system().lower()}.archive"
+    expected_archive_name = f"sing-box-{version}-{platform.system().lower()}.archive"
     if archive.name != expected_archive_name or not archive.is_file():
         raise SystemTunnelError("The privileged helper rejected an unexpected sing-box archive path.")
-    if _sha256(archive) != expected_asset["sha256"]:
+    if not SHA256_PATTERN.fullmatch(str(args.archive_sha256)) or _sha256(archive) != args.archive_sha256:
         raise SystemTunnelError("The privileged helper rejected the sing-box archive checksum.")
     archive_files = SystemTunnelManager._archive_runtime_file_hashes(
         archive, expected_asset["archive"], expected_executable
     )
     archive_engine_hash = archive_files[expected_executable]
     if not engine.is_file() or engine.is_symlink() or _sha256(engine) != archive_engine_hash:
-        raise SystemTunnelError("The privileged helper rejected the engine: it does not match the pinned archive.")
+        raise SystemTunnelError("The privileged helper rejected the engine: it does not match the downloaded archive.")
     if args.sha256 != archive_engine_hash:
         raise SystemTunnelError("The privileged helper rejected the engine SHA-256 argument.")
     actual_engine_files = {path.name for path in engine.parent.iterdir() if path.is_file() or path.is_symlink()}
@@ -991,11 +1161,32 @@ def _helper_start(args: Any) -> dict[str, Any]:
     if set(route) != {"auto_detect_interface", "rules", "final"} or route.get("auto_detect_interface") is not True or route.get("final") != "tor-socks":
         raise SystemTunnelError("The privileged helper rejected the routing defaults.")
     route_rules = route.get("rules", [])
-    if len(route_rules) != 3 or route_rules[1] != {"action": "hijack-dns"}:
-        raise SystemTunnelError("DNS packets must be hijacked into the Tor-routed DNS module.")
-    if route_rules[2] != {"network": "udp", "action": "reject", "method": "default"}:
-        raise SystemTunnelError("UDP must be rejected to prevent traffic from bypassing Tor.")
-    direct_rule = route_rules[0]
+    if (
+        len(route_rules) != 4
+        or route_rules[2] != {"action": "hijack-dns"}
+        or route_rules[3] != {"network": "udp", "action": "reject", "method": "default"}
+    ):
+        raise SystemTunnelError("The privileged helper rejected the DNS/UDP route ordering.")
+
+    name_rule = route_rules[0]
+    process_names = name_rule.get("process_name") if isinstance(name_rule, dict) else None
+    if (
+        set(name_rule) != {"process_name", "action", "outbound"}
+        or name_rule.get("action") != "route"
+        or name_rule.get("outbound") != "direct"
+        or not isinstance(process_names, list)
+        or not process_names or process_names != sorted(set(process_names))
+    ):
+        raise SystemTunnelError("The privileged helper rejected the process-name bypass route.")
+    allowed_names = {"tor", "tor.exe", "lyrebird", "lyrebird.exe", engine.name.casefold()}
+    if (
+        any(not isinstance(name, str) or name.casefold() not in allowed_names for name in process_names)
+        or engine.name.casefold() not in {name.casefold() for name in process_names}
+        or not any(name.casefold() in {"tor", "tor.exe"} for name in process_names)
+    ):
+        raise SystemTunnelError("Tor and sing-box must have explicit process-name TUN bypasses.")
+
+    direct_rule = route_rules[1]
     process_paths = direct_rule.get("process_path")
     if (
         set(direct_rule) != {"process_path", "action", "outbound"}
@@ -1005,15 +1196,15 @@ def _helper_start(args: Any) -> dict[str, Any]:
         or len(process_paths) not in {2, 3}
         or process_paths != sorted(set(process_paths))
     ):
-        raise SystemTunnelError("The privileged helper rejected the process-bypass route.")
+        raise SystemTunnelError("The privileged helper rejected the process-path bypass route.")
     normalized_paths = []
     for raw_path in process_paths:
         if not isinstance(raw_path, str) or not Path(raw_path).is_absolute() or not Path(raw_path).is_file():
             raise SystemTunnelError("The privileged helper rejected a missing or relative bypass executable.")
         normalized_paths.append(str(Path(raw_path).resolve()))
     if str(engine) not in normalized_paths or not any(Path(p).name.casefold() in {"tor", "tor.exe"} for p in normalized_paths):
-        raise SystemTunnelError("The Tor and sing-box executables must be excluded from TUN routing.")
-    if any(Path(p).name.casefold() not in {"tor", "tor.exe", "lyrebird", "lyrebird.exe", engine.name.casefold()} for p in normalized_paths):
+        raise SystemTunnelError("The Tor and sing-box executable paths must be excluded from TUN routing.")
+    if any(Path(p).name.casefold() not in allowed_names for p in normalized_paths):
         raise SystemTunnelError("The privileged helper rejected an unexpected direct-route executable.")
 
     state = _read_json(state_path)
@@ -1235,6 +1426,9 @@ def system_tunnel_helper_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sha256", required=True)
     parser.add_argument("--archive", required=True)
     parser.add_argument("--archive-sha256", required=True)
+    parser.add_argument("--release-sha256", default="")
+    parser.add_argument("--source-url", required=True)
+    parser.add_argument("--unverified-release", action="store_true")
     parser.add_argument("--archive-type", choices=("zip", "tar.gz"), required=True)
     parser.add_argument("--interface", required=True)
     parser.add_argument("--result", required=True)
