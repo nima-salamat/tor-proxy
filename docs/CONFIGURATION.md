@@ -47,7 +47,7 @@ Browser-only profiles are stored under the per-user data directory in `browser_p
 
 ## Host-rule files
 
-Blocked hosts and direct exclusions are maintained separately in per-user configuration storage. Both lists use the same host-rule parser and matcher.
+Blocked hosts and direct exclusions are maintained separately in per-user configuration storage. Both lists use the same host-rule parser and matcher in the HTTP proxy and System Tunnel. The HTTP proxy applies saved changes immediately. System Tunnel reads the files when it starts, so stop and start the tunnel after editing a rule. TUN host rules apply to supported TCP connections only; domain rules rely on FakeIP reverse mapping or HTTP/TLS hostname sniffing, while IP-literal rules match destination IPs. TUN DNS continues to use its configured FakeIP and Tor-routed DoH resolver.
 
 - `example.org` — the hostname and all subdomains.
 - `=example.org` — exactly that hostname, not its subdomains.
@@ -59,7 +59,7 @@ Blocked hosts and direct exclusions are maintained separately in per-user config
 
 The `*` character matches zero or more characters within one DNS label; it does not match a dot. Label-glob patterns must match the same number of labels. The special `*.domain` suffix form matches subdomains across any depth. These are glob-style hostname rules, **not regular expressions**; regex syntax such as `?`, `[]`, `+`, or grouping is not supported. Wildcards inside an internationalized label must use its ASCII/IDNA form, although whole IDN labels and IDN suffixes are supported.
 
-Rules accept hostnames/IP literals, not URLs, user-info, paths, or `host:port` authorities. Unicode hostname labels are normalized using IDNA. Block rules take precedence over exclusions. Excluded hosts use a direct connection outside Tor, so only add exclusions when that privacy trade-off is intentional.
+Rules accept hostnames/IP literals, not URLs, user-info, paths, or `host:port` authorities. Unicode hostname labels are normalized using IDNA. Block rules take precedence over exclusions. Excluded hosts use a direct connection outside Tor, so only add exclusions when that privacy trade-off is intentional. In System Tunnel, exclusions affect TCP destination routing; DNS remains on the tunnel's configured resolver.
 
 ## Bridge records
 
