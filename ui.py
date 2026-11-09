@@ -14,7 +14,8 @@ from PySide6.QtWidgets import (
     QToolButton,
     QButtonGroup,
     QFrame,
-    QSystemTrayIcon
+    QSystemTrayIcon,
+    QWidgetAction
 )
 from PySide6.QtGui import (
     QAction,
@@ -221,6 +222,28 @@ class Window(QMainWindow):
         self.tray_icon.setIcon(QIcon(resource_path("assets/icon.png")))
         self.tray_icon.setToolTip("TorProxy")
         self.tray_menu = QMenu(self)
+        self.tray_menu.setObjectName("trayContextMenu")
+        self.tray_menu.setMinimumWidth(286)
+        self.tray_menu.setSeparatorsCollapsible(False)
+
+        # A small branded header makes this feel like an intentional app menu,
+        # rather than a default system popup with a few buttons inside it.
+        self.tray_menu_header = QWidget(self.tray_menu)
+        self.tray_menu_header.setObjectName("trayMenuHeader")
+        header_layout = QVBoxLayout(self.tray_menu_header)
+        header_layout.setContentsMargins(14, 10, 14, 8)
+        header_layout.setSpacing(2)
+        self.tray_menu_title = QLabel("TorProxy", self.tray_menu_header)
+        self.tray_menu_title.setObjectName("trayMenuTitle")
+        self.tray_menu_subtitle = QLabel("Quick controls", self.tray_menu_header)
+        self.tray_menu_subtitle.setObjectName("trayMenuSubtitle")
+        header_layout.addWidget(self.tray_menu_title)
+        header_layout.addWidget(self.tray_menu_subtitle)
+        self.tray_menu_header_action = QWidgetAction(self.tray_menu)
+        self.tray_menu_header_action.setDefaultWidget(self.tray_menu_header)
+        self.tray_menu.addAction(self.tray_menu_header_action)
+        self.tray_menu.addSeparator()
+
         self.tray_toggle_action = QAction("Show / Hide TorProxy", self)
         self.tray_toggle_action.triggered.connect(self._toggle_visibility)
         self.tray_menu.addAction(self.tray_toggle_action)
@@ -228,6 +251,17 @@ class Window(QMainWindow):
 
         # Keep the three tray choices wired to the same policy combo and
         # handler used by Home; never change OS proxy settings through a second path.
+        self.tray_proxy_section = QWidget(self.tray_menu)
+        self.tray_proxy_section.setObjectName("trayMenuSection")
+        proxy_section_layout = QHBoxLayout(self.tray_proxy_section)
+        proxy_section_layout.setContentsMargins(14, 5, 12, 2)
+        self.tray_proxy_section_label = QLabel("SYSTEM PROXY", self.tray_proxy_section)
+        self.tray_proxy_section_label.setObjectName("trayMenuSectionLabel")
+        proxy_section_layout.addWidget(self.tray_proxy_section_label)
+        self.tray_proxy_section_action = QWidgetAction(self.tray_menu)
+        self.tray_proxy_section_action.setDefaultWidget(self.tray_proxy_section)
+        self.tray_menu.addAction(self.tray_proxy_section_action)
+
         self.tray_system_proxy_action_group = QActionGroup(self)
         self.tray_system_proxy_action_group.setExclusive(True)
         self.tray_system_proxy_mode_actions = {}
@@ -245,14 +279,13 @@ class Window(QMainWindow):
                     self._set_tray_system_proxy_mode(selected_mode)
             )
             self.tray_system_proxy_action_group.addAction(action)
-            # Put each checkable policy directly in the tray menu. QActionGroup
-            # keeps exactly one active choice checked without another submenu.
+            # Keep all choices visible in one compact group; the exclusive
+            # indicator communicates the selected policy without a submenu.
             self.tray_menu.addAction(action)
             self.tray_system_proxy_mode_actions[mode] = action
 
         self.tray_menu.addSeparator()
         self.tray_exit_action = QAction("Exit TorProxy", self)
-        self.tray_exit_action.setIcon(qta.icon("fa6s.right-from-bracket", color="#d9534f"))
         self.tray_exit_action.triggered.connect(self.ask_close)
         self.tray_menu.addAction(self.tray_exit_action)
 
@@ -260,6 +293,7 @@ class Window(QMainWindow):
         if proxy_mode_combo is not None:
             proxy_mode_combo.currentIndexChanged.connect(self._sync_tray_system_proxy_actions)
         self._sync_tray_system_proxy_actions()
+        self._sync_tray_menu_theme()
 
         # Do not give the menu to the shell: Windows chooses its own anchor and
         # may open it downward over the tray icon. Position our menu explicitly.
@@ -532,9 +566,9 @@ class Window(QMainWindow):
         """Open the app menu just above its tray icon, inside the work area."""
         if not hasattr(self, "tray_menu"):
             return
-        self.tray_toggle_action.setText(
-            "Show TorProxy" if self.isHidden() or self.isMinimized() else "Hide TorProxy"
-        )
+        hidden = self.isHidden() or self.isMinimized()
+        self.tray_toggle_action.setText("Show TorProxy" if hidden else "Hide TorProxy")
+        self._sync_tray_menu_theme()
         self.tray_menu.ensurePolished()
         size = self.tray_menu.sizeHint()
         anchor = QCursor.pos()
@@ -952,6 +986,112 @@ class Window(QMainWindow):
             if callable(apply_theme):
                 apply_theme(mode)
         self._apply_shell_styles(mode)
+        if hasattr(self, "tray_menu"):
+            self._sync_tray_menu_theme(mode)
+
+    def _sync_tray_menu_theme(self, mode=None):
+        """Apply the current app theme to the floating system-tray menu."""
+        menu = getattr(self, "tray_menu", None)
+        if menu is None:
+            return
+
+        dark = (mode or CONFIG.get("mode", "dark")) == "dark"
+        if dark:
+            surface = "#171e29"
+            border = "#303b4c"
+            text = "#e8edf6"
+            muted = "#94a2b5"
+            hover = "#29384d"
+            accent = "#5797ed"
+            divider = "#303b4c"
+            danger = "#ef7777"
+            danger_hover = "#3b2930"
+        else:
+            surface = "#ffffff"
+            border = "#dfe6ef"
+            text = "#253246"
+            muted = "#7b8798"
+            hover = "#edf3fb"
+            accent = "#2878d0"
+            divider = "#e7ecf2"
+            danger = "#c94343"
+            danger_hover = "#fff0f0"
+
+        menu.setStyleSheet(f"""
+            QMenu#trayContextMenu {{
+                background-color: {surface};
+                color: {text};
+                border: 1px solid {border};
+                border-radius: 14px;
+                padding: 7px;
+            }}
+            QMenu#trayContextMenu::item {{
+                color: {text};
+                background: transparent;
+                padding: 9px 14px 9px 12px;
+                margin: 2px 4px;
+                min-height: 20px;
+                border-radius: 8px;
+            }}
+            QMenu#trayContextMenu::item:selected {{
+                color: {text};
+                background-color: {hover};
+            }}
+            QMenu#trayContextMenu::item:disabled {{
+                color: {muted};
+            }}
+            QMenu#trayContextMenu::separator {{
+                height: 1px;
+                background-color: {divider};
+                margin: 5px 12px;
+            }}
+            QMenu#trayContextMenu::indicator {{
+                width: 14px;
+                height: 14px;
+                border: 1px solid {border};
+                border-radius: 7px;
+                background: transparent;
+                margin-left: 4px;
+            }}
+            QMenu#trayContextMenu::indicator:checked {{
+                background-color: {accent};
+                border: 4px solid {surface};
+            }}
+            QWidget#trayMenuHeader, QWidget#trayMenuSection {{
+                background: transparent;
+                border: none;
+            }}
+            QLabel#trayMenuTitle {{
+                color: {text};
+                font-size: 10pt;
+                font-weight: 700;
+            }}
+            QLabel#trayMenuSubtitle {{
+                color: {muted};
+                font-size: 8pt;
+            }}
+            QLabel#trayMenuSectionLabel {{
+                color: {muted};
+                font-size: 8pt;
+                font-weight: 700;
+            }}
+        """)
+
+        icon_color = "#edf2f9" if dark else "#344258"
+        hidden = self.isHidden() or self.isMinimized()
+        self.tray_toggle_action.setIcon(
+            qta.icon("fa6s.eye" if hidden else "fa6s.eye-slash", color=icon_color)
+        )
+        proxy_icons = {
+            "set": "fa6s.link",
+            "unchanged": "fa6s.circle-minus",
+            "clear": "fa6s.link-slash",
+        }
+        for proxy_mode, action in self.tray_system_proxy_mode_actions.items():
+            action.setIcon(qta.icon(proxy_icons[proxy_mode], color=icon_color))
+        self.tray_exit_action.setIcon(
+            qta.icon("fa6s.right-from-bracket", color=danger)
+        )
 
     def _theme_reveal_origin(self):
         """Choose the pointer position as the reveal origin, with a safe fallback."""
