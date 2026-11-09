@@ -857,7 +857,7 @@ class SettingWindow(QWidget):
             proxy_widget._system_tunnel_busy = False
         self.btn_tunnel_recovery.setEnabled(True)
 
-    def _refresh_tunnel_views_after_recovery(self, detail: str = ""):
+    def _refresh_tunnel_views_after_recovery(self):
         proxy_widget = getattr(self._parent, "proxyWidget", None)
         if proxy_widget is not None:
             refresh_home = getattr(proxy_widget, "_update_tunnel_hint", None)
@@ -867,6 +867,7 @@ class SettingWindow(QWidget):
         refresh_page = getattr(tunnel_page, "_refresh_state", None)
         if callable(refresh_page):
             refresh_page()
+
     def _on_tunnel_recovery_finished(self, result):
         self._finish_tunnel_recovery()
         message = str(result or "No previous TorProxy tunnel state needed cleanup.")
