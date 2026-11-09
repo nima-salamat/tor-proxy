@@ -306,8 +306,8 @@ def test_blocked_http_proxy_request_is_rejected_before_opening_upstream(monkeypa
         )
         client.settimeout(5)
         client.sendall(
-            b"GET http://127.0.0.1:18080/blocked HTTP/1.1\\r\\n"
-            b"Host: 127.0.0.1:18080\\r\\nConnection: close\\r\\n\\r\\n"
+            b"GET http://127.0.0.1:18080/blocked HTTP/1.1\r\n"
+            b"Host: 127.0.0.1:18080\r\nConnection: close\r\n\r\n"
         )
         response = client.recv(4096)
         assert b"403" in response
@@ -343,9 +343,9 @@ def test_excluded_http_proxy_request_uses_direct_connection_not_tor(monkeypatch)
         target_port = target.server_address[1]
         client.sendall(
             (
-                f"GET http://127.0.0.1:{target_port}/direct HTTP/1.1\\r\\n"
-                f"Host: 127.0.0.1:{target_port}\\r\\n"
-                "Connection: close\\r\\n\\r\\n"
+                f"GET http://127.0.0.1:{target_port}/direct HTTP/1.1\r\n"
+                f"Host: 127.0.0.1:{target_port}\r\n"
+                "Connection: close\r\n\r\n"
             ).encode("ascii")
         )
         response = bytearray()
