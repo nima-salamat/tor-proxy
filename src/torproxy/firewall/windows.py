@@ -42,6 +42,18 @@ function Get-PersistentProfiles {
     # PersistentStore is the local configuration TorProxy snapshots and restores.
     return @(Get-NetFirewallProfile -PolicyStore PersistentStore -Profile Domain,Private,Public | Select-Object Name,Enabled,DefaultOutboundAction)
 }
+function Assert-EffectiveOutboundAction([string]$expectedAction) {
+    $profiles = @(Get-ActiveProfiles)
+    foreach ($name in @('Domain', 'Private', 'Public')) {
+        $profile = $profiles | Where-Object { [string]$_.Name -eq $name } | Select-Object -First 1
+        if ($null -eq $profile) {
+            throw "The effective Windows Firewall $name profile could not be read from ActiveStore."
+        }
+        if (-not [bool]$profile.Enabled -or [string]$profile.DefaultOutboundAction -ne $expectedAction) {
+            throw "Effective Windows Firewall profile $name does not enforce outbound $expectedAction."
+        }
+    }
+}
 function Get-SnapshotValue($snapshot, [string]$name) {
     if ($snapshot -is [System.Collections.IDictionary]) {
         return $snapshot[$name]
@@ -182,12 +194,7 @@ function Assert-ManagedState($snapshot, $requireRules = $true) {
         }
     }
     if ($requireRules) {
-        $effectiveProfiles = Get-ActiveProfiles
-        foreach ($profile in $effectiveProfiles) {
-            if (-not [bool]$profile.Enabled -or [string]$profile.DefaultOutboundAction -ne 'Block') {
-                throw "Effective Windows Firewall profile $($profile.Name) does not enforce outbound Block; protection is not active."
-            }
-        }
+        Assert-EffectiveOutboundAction 'Block'
         $groupRules = @(Get-NetFirewallRule -PolicyStore ActiveStore -Group $Group -ErrorAction SilentlyContinue)
         if ($groupRules.Count -lt 1) {
             throw 'TorProxy firewall rules are missing. The saved snapshot was retained for manual recovery.'
@@ -304,12 +311,7 @@ try {
             Assert-SharedAccessBlockRule
         }
 
-        $effective = Get-ActiveProfiles
-        foreach ($profile in $effective) {
-            if (-not $profile.Enabled -or [string]$profile.DefaultOutboundAction -ne 'Block') {
-                throw "Windows Firewall did not retain the outbound block policy for profile $($profile.Name)."
-            }
-        }
+        Assert-EffectiveOutboundAction 'Block'
         $remaining = @(Get-NetFirewallRule -PolicyStore ActiveStore -TracePolicyStore -Direction Outbound -Action Allow -Enabled True | Where-Object {
             if ([string]$_.Group -eq $Group) { return $false }
             if ([bool](Get-SnapshotValue $snapshot 'blockSharedAccess') -and (Test-SharedAccessDynamicAllowRule $_)) { return $false }
@@ -459,12 +461,7 @@ try {
         # Explicit user-requested fallback. Keep Windows Firewall enabled and
         # restore ordinary outbound access without resetting unrelated rules.
         Set-NetFirewallProfile -PolicyStore PersistentStore -Profile Domain,Private,Public -Enabled True -DefaultOutboundAction Allow
-        $recoveryProfiles = Get-ActiveProfiles
-        foreach ($profile in $recoveryProfiles) {
-            if (-not [bool]$profile.Enabled -or [string]$profile.DefaultOutboundAction -ne 'Allow') {
-                throw "Windows did not accept the emergency outbound-Allow policy for profile $($profile.Name)."
-            }
-        }
+        Assert-EffectiveOutboundAction 'Allow'
         Get-NetFirewallRule -PolicyStore PersistentStore -Group $Group -ErrorAction SilentlyContinue |
             Remove-NetFirewallRule -ErrorAction Stop
 
