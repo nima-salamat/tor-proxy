@@ -19,6 +19,7 @@ from stem.connection import AuthenticationFailure
 from torproxy.ports import PortAllocationError, resolve_listener_ports
 from set_proxy import has_proxy_snapshot, manage_proxy
 from tor import TorRunner, Runner
+from proxy import load_blocked, load_exclude
 
 from whatismyip import what_is_my_ip
 from ui_.window.log_window import LogWindow
@@ -44,6 +45,9 @@ class ProxyWindow(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.data = Data()
+        # Load saved host policy before either proxy service can accept traffic.
+        load_blocked()
+        load_exclude()
         self.running = False
         self.connected = False
         self.failed = False
