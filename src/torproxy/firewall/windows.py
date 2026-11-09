@@ -118,6 +118,57 @@ function Set-SnapshotValue($snapshot, [string]$name, $value) {
         $property.Value = $value
     }
 }
+function Set-SnapshotRulesByInternalIds($ids, $expectedById, [bool]$enabled, [string]$reason) {
+    $ruleIds = @($ids | ForEach-Object { [string]$_ } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
+    if ($ruleIds.Count -eq 0) {
+        return [pscustomobject]@{ Matched = 0; Changed = 0 }
+    }
+
+    $before = @(Get-NetFirewallRule -PolicyStore PersistentStore -Name $ruleIds -ErrorAction Stop)
+    if ($before.Count -ne $ruleIds.Count) {
+        throw "Only $($before.Count) of $($ruleIds.Count) firewall rules could be re-read for the $reason fallback."
+    }
+
+    $changeIds = [System.Collections.Generic.List[string]]::new()
+    foreach ($current in $before) {
+        $id = [string]$current.Name
+        if (-not $expectedById.ContainsKey($id)) {
+            throw "Firewall rule ID $id was not part of the saved snapshot; refusing the $reason fallback."
+        }
+        $expected = $expectedById[$id]
+        $currentEnabled = ([string]$current.Enabled -eq 'True')
+        if ([string]$current.Direction -ne 'Outbound' -or
+            [string]$current.Action -ne 'Allow' -or
+            ($currentEnabled -ne [bool]$expected.Enabled -and $currentEnabled -ne $enabled)) {
+            throw "Firewall rule $id changed outside TorProxy before the $reason fallback; refusing to overwrite it."
+        }
+        if ($currentEnabled -ne $enabled) {
+            $changeIds.Add($id)
+        }
+    }
+
+    if ($changeIds.Count -gt 0) {
+        $enabledValue = if ($enabled) { 'True' } else { 'False' }
+        Set-NetFirewallRule -PolicyStore PersistentStore -Name ($changeIds.ToArray()) -Enabled $enabledValue -ErrorAction Stop | Out-Null
+    }
+
+    $verified = @(Get-NetFirewallRule -PolicyStore PersistentStore -Name $ruleIds -ErrorAction Stop)
+    if ($verified.Count -ne $ruleIds.Count) {
+        throw "Only $($verified.Count) of $($ruleIds.Count) firewall rules were returned during $reason fallback verification."
+    }
+    foreach ($current in $verified) {
+        $id = [string]$current.Name
+        if ([string]$current.Direction -ne 'Outbound' -or
+            [string]$current.Action -ne 'Allow' -or
+            ([string]$current.Enabled -eq 'True') -ne $enabled) {
+            throw "Firewall rule $id did not reach the requested Enabled state during $reason fallback."
+        }
+    }
+
+    return [pscustomobject]@{ Matched = $ruleIds.Count; Changed = $changeIds.Count }
+}
+
 function Set-SnapshotLocalRulesEnabled($snapshot, [bool]$enabled) {
     # NetSecurity's Name is the stable policy-store ID (often a GUID), while
     # INetFwRule.Name is only a friendly display name and is not unique.
@@ -228,57 +279,38 @@ function Set-SnapshotLocalRulesEnabled($snapshot, [bool]$enabled) {
             }
         }
 
-        # A duplicate COM friendly name cannot identify a unique INetFwRule.
-        # Use NetSecurity's stable GUID IDs for just those collisions, in one
-        # batch, and verify each exact rule before and after the update.
-        if ($duplicateRuleIds.Count -gt 0) {
-            $duplicateIds = $duplicateRuleIds.ToArray()
-            $before = @(Get-NetFirewallRule -PolicyStore PersistentStore -Name $duplicateIds -ErrorAction Stop)
-            if ($before.Count -ne $duplicateIds.Count) {
-                throw "Only $($before.Count) of $($duplicateIds.Count) duplicate-name firewall rules could be re-read before update."
-            }
-            foreach ($current in $before) {
-                $id = [string]$current.Name
-                if (-not $expectedById.ContainsKey($id) -or
-                    [string]$current.Direction -ne 'Outbound' -or
-                    [string]$current.Action -ne 'Allow' -or
-                    ([string]$current.Enabled -eq 'True') -ne [bool]$expectedById[$id].Enabled) {
-                    throw "Duplicate-name firewall rule $id changed after it was resolved; refusing to overwrite external changes."
-                }
-            }
+        # Hold collisions for a single exact-GUID NetSecurity batch. Also add
+        # any unique friendly name whose COM Item lookup reports FILE_NOT_FOUND.
+        $fallbackRuleIds = [System.Collections.Generic.List[string]]::new()
+        foreach ($id in $duplicateRuleIds) { $fallbackRuleIds.Add([string]$id) }
 
-            if ($duplicateChangeIds.Count -gt 0) {
-                Set-Phase ("Updating {0} duplicate-display-name firewall rules by their unique GUID IDs..." -f $duplicateChangeIds.Count)
-                $enabledValue = if ($enabled) { 'True' } else { 'False' }
-                Set-NetFirewallRule -PolicyStore PersistentStore -Name ($duplicateChangeIds.ToArray()) -Enabled $enabledValue -ErrorAction Stop | Out-Null
-            }
-
-            $verifiedDuplicates = @(Get-NetFirewallRule -PolicyStore PersistentStore -Name $duplicateIds -ErrorAction Stop)
-            if ($verifiedDuplicates.Count -ne $duplicateIds.Count) {
-                throw "Only $($verifiedDuplicates.Count) of $($duplicateIds.Count) duplicate-name firewall rules were returned during verification."
-            }
-            foreach ($current in $verifiedDuplicates) {
-                $id = [string]$current.Name
-                if ([string]$current.Direction -ne 'Outbound' -or
-                    [string]$current.Action -ne 'Allow' -or
-                    ([string]$current.Enabled -eq 'True') -ne $enabled) {
-                    throw "Duplicate-name firewall rule $id did not reach the requested Enabled state."
-                }
-            }
-            $matched += $duplicateIds.Count
-        }
-
-        Set-Phase ("Updating {0} uniquely named firewall rules through COM; {1} duplicate names use GUID lookup..." -f $uniqueFriendlyNames.Count, $duplicateRuleIds.Count)
+        Set-Phase ("Updating {0} uniquely named firewall rules through COM; {1} rules require exact-GUID lookup..." -f $uniqueFriendlyNames.Count, $fallbackRuleIds.Count)
         foreach ($friendlyName in $uniqueFriendlyNames) {
             $expected = @($expectedByFriendlyName[$friendlyName])[0]
             $rule = $null
             try {
                 $rule = $rules.Item([string]$friendlyName)
             } catch {
-                throw ("COM could not resolve saved rule ID {0} using its unique friendly name '{1}': {2}" -f $expected.InternalName, $friendlyName, $_.Exception.Message)
+                # Some Windows-owned/package rules are visible through
+                # NetSecurity but INetFwRules::Item cannot resolve their name.
+                # Fall back only for the documented file-not-found COM result;
+                # the subsequent update is scoped to the saved internal GUID.
+                $exception = $_.Exception
+                $isMissing = $false
+                while ($null -ne $exception) {
+                    if ([int]$exception.HResult -eq -2147024894) {
+                        $isMissing = $true
+                        break
+                    }
+                    $exception = $exception.InnerException
+                }
+                if (-not $isMissing) { throw }
+                $fallbackRuleIds.Add([string]$expected.InternalName)
+                continue
             }
             if ($null -eq $rule) {
-                throw "COM returned no object for saved rule ID $($expected.InternalName) with friendly name '$friendlyName'."
+                $fallbackRuleIds.Add([string]$expected.InternalName)
+                continue
             }
 
             try {
@@ -303,6 +335,13 @@ function Set-SnapshotLocalRulesEnabled($snapshot, [bool]$enabled) {
                     [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($rule)
                 }
             }
+        }
+
+        if ($fallbackRuleIds.Count -gt 0) {
+            Set-Phase ("Updating {0} COM-unavailable/ambiguous firewall rules by exact saved GUID..." -f $fallbackRuleIds.Count)
+            $fallbackResult = Set-SnapshotRulesByInternalIds $fallbackRuleIds.ToArray() $expectedById $enabled 'COM lookup'
+            $matched += [int]$fallbackResult.Matched
+            $changed += [int]$fallbackResult.Changed
         }
 
         $timer.Stop()
