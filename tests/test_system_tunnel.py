@@ -33,6 +33,7 @@ def test_system_tunnel_config_uses_tcp_tor_socks_and_hijacks_dns(tmp_path, monke
     tor.write_bytes(b"test tor executable")
 
     config = manager.build_config(9150, tor_executables=[tor])
+    assert config["log"] == {"level": "info", "timestamp": True}
     inbound = config["inbounds"][0]
     outbound = next(item for item in config["outbounds"] if item["tag"] == "tor-socks")
     rules = config["route"]["rules"]
@@ -278,7 +279,7 @@ def test_test_connection_refuses_to_probe_when_tunnel_is_not_active(tmp_path, mo
         manager.test_connection(9150)
 
 
-def test_windows_tun_config_forces_gvisor_stack_for_known_windows_forwarding_failure(tmp_path, monkeypatch):
+def test_windows_tun_config_is_ipv4_only_and_uses_gvisor_stack(tmp_path, monkeypatch):
     monkeypatch.setattr(system_tunnel.platform, "system", lambda: "Windows")
     manager = _manager(tmp_path)
     manager.engine_dir.mkdir(parents=True, exist_ok=True)
@@ -287,11 +288,20 @@ def test_windows_tun_config_forces_gvisor_stack_for_known_windows_forwarding_fai
     tor.write_bytes(b"tor")
 
     config = manager.build_config(9150, tor_executables=[tor])
+    inbound = config["inbounds"][0]
 
-    assert config["inbounds"][0]["stack"] == "gvisor"
-    assert "auto_redirect" not in config["inbounds"][0]
+    assert inbound["stack"] == "gvisor"
+    assert "auto_redirect" not in inbound
+    assert inbound["address"] == ["172.19.0.1/30"]
+    assert inbound["dns_address"] == ["172.19.0.2"]
+    assert config["route"]["rules"][2] == {
+        "ip_cidr": ["172.19.0.1/32"],
+        "action": "reject",
+        "method": "drop",
+    }
     system_config = manager.build_config(9150, tor_executables=[tor], tun_stack="system")
     assert system_config["inbounds"][0]["stack"] == "system"
+    assert system_config["inbounds"][0]["address"] == ["172.19.0.1/30"]
 
 
 def test_tunnel_engine_download_refuses_an_unspecified_network_route(tmp_path, monkeypatch):

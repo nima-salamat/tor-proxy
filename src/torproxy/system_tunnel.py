@@ -762,12 +762,23 @@ class SystemTunnelManager:
         if not any(Path(path).name.casefold() in {"tor", "tor.exe"} for path in bypass_paths):
             raise SystemTunnelError("A validated Tor executable path is required to prevent a tunnel loop.")
 
+        # Windows can reset IPv6 flows when its TUN has an IPv6 route but
+        # the physical uplink has no usable IPv6 path (sing-box issue #4507).
+        # Keep Windows IPv4-only; strict_route blocks unsupported IPv6 instead
+        # of leaving a route around the Tor tunnel. Linux remains dual-stack.
+        windows_tun = platform.system() == "Windows"
+        tun_addresses = ["172.19.0.1/30"]
+        dns_addresses = ["172.19.0.2"]
+        if not windows_tun:
+            tun_addresses.append("fdfe:dcba:9876::1/126")
+            dns_addresses.append("fdfe:dcba:9876::2")
+
         tun = {
             "type": "tun",
             "tag": "torproxy-tun-in",
             "interface_name": self.interface_name,
-            "address": ["172.19.0.1/30", "fdfe:dcba:9876::1/126"],
-            "dns_address": ["172.19.0.2", "fdfe:dcba:9876::2"],
+            "address": tun_addresses,
+            "dns_address": dns_addresses,
             "mtu": 1400,
             "auto_route": True,
             "strict_route": True,
@@ -788,7 +799,7 @@ class SystemTunnelManager:
                 )
 
         return {
-            "log": {"level": "warn", "timestamp": True},
+            "log": {"level": "info", "timestamp": True},
             "dns": {
                 "servers": [
                     {
@@ -833,7 +844,10 @@ class SystemTunnelManager:
                         "outbound": "direct",
                     },
                     {
-                        "ip_cidr": ["172.19.0.1/32", "fdfe:dcba:9876::1/128"],
+                        "ip_cidr": (
+                            ["172.19.0.1/32"]
+                            if windows_tun else ["172.19.0.1/32", "fdfe:dcba:9876::1/128"]
+                        ),
                         "action": "reject",
                         "method": "drop",
                     },
@@ -1252,7 +1266,7 @@ def _helper_start(args: Any) -> dict[str, Any]:
     config = _read_json(config_path)
     if not isinstance(config, dict) or set(config) != {"log", "dns", "inbounds", "outbounds", "route"}:
         raise SystemTunnelError("The privileged helper rejected unexpected top-level tunnel configuration.")
-    if config.get("log") != {"level": "warn", "timestamp": True}:
+    if config.get("log") != {"level": "info", "timestamp": True}:
         raise SystemTunnelError("The privileged helper rejected unexpected logging options.")
     if not isinstance(config.get("inbounds"), list) or len(config["inbounds"]) != 1:
         raise SystemTunnelError("The privileged helper rejected the tunnel inbounds.")
@@ -1263,9 +1277,15 @@ def _helper_start(args: Any) -> dict[str, Any]:
         raise SystemTunnelError("The privileged helper rejected the TUN interface configuration.")
     if inbound.get("auto_route") is not True or inbound.get("strict_route") is not True:
         raise SystemTunnelError("The privileged helper requires strict automatic routing.")
-    if inbound.get("dns_mode") != "hijack" or inbound.get("dns_address") != [
-        "172.19.0.2", "fdfe:dcba:9876::2"
-    ]:
+    windows_tun = platform.system() == "Windows"
+    expected_tun_addresses = ["172.19.0.1/30"]
+    expected_dns_addresses = ["172.19.0.2"]
+    expected_self_addresses = ["172.19.0.1/32"]
+    if not windows_tun:
+        expected_tun_addresses.append("fdfe:dcba:9876::1/126")
+        expected_dns_addresses.append("fdfe:dcba:9876::2")
+        expected_self_addresses.append("fdfe:dcba:9876::1/128")
+    if inbound.get("dns_mode") != "hijack" or inbound.get("dns_address") != expected_dns_addresses:
         raise SystemTunnelError("The privileged helper requires the pinned TUN DNS addresses.")
     version_parts = tuple(int(part) for part in str(args.version).split("."))
     legacy_windows_stack = (
@@ -1279,9 +1299,11 @@ def _helper_start(args: Any) -> dict[str, Any]:
     )
     if set(inbound) != expected_tun_fields:
         raise SystemTunnelError("The privileged helper rejected unexpected TUN options.")
-    if inbound.get("tag") != "torproxy-tun-in" or inbound.get("address") != [
-        "172.19.0.1/30", "fdfe:dcba:9876::1/126"
-    ] or inbound.get("mtu") != 1400:
+    if (
+        inbound.get("tag") != "torproxy-tun-in"
+        or inbound.get("address") != expected_tun_addresses
+        or inbound.get("mtu") != 1400
+    ):
         raise SystemTunnelError("The privileged helper rejected the TUN interface addresses.")
     if platform.system() == "Linux" and inbound.get("auto_redirect") is not True:
         raise SystemTunnelError("Linux TUN must use the verified auto-redirect mode.")
@@ -1326,7 +1348,7 @@ def _helper_start(args: Any) -> dict[str, Any]:
     if (
         len(route_rules) != 5
         or route_rules[2] != {
-            "ip_cidr": ["172.19.0.1/32", "fdfe:dcba:9876::1/128"],
+            "ip_cidr": expected_self_addresses,
             "action": "reject",
             "method": "drop",
         }
@@ -1398,7 +1420,7 @@ def _helper_start(args: Any) -> dict[str, Any]:
         raise SystemTunnelError(detail[-1200:])
 
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    with log_path.open("ab", buffering=0) as log_handle:
+    with log_path.open("wb", buffering=0) as log_handle:
         kwargs: dict[str, Any] = {
             "stdin": subprocess.DEVNULL,
             "stdout": log_handle,

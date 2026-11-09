@@ -52,7 +52,7 @@ A firewall policy that was created by an older TorProxy release may remain on th
 
 ## System-wide tunnel boundaries
 
-The optional TUN feature is TCP-only because TorProxy uses Tor's local SOCKS5 listener and Tor SOCKS does not provide an arbitrary UDP transport. sing-box rejects user UDP traffic in the route table; DNS is the explicit exception because TUN DNS packets are hijacked into the DNS module and its HTTPS resolver is dialed over the Tor SOCKS outbound. This is intentionally fail-closed rather than allowing QUIC, game, VoIP, or other UDP traffic to escape directly.
+The optional TUN feature is TCP-only because TorProxy uses Tor's local SOCKS5 listener and Tor SOCKS does not provide an arbitrary UDP transport. sing-box rejects user UDP traffic in the route table; DNS is the explicit exception because TUN DNS packets are hijacked into the DNS module and its HTTPS resolver is dialed over the Tor SOCKS outbound. This is intentionally fail-closed rather than allowing QUIC, game, VoIP, or other UDP traffic to escape directly. On Windows, the TUN is IPv4-only; Linux retains dual-stack TUN addressing.
 
 The sing-box process and the managed Tor/bridge executables bypass TUN routing so Tor can establish its own relay connections without being fed back into itself. This means Tor itself needs its own direct network route to reach relays. The TUN is a routing mechanism, not a default-deny firewall; it does not create Windows Firewall/WFP rules, Linux nftables output exceptions, or a system-wide egress block.
 
