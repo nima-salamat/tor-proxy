@@ -43,6 +43,13 @@ function Get-PersistentProfiles {
     return @(Get-NetFirewallProfile -PolicyStore PersistentStore -Profile Domain,Private,Public | Select-Object Name,Enabled,DefaultOutboundAction)
 }
 function Assert-EffectiveOutboundAction([string]$expectedAction) {
+    # Firewall profile settings are ineffective if the filtering services are stopped.
+    foreach ($serviceName in @('BFE', 'MpsSvc')) {
+        $service = Get-Service -Name $serviceName -ErrorAction Stop
+        if ([string]$service.Status -ne 'Running') {
+            throw "Required Windows filtering service $serviceName is not running."
+        }
+    }
     $profiles = @(Get-ActiveProfiles)
     foreach ($name in @('Domain', 'Private', 'Public')) {
         $profile = $profiles | Where-Object { [string]$_.Name -eq $name } | Select-Object -First 1
