@@ -234,8 +234,12 @@ def test_updates_navigation_keeps_theme_text_color_on_hover():
     # Suppress the platform-colored native indicator and draw a chevron with
     # the exact foreground used by the Updates label.
     assert "QToolButton#updatesNavButton::menu-button" not in source
-    assert "QToolButton#updatesNavButton::menu-indicator {{" in source
+    assert source.count("QToolButton#updatesNavButton::menu-indicator {{") == 1
     assert "image: none;" in source
+    assert "subcontrol-origin: padding;" in source
+    assert "subcontrol-position: bottom right;" in source
+    assert "QToolButton#updatesNavButton {{ padding-right: 22px; }}" in source
+    assert "center_y = self.rect().bottom() - 8" in source
     assert "class UpdatesMenuButton(QToolButton):" in source
     assert "self.updates_nav_button.setMenuIndicatorColor(color)" in source
     assert "QPushButton#topNavButton, QToolButton#updatesNavButton {{" in source
