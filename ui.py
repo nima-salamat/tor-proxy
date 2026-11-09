@@ -16,7 +16,17 @@ from PySide6.QtWidgets import (
     QFrame,
     QSystemTrayIcon
 )
-from PySide6.QtGui import QIcon, QAction, QActionGroup, QGuiApplication, QCursor
+from PySide6.QtGui import (
+    QAction,
+    QActionGroup,
+    QColor,
+    QCursor,
+    QGuiApplication,
+    QIcon,
+    QPainter,
+    QPainterPath,
+    QPen,
+)
 import qdarkstyle
 from qdarkstyle.dark.palette import DarkPalette
 from qdarkstyle.light.palette import LightPalette
@@ -51,6 +61,52 @@ def _theme_stylesheet(mode):
         cached = qdarkstyle.load_stylesheet(palette=palette)
         _THEME_STYLESHEET_CACHE[mode] = cached
     return cached
+
+
+class UpdatesMenuButton(QToolButton):
+    """QToolButton with a theme-aware dropdown chevron."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._menu_indicator_color = QColor("#202832")
+
+    def setMenuIndicatorColor(self, color):
+        """Set the dropdown chevron to the exact foreground used by the label."""
+        resolved = QColor(color)
+        if not resolved.isValid():
+            return
+        if resolved != self._menu_indicator_color:
+            self._menu_indicator_color = resolved
+            self.update()
+
+    def paintEvent(self, event):
+        # QSS disables only Qt's platform-painted indicator. Draw the same
+        # compact chevron ourselves so it follows the Updates label color.
+        super().paintEvent(event)
+        if self.menu() is None:
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        pen = QPen(self._menu_indicator_color)
+        pen.setWidthF(1.8)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        center_x = self.rect().right() - 11
+        center_y = self.rect().center().y()
+        path = QPainterPath()
+        if self.menu().isVisible():
+            path.moveTo(center_x - 3, center_y + 1)
+            path.lineTo(center_x, center_y - 2)
+            path.lineTo(center_x + 3, center_y + 1)
+        else:
+            path.moveTo(center_x - 3, center_y - 1)
+            path.lineTo(center_x, center_y + 2)
+            path.lineTo(center_x + 3, center_y - 1)
+        painter.drawPath(path)
 
 
 class Window(QMainWindow):
@@ -513,7 +569,7 @@ class Window(QMainWindow):
                 self.help_action = action
                 self.help_nav_button = button
 
-        self.updates_nav_button = QToolButton(menu_bar)
+        self.updates_nav_button = UpdatesMenuButton(menu_bar)
         self.updates_nav_button.setObjectName("updatesNavButton")
         self.updates_nav_button.setText("Updates")
         self._sync_updates_nav_icon()
@@ -652,6 +708,7 @@ class Window(QMainWindow):
         self.updates_nav_button.setChecked(selected)
         color = "#ffffff" if selected else ("#eff1f4" if dark else "#202832")
         self.updates_nav_button.setIcon(qta.icon("fa6s.cloud-arrow-down", color=color))
+        self.updates_nav_button.setMenuIndicatorColor(color)
     def _apply_shell_styles(self, mode=None):
         dark = (mode or CONFIG["mode"]) == "dark"
         border = "#3b4552" if dark else "#d7dee7"
@@ -677,6 +734,11 @@ class Window(QMainWindow):
             }}
             QPushButton#topNavButton:checked:hover, QToolButton#updatesNavButton:checked:hover {{
                 background: {accent}; color: #ffffff; border-color: {accent};
+            }}
+            /* The chevron is painted by UpdatesMenuButton using the label color. */
+            QToolButton#updatesNavButton::menu-indicator {{
+                image: none;
+                width: 12px;
             }}
             QPushButton#topNavExitButton {{
                 min-height: 32px; padding: 0 9px; margin: 0 1px; border: 1px solid {border};
