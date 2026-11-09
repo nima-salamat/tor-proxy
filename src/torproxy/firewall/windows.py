@@ -566,8 +566,9 @@ try {
         }
         Set-Phase 'Installing persistent IPv4/IPv6 WFP filters in one transaction...'
         $detail = Invoke-WfpHelper 'activate' $programs
+        $tunAllowed = $detail -match 'tun_interface_allowed=true'
         Set-Phase 'Persistent WFP filter set committed and verified.'
-        Write-Result @{ ok = $true; active = $true; verified = $true; backend = 'WFP'; detail = $detail }
+        Write-Result @{ ok = $true; active = $true; verified = $true; backend = 'WFP'; tun_interface_allowed = $tunAllowed; detail = $detail }
         return
     }
 
@@ -592,7 +593,8 @@ try {
         $detail = Invoke-WfpHelper 'status'
         $active = $detail.StartsWith('ACTIVE', [System.StringComparison]::OrdinalIgnoreCase)
         $verified = $active -or $detail.StartsWith('INACTIVE', [System.StringComparison]::OrdinalIgnoreCase)
-        Write-Result @{ ok = $true; active = $active; verified = $verified; backend = 'WFP'; detail = $detail }
+        $tunAllowed = $detail -match 'tun_interface_allowed=true'
+        Write-Result @{ ok = $true; active = $active; verified = $verified; backend = 'WFP'; tun_interface_allowed = $tunAllowed; detail = $detail }
         return
     }
 
