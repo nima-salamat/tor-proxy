@@ -33,6 +33,7 @@ import requests
 
 from .network import NetworkRouteError, create_session
 from .paths import user_directories
+from .host_rules import HostRuleError, HostRules, MatchMode
 
 
 SING_BOX_LATEST_VERSION = "1.14.4"
@@ -98,6 +99,33 @@ _ENGINE_ASSETS = _ENGINE_RELEASES[SING_BOX_VERSION]
 
 class SystemTunnelError(RuntimeError):
     """The system-wide Tor tunnel could not be installed, started, or stopped."""
+
+
+def _host_rule_route_fields(rule) -> dict[str, list[str]]:
+    """Translate one validated TorProxy host rule into sing-box match fields."""
+    try:
+        address = ipaddress.ip_address(rule.host)
+    except ValueError:
+        address = None
+    if address is not None:
+        return {"ip_cidr": [f"{address}/{address.max_prefixlen}"]}
+
+    if rule.mode is MatchMode.EXACT:
+        return {"domain": [rule.host]}
+    if rule.mode is MatchMode.SUBDOMAINS_ONLY:
+        return {"domain_suffix": ["." + rule.host]}
+    if rule.mode is MatchMode.DOMAIN_AND_SUBDOMAINS:
+        return {
+            "domain": [rule.host],
+            "domain_suffix": ["." + rule.host],
+        }
+    if rule.mode is MatchMode.GLOB:
+        labels = [
+            re.escape(label).replace(r"\\*", ".*")
+            for label in rule.host.split(".")
+        ]
+        return {"domain_regex": ["^" + r"\\.".join(labels) + "$"]}
+    raise SystemTunnelError("The saved host rule uses an unsupported match mode.")
 
 
 def _normalize_upstream_asset(
@@ -743,6 +771,27 @@ class SystemTunnelManager:
         """Compatibility helper for tests and diagnostics."""
         return cls._archive_runtime_file_hashes(archive, archive_type, filename)[filename]
 
+    def _load_saved_host_rules(self, filename: str) -> HostRules:
+        """Read the same per-user rule file used by the loopback HTTP proxy."""
+        config_dir = getattr(self.directories, "config", None)
+        if config_dir is None:
+            return HostRules()
+        path = Path(config_dir) / filename
+        if not path.exists():
+            return HostRules()
+        try:
+            if path.stat().st_size > 1024 * 1024:
+                raise ValueError("the file exceeds the 1 MiB safety limit")
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+                raise ValueError("the file must contain a JSON list of strings")
+            return HostRules.from_values(raw)
+        except (OSError, ValueError, json.JSONDecodeError, HostRuleError) as exc:
+            raise SystemTunnelError(
+                f"Saved host-policy file '{filename}' could not be loaded: {exc}. "
+                "Fix or remove that file before starting the system tunnel."
+            ) from exc
+
     def build_config(
         self,
         socks_port: int,
@@ -809,6 +858,62 @@ class SystemTunnelManager:
         if not windows_tun:
             fakeip_server["inet6_range"] = "2001:2::/48"
 
+        blocked_hosts = self._load_saved_host_rules("blocked_hosts.json")
+        excluded_hosts = self._load_saved_host_rules("exclude_hosts.json")
+        host_policy_rules: list[dict[str, Any]] = []
+        for rule in blocked_hosts.rules:
+            host_policy_rules.append({
+                "network": "tcp",
+                **_host_rule_route_fields(rule),
+                "action": "reject",
+                "method": "default",
+            })
+        for rule in excluded_hosts.rules:
+            host_policy_rules.append({
+                "network": "tcp",
+                **_host_rule_route_fields(rule),
+                "action": "route",
+                "outbound": "direct",
+            })
+
+        route_rules = [
+            {
+                "process_name": sorted({Path(path).name.casefold() for path in bypass_paths}),
+                "action": "route",
+                "outbound": "direct",
+            },
+            {
+                "process_path": sorted(bypass_paths),
+                "action": "route",
+                "outbound": "direct",
+            },
+            {"port": 53, "action": "hijack-dns"},
+            {
+                # Windows uses 172.19.0.1/30; Linux also has the IPv6 /126.
+                # Drop the entire TUN subnet after DNS interception so packets to the
+                # peer/gateway cannot be emitted back into the same adapter as a fresh flow.
+                "ip_cidr": (
+                    ["172.19.0.0/30"]
+                    if windows_tun else ["172.19.0.0/30", "fdfe:dcba:9876::/126"]
+                ),
+                "action": "reject",
+                "method": "drop",
+            },
+            {"network": "udp", "action": "reject", "method": "default"},
+            # Do not rely on the implicit final outbound for browser TCP.
+            # Every non-bypassed TCP connection must explicitly use Tor.
+            {"network": "tcp", "action": "route", "outbound": "tor-socks"},
+        ]
+        if host_policy_rules:
+            # Domain metadata is recovered from the FakeIP reverse mapping or
+            # sniffed from HTTP/TLS. These rules apply before the catch-all Tor route.
+            sniff_required = any(
+                any(key in rule for key in ("domain", "domain_suffix", "domain_regex"))
+                for rule in host_policy_rules
+            )
+            insertion = [{"action": "sniff"}] if sniff_required else []
+            route_rules[3:3] = insertion + host_policy_rules
+
         return {
             "log": {"level": "warn", "timestamp": True},
             "dns": {
@@ -852,36 +957,7 @@ class SystemTunnelManager:
                 # requires an explicit resolver for domain-based dial fields.
                 # The DoH endpoint is an IP literal and itself detours via Tor.
                 "default_domain_resolver": "tor-doh",
-                "rules": [
-                    {
-                        "process_name": sorted({Path(path).name.casefold() for path in bypass_paths}),
-                        "action": "route",
-                        "outbound": "direct",
-                    },
-                    {
-                        "process_path": sorted(bypass_paths),
-                        "action": "route",
-                        "outbound": "direct",
-                    },
-                    # An action-only hijack rule is a catch-all and would consume browser TCP streams.
-                    {"port": 53, "action": "hijack-dns"},
-                    {
-                        # Windows uses 172.19.0.1/30; Linux also has the IPv6 /126.
-                        # Drop the entire TUN subnet after DNS interception so
-                        # packets to the peer/gateway cannot be emitted back into
-                        # the same adapter as a fresh outbound flow.
-                        "ip_cidr": (
-                            ["172.19.0.0/30"]
-                            if windows_tun else ["172.19.0.0/30", "fdfe:dcba:9876::/126"]
-                        ),
-                        "action": "reject",
-                        "method": "drop",
-                    },
-                    {"network": "udp", "action": "reject", "method": "default"},
-                    # Do not rely on the implicit final outbound for browser TCP.
-                    # Every non-bypassed TCP connection must explicitly use Tor.
-                    {"network": "tcp", "action": "route", "outbound": "tor-socks"},
-                ],
+                "rules": route_rules,
                 # Fail closed for ICMP and any traffic not explicitly handled above.
                 "final": "block",
             },
