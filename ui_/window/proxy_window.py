@@ -752,6 +752,7 @@ class ProxyWindow(QWidget):
         self.connect_btn.setEnabled(True)
         self.btn_status.setText("CONNECTION PREFLIGHT FAILED")
         self.set_btn_status_style("disconnected")
+        self._update_proxy_buttons()
         QMessageBox.warning(self, "Connection preflight", str(error))
 
     # ===== slot that runs on main thread with the result =====
@@ -861,6 +862,8 @@ class ProxyWindow(QWidget):
         finally:
             with self._operation_lock:
                 self._connect_operation_busy = False
+            # Recompute Home and Tunnel actions now that preflight has ended.
+            self._update_proxy_buttons()
             # always re-enable the button
             self.connect_btn.setEnabled(True)
 
