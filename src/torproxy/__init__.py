@@ -1,3 +1,3 @@
 """TorProxy's independently testable application core."""
 
-__version__ = "2.0.4"
+__version__ = "2.0.5"
