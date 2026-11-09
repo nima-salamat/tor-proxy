@@ -2067,10 +2067,17 @@ def test_system_theme_selector_and_live_os_updates_are_wired_into_the_app():
 def test_tunnel_download_icon_uses_the_same_foreground_as_its_button():
     repository = Path(__file__).resolve().parents[1]
     source = (repository / "ui_/window/tunnel_window.py").read_text(encoding="utf-8")
+    init_source = source[source.index("def __init__"):source.index("def _populate_versions")]
+    styles_start = source.index("def _apply_local_styles")
+    styles_end = source.index("__all__")
+    styles_source = source[styles_start:styles_end]
 
     assert 'self.btn_install.setObjectName("primaryButton")' in source
     assert 'QPushButton#primaryButton {{ font-weight: 650; color: {text}; }}' in source
-    assert 'self.btn_install.setIcon(qta.icon("fa6s.download", color=text))' in source
+    # The icon is assigned with a theme-derived color after the button exists.
+    # Do not reference the local stylesheet variable from __init__.
+    assert 'self.btn_install.setIcon' not in init_source
+    assert 'self.btn_install.setIcon(qta.icon("fa6s.download", color=text))' in styles_source
     assert 'self.btn_install.setIcon(qta.icon("fa6s.download", color="#ffffff"))' not in source
 
 
