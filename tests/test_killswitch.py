@@ -346,8 +346,29 @@ def test_linux_install_is_idempotent_without_restarting_the_live_drop_chain(tmp_
 
 def test_windows_helper_can_restore_a_partially_applied_policy():
     assert "Assert-ManagedState $snapshot $false" in _POWERSHELL
-    assert "$currentProfiles = Get-ActiveProfiles" in _POWERSHELL
+    assert "$currentProfiles = Get-PersistentProfiles" in _POWERSHELL
     assert "DefaultOutboundAction" in _POWERSHELL
+
+
+def test_windows_kill_switch_checks_effective_policy_but_snapshots_local_settings():
+    # The local persistent store is reversible configuration; ActiveStore is
+    # the merged policy that Windows Firewall actually enforces.
+    assert "Get-NetFirewallProfile -PolicyStore ActiveStore" in _POWERSHELL
+    assert "Get-NetFirewallProfile -PolicyStore PersistentStore" in _POWERSHELL
+    assert "$profiles = Get-PersistentProfiles" in _POWERSHELL
+    assert "function Assert-EffectiveOutboundAction" in _POWERSHELL
+    assert "foreach ($serviceName in @('BFE', 'MpsSvc'))" in _POWERSHELL
+    assert "Required Windows filtering service $serviceName is not running." in _POWERSHELL
+    assert "DisabledInterfaceAliases" in _POWERSHELL
+    assert """if ($expectedAction -eq 'Block') {
+            $disabledInterfaces = @($profile.DisabledInterfaceAliases""" in _POWERSHELL
+    assert "excludes interface filtering for: $names" in _POWERSHELL
+    assert "Assert-EffectiveOutboundAction 'Block'" in _POWERSHELL
+    assert "Assert-EffectiveOutboundAction 'Allow'" in _POWERSHELL
+    assert "Assert-EffectiveOutboundAction 'Allow'" in _POWERSHELL
+    assert "The effective Windows Firewall $name profile could not be read from ActiveStore." in _POWERSHELL
+    assert "Effective Windows Firewall profile $name does not enforce outbound $expectedAction." in _POWERSHELL
+    assert "Set-NetFirewallProfile -PolicyStore PersistentStore" in _POWERSHELL
 
 
 
