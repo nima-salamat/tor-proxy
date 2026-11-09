@@ -537,7 +537,17 @@ def test_stale_tor_cleanup_targets_only_process_using_exact_managed_torrc(tmp_pa
         "tor.exe",
         [str(manager.settings.executable), "-f", str(tmp_path / "other-torrc")],
     )
-    monkeypatch.setattr(tor_manager_module.psutil, "process_iter", lambda _attrs: [stale, unrelated])
+    other_tor_executable = tmp_path / "other-install" / "tor.exe"
+    wrong_executable = FakeProcess(
+        4569,
+        "tor.exe",
+        [str(other_tor_executable), "-f", str(manager.torrc_path)],
+    )
+    monkeypatch.setattr(
+        tor_manager_module.psutil,
+        "process_iter",
+        lambda _attrs: [stale, unrelated, wrong_executable],
+    )
     monkeypatch.setattr(
         tor_manager_module.psutil,
         "wait_procs",
@@ -550,6 +560,8 @@ def test_stale_tor_cleanup_targets_only_process_using_exact_managed_torrc(tmp_pa
     assert stale.killed is False
     assert unrelated.terminated is False
     assert unrelated.killed is False
+    assert wrong_executable.terminated is False
+    assert wrong_executable.killed is False
 
 
 
