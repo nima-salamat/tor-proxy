@@ -93,24 +93,12 @@ def _read_json(path: Path) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _enable_windows_wfp_tun_exception() -> bool:
-    """Add the current TorProxy adapter LUID to the active WFP policy, if present."""
-    if os.name != "nt":
-        return False
-
-    helper = (
-        user_directories().state
-        / "killswitch"
-        / "native"
-        / "TorProxyWfpHelper.exe"
-    )
-    # Older releases use a persistent Windows Firewall interface-alias rule.
-    # They do not have the native WFP helper, so leave that legacy rule alone.
+def _apply_wfp_tun_exception(helper: Path, runner=subprocess.run) -> bool:
+    """Add the live TorProxy adapter LUID to an already-active WFP policy."""
     if not helper.is_file():
         return False
-
     try:
-        status = subprocess.run(
+        status = runner(
             [str(helper), "status"],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
@@ -135,7 +123,7 @@ def _enable_windows_wfp_tun_exception() -> bool:
         raise SystemTunnelError(f"The WFP kill switch returned an unknown status: {status_text}")
 
     try:
-        update = subprocess.run(
+        update = runner(
             [str(helper), "allow-tun"],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
@@ -154,6 +142,24 @@ def _enable_windows_wfp_tun_exception() -> bool:
             f"{update_text[-1000:]}"
         )
     return True
+
+
+def _enable_windows_wfp_tun_exception() -> bool:
+    """Add the current TorProxy adapter LUID to the active WFP policy, if present."""
+    if os.name != "nt":
+        return False
+
+    helper = (
+        user_directories().state
+        / "killswitch"
+        / "native"
+        / "TorProxyWfpHelper.exe"
+    )
+    # Older releases use a persistent Windows Firewall interface-alias rule.
+    # They do not have the native WFP helper, so leave that legacy rule alone.
+    if not helper.is_file():
+        return False
+    return _apply_wfp_tun_exception(helper)
 
 
 def _interface_exists(name: str) -> bool:
