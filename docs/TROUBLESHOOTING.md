@@ -93,6 +93,12 @@ Install dependencies with `python -m pip install -e ".[dev]"`. On Debian/Ubuntu,
 Include OS/Python versions, sanitized logs, the action that failed, and whether the issue reproduces with a verified Tor Expert Bundle. Remove IPs, bridge lines, usernames, cookies, credentials, full URLs, and query strings first.
 
 
+## sing-box or TUN state remains after an interrupted run
+
+When TorProxy starts a new Tor connection, its preflight inspects the saved system-tunnel process record first. If the recorded sing-box process still matches the saved PID, executable, start time and configuration, TorProxy asks the privileged helper to stop it gracefully and verifies that the TUN interface is gone. A dead process record may be removed when its adapter is absent. The same inspection is available from **Settings → Advanced → Emergency sing-box cleanup**.
+
+If the TUN adapter remains without a verifiable process, or the saved PID now belongs to another process, cleanup stops safely and Connect is blocked. The emergency action does not delete arbitrary Windows adapters, Linux routes, or processes; those leftovers need manual inspection because the application cannot prove their ownership from the remaining state.
+
 ## Legacy firewall policy remains after upgrading
 
 The current TorProxy desktop no longer exposes or activates the optional Kill Switch. If you upgraded from an older release that had the feature enabled, its persistent firewall policy may remain after the upgrade even though the current application no longer manages it.
