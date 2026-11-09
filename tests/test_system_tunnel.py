@@ -61,7 +61,7 @@ def test_system_tunnel_config_uses_tcp_tor_socks_and_hijacks_dns(tmp_path, monke
     assert expected_names.issubset(set(rules[0]["process_name"]))
     assert str(manager.engine_path.resolve()) in rules[1]["process_path"]
     assert str(tor.resolve()) in rules[1]["process_path"]
-    assert rules[2] == {"action": "hijack-dns"}
+    assert rules[2] == {"port": 53, "action": "hijack-dns"}
     assert rules[3] == {
         "ip_cidr": ["172.19.0.0/30", "fdfe:dcba:9876::/126"],
         "action": "reject",
@@ -308,7 +308,7 @@ def test_windows_tun_config_is_ipv4_only_and_uses_gvisor_stack(tmp_path, monkeyp
     }
     assert config["dns"]["reverse_mapping"] is True
     assert config["route"]["default_domain_resolver"] == "tor-doh"
-    assert config["route"]["rules"][2] == {"action": "hijack-dns"}
+    assert config["route"]["rules"][2] == {"port": 53, "action": "hijack-dns"}
     assert config["route"]["rules"][3] == {
         "ip_cidr": ["172.19.0.0/30"],
         "action": "reject",
