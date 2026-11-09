@@ -1176,6 +1176,10 @@ def test_tunnel_manager_is_a_versioned_updates_page_with_explicit_network_routes
     assert "AVAILABLE VERSIONS" in tunnel_source
     assert "check_latest_release" in tunnel_source
     assert "upstream-unpinned" in tunnel_source
+    assert 'self.versions_list.insertItem(0, item)' in tunnel_source
+    assert 'item.setData(Qt.ItemDataRole.UserRole + 2, platform_asset)' in tunnel_source
+    assert 'allow_unpinned=upstream_unpinned' in tunnel_source
+    assert "Install newer upstream sing-box release?" in tunnel_source
     assert "Install selected version" in tunnel_source
     assert "_resolve_network_route" in tunnel_source
     assert "allow_direct=allow_direct" in tunnel_source
