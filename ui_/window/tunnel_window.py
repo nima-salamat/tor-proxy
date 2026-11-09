@@ -49,6 +49,7 @@ class TunnelManagerWindow(QWidget):
         self._latest_worker = None
         self._latest_info: dict | None = None
         self._upstream_unpinned_version: str | None = None
+        self._selected_release_asset: dict | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 22, 28, 18)
@@ -199,13 +200,27 @@ class TunnelManagerWindow(QWidget):
             self.status.setText("The system tunnel manager is unavailable.")
             return
         installed = self.manager.installed_version
-        selected_version = (
-            installed if installed in SUPPORTED_SING_BOX_VERSIONS
-            else SING_BOX_LATEST_VERSION
-        )
+        installed_asset = getattr(self.manager, "installed_release_asset", None)
+        pinned_versions = self.manager.supported_versions()
+        selected_version = installed or SING_BOX_LATEST_VERSION
+
         self.versions_list.blockSignals(True)
         self.versions_list.clear()
-        for version in self.manager.supported_versions():
+        # Keep an already-installed newer release visible after restart, even if
+        # this TorProxy build does not have its digest in the pinned release table.
+        if installed and installed not in pinned_versions and isinstance(installed_asset, dict):
+            item = QListWidgetItem(f"v{installed}   ·   Installed · upstream release")
+            item.setData(Qt.ItemDataRole.UserRole, installed)
+            item.setData(Qt.ItemDataRole.UserRole + 1, "upstream-installed")
+            item.setData(Qt.ItemDataRole.UserRole + 2, installed_asset)
+            item.setToolTip(
+                "Installed from the official GitHub release after explicit risk confirmation. "
+                "The saved asset and archive verification metadata are retained locally."
+            )
+            self.versions_list.addItem(item)
+            self.versions_list.setCurrentItem(item)
+
+        for version in pinned_versions:
             metadata = self.manager.release_metadata(version)
             published = self._format_date(metadata.get("published_at", ""))
             suffix = []
@@ -218,10 +233,13 @@ class TunnelManagerWindow(QWidget):
                 label += "   ·   " + " · ".join(suffix)
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, version)
-            item.setToolTip(f"sing-box {version}\nReleased {published}\nOfficial pinned SHA-256")
+            item.setToolTip(f"sing-box {version}\\nReleased {published}\\nTorProxy-pinned SHA-256")
             self.versions_list.addItem(item)
-            if version == selected_version:
+            if version == selected_version and not (
+                installed and installed not in pinned_versions and isinstance(installed_asset, dict)
+            ):
                 self.versions_list.setCurrentItem(item)
+
         self.versions_list.blockSignals(False)
         if self.versions_list.currentItem() is None and self.versions_list.count():
             self.versions_list.setCurrentRow(0)
@@ -245,21 +263,45 @@ class TunnelManagerWindow(QWidget):
         if self.manager is None or current is None or self._busy:
             return
         version = str(current.data(Qt.ItemDataRole.UserRole) or "")
+        release_asset = current.data(Qt.ItemDataRole.UserRole + 2)
+        release_kind = current.data(Qt.ItemDataRole.UserRole + 1)
         try:
-            self.manager.select_version(version)
+            if (
+                isinstance(release_asset, dict)
+                and release_kind in {"upstream-unpinned", "upstream-installed"}
+            ):
+                # Selecting a row only prepares the metadata; execution still
+                # requires a separate, explicit risk confirmation in Install.
+                self.manager.select_version(
+                    version, release_asset=release_asset, allow_unpinned=True
+                )
+                self._selected_release_asset = dict(release_asset)
+            else:
+                self.manager.select_version(version)
+                self._selected_release_asset = None
         except SystemTunnelError as exc:
             self.status.setText(str(exc))
             return
-        metadata = self.manager.release_metadata(version)
+
+        if version in self.manager.supported_versions():
+            metadata = self.manager.release_metadata(version)
+        else:
+            metadata = release_asset if isinstance(release_asset, dict) else {}
         self.selected_title.setText(f"sing-box v{version}")
         try:
             asset = self.manager.platform_asset
             platform_name = "Windows x64" if asset["archive"] == "zip" else "Linux x64"
-            platform_key = "Windows" if platform_name.startswith("Windows") else "Linux"
-            size = int(metadata.get("asset_sizes", {}).get(platform_key, 0))
+            size = int(asset.get("size") or 0)
+            if not size:
+                platform_key = "Windows" if platform_name.startswith("Windows") else "Linux"
+                size = int(metadata.get("asset_sizes", {}).get(platform_key, 0))
+            trust = (
+                "GitHub API SHA-256" if asset.get("sha256")
+                else "HTTPS only · no publisher digest"
+            ) if version not in self.manager.supported_versions() else "TorProxy-pinned SHA-256"
             self.version_meta.setText(
                 f"{self._format_date(metadata.get('published_at', ''))}  ·  {platform_name}  ·  "
-                f"{size / (1024 * 1024):.1f} MiB"
+                f"{size / (1024 * 1024):.1f} MiB  ·  {trust}"
             )
             self._platform_supported = True
         except SystemTunnelError as exc:
@@ -361,11 +403,51 @@ class TunnelManagerWindow(QWidget):
         if self._busy or self.manager is None:
             return
         version = self._selected_version()
-        try:
-            self.manager.select_version(version)
-        except SystemTunnelError as exc:
-            QMessageBox.warning(self, "Tunnel engine", str(exc))
-            return
+        item = self.versions_list.currentItem()
+        release_asset = item.data(Qt.ItemDataRole.UserRole + 2) if item is not None else None
+        upstream_unpinned = (
+            version not in self.manager.supported_versions()
+            and isinstance(release_asset, dict)
+        )
+        if upstream_unpinned:
+            digest = str(release_asset.get("sha256") or "")
+            digest_note = (
+                f"GitHub Releases API SHA-256: {digest}"
+                if digest else
+                "GitHub did not publish a SHA-256 digest for this asset. TorProxy can verify the HTTPS transfer, "
+                "safe archive structure and local file hash, but cannot independently authenticate the publisher."
+            )
+            reply = QMessageBox.warning(
+                self,
+                "Install newer upstream sing-box release?",
+                (
+                    f"v{version} is newer than the releases pinned in this TorProxy build.\\n\\n"
+                    "The exact platform archive will be downloaded from the official "
+                    "github.com/SagerNet/sing-box release.\\n\\n"
+                    f"{digest_note}\\n\\n"
+                    "This release has not been independently reviewed or pinned by TorProxy. "
+                    "A GitHub API digest is served by the same release service and is not an independent "
+                    "publisher signature. Installing this version is your choice and risk. Continue?"
+                ),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+            try:
+                self.manager.select_version(
+                    version, release_asset=release_asset, allow_unpinned=True
+                )
+            except SystemTunnelError as exc:
+                QMessageBox.warning(self, "Tunnel engine", str(exc))
+                return
+        else:
+            try:
+                self.manager.select_version(version)
+            except SystemTunnelError as exc:
+                QMessageBox.warning(self, "Tunnel engine", str(exc))
+                return
+
         route = self._resolve_network_route("sing-box tunnel-engine download")
         if route is None:
             return
@@ -380,6 +462,8 @@ class TunnelManagerWindow(QWidget):
             progress_callback,
             proxy_url=proxy_url,
             allow_direct=allow_direct,
+            release_asset=release_asset if upstream_unpinned else None,
+            allow_unpinned=upstream_unpinned,
         )
 
     def toggle_tunnel_from_home(self) -> None:
@@ -538,6 +622,7 @@ class TunnelManagerWindow(QWidget):
             return
         latest = str(result.get("version", "unknown"))
         published = self._format_date(str(result.get("published_at", "")))
+        platform_asset = result.get("platform_asset")
         if self._upstream_unpinned_version:
             for index in range(self.versions_list.count() - 1, -1, -1):
                 item = self.versions_list.item(index)
@@ -546,22 +631,29 @@ class TunnelManagerWindow(QWidget):
             self._upstream_unpinned_version = None
 
         if result.get("supported"):
-            message = f"Latest upstream stable: v{latest} · verified and selectable"
-        else:
-            message = (
-                f"New upstream stable release v{latest} found ({published}), but this TorProxy build "
-                "does not yet contain a pinned SHA-256 for it. Update TorProxy before installing that release."
-            )
+            message = f"Latest upstream stable: v{latest} · TorProxy-pinned and selectable"
+        elif isinstance(platform_asset, dict):
             self._upstream_unpinned_version = latest
-            item = QListWidgetItem(f"v{latest}   ·   New upstream · not verified")
+            digest = str(platform_asset.get("sha256") or "")
+            digest_label = "GitHub API SHA-256 available" if digest else "HTTPS only · no API digest"
+            item = QListWidgetItem(f"v{latest}   ·   New upstream · {digest_label}")
             item.setData(Qt.ItemDataRole.UserRole, latest)
             item.setData(Qt.ItemDataRole.UserRole + 1, "upstream-unpinned")
-            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled & ~Qt.ItemFlag.ItemIsSelectable)
+            item.setData(Qt.ItemDataRole.UserRole + 2, platform_asset)
             item.setToolTip(
-                "This release is visible for update awareness only. Its platform archive SHA-256 "
-                "has not been reviewed and pinned in this TorProxy build, so installation is disabled."
+                "This is the exact current-platform asset from the official SagerNet GitHub release. "
+                "Select it and choose Install to review and accept the risk warning before downloading."
             )
             self.versions_list.insertItem(0, item)
+            message = (
+                f"New upstream stable v{latest} found ({published}). It can be installed after you "
+                "review the warning and explicitly accept the risk. No TorProxy update is required."
+            )
+        else:
+            message = (
+                f"New upstream stable v{latest} found ({published}), but GitHub does not publish a "
+                "matching Windows/Linux x64 asset for this device."
+            )
         self.latest_label.setText(message)
         self._latest_info = result
 
