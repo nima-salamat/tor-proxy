@@ -85,6 +85,10 @@ To restore access, use **Settings → Advanced → Network protection → System
 
 When Kill Switch is enabled, direct Exclude Host entries are blocked. Tor bundle downloads or updater operations that use a direct connection may also fail until protection is deliberately disabled.
 
+### Windows activation takes too long
+
+Windows firewall activation reads policy provenance from the merged ActiveStore once, then uses a normal ActiveStore read for final rule membership checks. The elevated helper reports its current stage to the error message and has a bounded 180-second timeout; it does not silently wait forever. A timeout may occur after some firewall changes have been applied, so use **Restore saved firewall** first and **Emergency network recovery** only if the saved-state restore cannot restore connectivity. Do not repeatedly retry activation while a previous operation is still being reconciled.
+
 ### Windows firewall source detection
 
 Before changing existing outbound Allow rules, TorProxy queries the merged ActiveStore with PowerShell's `-TracePolicyStore` switch. Windows only populates `PolicyStoreSourceType` and `PolicyStoreSource` for ActiveStore results when source tracing is requested. This distinguishes Local rules from Group Policy, Dynamic, Generated and Hardcoded entries; unsupported sources remain a fail-closed error and are reported by rule name/source rather than silently ignored.

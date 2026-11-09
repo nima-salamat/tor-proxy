@@ -14,6 +14,7 @@ from ..paths import user_directories
 
 GROUP = "TorProxy Kill Switch"
 SNAPSHOT_NAME = "windows-firewall-snapshot.json"
+ELEVATED_HELPER_TIMEOUT_MS = 180_000
 
 _POWERSHELL = r"""
 param(
@@ -24,6 +25,17 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $Group = 'TorProxy Kill Switch'
+$ProgressPath = $ResultPath + '.progress'
+function Set-Phase([string]$phase) {
+    try {
+        [System.IO.File]::WriteAllText(
+            $ProgressPath, $phase, [System.Text.UTF8Encoding]::new($false)
+        )
+    } catch {
+        # Progress reporting must never prevent a firewall operation.
+    }
+}
+Set-Phase "Starting elevated Windows Firewall helper ($Action)..."
 function Write-Result($value) {
     $json = ConvertTo-Json -InputObject $value -Depth 8 -Compress
     [System.IO.File]::WriteAllText($ResultPath, $json, [System.Text.UTF8Encoding]::new($false))
@@ -223,6 +235,8 @@ function Assert-ManagedState($snapshot, $requireRules = $true) {
     }
 }
 try {
+    Set-Phase 'Loading Windows Firewall management module...'
+    Import-Module NetSecurity -ErrorAction Stop
     if (-not (Get-Command Get-NetFirewallProfile -ErrorAction SilentlyContinue)) {
         throw 'The Windows NetSecurity PowerShell module is unavailable.'
     }
@@ -234,16 +248,27 @@ try {
             if (-not [System.IO.File]::Exists([string]$program)) { throw "Allowed executable does not exist: $program" }
         }
 
+        Set-Phase 'Reading the effective outbound firewall rules...'
+        # Trace policy provenance once. Re-querying ActiveStore with
+        # -TracePolicyStore is expensive on systems with many firewall rules.
+        $activeAllow = @(Get-NetFirewallRule -PolicyStore ActiveStore -TracePolicyStore -Direction Outbound -Action Allow -Enabled True -ErrorAction Stop)
+        $sharedAccessRuleNames = @{}
+        foreach ($rule in $activeAllow) {
+            if (Test-SharedAccessDynamicAllowRule $rule) {
+                $sharedAccessRuleNames[[string]$rule.Name] = $true
+            }
+        }
+
         if (Test-Path -LiteralPath $SnapshotPath) {
             $snapshot = Get-Content -LiteralPath $SnapshotPath -Raw | ConvertFrom-Json
             Assert-ManagedState $snapshot $false
         } else {
-            $orphanedGroup = @(Get-NetFirewallRule -PolicyStore ActiveStore -Group $Group -ErrorAction SilentlyContinue)
+            Set-Phase 'Checking policy ownership and saving the original firewall configuration...'
+            $orphanedGroup = @(Get-NetFirewallRule -PolicyStore ActiveStore -Group $Group -ErrorAction Stop)
             if ($orphanedGroup.Count -gt 0) {
                 throw 'TorProxy firewall rules exist but the original snapshot is missing. Refusing to guess the original firewall policy; manual recovery is required.'
             }
             $profiles = Get-PersistentProfiles
-            $activeAllow = @(Get-NetFirewallRule -PolicyStore ActiveStore -TracePolicyStore -Direction Outbound -Action Allow -Enabled True -ErrorAction SilentlyContinue)
             $gpoRules = @($activeAllow | Where-Object { [string]$_.PolicyStoreSourceType -eq 'GroupPolicy' })
             if ($gpoRules.Count -gt 0) {
                 $gpoDetails = @($gpoRules | Select-Object -First 8 | ForEach-Object {
@@ -251,8 +276,8 @@ try {
                 }) -join '; '
                 throw "Enabled outbound Allow rules are enforced by Group Policy and cannot be safely disabled: $gpoDetails"
             }
-            $sharedAccessRules = @($activeAllow | Where-Object { Test-SharedAccessDynamicAllowRule $_ })
-            $localAllow = @(Get-NetFirewallRule -PolicyStore PersistentStore -Direction Outbound -Action Allow -Enabled True -ErrorAction SilentlyContinue)
+            $sharedAccessRules = @($sharedAccessRuleNames.Keys)
+            $localAllow = @(Get-NetFirewallRule -PolicyStore PersistentStore -Direction Outbound -Action Allow -Enabled True -ErrorAction Stop)
             $localNames = @($localAllow | ForEach-Object { [string]$_.Name } | Sort-Object -Unique)
             $localSet = @{}
             foreach ($name in $localNames) { $localSet[$name] = $true }
@@ -260,7 +285,7 @@ try {
                 ([string]$_.PolicyStoreSourceType -ne 'Local' -or
                  -not $localSet.ContainsKey([string]$_.Name)) -and
                 [string]$_.Group -ne $Group -and
-                -not (Test-SharedAccessDynamicAllowRule $_)
+                -not $sharedAccessRuleNames.ContainsKey([string]$_.Name)
             })
             if ($unmanaged.Count -gt 0) {
                 $details = @($unmanaged | Select-Object -First 4 | ForEach-Object {
@@ -288,10 +313,9 @@ try {
 
         # A dynamic ICS allow rule is tied to svchost.exe/SharedAccess. Keep
         # that source rule intact, but override it with a TorProxy-owned
-        # explicit Block rule while the Kill Switch is active.
-        $latestActiveAllow = @(Get-NetFirewallRule -PolicyStore ActiveStore -TracePolicyStore -Direction Outbound -Action Allow -Enabled True -ErrorAction SilentlyContinue)
-        $latestSharedAccessRules = @($latestActiveAllow | Where-Object { Test-SharedAccessDynamicAllowRule $_ })
-        if ($latestSharedAccessRules.Count -gt 0) {
+        # explicit Block rule while the Kill Switch is active. Reuse the
+        # provenance scan above instead of asking Windows for it a second time.
+        if ($sharedAccessRuleNames.Count -gt 0) {
             Set-SnapshotValue $snapshot 'blockSharedAccess' $true
             Set-SnapshotValue $snapshot 'sharedAccessProgram' (Join-Path $env:SystemRoot 'System32\svchost.exe')
             Save-Snapshot $snapshot
@@ -302,12 +326,14 @@ try {
         }
 
         # Apply the restrictive default before removing old exceptions.
+        Set-Phase 'Applying outbound default-deny policy to all firewall profiles...'
         Set-NetFirewallProfile -PolicyStore PersistentStore -Profile Domain,Private,Public -Enabled True -DefaultOutboundAction Block
         foreach ($name in @($snapshot.disabledRules)) {
             Set-NetFirewallRule -PolicyStore PersistentStore -Name ([string]$name) -Enabled False
         }
         Get-NetFirewallRule -PolicyStore PersistentStore -Group $Group -ErrorAction SilentlyContinue | Remove-NetFirewallRule
 
+        Set-Phase 'Installing Tor, DHCP, IPv6 and tunnel firewall exceptions...'
         $i = 0
         foreach ($program in $programs) {
             $i++
@@ -329,10 +355,15 @@ try {
             Assert-SharedAccessBlockRule
         }
 
+        Set-Phase 'Verifying effective firewall profiles and TorProxy-owned rules...'
         Assert-EffectiveOutboundAction 'Block'
-        $remaining = @(Get-NetFirewallRule -PolicyStore ActiveStore -TracePolicyStore -Direction Outbound -Action Allow -Enabled True | Where-Object {
+        # The source scan is already captured above. A plain ActiveStore read is
+        # enough for final membership verification; known ICS dynamic rules are
+        # matched by their previously verified names.
+        $finalActiveAllow = @(Get-NetFirewallRule -PolicyStore ActiveStore -Direction Outbound -Action Allow -Enabled True -ErrorAction Stop)
+        $remaining = @($finalActiveAllow | Where-Object {
             if ([string]$_.Group -eq $Group) { return $false }
-            if ([bool](Get-SnapshotValue $snapshot 'blockSharedAccess') -and (Test-SharedAccessDynamicAllowRule $_)) { return $false }
+            if ([bool](Get-SnapshotValue $snapshot 'blockSharedAccess') -and $sharedAccessRuleNames.ContainsKey([string]$_.Name)) { return $false }
             return $true
         })
         if ($remaining.Count -gt 0) {
@@ -342,9 +373,11 @@ try {
         if ([bool](Get-SnapshotValue $snapshot 'blockSharedAccess')) {
             Assert-SharedAccessBlockRule
         }
+        Set-Phase 'Kill Switch activation and verification completed.'
         Write-Result @{ ok = $true; active = $true; tun_interface_allowed = (Test-TunInterfaceAllowRule); detail = 'Outbound default block verified; TorProxy exceptions, the dedicated TUN interface, and the SharedAccess deny override are active.' }
     }
     elseif ($Action -eq 'deactivate') {
+        Set-Phase 'Restoring the saved Windows Firewall configuration...'
         if (-not (Test-Path -LiteralPath $SnapshotPath)) {
             $orphanedGroup = @(Get-NetFirewallRule -PolicyStore ActiveStore -Group $Group -ErrorAction SilentlyContinue)
             if ($orphanedGroup.Count -gt 0) {
@@ -388,6 +421,7 @@ try {
         }
     }
     elseif ($Action -eq 'recover') {
+        Set-Phase 'Reconciling the saved Windows Firewall snapshot...'
         if (-not (Test-Path -LiteralPath $SnapshotPath)) {
             $orphanedRules = @(Get-NetFirewallRule -PolicyStore PersistentStore -Group $Group -ErrorAction SilentlyContinue)
             if ($orphanedRules.Count -gt 0) {
@@ -476,6 +510,7 @@ try {
         }
     }
     elseif ($Action -eq 'emergency') {
+        Set-Phase 'Restoring normal outbound access while keeping Windows Firewall enabled...'
         # Explicit user-requested fallback. Keep Windows Firewall enabled and
         # restore ordinary outbound access without resetting unrelated rules.
         Set-NetFirewallProfile -PolicyStore PersistentStore -Profile Domain,Private,Public -Enabled True -DefaultOutboundAction Allow
@@ -493,6 +528,7 @@ try {
         Write-Result @{ ok = $true; active = $false; mode = 'emergency'; detail = 'Emergency recovery restored outbound Allow on all profiles, kept Windows Firewall enabled, and removed only TorProxy-owned rules. The previous snapshot was preserved when present.' }
     }
     elseif ($Action -eq 'status') {
+        Set-Phase 'Verifying current Windows Firewall protection status...'
         if (-not (Test-Path -LiteralPath $SnapshotPath)) {
             $orphanedGroup = @(Get-NetFirewallRule -PolicyStore ActiveStore -Group $Group -ErrorAction SilentlyContinue)
             $orphaned = $orphanedGroup.Count -gt 0
@@ -500,7 +536,7 @@ try {
         } else {
             $snapshot = Get-Content -LiteralPath $SnapshotPath -Raw | ConvertFrom-Json
             Assert-ManagedState $snapshot
-            $remaining = @(Get-NetFirewallRule -PolicyStore ActiveStore -TracePolicyStore -Direction Outbound -Action Allow -Enabled True | Where-Object {
+            $remaining = @(Get-NetFirewallRule -PolicyStore ActiveStore -TracePolicyStore -Direction Outbound -Action Allow -Enabled True -ErrorAction Stop | Where-Object {
                 if ([string]$_.Group -eq $Group) { return $false }
                 if ([bool](Get-SnapshotValue $snapshot 'blockSharedAccess') -and (Test-SharedAccessDynamicAllowRule $_)) { return $false }
                 return $true
@@ -570,18 +606,26 @@ def _run_elevated(script_path: Path, action: str, snapshot_path: Path,
     kernel32.CloseHandle.restype = wintypes.BOOL
 
     try:
-        wait_result = kernel32.WaitForSingleObject(info.hProcess, 60000)
+        wait_result = kernel32.WaitForSingleObject(info.hProcess, ELEVATED_HELPER_TIMEOUT_MS)
         if wait_result == 0x00000102:  # WAIT_TIMEOUT
+            progress_path = Path(str(result_path) + ".progress")
+            try:
+                last_phase = progress_path.read_text(encoding="utf-8").strip()
+            except OSError:
+                last_phase = "The helper did not report its current stage."
+            phase_detail = f" Last reported step: {last_phase}" if last_phase else ""
             if not kernel32.TerminateProcess(info.hProcess, 1):
                 error = ctypes.get_last_error()
                 raise KillSwitchError(
-                    "The elevated firewall operation exceeded 60 seconds and Windows could not stop "
-                    f"the helper process (error {error}). Use Emergency network recovery."
+                    f"The elevated firewall operation exceeded {ELEVATED_HELPER_TIMEOUT_MS // 1000} seconds."
+                    f"{phase_detail} Windows could not stop the helper process (error {error}). "
+                    "Use Emergency network recovery."
                 )
             kernel32.WaitForSingleObject(info.hProcess, 5000)
             raise KillSwitchError(
-                "The elevated firewall operation exceeded 60 seconds. The helper was terminated; "
-                "use Restore saved firewall or Emergency network recovery to reconcile any partial changes."
+                f"The elevated firewall operation exceeded {ELEVATED_HELPER_TIMEOUT_MS // 1000} seconds."
+                f"{phase_detail} The helper was terminated; use Restore saved firewall or "
+                "Emergency network recovery to reconcile any partial changes."
             )
         if wait_result == 0xFFFFFFFF:  # WAIT_FAILED
             error = ctypes.get_last_error()

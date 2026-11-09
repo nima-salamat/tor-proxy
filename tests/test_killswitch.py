@@ -133,13 +133,15 @@ def test_windows_helper_exposes_saved_and_emergency_recovery_paths():
 
 def test_windows_elevated_runner_has_a_bounded_wait_and_terminates_timeouts():
     import inspect
-    from torproxy.firewall.windows import _run_elevated
+    from torproxy.firewall.windows import ELEVATED_HELPER_TIMEOUT_MS, _run_elevated
 
     source = inspect.getsource(_run_elevated)
-    assert "WaitForSingleObject(info.hProcess, 60000)" in source
+    assert ELEVATED_HELPER_TIMEOUT_MS == 180_000
+    assert "WaitForSingleObject(info.hProcess, ELEVATED_HELPER_TIMEOUT_MS)" in source
     assert "TerminateProcess" in source
     assert "ctypes.POINTER(wintypes.DWORD)" in source
     assert "WAIT_TIMEOUT" in source
+    assert "Last reported step" in source
 
 
 def test_manager_recovery_state_is_local_and_does_not_require_admin():
@@ -292,12 +294,38 @@ def test_windows_firewall_helper_is_strict_about_outbound_exceptions():
     assert "-Action Block -Program $sharedAccessProgram -Service SharedAccess -OverrideBlockRules $false" in _POWERSHELL
     assert "Assert-SharedAccessBlockRule" in _POWERSHELL
     assert "Get-SnapshotValue $snapshot 'blockSharedAccess' -and" not in _POWERSHELL
-    assert "Get-SnapshotValue $snapshot 'blockSharedAccess') -and (Test-SharedAccessDynamicAllowRule $_)" in _POWERSHELL
+    assert "Get-SnapshotValue $snapshot 'blockSharedAccess') -and $sharedAccessRuleNames.ContainsKey([string]$_.Name)" in _POWERSHELL
+    assert "Set-Phase 'Reading the effective outbound firewall rules...'" in _POWERSHELL
+    assert "$ProgressPath = $ResultPath + '.progress'" in _POWERSHELL
     assert "Set-NetFirewallRule" in _POWERSHELL
     assert "TorProxy Kill Switch" in _POWERSHELL
     assert "original snapshot is missing" in _POWERSHELL
     assert "could not be restored to its saved state" in _POWERSHELL
 
+
+
+
+
+def test_windows_activation_reuses_a_single_traced_active_store_scan():
+    activation_start = _POWERSHELL.index("if ($Action -eq 'activate')")
+    activation_end = _POWERSHELL.index("elseif ($Action -eq 'deactivate')", activation_start)
+    activation_script = _POWERSHELL[activation_start:activation_end]
+
+    traced_query = (
+        "Get-NetFirewallRule -PolicyStore ActiveStore -TracePolicyStore "
+        "-Direction Outbound -Action Allow -Enabled True"
+    )
+    assert activation_script.count(traced_query) == 1
+    assert "$sharedAccessRuleNames[[string]$rule.Name] = $true" in activation_script
+    assert "$sharedAccessRuleNames.ContainsKey([string]$_.Name)" in activation_script
+    assert "$finalActiveAllow = @(Get-NetFirewallRule -PolicyStore ActiveStore -Direction Outbound" in activation_script
+    assert "-ErrorAction Stop" in activation_script
+
+
+def test_windows_helper_reports_the_current_phase_without_affecting_firewall_work():
+    assert "function Set-Phase([string]$phase)" in _POWERSHELL
+    assert "Progress reporting must never prevent a firewall operation." in _POWERSHELL
+    assert "Verifying effective firewall profiles and TorProxy-owned rules" in _POWERSHELL
 
 
 def test_linux_install_is_idempotent_without_restarting_the_live_drop_chain(tmp_path, monkeypatch):
