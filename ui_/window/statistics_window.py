@@ -77,6 +77,8 @@ class TrafficChart(QWidget):
         self.chart_kind = chart_kind
         self._samples: list[_TrafficSample] = []
         self._history_values: list[float] | None = None
+        self._history_upload_values: list[float] | None = None
+        self._history_download_values: list[float] | None = None
         self._history_period_seconds = 3600
         self._dark = True
         self.setMinimumHeight(205)
@@ -122,6 +124,8 @@ class TrafficChart(QWidget):
 
     def set_history(self, buckets: list[dict[str, int]], period_seconds: int) -> None:
         self._history_values = [float(bucket.get("total_bytes", 0)) for bucket in buckets]
+        self._history_upload_values = [float(bucket.get("upload_bytes", 0)) for bucket in buckets]
+        self._history_download_values = [float(bucket.get("download_bytes", 0)) for bucket in buckets]
         self._history_period_seconds = max(60, int(period_seconds))
         self.update()
 
@@ -129,7 +133,7 @@ class TrafficChart(QWidget):
         del event
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        _background, grid_color, text_color, accent, _download_color = self._colors()
+        _background, grid_color, text_color, accent, download_color = self._colors()
         rect = self.rect()
         plot = QRectF(56, 10, max(1, rect.width() - 70), max(1, rect.height() - 49))
         if plot.width() < 80 or plot.height() < 60:
@@ -189,14 +193,32 @@ class TrafficChart(QWidget):
                 painter.drawEllipse(QPointF(plot.right(), last_y), 3.2, 3.2)
         else:
             painter.setPen(Qt.PenStyle.NoPen)
+            uploads = self._history_upload_values or [0.0] * len(values)
+            downloads = self._history_download_values or [0.0] * len(values)
             for index, value in enumerate(values):
                 slot = plot.width() / max(1, len(values))
                 bar_width = max(1.0, slot * 0.62)
-                height = plot.height() * (value / max_value)
+                upload = uploads[index] if index < len(uploads) else 0.0
+                download = downloads[index] if index < len(downloads) else 0.0
+                # Stacked directional bars preserve the total height while showing
+                # the upload/download composition in the selected persistent range.
+                download_height = plot.height() * (download / max_value)
+                upload_height = plot.height() * (upload / max_value)
                 x = plot.left() + slot * index + (slot - bar_width) / 2
-                y = plot.bottom() - height
-                painter.setBrush(accent if index < len(values) - 1 else QColor("#79d6b0" if self._dark else "#188b68"))
-                painter.drawRoundedRect(QRectF(x, y, bar_width, max(0.0, height)), 2.0, 2.0)
+                bottom = plot.bottom()
+                if download_height > 0:
+                    painter.setBrush(download_color)
+                    painter.drawRoundedRect(
+                        QRectF(x, bottom - download_height, bar_width, download_height),
+                        2.0, 2.0,
+                    )
+                    bottom -= download_height
+                if upload_height > 0:
+                    painter.setBrush(accent)
+                    painter.drawRoundedRect(
+                        QRectF(x, bottom - upload_height, bar_width, upload_height),
+                        2.0, 2.0,
+                    )
             if not any(values):
                 painter.setPen(text_color)
                 painter.drawText(
@@ -344,9 +366,9 @@ class StatisticsWindow(QWidget):
         root.addLayout(charts, 1)
 
         self.data_note = QLabel(
-            "The legacy all-time total is preserved; directional totals and minute history start with this version. "
+            "History records HTTP proxy traffic and cumulative TorProxy TUN adapter counters; upload and download are shown separately. "
             "Minute-level history is kept for up to 180 days; live rate and peak reset each launch. "
-            "This is not a system-wide network meter."
+            "TUN counters are sampled by the background accounting worker and do not depend on opening this page."
         )
         self.data_note.setObjectName("statisticsNote")
         self.data_note.setWordWrap(True)
