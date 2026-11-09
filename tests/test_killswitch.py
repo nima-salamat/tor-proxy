@@ -135,6 +135,15 @@ def test_windows_helper_exposes_saved_and_emergency_recovery_paths():
     assert "-DefaultOutboundAction Allow" in _POWERSHELL
     assert "kept Windows Firewall enabled" in _POWERSHELL
 
+    # A WFP-only recovery has no legacy snapshot and must not reset unrelated
+    # Windows Firewall profile defaults, including in emergency mode.
+    start = _POWERSHELL.index("if ($Action -eq 'recover' -or $Action -eq 'deactivate' -or $Action -eq 'emergency')")
+    end = _POWERSHELL.index("if ($Action -eq 'status'", start)
+    wfp_recovery = _POWERSHELL[start:end]
+    assert "-not (Test-Path -LiteralPath $SnapshotPath)" in wfp_recovery
+    assert "Write-Result @{ ok = $true; active = $false; verified = $true; backend = 'WFP'; mode = $Action" in wfp_recovery
+    assert "return" in wfp_recovery
+
 
 def test_windows_elevated_runner_has_a_bounded_wait_and_terminates_timeouts():
     import inspect
