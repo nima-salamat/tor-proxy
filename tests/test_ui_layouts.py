@@ -340,9 +340,11 @@ def test_theme_sync_and_titlebar_use_fontawesome_icons_and_consistent_corner_bac
     titlebar_source = (repository / "ui_/window/custom_titlebar.py").read_text(encoding="utf-8")
     assert "QWidget#topMenuBar, QWidget#menuBarCorner" in ui_source
     assert "QPushButton#topNavButton:checked" in ui_source
-    assert "def _set_theme(self, mode)" in ui_source
-    assert "self._parent._set_theme(mode)" in settings_source
-    assert "self.theme_switch.modeChanged.connect" in settings_source
+    assert "def _set_theme(self, mode, *, preference=None)" in ui_source
+    assert "self._parent._set_theme_preference(preference)" in settings_source
+    assert 'self.theme_mode_buttons = {}' in settings_source
+    assert '("system", "System"), ("light", "Light"), ("dark", "Dark")' in settings_source
+    assert "def _on_system_color_scheme_changed(self, _scheme=None)" in ui_source
     assert 'qta.icon("fa6s.window-minimize"' in titlebar_source
     assert 'qta.icon("fa6s.window-maximize"' in titlebar_source
     assert 'qta.icon("fa6s.xmark"' in titlebar_source
