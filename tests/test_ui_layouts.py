@@ -233,6 +233,43 @@ def test_updates_navigation_keeps_theme_text_color_on_hover():
     assert "background: {accent}; color: #ffffff; border-color: {accent};" in source
 
 
+
+def test_updates_nav_icon_tracks_active_pages_and_theme(monkeypatch):
+    pytest.importorskip("qtawesome")
+    from types import SimpleNamespace
+    import ui
+
+    class _Stack:
+        def __init__(self, page):
+            self.page = page
+
+        def currentIndex(self):
+            return self.page
+
+    class _Button:
+        icon = None
+
+        def setIcon(self, icon):
+            self.icon = icon
+
+    fake = SimpleNamespace(stack=_Stack(4), updates_nav_button=_Button())
+    monkeypatch.setattr(ui.qta, "icon", lambda name, color: (name, color))
+
+    ui.Window._sync_updates_nav_icon(fake, "light")
+    assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-down", "#ffffff")
+
+    fake.stack.page = 5
+    ui.Window._sync_updates_nav_icon(fake, "dark")
+    assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-down", "#ffffff")
+
+    fake.stack.page = 0
+    ui.Window._sync_updates_nav_icon(fake, "light")
+    assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-down", "#202832")
+
+    ui.Window._sync_updates_nav_icon(fake, "dark")
+    assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-down", "#eff1f4")
+
+
 def test_manage_proxy_disable_dispatches_explicit_clear_to_the_current_platform(monkeypatch):
     import set_proxy
 
