@@ -2,6 +2,11 @@
 
 All notable changes are recorded here. Dates and release numbers are added only when a release is actually published.
 
+## Recent improvements
+
+- Matched the sing-box manager page to the Bundle updater visual language and added live tunnel status refresh while the page is open.
+- Added pre-connect reconciliation of recorded sing-box state and an Advanced emergency cleanup action. Cleanup remains identity-checked and refuses to delete untracked TUN adapters or terminate unrelated processes.
+
 ## Unreleased — UI, updater, and security redesign
 - Browser discovery now starts after the shared popup is shown and runs in a Qt background worker; the dialog immediately renders its last SQLite-cached snapshot and refreshes it atomically when the scan finishes.
 - Added stale-install handling for cached browser cards: an executable that was deleted or moved is removed from the database/UI immediately and produces a clear launch error, even while discovery is still running.
