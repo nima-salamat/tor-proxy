@@ -47,7 +47,8 @@ def test_system_tunnel_config_uses_tcp_tor_socks_and_hijacks_dns(tmp_path, monke
     assert outbound["network"] == "tcp"
     assert config["dns"]["servers"][0]["detour"] == "tor-socks"
     assert rules[0]["outbound"] == "direct"
-    assert {"tor", "sing-box"}.issubset(set(rules[0]["process_name"]))
+    expected_names = {manager.engine_path.name.casefold(), tor.name.casefold()}
+    assert expected_names.issubset(set(rules[0]["process_name"]))
     assert str(manager.engine_path.resolve()) in rules[1]["process_path"]
     assert str(tor.resolve()) in rules[1]["process_path"]
     assert rules[2] == {"action": "hijack-dns"}
@@ -58,6 +59,7 @@ def test_system_tunnel_config_uses_tcp_tor_socks_and_hijacks_dns(tmp_path, monke
 
 def test_windows_and_linux_helpers_share_one_complete_argument_builder(tmp_path, monkeypatch):
     manager = _manager(tmp_path)
+    monkeypatch.setattr(SystemTunnelManager, "engine_sha256", property(lambda _self: "a" * 64))
     args = manager._helper_action_arguments("start", tmp_path / "helper.json")
     mapping = {args[i]: args[i + 1] for i in range(0, len(args) - 1, 2) if args[i].startswith("--")}
     assert mapping["--version"] == manager.version
@@ -74,6 +76,10 @@ def test_system_tunnel_start_rolls_back_when_tun_has_no_outbound_tcp_tls(tmp_pat
     monkeypatch.setattr(system_tunnel, "_interface_exists", lambda _name: False)
     monkeypatch.setattr(manager, "_write_and_check_config", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(manager, "_invoke_helper", lambda _action: {"ok": True, "active": True})
+    monkeypatch.setattr(manager, "_socks5_connect_probe", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(manager, "_verify_tunnel_tcp_tls", lambda: (_ for _ in ()).throw(
+        SystemTunnelError("probe timeout")
+    ))
     real_connect = system_tunnel.socket.create_connection
     stopped = []
 
@@ -91,6 +97,20 @@ def test_system_tunnel_start_rolls_back_when_tun_has_no_outbound_tcp_tls(tmp_pat
         manager.start(9150, tor_executables=[tmp_path / "tor"])
     assert stopped == [True]
     monkeypatch.setattr(system_tunnel.socket, "create_connection", real_connect)
+
+
+def test_windows_tun_config_forces_gvisor_stack_for_known_windows_forwarding_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(system_tunnel.platform, "system", lambda: "Windows")
+    manager = _manager(tmp_path)
+    manager.engine_dir.mkdir(parents=True, exist_ok=True)
+    manager.engine_path.write_bytes(b"engine")
+    tor = tmp_path / "tor.exe"
+    tor.write_bytes(b"tor")
+
+    config = manager.build_config(9150, tor_executables=[tor])
+
+    assert config["inbounds"][0]["stack"] == "gvisor"
+    assert "auto_redirect" not in config["inbounds"][0]
 
 
 def test_tunnel_engine_download_refuses_an_unspecified_network_route(tmp_path, monkeypatch):
