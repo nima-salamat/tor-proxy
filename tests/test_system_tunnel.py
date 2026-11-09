@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import zipfile
 from pathlib import Path
 
@@ -18,6 +19,7 @@ class FakeDirectories:
         self.state = root / "state"
         self.cache = root / "cache"
         self.logs = root / "logs"
+        self.config = root / "config"
 
 
 def _manager(tmp_path: Path) -> SystemTunnelManager:
@@ -72,6 +74,110 @@ def test_system_tunnel_config_uses_tcp_tor_socks_and_hijacks_dns(tmp_path, monke
     assert config["route"]["final"] == "block"
 
 
+
+
+def test_system_tunnel_config_applies_saved_host_policy_before_default_tor_route(tmp_path, monkeypatch):
+    monkeypatch.setattr(system_tunnel.platform, "system", lambda: "Linux")
+    manager = _manager(tmp_path)
+    manager.engine_dir.mkdir(parents=True)
+    manager.engine_path.write_bytes(b"pinned test engine")
+    tor = tmp_path / ("tor.exe" if os.name == "nt" else "tor")
+    tor.write_bytes(b"test tor executable")
+    manager.directories.config.mkdir(parents=True)
+    (manager.directories.config / "blocked_hosts.json").write_text(
+        json.dumps([
+            "blocked.example",
+            "=exact.blocked.example",
+            "*.sub.blocked.example",
+            "*-api.blocked.example",
+            "192.0.2.9",
+            "shared.example",
+        ]),
+        encoding="utf-8",
+    )
+    (manager.directories.config / "exclude_hosts.json").write_text(
+        json.dumps(["excluded.example", "shared.example"]),
+        encoding="utf-8",
+    )
+
+    config = manager.build_config(9150, tor_executables=[tor])
+    rules = config["route"]["rules"]
+
+    assert rules[:4] == [
+        rules[0],
+        rules[1],
+        {"port": 53, "action": "hijack-dns"},
+        {
+            "ip_cidr": ["172.19.0.0/30", "fdfe:dcba:9876::/126"],
+            "action": "reject",
+            "method": "drop",
+        },
+    ]
+    assert rules[4] == {"action": "sniff"}
+
+    blocked = rules[5:11]
+    excluded = rules[11:13]
+    assert blocked[0] == {
+        "network": "tcp",
+        "domain": ["blocked.example"],
+        "domain_suffix": [".blocked.example"],
+        "action": "reject",
+        "method": "default",
+    }
+    assert blocked[1] == {
+        "network": "tcp",
+        "domain": ["exact.blocked.example"],
+        "action": "reject",
+        "method": "default",
+    }
+    assert blocked[2] == {
+        "network": "tcp",
+        "domain_suffix": [".sub.blocked.example"],
+        "action": "reject",
+        "method": "default",
+    }
+    glob_pattern = blocked[3]["domain_regex"][0]
+    assert re.fullmatch(glob_pattern.removeprefix("^").removesuffix("$"), "v2-api.blocked.example")
+    assert not re.fullmatch(glob_pattern.removeprefix("^").removesuffix("$"), "deep.v2-api.blocked.example")
+    assert blocked[4] == {
+        "network": "tcp",
+        "ip_cidr": ["192.0.2.9/32"],
+        "action": "reject",
+        "method": "default",
+    }
+    assert blocked[5]["domain"] == ["shared.example"]
+    assert blocked[5]["action"] == "reject"
+
+    assert excluded[0] == {
+        "network": "tcp",
+        "domain": ["excluded.example"],
+        "domain_suffix": [".excluded.example"],
+        "action": "route",
+        "outbound": "direct",
+    }
+    assert excluded[1]["domain"] == ["shared.example"]
+    assert excluded[1]["action"] == "route"
+    assert excluded[1]["outbound"] == "direct"
+    assert rules.index(blocked[5]) < rules.index(excluded[1])
+    assert rules[13] == {"network": "udp", "action": "reject", "method": "default"}
+    assert rules[14] == {"network": "tcp", "action": "route", "outbound": "tor-socks"}
+
+
+def test_system_tunnel_fails_closed_when_saved_host_policy_is_invalid(tmp_path, monkeypatch):
+    monkeypatch.setattr(system_tunnel.platform, "system", lambda: "Linux")
+    manager = _manager(tmp_path)
+    manager.engine_dir.mkdir(parents=True)
+    manager.engine_path.write_bytes(b"pinned test engine")
+    tor = tmp_path / ("tor.exe" if os.name == "nt" else "tor")
+    tor.write_bytes(b"test tor executable")
+    manager.directories.config.mkdir(parents=True)
+    (manager.directories.config / "blocked_hosts.json").write_text(
+        json.dumps(["https://blocked.example/path"]),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemTunnelError, match="blocked_hosts.json"):
+        manager.build_config(9150, tor_executables=[tor])
 
 def test_tor_socks_dialer_binds_to_loopback_even_with_default_interface_detection(tmp_path):
     manager = _manager(tmp_path)
