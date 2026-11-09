@@ -357,15 +357,18 @@ def test_optional_firewall_group_query_only_suppresses_expected_not_found():
     assert "throw $unexpectedErrors[0]" in _POWERSHELL
 
 
-def test_windows_saved_local_allow_rules_are_processed_in_one_com_collection_pass():
+def test_windows_saved_local_allow_rules_use_direct_com_name_lookups():
     start = _POWERSHELL.index("function Set-SnapshotLocalRulesEnabled")
     end = _POWERSHELL.index("function Set-SnapshotProfile", start)
     helper = _POWERSHELL[start:end]
     assert "New-Object -ComObject HNetCfg.FwPolicy2" in helper
     assert "$rules = $policy.Rules" in helper
-    assert "foreach ($rule in $rules)" in helper
-    assert "$wanted.Contains($ruleName)" in helper
+    assert "foreach ($name in $names)" in helper
+    assert "$rules.Item([string]$name)" in helper
+    assert "[int]$_.Exception.HResult -eq -2147024894" in helper
     assert "$rule.Enabled = [bool]$enabled" in helper
+    assert "Saved name examples:" in helper
+    assert "COM name examples:" in helper
     assert "Set-NetFirewallRule" not in helper
     assert "Get-NetFirewallRule" not in helper
 
@@ -373,13 +376,11 @@ def test_windows_saved_local_allow_rules_are_processed_in_one_com_collection_pas
     activation_end = _POWERSHELL.index("elseif ($Action -eq 'deactivate')", activation_start)
     activation_script = _POWERSHELL[activation_start:activation_end]
     assert "Set-SnapshotLocalRulesEnabled $snapshot $false" in activation_script
-    assert "Disabling saved local outbound Allow rules through COM" in activation_script
 
     recovery_start = _POWERSHELL.index("elseif ($Action -eq 'recover')")
     recovery_end = _POWERSHELL.index("elseif ($Action -eq 'emergency')", recovery_start)
     recovery_script = _POWERSHELL[recovery_start:recovery_end]
     assert "Set-SnapshotLocalRulesEnabled $snapshot $true" in recovery_script
-    assert "Restoring saved local outbound Allow rules through COM" in recovery_script
 
 
 def test_windows_profile_updates_use_netsecurity_enum_strings():
@@ -397,14 +398,16 @@ def test_windows_saved_rule_updates_use_native_firewall_com_not_netsecurity_cim(
 
     assert "New-Object -ComObject HNetCfg.FwPolicy2" in helper
     assert "$rules = $policy.Rules" in helper
-    assert "foreach ($rule in $rules)" in helper
+    assert "foreach ($name in $names)" in helper
+    assert "$rules.Item([string]$name)" in helper
     assert "$rule.Enabled = [bool]$enabled" in helper
     assert "[int]$rule.Direction -ne 2" in helper
     assert "[int]$rule.Action -ne 1" in helper
     assert "FinalReleaseComObject" in helper
     assert "Set-NetFirewallRule" not in helper
     assert "Get-NetFirewallRule" not in helper
-    assert "None of the {0} saved firewall rules were found" in helper
+    assert "None of the {0} saved firewall rules were found through INetFwRules::Item" in helper
+    assert "COM collection contains {1} rules" in helper
     assert "Windows Firewall COM updated" in helper
 
 
