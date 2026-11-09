@@ -19,6 +19,7 @@ from socketserver import ThreadingMixIn
 from urllib.parse import urlsplit
 
 import socks
+import psutil
 
 from config import CONFIG
 from torproxy.host_rules import HostRuleError, HostRules, normalize_hostname
@@ -52,6 +53,26 @@ def get_traffic_direction_snapshot() -> dict[str, int]:
     """Return thread-safe in-process upload/download byte totals."""
     with _traffic_direction_lock:
         return dict(_traffic_direction_totals)
+
+
+def _read_system_tun_io_counters() -> tuple[int, int] | None:
+    """Read cumulative sent/received bytes from TorProxy's TUN adapter.
+
+    This is sampled by the background accounting worker, never from a relay
+    socket callback, so interface polling cannot add latency to user traffic.
+    """
+    try:
+        counters = psutil.net_io_counters(pernic=True) or {}
+    except (OSError, RuntimeError, AttributeError, TypeError):
+        logger.debug("Could not read per-interface traffic counters.", exc_info=True)
+        return None
+    for name, counter in counters.items():
+        if str(name).casefold() in {"torproxy", "torproxy-tun"}:
+            try:
+                return max(0, int(counter.bytes_sent)), max(0, int(counter.bytes_recv))
+            except (AttributeError, TypeError, ValueError, OverflowError):
+                return None
+    return None
 
 
 def _rules_path(filename: str) -> Path:
@@ -229,6 +250,8 @@ def worker_data_usage_tracker(stop_event: threading.Event) -> None:
     config_sync_needed = False
     final_write_failures = 0
     history_store = None
+    last_tun_counters = _read_system_tun_io_counters()
+    last_tun_poll = time.monotonic()
 
     try:
         try:
@@ -283,6 +306,21 @@ def worker_data_usage_tracker(stop_event: threading.Event) -> None:
                         bucket[2] += amount
 
             now_monotonic = time.monotonic()
+            if now_monotonic - last_tun_poll >= 1.0:
+                current_tun_counters = _read_system_tun_io_counters()
+                if current_tun_counters is None:
+                    # Do not count bytes across an interval where the adapter was absent.
+                    last_tun_counters = None
+                elif last_tun_counters is not None:
+                    sent_delta = max(0, current_tun_counters[0] - last_tun_counters[0])
+                    received_delta = max(0, current_tun_counters[1] - last_tun_counters[1])
+                    if sent_delta:
+                        _record_bytes(sent_delta, "upload")
+                    if received_delta:
+                        _record_bytes(received_delta, "download")
+                last_tun_counters = current_tun_counters
+                last_tun_poll = now_monotonic
+
             if config_sync_needed and history_store is not None and now_monotonic - last_config_sync >= 2.0:
                 try:
                     CONFIG["data_usage"] = history_store.get_totals()["total_bytes"]
