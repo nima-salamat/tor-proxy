@@ -911,7 +911,7 @@ class SystemTunnelManager:
                 any(key in rule for key in ("domain", "domain_suffix", "domain_regex"))
                 for rule in host_policy_rules
             )
-            insertion = [{"action": "sniff"}] if sniff_required else []
+            insertion = [{"network": "tcp", "action": "sniff"}] if sniff_required else []
             route_rules[4:4] = insertion + host_policy_rules
 
         return {
