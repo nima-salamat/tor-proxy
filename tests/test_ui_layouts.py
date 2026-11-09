@@ -279,7 +279,7 @@ def test_updates_nav_icon_and_text_follow_only_the_active_updates_page(monkeypat
     monkeypatch.setattr(ui, "CONFIG", {"mode": "light"})
     monkeypatch.setattr(ui.qta, "icon", lambda name, color: (name, color))
 
-    # Bundles/Tunnel active: text, cloud and native caret all use active white.
+    # Bundles/Tunnel active: text, cloud and custom dropdown chevron are white.
     ui.Window._sync_updates_nav_icon(fake, "light")
     assert fake.updates_nav_button.checked is True
     assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-down", "#ffffff")
