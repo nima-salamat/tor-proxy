@@ -94,7 +94,7 @@ def test_socks5_connect_probe_sends_protocol_bytes_and_completes_connect(monkeyp
         def settimeout(self, _timeout):
             pass
 
-            def sendall(self, payload):
+        def sendall(self, payload):
             self.sent.append(payload)
 
         def recv(self, size):
@@ -144,6 +144,8 @@ def test_windows_start_uses_one_gvisor_attempt_without_network_probes_or_restart
     assert config_writes[0][1] == {}
     assert helper_actions == ["start"]
     assert "Test traffic" in result
+
+
 def test_system_tunnel_115_uses_native_stack_without_legacy_stack_option(tmp_path, monkeypatch):
     monkeypatch.setattr(system_tunnel.platform, "system", lambda: "Windows")
     manager = _manager(tmp_path)
@@ -227,6 +229,8 @@ def test_system_tunnel_start_does_not_gate_startup_on_network_connectivity(tmp_p
     assert config_writes
     assert helper_actions == ["start"]
     assert "TUN interface are active" in result
+
+
 def test_test_connection_runs_remote_checks_without_starting_or_stopping_helper(tmp_path, monkeypatch):
     manager = _manager(tmp_path)
     monkeypatch.setattr(manager, "status", lambda: {"active": True, "verified": True, "detail": "active"})
