@@ -121,10 +121,10 @@ def _host_rule_route_fields(rule) -> dict[str, list[str]]:
         }
     if rule.mode is MatchMode.GLOB:
         labels = [
-            re.escape(label).replace(r"\\*", ".*")
+            re.escape(label).replace(r"\*", ".*")
             for label in rule.host.split(".")
         ]
-        return {"domain_regex": ["^" + r"\\.".join(labels) + "$"]}
+        return {"domain_regex": ["^" + r"\.".join(labels) + "$"]}
     raise SystemTunnelError("The saved host rule uses an unsupported match mode.")
 
 
@@ -912,7 +912,7 @@ class SystemTunnelManager:
                 for rule in host_policy_rules
             )
             insertion = [{"action": "sniff"}] if sniff_required else []
-            route_rules[3:3] = insertion + host_policy_rules
+            route_rules[4:4] = insertion + host_policy_rules
 
         return {
             "log": {"level": "warn", "timestamp": True},
