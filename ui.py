@@ -689,12 +689,19 @@ class Window(QMainWindow):
                     self.updates_nav_button.setChecked(index in {4, 5})
             if hasattr(self, "page_nav_buttons"):
                 neutral_icon = "#eff1f4" if CONFIG["mode"] == "dark" else "#202832"
-                for page_index, button, icon_name in zip(
-                    self.page_nav_page_indices, self.page_nav_buttons, self.page_icon_names
-                ):
-                    selected = page_index == index
-                    button.setChecked(selected)
-                    button.setIcon(qta.icon(icon_name, color="#ffffff" if selected else neutral_icon))
+                # Updates is a separate menu destination, not one of the regular
+                # top-level pages. Temporarily disable exclusivity so the old
+                # Home/Settings button can actually become unchecked.
+                self.page_nav_group.setExclusive(False)
+                try:
+                    for page_index, button, icon_name in zip(
+                        self.page_nav_page_indices, self.page_nav_buttons, self.page_icon_names
+                    ):
+                        selected = page_index == index
+                        button.setChecked(selected)
+                        button.setIcon(qta.icon(icon_name, color="#ffffff" if selected else neutral_icon))
+                finally:
+                    self.page_nav_group.setExclusive(True)
             self._update_global_state()
     def _update_global_state(self):
         proxy_widget = getattr(self, "proxyWidget", None)
