@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -15,6 +16,43 @@ from ..paths import user_directories
 GROUP = "TorProxy Kill Switch"
 SNAPSHOT_NAME = "windows-firewall-snapshot.json"
 ELEVATED_HELPER_TIMEOUT_MS = 30_000
+WFP_HELPER_NAME = "TorProxyWfpHelper.exe"
+
+
+def _find_wfp_helper() -> Path | None:
+    """Locate the packaged native WFP helper or a local CMake build."""
+    candidates: list[Path] = []
+    configured = os.environ.get("TORPROXY_WFP_HELPER")
+    if configured:
+        candidates.append(Path(configured).expanduser())
+
+    try:
+        candidates.append(Path(sys.executable).resolve().parent / WFP_HELPER_NAME)
+    except (OSError, RuntimeError):
+        pass
+
+    try:
+        repository_root = Path(__file__).resolve().parents[3]
+        candidates.extend(
+            [
+                repository_root / WFP_HELPER_NAME,
+                repository_root / "build" / "launcher" / "Release" / WFP_HELPER_NAME,
+                repository_root / "build" / "launcher" / WFP_HELPER_NAME,
+                repository_root / "build" / "launcher" / "Debug" / WFP_HELPER_NAME,
+            ]
+        )
+    except (IndexError, OSError, RuntimeError):
+        pass
+
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve(strict=True)
+        except (OSError, RuntimeError):
+            continue
+        if resolved.is_file():
+            return resolved
+    return None
+
 
 _POWERSHELL = r"""
 param(
@@ -920,14 +958,27 @@ def _run_elevated(script_path: Path, action: str, snapshot_path: Path,
 
 
 class WindowsFirewallBackend:
-    """Use Defender Firewall's default-block policy with exact Tor exceptions."""
+    """Use persistent WFP filters without editing user-owned firewall rules."""
 
-    def __init__(self, *, state_dir: Path | None = None, runner=_run_elevated):
+    def __init__(
+        self,
+        *,
+        state_dir: Path | None = None,
+        runner=_run_elevated,
+        wfp_helper_path: Path | None = None,
+    ):
         self.state_dir = Path(state_dir or (user_directories().state / "killswitch"))
         self.snapshot_path = self.state_dir / SNAPSHOT_NAME
         self._runner = runner
+        self.wfp_helper_path = Path(wfp_helper_path) if wfp_helper_path else _find_wfp_helper()
 
     def _invoke(self, action: str, programs: tuple[str, ...] = ()) -> dict[str, object]:
+        if self._runner is _run_elevated and self.wfp_helper_path is None:
+            raise KillSwitchError(
+                "TorProxyWfpHelper.exe is missing. Install the current Windows package "
+                "or build launcher/src/wfp_helper.cpp with CMake; the slow per-rule "
+                "firewall updater is no longer used."
+            )
         self.state_dir.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="torproxy-killswitch-") as temporary:
             root = Path(temporary)
@@ -935,7 +986,15 @@ class WindowsFirewallBackend:
             request = root / "request.json"
             result = root / "result.json"
             script.write_text(_POWERSHELL, encoding="utf-8")
-            request.write_text(json.dumps({"programs": list(programs)}), encoding="utf-8")
+            request.write_text(
+                json.dumps(
+                    {
+                        "programs": list(programs),
+                        "wfp_helper_path": str(self.wfp_helper_path) if self.wfp_helper_path else "",
+                    }
+                ),
+                encoding="utf-8",
+            )
             exit_code = self._runner(script, action, self.snapshot_path, request, result)
             if not result.is_file():
                 raise KillSwitchError("The elevated firewall helper did not write a result; its state is unknown.")
