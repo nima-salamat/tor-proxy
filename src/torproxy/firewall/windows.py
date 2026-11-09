@@ -35,7 +35,12 @@ function Save-Snapshot($snapshot) {
     Move-Item -LiteralPath $temp -Destination $SnapshotPath -Force
 }
 function Get-ActiveProfiles {
-    return @(Get-NetFirewallProfile -Profile Domain,Private,Public | Select-Object Name,Enabled,DefaultOutboundAction)
+    # ActiveStore is the merged policy Windows Firewall currently enforces.
+    return @(Get-NetFirewallProfile -PolicyStore ActiveStore -Profile Domain,Private,Public | Select-Object Name,Enabled,DefaultOutboundAction)
+}
+function Get-PersistentProfiles {
+    # PersistentStore is the local configuration TorProxy snapshots and restores.
+    return @(Get-NetFirewallProfile -PolicyStore PersistentStore -Profile Domain,Private,Public | Select-Object Name,Enabled,DefaultOutboundAction)
 }
 function Get-SnapshotValue($snapshot, [string]$name) {
     if ($snapshot -is [System.Collections.IDictionary]) {
@@ -160,7 +165,7 @@ function Test-TunInterfaceAllowRule {
     return ($aliases.Count -eq 1 -and [string]$aliases[0] -eq 'TorProxy')
 }
 function Assert-ManagedState($snapshot, $requireRules = $true) {
-    $profiles = Get-ActiveProfiles
+    $profiles = Get-PersistentProfiles
     foreach ($saved in $snapshot.profiles) {
         $current = $profiles | Where-Object { $_.Name -eq $saved.Name } | Select-Object -First 1
         if ($null -eq $current) {
@@ -177,6 +182,12 @@ function Assert-ManagedState($snapshot, $requireRules = $true) {
         }
     }
     if ($requireRules) {
+        $effectiveProfiles = Get-ActiveProfiles
+        foreach ($profile in $effectiveProfiles) {
+            if (-not [bool]$profile.Enabled -or [string]$profile.DefaultOutboundAction -ne 'Block') {
+                throw "Effective Windows Firewall profile $($profile.Name) does not enforce outbound Block; protection is not active."
+            }
+        }
         $groupRules = @(Get-NetFirewallRule -PolicyStore ActiveStore -Group $Group -ErrorAction SilentlyContinue)
         if ($groupRules.Count -lt 1) {
             throw 'TorProxy firewall rules are missing. The saved snapshot was retained for manual recovery.'
@@ -206,7 +217,7 @@ try {
             if ($orphanedGroup.Count -gt 0) {
                 throw 'TorProxy firewall rules exist but the original snapshot is missing. Refusing to guess the original firewall policy; manual recovery is required.'
             }
-            $profiles = Get-ActiveProfiles
+            $profiles = Get-PersistentProfiles
             $activeAllow = @(Get-NetFirewallRule -PolicyStore ActiveStore -TracePolicyStore -Direction Outbound -Action Allow -Enabled True -ErrorAction SilentlyContinue)
             $gpoRules = @($activeAllow | Where-Object { [string]$_.PolicyStoreSourceType -eq 'GroupPolicy' })
             if ($gpoRules.Count -gt 0) {
@@ -266,7 +277,7 @@ try {
         }
 
         # Apply the restrictive default before removing old exceptions.
-        Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled True -DefaultOutboundAction Block
+        Set-NetFirewallProfile -PolicyStore PersistentStore -Profile Domain,Private,Public -Enabled True -DefaultOutboundAction Block
         foreach ($name in @($snapshot.disabledRules)) {
             Set-NetFirewallRule -PolicyStore PersistentStore -Name ([string]$name) -Enabled False
         }
@@ -325,11 +336,11 @@ try {
             Assert-ManagedState $snapshot $false
             Get-NetFirewallRule -PolicyStore PersistentStore -Group $Group -ErrorAction SilentlyContinue | Remove-NetFirewallRule
 
-            $currentProfiles = Get-ActiveProfiles
+            $currentProfiles = Get-PersistentProfiles
             foreach ($saved in $snapshot.profiles) {
                 $current = $currentProfiles | Where-Object { $_.Name -eq $saved.Name } | Select-Object -First 1
                 if ($null -ne $current -and [bool]$current.Enabled -and [string]$current.DefaultOutboundAction -eq 'Block') {
-                    Set-NetFirewallProfile -Profile ([string]$saved.Name) -Enabled ([bool]$saved.Enabled) -DefaultOutboundAction ([string]$saved.DefaultOutboundAction)
+                    Set-NetFirewallProfile -PolicyStore PersistentStore -Profile ([string]$saved.Name) -Enabled ([bool]$saved.Enabled) -DefaultOutboundAction ([string]$saved.DefaultOutboundAction)
                 }
             }
             foreach ($name in @($snapshot.disabledRules)) {
@@ -338,7 +349,7 @@ try {
                     Set-NetFirewallRule -PolicyStore PersistentStore -Name ([string]$name) -Enabled True
                 }
             }
-            $restoredProfiles = Get-ActiveProfiles
+            $restoredProfiles = Get-PersistentProfiles
             foreach ($saved in $snapshot.profiles) {
                 $current = $restoredProfiles | Where-Object { $_.Name -eq $saved.Name } | Select-Object -First 1
                 if ($null -eq $current -or [bool]$current.Enabled -ne [bool]$saved.Enabled -or
@@ -447,7 +458,7 @@ try {
     elseif ($Action -eq 'emergency') {
         # Explicit user-requested fallback. Keep Windows Firewall enabled and
         # restore ordinary outbound access without resetting unrelated rules.
-        Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled True -DefaultOutboundAction Allow
+        Set-NetFirewallProfile -PolicyStore PersistentStore -Profile Domain,Private,Public -Enabled True -DefaultOutboundAction Allow
         $recoveryProfiles = Get-ActiveProfiles
         foreach ($profile in $recoveryProfiles) {
             if (-not [bool]$profile.Enabled -or [string]$profile.DefaultOutboundAction -ne 'Allow') {
