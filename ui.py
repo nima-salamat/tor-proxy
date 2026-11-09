@@ -119,6 +119,40 @@ class UpdatesMenuButton(QToolButton):
         painter.drawPath(path)
 
 
+class HoverIconButton(QPushButton):
+    """Push button whose icon follows its normal and hover foreground colors."""
+
+    def __init__(self, text, icon_name, icon_color, parent=None):
+        super().__init__(text, parent)
+        self._icon_name = icon_name
+        self._normal_icon_color = str(icon_color)
+        self._hover_icon_color = "#ffffff"
+        self._hovered = False
+        self._sync_icon()
+
+    def _sync_icon(self):
+        color = self._hover_icon_color if self._hovered else self._normal_icon_color
+        self.setIcon(qta.icon(self._icon_name, color=color))
+
+    def setNormalIconColor(self, color):
+        self._normal_icon_color = str(color)
+        self._sync_icon()
+
+    def _set_hovered(self, hovered):
+        hovered = bool(hovered)
+        if hovered != self._hovered:
+            self._hovered = hovered
+            self._sync_icon()
+
+    def enterEvent(self, event):
+        self._set_hovered(True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._set_hovered(False)
+        super().leaveEvent(event)
+
+
 class Window(QMainWindow):
     toggle_visibility_signal = Signal()
     hotkey_error_signal = Signal(str)
@@ -616,9 +650,10 @@ class Window(QMainWindow):
         self.exit_action.triggered.connect(self.ask_close)
         self.addAction(self.exit_action)
 
-        self.exit_nav_button = QPushButton("Exit", menu_bar)
+        self.exit_nav_button = HoverIconButton(
+            "Exit", "fa6s.right-from-bracket", icon_color, menu_bar
+        )
         self.exit_nav_button.setObjectName("topNavExitButton")
-        self.exit_nav_button.setIcon(qta.icon("fa6s.right-from-bracket", color=icon_color))
         self.exit_nav_button.setIconSize(QSize(17, 17))
         self.exit_nav_button.setToolTip("Exit TorProxy (Ctrl+Q)")
         self.exit_nav_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -790,7 +825,7 @@ class Window(QMainWindow):
         self.bundles_update_action.setIcon(qta.icon("fa6s.boxes-stacked", color=icon_color))
         self.tunnel_update_action.setIcon(qta.icon("fa6s.network-wired", color=icon_color))
         self.exit_action.setIcon(qta.icon("fa6s.right-from-bracket", color=icon_color))
-        self.exit_nav_button.setIcon(qta.icon("fa6s.right-from-bracket", color=icon_color))
+        self.exit_nav_button.setNormalIconColor(icon_color)
         self.toggle_btn.setIcon(qta.icon("fa6s.sun" if dark else "fa6s.moon", color=icon_color))
         self.notification_btn.setIcon(qta.icon("fa6s.bell", color=icon_color))
         self.notification_btn.setText(
