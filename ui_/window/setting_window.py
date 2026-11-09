@@ -836,6 +836,11 @@ class SettingWindow(QWidget):
             return
 
         self._tunnel_recovery_busy = True
+        if proxy_widget is not None:
+            proxy_widget._system_tunnel_busy = True
+            refresh_home = getattr(proxy_widget, "_update_tunnel_hint", None)
+            if callable(refresh_home):
+                refresh_home()
         self.btn_tunnel_recovery.setEnabled(False)
         self.lbl_tunnel_recovery_status.setText("Inspecting saved process identity and TUN state…")
         worker = Worker(manager.cleanup_previous_session)
@@ -847,9 +852,12 @@ class SettingWindow(QWidget):
     def _finish_tunnel_recovery(self):
         self._tunnel_recovery_busy = False
         self._tunnel_recovery_worker = None
+        proxy_widget = getattr(self._parent, "proxyWidget", None)
+        if proxy_widget is not None:
+            proxy_widget._system_tunnel_busy = False
         self.btn_tunnel_recovery.setEnabled(True)
 
-    def _refresh_tunnel_views_after_recovery(self):
+    def _refresh_tunnel_views_after_recovery(self, detail: str = ""):
         proxy_widget = getattr(self._parent, "proxyWidget", None)
         if proxy_widget is not None:
             refresh_home = getattr(proxy_widget, "_update_tunnel_hint", None)
@@ -861,13 +869,14 @@ class SettingWindow(QWidget):
             refresh_page()
         logs_widget = getattr(proxy_widget, "logs_widget", None)
         if logs_widget is not None:
-            logs_widget.update_log("Emergency sing-box cleanup completed from Settings → Advanced.")
+            summary = detail or "Recovery check completed."
+            logs_widget.update_log("Emergency sing-box recovery: " + summary)
 
     def _on_tunnel_recovery_finished(self, result):
         self._finish_tunnel_recovery()
         message = str(result or "No previous TorProxy tunnel state needed cleanup.")
         self.lbl_tunnel_recovery_status.setText(message)
-        self._refresh_tunnel_views_after_recovery()
+        self._refresh_tunnel_views_after_recovery(message)
 
     def _on_tunnel_recovery_failed(self, error):
         self._finish_tunnel_recovery()
