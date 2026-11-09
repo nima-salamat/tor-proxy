@@ -47,7 +47,14 @@ def test_system_tunnel_config_uses_tcp_tor_socks_and_hijacks_dns(tmp_path, monke
     assert outbound["server_port"] == 9150
     assert outbound["network"] == "tcp"
     assert outbound["inet4_bind_address"] == "127.0.0.1"
-    assert config["dns"]["servers"][0]["detour"] == "tor-socks"
+    assert config["dns"]["servers"][0] == {
+        "type": "fakeip", "tag": "tor-fakeip",
+        "inet4_range": "198.18.0.0/15", "inet6_range": "2001:2::/48",
+    }
+    assert config["dns"]["rules"] == [{"action": "route", "server": "tor-fakeip"}]
+    assert config["dns"]["final"] == "tor-doh"
+    assert config["dns"]["reverse_mapping"] is True
+    assert config["dns"]["servers"][1]["detour"] == "tor-socks"
     assert rules[0]["outbound"] == "direct"
     expected_names = {manager.engine_path.name.casefold(), tor.name.casefold()}
     assert expected_names.issubset(set(rules[0]["process_name"]))
@@ -295,6 +302,10 @@ def test_windows_tun_config_is_ipv4_only_and_uses_gvisor_stack(tmp_path, monkeyp
     assert "auto_redirect" not in inbound
     assert inbound["address"] == ["172.19.0.1/30"]
     assert inbound["dns_address"] == ["172.19.0.2"]
+    assert config["dns"]["servers"][0] == {
+        "type": "fakeip", "tag": "tor-fakeip", "inet4_range": "198.18.0.0/15"
+    }
+    assert config["dns"]["reverse_mapping"] is True
     assert config["route"]["rules"][2] == {"action": "hijack-dns"}
     assert config["route"]["rules"][3] == {
         "ip_cidr": ["172.19.0.0/30"],
