@@ -1106,7 +1106,7 @@ class SystemTunnelManager:
             "The TUN process and interface are active, but end-to-end traffic could not be verified. "
             "The tunnel was left running for inspection; no automatic restart or route change was attempted. "
             + " | ".join(failures)
-            + f" | Inspect sing-box flow events in {self.log_path} (look for inbound/tun and outbound/socks[tor-socks])."
+            + f" | Inspect sing-box warnings/errors in {self.log_path}; routine per-connection INFO logging is disabled to reduce disk I/O."
         )
 
     def stop(self) -> str:
