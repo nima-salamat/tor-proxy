@@ -1059,6 +1059,10 @@ class ProxyWindow(QWidget):
             )
         self._update_proxy_mode_status()
         self._update_tunnel_hint()
+        tunnel_page = getattr(self._parent, "tunnel_window", None)
+        refresh_tunnel_page = getattr(tunnel_page, "_refresh_state", None)
+        if callable(refresh_tunnel_page):
+            refresh_tunnel_page()
 
 
     def _update_tunnel_hint(self):
