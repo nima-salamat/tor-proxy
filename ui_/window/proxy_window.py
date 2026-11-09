@@ -377,6 +377,8 @@ class ProxyWindow(QWidget):
         muted = "#aab4c1" if dark else "#667386"
         accent = "#47a3f2" if dark else "#1876bf"
         surface = "#202630" if dark else "#ffffff"
+        field = "#151b24" if dark else "#f4f6f8"
+        hover = "#2b3643" if dark else "#eaf0f5"
         text = "#e8edf3" if dark else "#253041"
         self.home_content.setStyleSheet(f"""
             QWidget#homeContent {{ background: transparent; }}
