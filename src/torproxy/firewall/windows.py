@@ -413,7 +413,7 @@ try {
         # Apply the restrictive default before removing old exceptions.
         Set-Phase 'Applying outbound default-deny policy to all firewall profiles...'
         Set-NetFirewallProfile -PolicyStore PersistentStore -Profile Domain,Private,Public -Enabled True -DefaultOutboundAction Block
-        Set-Phase 'Disabling saved local outbound Allow rules in one batch...'
+        Set-Phase 'Disabling saved local outbound Allow rules through COM...'
         Set-SnapshotLocalRulesEnabled $snapshot $false
         Get-NetFirewallRule -PolicyStore PersistentStore -Group $Group -ErrorAction SilentlyContinue | Remove-NetFirewallRule
 
@@ -480,7 +480,7 @@ try {
                     Set-SnapshotProfile $saved
                 }
             }
-            Set-Phase 'Restoring saved local outbound Allow rules in one batch...'
+            Set-Phase 'Restoring saved local outbound Allow rules through COM...'
             Set-SnapshotLocalRulesEnabled $snapshot $true
             $restoredProfiles = Get-PersistentProfiles
             foreach ($saved in $snapshot.profiles) {
