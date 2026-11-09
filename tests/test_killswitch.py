@@ -248,6 +248,72 @@ def test_linux_backend_passes_numeric_cgroup_id_and_level_without_shell(monkeypa
     assert "shell" not in kwargs
 
 
+def test_windows_wfp_source_uses_persistent_filters_and_one_transaction():
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "launcher"
+        / "src"
+        / "wfp_helper.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert "FwpmTransactionBegin0" in source
+    assert "FwpmTransactionCommit0" in source
+    assert "FwpmTransactionAbort0" in source
+    assert "FWPM_PROVIDER_FLAG_PERSISTENT" in source
+    assert "FWPM_SUBLAYER_FLAG_PERSISTENT" in source
+    assert "FWPM_FILTER_FLAG_PERSISTENT" in source
+    assert "FWPM_LAYER_ALE_AUTH_CONNECT_V4" in source
+    assert "FWPM_LAYER_ALE_AUTH_CONNECT_V6" in source
+    assert "FWPM_CONDITION_ALE_APP_ID" in source
+    assert "FWPM_CONDITION_IP_LOCAL_INTERFACE" in source
+    assert "FWPM_CONDITION_FLAGS" in source
+    assert "FWPM_SESSION_FLAG_DYNAMIC" not in source
+    assert "CLEAR_ACTION_RIGHT" not in source
+
+
+def test_windows_wfp_cmake_target_is_installed_with_the_desktop_package():
+    cmake = (
+        Path(__file__).resolve().parents[1] / "launcher" / "CMakeLists.txt"
+    ).read_text(encoding="utf-8")
+    assert "add_executable(TorProxyWfpHelper src/wfp_helper.cpp)" in cmake
+    assert "target_link_libraries(TorProxyWfpHelper PRIVATE Fwpuclnt Iphlpapi Ole32)" in cmake
+    assert "install(TARGETS TorProxyWfpHelper RUNTIME DESTINATION .)" in cmake
+
+
+def test_windows_backend_includes_the_native_wfp_helper_path_in_request(tmp_path):
+    executable = tmp_path / "tor.exe"
+    executable.write_text("fake tor", encoding="utf-8")
+    helper = tmp_path / "TorProxyWfpHelper.exe"
+    helper.write_bytes(b"test stub")
+    calls = []
+
+    def fake_runner(_script, action, _snapshot, request_path, result_path):
+        payload = json.loads(request_path.read_text(encoding="utf-8"))
+        calls.append((action, payload))
+        result_path.write_text(json.dumps({"ok": True, "active": True}), encoding="utf-8")
+        return 0
+
+    backend = WindowsFirewallBackend(
+        state_dir=tmp_path / "state",
+        runner=fake_runner,
+        wfp_helper_path=helper,
+    )
+    backend.activate((str(executable.resolve()),))
+
+    assert calls[0][0] == "activate"
+    assert calls[0][1]["wfp_helper_path"] == str(helper.resolve())
+    assert calls[0][1]["programs"] == [str(executable.resolve())]
+
+
+def test_windows_backend_refuses_to_run_without_packaged_wfp_helper(tmp_path, monkeypatch):
+    from torproxy.firewall import windows
+
+    monkeypatch.setattr(windows, "_find_wfp_helper", lambda: None)
+    backend = WindowsFirewallBackend(state_dir=tmp_path / "state")
+    with pytest.raises(KillSwitchError, match="TorProxyWfpHelper.exe is missing"):
+        backend._invoke("activate", ("C:\\\\Tor\\\\tor.exe",))
+
+
 def test_windows_backend_uses_elevated_helper_and_verifies_result(tmp_path):
     executable = tmp_path / "tor.exe"
     executable.write_text("fake tor", encoding="utf-8")
@@ -328,20 +394,17 @@ def test_windows_firewall_helper_is_strict_about_outbound_exceptions():
 
 
 
-def test_windows_activation_reuses_a_single_traced_active_store_scan():
+def test_windows_activation_uses_transactional_wfp_without_per_rule_updates():
     activation_start = _POWERSHELL.index("if ($Action -eq 'activate')")
-    activation_end = _POWERSHELL.index("elseif ($Action -eq 'deactivate')", activation_start)
+    activation_end = _POWERSHELL.index("if ($Action -eq 'recover' -or", activation_start)
     activation_script = _POWERSHELL[activation_start:activation_end]
 
-    traced_query = (
-        "Get-NetFirewallRule -PolicyStore ActiveStore -TracePolicyStore "
-        "-Direction Outbound -Action Allow -Enabled True"
-    )
-    assert activation_script.count(traced_query) == 1
-    assert "$sharedAccessRuleNames[[string]$rule.Name] = $true" in activation_script
-    assert "$sharedAccessRuleNames.ContainsKey([string]$_.Name)" in activation_script
-    assert "$finalActiveAllow = @(Get-NetFirewallRule -PolicyStore ActiveStore -Direction Outbound" in activation_script
-    assert "-ErrorAction Stop" in activation_script
+    assert "Invoke-WfpHelper 'activate' $programs" in activation_script
+    assert "Persistent WFP filter set committed and verified" in activation_script
+    assert "Set-NetFirewallProfile" not in activation_script
+    assert "Set-SnapshotLocalRulesEnabled" not in activation_script
+    assert "Save-Snapshot" not in activation_script
+    assert "does not change existing Windows Firewall rules or profile defaults" in _POWERSHELL
 
 
 def test_windows_first_activation_treats_missing_owned_group_as_empty():
@@ -383,11 +446,6 @@ def test_windows_saved_local_allow_rules_map_internal_ids_to_com_friendly_names(
     assert "Set-NetFirewallRule -PolicyStore PersistentStore -Name ($changeIds.ToArray()) -Enabled $enabledValue" in fallback
     assert "Get-NetFirewallRule -PolicyStore PersistentStore -Name $ruleIds" in fallback
     assert "FinalReleaseComObject" in helper
-
-    activation_start = _POWERSHELL.index("if ($Action -eq 'activate')")
-    activation_end = _POWERSHELL.index("elseif ($Action -eq 'deactivate')", activation_start)
-    activation_script = _POWERSHELL[activation_start:activation_end]
-    assert "Set-SnapshotLocalRulesEnabled $snapshot $false" in activation_script
 
     recovery_start = _POWERSHELL.index("elseif ($Action -eq 'recover')")
     recovery_end = _POWERSHELL.index("elseif ($Action -eq 'emergency')", recovery_start)
