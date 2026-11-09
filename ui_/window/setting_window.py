@@ -867,16 +867,15 @@ class SettingWindow(QWidget):
         refresh_page = getattr(tunnel_page, "_refresh_state", None)
         if callable(refresh_page):
             refresh_page()
-        logs_widget = getattr(proxy_widget, "logs_widget", None)
-        if logs_widget is not None:
-            summary = detail or "Recovery check completed."
-            logs_widget.update_log("Emergency sing-box recovery: " + summary)
-
     def _on_tunnel_recovery_finished(self, result):
         self._finish_tunnel_recovery()
         message = str(result or "No previous TorProxy tunnel state needed cleanup.")
         self.lbl_tunnel_recovery_status.setText(message)
-        self._refresh_tunnel_views_after_recovery(message)
+        proxy_widget = getattr(self._parent, "proxyWidget", None)
+        logs_widget = getattr(proxy_widget, "logs_widget", None)
+        if logs_widget is not None:
+            logs_widget.update_log("Emergency sing-box recovery: " + message)
+        self._refresh_tunnel_views_after_recovery()
 
     def _on_tunnel_recovery_failed(self, error):
         self._finish_tunnel_recovery()
