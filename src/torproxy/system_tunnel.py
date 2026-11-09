@@ -1775,15 +1775,20 @@ def _helper_stop(state_path: Path, interface_name: str) -> dict[str, Any]:
             saved_pid = int(state.get("pid", 0))
         except (TypeError, ValueError):
             saved_pid = 0
-        if saved_pid <= 0 or psutil.pid_exists(saved_pid):
+        if saved_pid > 0 and psutil.pid_exists(saved_pid):
             raise SystemTunnelError("The saved tunnel PID still identifies another process; refusing to terminate it.")
         if _interface_exists(interface_name):
             raise SystemTunnelError(
-                f"The {interface_name} adapter remains after its process exited. "
+                f"The {interface_name} adapter remains after its process exited or its identity became invalid. "
                 "The helper retained the stale record instead of claiming that routes were restored."
             )
         state_path.unlink(missing_ok=True)
-        return {"ok": True, "active": False, "detail": "Removed a stale tunnel record; its process has already exited."}
+        detail = (
+            "Removed a stale tunnel record; its process has already exited."
+            if saved_pid > 0 else
+            "Removed a malformed tunnel record; it had no valid PID and no TUN interface remained."
+        )
+        return {"ok": True, "active": False, "detail": detail}
     try:
         _stop_verified_process(process, state)
     except psutil.NoSuchProcess:
