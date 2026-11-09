@@ -516,7 +516,8 @@ class Window(QMainWindow):
         self.updates_nav_button = QToolButton(menu_bar)
         self.updates_nav_button.setObjectName("updatesNavButton")
         self.updates_nav_button.setText("Updates")
-        self._sync_updates_nav_icon(mode)
+        self._updates_menu_open = False
+        self._sync_updates_nav_icon()
         self.updates_nav_button.setIconSize(QSize(17, 17))
         self.updates_nav_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.updates_nav_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -538,9 +539,8 @@ class Window(QMainWindow):
         self.tunnel_update_action.setToolTip("Install and manage the system tunnel engine")
         self.tunnel_update_action.triggered.connect(self._show_tunnel_page)
         self.updates_nav_button.setMenu(self.updates_menu)
-        self.updates_menu.aboutToHide.connect(
-            lambda: self.updates_nav_button.setChecked(self.stack.currentIndex() in {4, 5})
-        )
+        self.updates_menu.aboutToShow.connect(self._on_updates_menu_about_to_show)
+        self.updates_menu.aboutToHide.connect(self._on_updates_menu_about_to_hide)
         menu_layout.addWidget(self.updates_nav_button)
 
         self.exit_action = QAction("Exit", self)
@@ -638,14 +638,26 @@ class Window(QMainWindow):
         empty = self.notifications_menu.addAction("No notifications")
         empty.setEnabled(False)
 
+    def _on_updates_menu_about_to_show(self):
+        """Show the opposite-facing cloud arrow while the Updates menu is open."""
+        self._updates_menu_open = True
+        self.updates_nav_button.setChecked(True)
+        self._sync_updates_nav_icon()
+
+    def _on_updates_menu_about_to_hide(self):
+        """Restore the normal Updates icon after the popup closes."""
+        self._updates_menu_open = False
+        self.updates_nav_button.setChecked(self.stack.currentIndex() in {4, 5})
+        self._sync_updates_nav_icon()
+
     def _sync_updates_nav_icon(self, mode=None):
-        """Keep the Updates icon white on its active accent background."""
-        dark = (mode or CONFIG["mode"]) == "dark"
+        """Keep the Updates icon, direction, and contrast in sync with UI state."""
+        dark = (mode or CONFIG.get("mode", "dark")) == "dark"
         selected = self.stack.currentIndex() in {4, 5}
+        menu_open = bool(getattr(self, "_updates_menu_open", False))
         color = "#ffffff" if selected else ("#eff1f4" if dark else "#202832")
-        self.updates_nav_button.setIcon(
-            qta.icon("fa6s.cloud-arrow-down", color=color)
-        )
+        icon_name = "fa6s.cloud-arrow-up" if menu_open else "fa6s.cloud-arrow-down"
+        self.updates_nav_button.setIcon(qta.icon(icon_name, color=color))
     def _apply_shell_styles(self, mode=None):
         dark = (mode or CONFIG["mode"]) == "dark"
         border = "#3b4552" if dark else "#d7dee7"
@@ -712,7 +724,7 @@ class Window(QMainWindow):
             action.setIcon(qta.icon(icon_name, color=color))
             if index < len(self.page_nav_buttons):
                 self.page_nav_buttons[index].setIcon(qta.icon(icon_name, color=color))
-        self.updates_nav_button.setIcon(qta.icon("fa6s.cloud-arrow-down", color=icon_color))
+        self._sync_updates_nav_icon(mode)
         self.bundles_update_action.setIcon(qta.icon("fa6s.boxes-stacked", color=icon_color))
         self.tunnel_update_action.setIcon(qta.icon("fa6s.network-wired", color=icon_color))
         self.exit_action.setIcon(qta.icon("fa6s.right-from-bracket", color=icon_color))
