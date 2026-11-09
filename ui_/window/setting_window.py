@@ -39,7 +39,7 @@ from torproxy.bridges import (
 from ui_.window.dialogs import QMessageBox
 from ui_.worker.worker import Worker
 from ui_.window.qrcode_widget import QrCodeFloatingWindow
-from ui_.btn.theme_switch import ThemeSwitch
+from ui_.window.theme import resolve_system_theme
 from ui_.emojis import WRONG, CORRECT
 
 class _BridgeTextEdit(QTextEdit):
@@ -201,8 +201,22 @@ class SettingWindow(QWidget):
             QPushButton#bridgeCardAction:hover {{ background: {hover}; border-color: {accent}; }}
             QPushButton#bridgeCardRemove:hover {{ background: rgba(227, 107, 117, 0.13); border-color: #e36b75; }}
             QPushButton#bridgeCardAction:disabled, QPushButton#bridgeCardRemove:disabled {{ color: {disabled}; background: transparent; }}
-            QLabel#themeModeValue {{ color: {accent}; background: transparent; font-size: 11px; font-weight: 800; min-width: 44px; }}
-            QWidget#themeSwitch {{ background: transparent; border: none; }}
+            QLabel#themeModeValue {{ color: {accent}; background: transparent; font-size: 10px; font-weight: 800; min-width: 82px; }}
+            QWidget#themeModeSelector {{
+                background: {field}; border: 1px solid {border};
+                border-radius: 9px; padding: 2px;
+            }}
+            QPushButton#themeModeOption {{
+                min-height: 29px; min-width: 58px; padding: 0 9px;
+                color: {muted}; background: transparent; border: 1px solid transparent;
+                border-radius: 7px; font-size: 9px; font-weight: 700;
+            }}
+            QPushButton#themeModeOption:hover {{
+                color: {text}; background: {hover};
+            }}
+            QPushButton#themeModeOption:checked {{
+                color: #ffffff; background: {accent}; border-color: {accent};
+            }}
             QCheckBox#confirmExitPreference {{ color: {text}; background: transparent; spacing: 8px; font-weight: 650; }}
             QPushButton#settingsNavButton {{
                 min-height: 34px; padding: 0 11px; spacing: 7px;
@@ -262,7 +276,7 @@ class SettingWindow(QWidget):
     def initialize_first_page(self):
         self.first_page_layout.addWidget(self._section_title("Appearance"))
         self.first_page_layout.addWidget(
-            self._description("Choose how TorProxy looks. The theme is synchronized with the top-right appearance button.")
+            self._description("Follow your operating system appearance, or choose a fixed light or dark theme.")
         )
         theme_row = QFrame(self)
         theme_row.setObjectName("settingsRowCard")
@@ -274,17 +288,41 @@ class SettingWindow(QWidget):
         theme_copy.setSpacing(3)
         theme_label = QLabel("Color theme")
         theme_label.setObjectName("settingsFieldLabel")
-        theme_description = self._description("Switch between the light and dark appearance.")
+        theme_description = self._description("System follows your desktop setting and updates when it changes.")
         theme_copy.addWidget(theme_label)
         theme_copy.addWidget(theme_description)
         mode_layout.addLayout(theme_copy, 1)
 
-        self.theme_mode_label = QLabel("Light" if CONFIG["mode"] == "light" else "Dark")
+        self.theme_mode_label = QLabel(self._theme_mode_status_text())
         self.theme_mode_label.setObjectName("themeModeValue")
         mode_layout.addWidget(self.theme_mode_label, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.theme_switch = ThemeSwitch(CONFIG["mode"], self)
-        self.theme_switch.modeChanged.connect(self.change_mode)
-        mode_layout.addWidget(self.theme_switch, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self.theme_mode_selector = QWidget(theme_row)
+        self.theme_mode_selector.setObjectName("themeModeSelector")
+        selector_layout = QHBoxLayout(self.theme_mode_selector)
+        selector_layout.setContentsMargins(2, 2, 2, 2)
+        selector_layout.setSpacing(2)
+        self.theme_mode_group = QButtonGroup(self)
+        self.theme_mode_group.setExclusive(True)
+        self.theme_mode_buttons = {}
+        for preference, label in (("system", "System"), ("light", "Light"), ("dark", "Dark")):
+            button = QPushButton(label, self.theme_mode_selector)
+            button.setObjectName("themeModeOption")
+            button.setCheckable(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setToolTip({
+                "system": "Follow the operating system appearance",
+                "light": "Always use the light theme",
+                "dark": "Always use the dark theme",
+            }[preference])
+            button.clicked.connect(
+                lambda _checked=False, selected=preference: self.change_mode(selected)
+            )
+            self.theme_mode_group.addButton(button)
+            self.theme_mode_buttons[preference] = button
+            selector_layout.addWidget(button)
+        mode_layout.addWidget(self.theme_mode_selector, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._sync_theme_preference_controls()
         self.first_page_layout.addWidget(theme_row)
 
         exit_row = QFrame(self)
@@ -1210,30 +1248,51 @@ class SettingWindow(QWidget):
             self.chk_auto_prune_bridges.blockSignals(False)
             QMessageBox.warning(self, "Settings could not be saved", str(exc))
 
-    def set_theme_mode(self, mode):
-        """Synchronize the switch after theme changes from the title bar."""
-        if mode not in {"dark", "light"}:
-            return
-        if hasattr(self, "theme_switch"):
-            self.theme_switch.set_mode(mode, animate=True)
-        if hasattr(self, "theme_mode_label"):
-            self.theme_mode_label.setText("Light" if mode == "light" else "Dark")
+    def _theme_mode_status_text(self):
+        preference = CONFIG.get("theme_preference", "system")
+        if preference == "system":
+            resolved = "Light" if CONFIG.get("mode", "dark") == "light" else "Dark"
+            return f"System · {resolved}"
+        return "Light" if preference == "light" else "Dark"
 
-    def change_mode(self, mode):
-        # Accept a mode string from ThemeSwitch. Keep compatibility with callers
-        # that may still pass a radio-like object from older integrations.
-        if not isinstance(mode, str):
-            mode = "light" if str(getattr(mode, "text", lambda: "dark")()).lower() == "light" else "dark"
+    def _sync_theme_preference_controls(self):
+        preference = CONFIG.get("theme_preference", "system")
+        for value, button in getattr(self, "theme_mode_buttons", {}).items():
+            button.setChecked(value == preference)
+        if hasattr(self, "theme_mode_label"):
+            self.theme_mode_label.setText(self._theme_mode_status_text())
+
+    def set_theme_mode(self, mode):
+        """Refresh the active appearance label without losing System selection."""
         if mode not in {"dark", "light"}:
             return
-        if self._parent is not None and hasattr(self._parent, "_set_theme"):
-            self._parent._set_theme(mode)
+        self._sync_theme_preference_controls()
+
+    def change_mode(self, preference, *_args):
+        """Persist System, Light, or Dark as the user's theme preference."""
+        if not isinstance(preference, str):
+            preference = str(getattr(preference, "text", lambda: "")()).strip().lower()
+        preference = preference.lower()
+        if preference not in {"system", "dark", "light"}:
             return
+
+        if self._parent is not None and hasattr(self._parent, "_set_theme_preference"):
+            self._parent._set_theme_preference(preference)
+            return
+
+        mode = resolve_system_theme(QApplication.instance()) if preference == "system" else preference
         app = QApplication.instance()
+        try:
+            CONFIG.update_many({"theme_preference": preference, "mode": mode})
+        except (ValueError, OSError, KeyError) as exc:
+            logger.exception("Could not save the theme preference.")
+            QMessageBox.warning(self, "Theme preference", str(exc))
+            self._sync_theme_preference_controls()
+            return
         if app is not None:
             palette = LightPalette() if mode == "light" else DarkPalette()
             app.setStyleSheet(qdarkstyle.load_stylesheet(palette=palette))
-        CONFIG["mode"] = mode
+        self.apply_theme(mode)
         self.set_theme_mode(mode)
 
     def _set_confirm_exit_preference(self, enabled):
