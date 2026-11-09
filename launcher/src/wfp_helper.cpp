@@ -25,6 +25,8 @@ const GUID kProviderKey = {
 const GUID kSubLayerKey = {
     0x8d6f1c24, 0x3e7a, 0x4b91, {0x9c, 0x52, 0x44, 0x18, 0xf0, 0xd2, 0xa7, 0x63}
 };
+constexpr wchar_t kTunnelPermitFilterName[] =
+    L"TorProxy WFP permit TorProxy tunnel interface";
 
 std::wstring errorMessage(const wchar_t* operation, DWORD status) {
     wchar_t* systemText = nullptr;
@@ -209,7 +211,7 @@ void addLoopbackPermit(HANDLE engine, const GUID& layer) {
 }
 
 void addInterfacePermit(HANDLE engine, const GUID& layer, UINT64* luid) {
-    addFilter(engine, layer, L"TorProxy WFP permit TorProxy tunnel interface",
+    addFilter(engine, layer, kTunnelPermitFilterName,
               FWP_ACTION_PERMIT,
               {uint64Condition(FWPM_CONDITION_IP_LOCAL_INTERFACE, luid)}, 950);
 }
@@ -265,7 +267,36 @@ void addProviderAndSublayer(HANDLE engine) {
     }
 }
 
-UINT32 enumerateOwnedFilters(HANDLE engine, std::vector<GUID>* keys) {
+bool isTunnelPermitFilter(const FWPM_FILTER0* filter) {
+    return filter && filter->displayData.name &&
+           std::wcscmp(filter->displayData.name, kTunnelPermitFilterName) == 0;
+}
+
+bool matchesTunnelLuid(const FWPM_FILTER0* filter, UINT64 luid) {
+    if (!isTunnelPermitFilter(filter) || filter->numFilterConditions != 1 ||
+        !filter->filterCondition) {
+        return false;
+    }
+    const bool supportedLayer =
+        IsEqualGUID(filter->layerKey, FWPM_LAYER_ALE_AUTH_CONNECT_V4) ||
+        IsEqualGUID(filter->layerKey, FWPM_LAYER_ALE_AUTH_CONNECT_V6);
+    if (!supportedLayer) return false;
+
+    const FWPM_FILTER_CONDITION0& condition = filter->filterCondition[0];
+    return IsEqualGUID(condition.fieldKey, FWPM_CONDITION_IP_LOCAL_INTERFACE) &&
+           condition.conditionValue.type == FWP_UINT64 &&
+           condition.conditionValue.uint64 &&
+           *condition.conditionValue.uint64 == luid;
+}
+
+UINT32 enumerateOwnedFilters(
+    HANDLE engine,
+    std::vector<GUID>* keys,
+    std::vector<GUID>* tunnelKeys = nullptr,
+    UINT32* matchingTunnelCount = nullptr,
+    const UINT64* expectedTunnelLuid = nullptr) {
+
+    if (matchingTunnelCount) *matchingTunnelCount = 0;
     FWPM_FILTER_ENUM_TEMPLATE0 filterTemplate{};
     filterTemplate.providerKey = const_cast<GUID*>(&kProviderKey);
 
@@ -285,9 +316,15 @@ UINT32 enumerateOwnedFilters(HANDLE engine, std::vector<GUID>* keys) {
                 break;
             }
             total += count;
-            if (keys) {
-                for (UINT32 index = 0; index < count; ++index) {
-                    keys->push_back(entries[index]->filterKey);
+            for (UINT32 index = 0; index < count; ++index) {
+                FWPM_FILTER0* filter = entries[index];
+                if (keys) keys->push_back(filter->filterKey);
+                if (tunnelKeys && isTunnelPermitFilter(filter)) {
+                    tunnelKeys->push_back(filter->filterKey);
+                }
+                if (matchingTunnelCount && expectedTunnelLuid &&
+                    matchesTunnelLuid(filter, *expectedTunnelLuid)) {
+                    ++(*matchingTunnelCount);
                 }
             }
             FwpmFreeMemory0(reinterpret_cast<void**>(&entries));
@@ -306,6 +343,24 @@ void removeOwnedFilters(HANDLE engine) {
     for (const GUID& key : keys) {
         requireSuccess(FwpmFilterDeleteByKey0(engine, &key), L"FwpmFilterDeleteByKey0");
     }
+}
+
+void removeTunnelPermitFilters(HANDLE engine) {
+    std::vector<GUID> keys;
+    enumerateOwnedFilters(engine, nullptr, &keys);
+    for (const GUID& key : keys) {
+        requireSuccess(FwpmFilterDeleteByKey0(engine, &key), L"FwpmFilterDeleteByKey0");
+    }
+}
+
+UINT32 getCurrentTunnelPermitCount(HANDLE engine) {
+    NET_LUID tunnelLuid{};
+    if (ConvertInterfaceNameToLuidW(L"TorProxy", &tunnelLuid) != NO_ERROR) {
+        return 0;
+    }
+    UINT32 count = 0;
+    enumerateOwnedFilters(engine, nullptr, nullptr, &count, &tunnelLuid.Value);
+    return count;
 }
 
 void activate(const std::vector<std::wstring>& programs) {
@@ -368,7 +423,42 @@ void activate(const std::vector<std::wstring>& programs) {
         cleanup.commit();
         throw std::runtime_error("WFP transaction committed an incomplete filter set; its TorProxy filters were removed.");
     }
-    std::wcout << L"ACTIVE filters=" << installed << L"\n";
+    const UINT32 tunnelPermits = getCurrentTunnelPermitCount(engine.get());
+    std::wcout << L"ACTIVE filters=" << installed
+               << L" tun_interface_allowed=" << (tunnelPermits >= 2 ? L"true" : L"false")
+               << L"\n";
+}
+
+void allowTunnelInterface() {
+    NET_LUID tunnelLuid{};
+    const NETIO_STATUS interfaceStatus = ConvertInterfaceNameToLuidW(L"TorProxy", &tunnelLuid);
+    if (interfaceStatus != NO_ERROR) {
+        requireSuccess(static_cast<DWORD>(interfaceStatus),
+                       L"ConvertInterfaceNameToLuidW(TorProxy)");
+    }
+
+    Engine engine;
+    const UINT32 existing = enumerateOwnedFilters(engine.get(), nullptr);
+    if (existing < 10) {
+        throw std::runtime_error("TorProxy WFP kill switch is not active; refusing to add a tunnel-only permit.");
+    }
+
+    Transaction transaction(engine.get());
+    removeTunnelPermitFilters(engine.get());
+    addInterfacePermit(engine.get(), FWPM_LAYER_ALE_AUTH_CONNECT_V4, &tunnelLuid.Value);
+    addInterfacePermit(engine.get(), FWPM_LAYER_ALE_AUTH_CONNECT_V6, &tunnelLuid.Value);
+    transaction.commit();
+
+    const UINT32 tunnelPermits = getCurrentTunnelPermitCount(engine.get());
+    if (tunnelPermits != 2) {
+        Transaction cleanup(engine.get());
+        removeTunnelPermitFilters(engine.get());
+        cleanup.commit();
+        throw std::runtime_error("The TorProxy tunnel-interface WFP exception could not be installed and verified.");
+    }
+    const UINT32 installed = enumerateOwnedFilters(engine.get(), nullptr);
+    std::wcout << L"ACTIVE filters=" << installed
+               << L" tun_interface_allowed=true\n";
 }
 
 void recover() {
@@ -376,21 +466,24 @@ void recover() {
     Transaction transaction(engine.get());
     removeOwnedFilters(engine.get());
     transaction.commit();
-    std::wcout << L"INACTIVE filters=0\n";
+    std::wcout << L"INACTIVE filters=0 tun_interface_allowed=false\n";
 }
 
 void status() {
     Engine engine;
     const UINT32 count = enumerateOwnedFilters(engine.get(), nullptr);
+    const UINT32 tunnelPermits = getCurrentTunnelPermitCount(engine.get());
     const wchar_t* state = count >= 10 ? L"ACTIVE" : (count == 0 ? L"INACTIVE" : L"INCOMPLETE");
-    std::wcout << state << L" filters=" << count << L"\n";
+    std::wcout << state << L" filters=" << count
+               << L" tun_interface_allowed=" << (tunnelPermits >= 2 ? L"true" : L"false")
+               << L"\n";
 }
 } // namespace
 
 int wmain(int argc, wchar_t* argv[]) {
     try {
         if (argc < 2) {
-            std::wcerr << L"Usage: TorProxyWfpHelper.exe activate <tor.exe> [bridge.exe...] | recover | status\n";
+            std::wcerr << L"Usage: TorProxyWfpHelper.exe activate <tor.exe> [bridge.exe...] | allow-tun | recover | status\n";
             return 2;
         }
         const std::wstring action = argv[1];
@@ -398,6 +491,8 @@ int wmain(int argc, wchar_t* argv[]) {
             std::vector<std::wstring> programs;
             for (int i = 2; i < argc; ++i) programs.emplace_back(argv[i]);
             activate(programs);
+        } else if (action == L"allow-tun") {
+            allowTunnelInterface();
         } else if (action == L"recover" || action == L"emergency") {
             recover();
         } else if (action == L"status") {
