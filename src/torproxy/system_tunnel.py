@@ -748,6 +748,7 @@ class SystemTunnelManager:
         socks_port: int,
         *,
         tor_executables: list[str | Path],
+        tun_stack: str | None = None,
     ) -> dict[str, Any]:
         """Create a fail-closed TCP-only TUN config with Tor bootstrap bypasses."""
         if type(socks_port) is not int or not 1 <= socks_port <= 65535:
@@ -775,10 +776,16 @@ class SystemTunnelManager:
         if platform.system() == "Linux":
             tun["auto_redirect"] = True
         elif platform.system() == "Windows":
-            # Prefer gvisor on Windows as a compatibility fallback for
-            # installations affected by system/mixed TUN forwarding issues.
-            # Host antivirus/network-filter drivers can still block the adapter.
-            tun["stack"] = "gvisor"
+            version_parts = tuple(int(part) for part in self.version.split("."))
+            if version_parts < (1, 15, 0):
+                selected_stack = tun_stack or "gvisor"
+                if selected_stack not in {"gvisor", "system", "mixed"}:
+                    raise SystemTunnelError("Unsupported Windows TUN stack.")
+                tun["stack"] = selected_stack
+            elif tun_stack is not None:
+                raise SystemTunnelError(
+                    "sing-box 1.15 and newer use the new native TUN stack; the legacy stack option must be omitted."
+                )
 
         return {
             "log": {"level": "warn", "timestamp": True},
@@ -830,9 +837,15 @@ class SystemTunnelManager:
         }
 
     def _write_and_check_config(
-        self, socks_port: int, tor_executables: list[str | Path]
+        self,
+        socks_port: int,
+        tor_executables: list[str | Path],
+        *,
+        tun_stack: str | None = None,
     ) -> None:
-        config = self.build_config(socks_port, tor_executables=tor_executables)
+        config = self.build_config(
+            socks_port, tor_executables=tor_executables, tun_stack=tun_stack
+        )
         self.state_dir.mkdir(parents=True, exist_ok=True)
         _atomic_json(self.config_path, config)
         if os.name != "nt":
@@ -897,8 +910,16 @@ class SystemTunnelManager:
         return bytes(chunks)
 
     @classmethod
-    def _socks5_connect_probe(cls, socks_port: int, target_ip: str, target_port: int, timeout: float = 15.0) -> None:
-        """Verify Tor SOCKS can establish an outbound TCP stream before changing default routes."""
+    def _socks5_connect_probe(
+        cls,
+        socks_port: int,
+        target_ip: str,
+        target_port: int,
+        *,
+        server_name: str | None = None,
+        timeout: float = 15.0,
+    ) -> None:
+        """Verify a real TCP connection, and optionally TLS, through Tor before routing."""
         with socket.create_connection(("127.0.0.1", socks_port), timeout=timeout) as sock:
             sock.settimeout(timeout)
             sock.sendall(b"\x05\x01\x00")
@@ -914,6 +935,13 @@ class SystemTunnelManager:
             if address_size is None:
                 address_size = cls._recv_exact(sock, 1)[0]
             cls._recv_exact(sock, address_size + 2)
+            if server_name:
+                # A successful SOCKS CONNECT alone does not prove that the exit
+                # can carry application TLS. Complete TLS before changing routes.
+                context = ssl.create_default_context()
+                with context.wrap_socket(sock, server_hostname=server_name) as verified:
+                    if not verified.getpeercert():
+                        raise ssl.SSLError("The TLS peer did not provide a certificate.")
 
     @classmethod
     def _probe_targets(cls) -> tuple[tuple[str, str], ...]:
@@ -923,25 +951,35 @@ class SystemTunnelManager:
             ("9.9.9.9", "dns.quad9.net"),
         )
 
+    def _windows_tun_stack_candidates(self) -> tuple[str | None, ...]:
+        if platform.system() != "Windows":
+            return (None,)
+        version_parts = tuple(int(part) for part in self.version.split("."))
+        if version_parts >= (1, 15, 0):
+            # sing-box 1.15+ has its own TCP/IP stack; the old "stack" setting
+            # is deprecated and should be omitted rather than guessed.
+            return (None,)
+        # Try the most broadly compatible userspace stack first, then the
+        # Windows system and mixed implementations. Some endpoint security
+        # drivers filter these stacks differently.
+        return ("gvisor", "system", "mixed")
+
     @classmethod
-    def _verify_tunnel_tcp_tls(cls) -> None:
-        """Probe the newly routed application path against several independent TLS endpoints."""
-        failures = []
-        context = ssl.create_default_context()
-        for address, server_name in cls._probe_targets():
-            try:
-                with socket.create_connection((address, 443), timeout=18) as raw:
-                    raw.settimeout(18)
-                    with context.wrap_socket(raw, server_hostname=server_name) as verified:
-                        if not verified.getpeercert():
-                            raise ssl.SSLError("The TLS peer did not provide a certificate.")
-                return
-            except (OSError, ssl.SSLError) as exc:
-                failures.append(f"{address} ({server_name}): {exc}")
-        raise SystemTunnelError(
-            "The TUN interface started, but no TCP/TLS test flow completed through the Tor SOCKS outbound. "
-            + " | ".join(failures)
-        )
+    def _verify_tunnel_tcp_tls(cls, target: tuple[str, str]) -> None:
+        """Verify a TLS flow through the active TUN using the same endpoint proven via Tor SOCKS."""
+        address, server_name = target
+        try:
+            with socket.create_connection((address, 443), timeout=15) as raw:
+                raw.settimeout(15)
+                with ssl.create_default_context().wrap_socket(
+                    raw, server_hostname=server_name
+                ) as verified:
+                    if not verified.getpeercert():
+                        raise ssl.SSLError("The TLS peer did not provide a certificate.")
+        except (OSError, ssl.SSLError) as exc:
+            raise SystemTunnelError(
+                f"TUN TCP/TLS test failed for {address} ({server_name}): {exc}"
+            ) from exc
 
     def start(self, socks_port: int, *, tor_executables: list[str | Path]) -> str:
         if not self.is_installed():
@@ -951,40 +989,62 @@ class SystemTunnelManager:
                 f"The {self.interface_name} interface already exists outside TorProxy; refusing to take it over."
             )
 
-        # A listening localhost port alone does not mean Tor has working egress.
-        # Test a SOCKS5 CONNECT before installing system-wide default routes.
+        # First prove end-to-end TLS through Tor's own SOCKS proxy. A TCP-only
+        # CONNECT can succeed even when Tor exits cannot complete application TLS.
+        verified_target = None
         preflight_errors = []
-        for target_ip, _server_name in self._probe_targets():
+        for target_ip, server_name in self._probe_targets():
             try:
-                self._socks5_connect_probe(socks_port, target_ip, 443)
+                self._socks5_connect_probe(
+                    socks_port, target_ip, 443, server_name=server_name, timeout=15
+                )
+                verified_target = (target_ip, server_name)
                 break
-            except OSError as exc:
-                preflight_errors.append(f"{target_ip}: {exc}")
-        else:
+            except (OSError, ssl.SSLError) as exc:
+                preflight_errors.append(f"{target_ip} ({server_name}): {exc}")
+        if verified_target is None:
             raise SystemTunnelError(
-                "Tor's SOCKS listener is open, but it could not establish an outbound TCP connection "
-                "to any tunnel connectivity probe. The system tunnel was not started. "
+                "Tor's SOCKS listener is open, but a complete TLS connection through Tor could not be verified. "
+                "The system tunnel was not started. "
                 + " | ".join(preflight_errors)
             )
 
-        self._write_and_check_config(socks_port, tor_executables)
-        result = self._invoke_helper("start")
-        if not result.get("ok") or not result.get("active"):
-            raise SystemTunnelError(str(result.get("error") or result.get("detail") or "Tunnel start failed."))
-
-        try:
-            self._verify_tunnel_tcp_tls()
-        except SystemTunnelError as exc:
-            try:
-                self.stop()
-            except Exception as stop_exc:
+        stack_failures = []
+        candidates = self._windows_tun_stack_candidates()
+        for tun_stack in candidates:
+            self._write_and_check_config(
+                socks_port, tor_executables, tun_stack=tun_stack
+            )
+            result = self._invoke_helper("start")
+            if not result.get("ok") or not result.get("active"):
                 raise SystemTunnelError(
-                    f"{exc} Automatic tunnel rollback also failed ({stop_exc}); check the tunnel state and routes."
-                ) from exc
-            raise SystemTunnelError(
-                f"{exc} The tunnel was stopped automatically instead of leaving your network blackholed."
-            ) from exc
-        return "System tunnel started; TCP/TLS traffic through Tor was verified."
+                    str(result.get("error") or result.get("detail") or "Tunnel start failed.")
+                )
+            try:
+                self._verify_tunnel_tcp_tls(verified_target)
+                stack_label = tun_stack or "sing-box native"
+                return (
+                    f"System tunnel started; TCP/TLS traffic through Tor was verified "
+                    f"using the {stack_label} TUN stack."
+                )
+            except SystemTunnelError as exc:
+                try:
+                    self.stop()
+                except Exception as stop_exc:
+                    raise SystemTunnelError(
+                        f"{exc} Automatic tunnel rollback failed ({stop_exc}); "
+                        "the system tunnel may still be active. Reconcile it before retrying."
+                    ) from exc
+                stack_failures.append(f"{tun_stack or 'native'}: {exc}")
+
+        raise SystemTunnelError(
+            "Tor SOCKS completed a TLS connection before TUN startup, but Windows TUN traffic failed "
+            "with every compatible stack. This isolates the problem to TUN forwarding or a Windows "
+            "network-filter/antivirus driver rather than Tor bootstrap or the exit TLS path. "
+            + " | ".join(stack_failures)
+            + " Check endpoint-security network shields and adapter filtering rules; TorProxy restored "
+            "the routes after each failed attempt."
+        )
 
     def stop(self) -> str:
         result = self._invoke_helper("stop", timeout=HELPER_STOP_TIMEOUT_SECONDS + 20)
@@ -1204,11 +1264,15 @@ def _helper_start(args: Any) -> dict[str, Any]:
         "172.19.0.2", "fdfe:dcba:9876::2"
     ]:
         raise SystemTunnelError("The privileged helper requires the pinned TUN DNS addresses.")
+    version_parts = tuple(int(part) for part in str(args.version).split("."))
+    legacy_windows_stack = (
+        platform.system() == "Windows" and version_parts < (1, 15, 0)
+    )
     expected_tun_fields = {
         "type", "tag", "interface_name", "address", "dns_address", "mtu",
         "auto_route", "strict_route", "dns_mode",
     } | ({"auto_redirect"} if platform.system() == "Linux" else set()) | (
-        {"stack"} if platform.system() == "Windows" else set()
+        {"stack"} if legacy_windows_stack else set()
     )
     if set(inbound) != expected_tun_fields:
         raise SystemTunnelError("The privileged helper rejected unexpected TUN options.")
@@ -1221,8 +1285,10 @@ def _helper_start(args: Any) -> dict[str, Any]:
     if platform.system() == "Windows":
         if "auto_redirect" in inbound:
             raise SystemTunnelError("The privileged helper rejected unsupported Windows TUN options.")
-        if inbound.get("stack") != "gvisor":
-            raise SystemTunnelError("Windows TUN must use the gvisor stack for reliable traffic forwarding.")
+        if legacy_windows_stack and inbound.get("stack") not in {"gvisor", "system", "mixed"}:
+            raise SystemTunnelError("Windows TUN must use a supported legacy TCP/IP stack.")
+        if not legacy_windows_stack and "stack" in inbound:
+            raise SystemTunnelError("sing-box 1.15+ must use its built-in native TUN stack.")
     outbounds = {item.get("tag"): item for item in config.get("outbounds", [])}
     proxy = outbounds.get("tor-socks")
     if not proxy or proxy.get("type") != "socks" or proxy.get("network") != "tcp":
