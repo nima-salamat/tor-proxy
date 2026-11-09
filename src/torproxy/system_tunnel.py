@@ -810,7 +810,7 @@ class SystemTunnelManager:
             fakeip_server["inet6_range"] = "2001:2::/48"
 
         return {
-            "log": {"level": "info", "timestamp": True},
+            "log": {"level": "warn", "timestamp": True},
             "dns": {
                 "servers": [
                     fakeip_server,
@@ -932,17 +932,33 @@ class SystemTunnelManager:
             return {"active": False, "verified": True, "detail": "System tunnel is stopped."}
         process = _process_matches(state)
         if process is None:
+            try:
+                saved_pid = int(state.get("pid", 0))
+            except (TypeError, ValueError):
+                saved_pid = 0
+            if saved_pid > 0 and psutil.pid_exists(saved_pid):
+                return {
+                    "active": False,
+                    "verified": False,
+                    "detail": "The saved sing-box PID is still alive but its executable/config identity does not match; refusing to terminate it.",
+                }
+            if _interface_exists(self.interface_name):
+                return {
+                    "active": False,
+                    "verified": False,
+                    "detail": f"The {self.interface_name} adapter remains without a live, verified sing-box process; refusing to reuse it.",
+                }
             return {
                 "active": False,
-                "verified": False,
-                "detail": "A stale or unverified tunnel process record exists; use Stop to reconcile it.",
+                "verified": True,
+                "detail": "A stale sing-box PID record was found; the privileged helper can safely remove it because its process has exited.",
             }
         if not _interface_exists(self.interface_name):
             return {
                 "active": False,
-                "verified": False,
+                "verified": True,
                 "pid": process.pid,
-                "detail": "The sing-box process is alive but its TUN interface is missing; use Stop to reconcile it.",
+                "detail": "A verified sing-box process was left alive without its TUN interface; it will be reaped by exact PID/image/config identity before restart.",
             }
         return {
             "active": True,
@@ -1296,7 +1312,7 @@ def _helper_start(args: Any) -> dict[str, Any]:
     config = _read_json(config_path)
     if not isinstance(config, dict) or set(config) != {"log", "dns", "inbounds", "outbounds", "route"}:
         raise SystemTunnelError("The privileged helper rejected unexpected top-level tunnel configuration.")
-    if config.get("log") != {"level": "info", "timestamp": True}:
+    if config.get("log") != {"level": "warn", "timestamp": True}:
         raise SystemTunnelError("The privileged helper rejected unexpected logging options.")
     if not isinstance(config.get("inbounds"), list) or len(config["inbounds"]) != 1:
         raise SystemTunnelError("The privileged helper rejected the tunnel inbounds.")
@@ -1448,14 +1464,28 @@ def _helper_start(args: Any) -> dict[str, Any]:
     if state:
         existing = _process_matches(state)
         if existing is not None:
-            return {"ok": True, "active": True, "pid": existing.pid, "detail": "System tunnel is already active."}
-        try:
-            stale_pid = int(state.get("pid", 0))
-        except (TypeError, ValueError):
-            stale_pid = 0
-        if stale_pid > 0 and psutil.pid_exists(stale_pid):
-            raise SystemTunnelError("The saved tunnel PID still identifies another process; refusing to take it over.")
-        state_path.unlink(missing_ok=True)
+            if _interface_exists(args.interface):
+                return {"ok": True, "active": True, "pid": existing.pid, "detail": "System tunnel is already active."}
+            LOGGER.warning(
+                "Reaping stale TorProxy sing-box process pid=%s: executable, start time and config match, but the TUN interface is absent.",
+                existing.pid,
+            )
+            _stop_verified_process(existing, state)
+            if psutil.pid_exists(existing.pid):
+                raise SystemTunnelError("The verified stale sing-box process remained alive after cleanup.")
+            state_path.unlink(missing_ok=True)
+        else:
+            try:
+                stale_pid = int(state.get("pid", 0))
+            except (TypeError, ValueError):
+                stale_pid = 0
+            if stale_pid > 0 and psutil.pid_exists(stale_pid):
+                raise SystemTunnelError("The saved tunnel PID still identifies another process; refusing to terminate it.")
+            if _interface_exists(args.interface):
+                raise SystemTunnelError(
+                    f"The {args.interface} adapter remains without its verified sing-box process; refusing to reuse it."
+                )
+            state_path.unlink(missing_ok=True)
     if _interface_exists(args.interface):
         raise SystemTunnelError("The requested TUN interface already exists; refusing to take over an unrelated adapter.")
 
