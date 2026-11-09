@@ -819,6 +819,19 @@ class SettingWindow(QWidget):
         if manager is None:
             QMessageBox.warning(self, "System tunnel recovery", "The system tunnel manager is unavailable.")
             return
+        tunnel_page = getattr(self._parent, "tunnel_window", None)
+        if (
+            getattr(proxy_widget, "_system_tunnel_busy", False)
+            or getattr(proxy_widget, "_stopping", False)
+            or getattr(proxy_widget, "_connect_operation_busy", False)
+            or getattr(tunnel_page, "_busy", False)
+        ):
+            QMessageBox.information(
+                self,
+                "System tunnel recovery",
+                "Wait for the current Tor or system tunnel operation to finish before starting emergency cleanup.",
+            )
+            return
         reply = QMessageBox.question(
             self,
             "Check / clean up sing-box",
