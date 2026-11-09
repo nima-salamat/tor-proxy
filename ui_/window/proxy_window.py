@@ -837,8 +837,6 @@ class ProxyWindow(QWidget):
         if getattr(self, "_system_tunnel_busy", False):
             message = "Disconnect was blocked because the system tunnel operation is still running."
             self.logs_widget.update_log(message)
-            if self._parent is not None and getattr(self._parent, "_shutdown_in_progress", False):
-                self._parent._on_proxy_shutdown_complete(False, message)
             return False
 
         self._stopping = True
