@@ -36,7 +36,7 @@ function Save-Snapshot($snapshot) {
 }
 function Get-ActiveProfiles {
     # ActiveStore is the merged policy Windows Firewall currently enforces.
-    return @(Get-NetFirewallProfile -PolicyStore ActiveStore -Profile Domain,Private,Public | Select-Object Name,Enabled,DefaultOutboundAction)
+    return @(Get-NetFirewallProfile -PolicyStore ActiveStore -Profile Domain,Private,Public | Select-Object Name,Enabled,DefaultOutboundAction,DisabledInterfaceAliases)
 }
 function Get-PersistentProfiles {
     # PersistentStore is the local configuration TorProxy snapshots and restores.
@@ -58,6 +58,13 @@ function Assert-EffectiveOutboundAction([string]$expectedAction) {
         }
         if (-not [bool]$profile.Enabled -or [string]$profile.DefaultOutboundAction -ne $expectedAction) {
             throw "Effective Windows Firewall profile $name does not enforce outbound $expectedAction."
+        }
+        $disabledInterfaces = @($profile.DisabledInterfaceAliases | Where-Object {
+            -not [string]::IsNullOrWhiteSpace([string]$_)
+        })
+        if ($disabledInterfaces.Count -gt 0) {
+            $names = ($disabledInterfaces | ForEach-Object { [string]$_ }) -join ', '
+            throw "Effective Windows Firewall profile $name excludes interface filtering for: $names."
         }
     }
 }
