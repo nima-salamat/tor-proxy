@@ -242,7 +242,7 @@ def test_updates_navigation_keeps_theme_text_color_on_hover():
 
 
 
-def test_updates_nav_icon_tracks_active_pages_theme_and_menu_state(monkeypatch):
+def test_updates_nav_icon_and_text_follow_only_the_active_updates_page(monkeypatch):
     pytest.importorskip("qtawesome")
     from types import SimpleNamespace
     import ui
@@ -256,7 +256,7 @@ def test_updates_nav_icon_tracks_active_pages_theme_and_menu_state(monkeypatch):
 
     class _Button:
         icon = None
-        checked = False
+        checked = None
 
         def setIcon(self, icon):
             self.icon = icon
@@ -267,39 +267,41 @@ def test_updates_nav_icon_tracks_active_pages_theme_and_menu_state(monkeypatch):
     fake = SimpleNamespace(
         stack=_Stack(4),
         updates_nav_button=_Button(),
-        _updates_menu_open=False,
     )
     monkeypatch.setattr(ui, "CONFIG", {"mode": "light"})
     monkeypatch.setattr(ui.qta, "icon", lambda name, color: (name, color))
 
+    # Bundles/Tunnel active: text, cloud and native caret all use active white.
     ui.Window._sync_updates_nav_icon(fake, "light")
+    assert fake.updates_nav_button.checked is True
     assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-down", "#ffffff")
 
     fake.stack.page = 5
     ui.Window._sync_updates_nav_icon(fake, "dark")
+    assert fake.updates_nav_button.checked is True
     assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-down", "#ffffff")
 
+    # Other page, light theme: opening Updates must not make the button active.
     fake.stack.page = 0
     ui.Window._sync_updates_nav_icon(fake, "light")
+    assert fake.updates_nav_button.checked is False
     assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-down", "#202832")
 
     ui.Window._on_updates_menu_about_to_show(fake)
-    assert fake._updates_menu_open is True
-    # Opening the popup alone must not mark its parent navigation button active.
     assert fake.updates_nav_button.checked is False
-    assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-down", "#ffffff")
+    assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-down", "#202832")
 
+    # Switching into an Updates page while the popup is shown follows page state.
     fake.stack.page = 4
     ui.Window._on_updates_menu_about_to_show(fake)
     assert fake.updates_nav_button.checked is True
-    ui.Window._sync_updates_nav_icon(fake, "light")
     assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-down", "#ffffff")
 
     ui.Window._on_updates_menu_about_to_hide(fake)
-    assert fake._updates_menu_open is False
     assert fake.updates_nav_button.checked is True
     assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-down", "#ffffff")
 
+    # Leaving Updates restores the normal theme text/icon/caret color.
     fake.stack.page = 0
     ui.Window._on_updates_menu_about_to_hide(fake)
     assert fake.updates_nav_button.checked is False
@@ -318,8 +320,10 @@ def test_updates_menu_initialization_avoids_undefined_mode_and_tracks_popup_stat
     assert 'self.updates_menu.aboutToHide.connect(self._on_updates_menu_about_to_hide)' in menu_builder
     assert 'def _on_updates_menu_about_to_show(self):' in source
     assert 'def _on_updates_menu_about_to_hide(self):' in source
-    assert 'self.updates_nav_button.setIcon(qta.icon("fa6s.cloud-arrow-down", color=color))' in source
-    assert 'icon_name = "fa6s.cloud-arrow-up" if menu_open else "fa6s.cloud-arrow-down"' not in source
+    assert 'self.updates_nav_button.setIcon(qta.icon("fa6s.cloud-arrow-down", color=color))' not in source
+    assert 'self.updates_nav_button.setChecked(selected)' in source
+    assert 'color = "#ffffff" if selected else ("#eff1f4" if dark else "#202832")' in source
+    assert "_updates_menu_open" not in source
     assert "QPushButton#topNavButton, QToolButton#updatesNavButton {{" in source
     assert "QToolButton#updatesNavButton::menu-button" not in source
     assert "QToolButton#updatesNavButton::menu-indicator" not in source
