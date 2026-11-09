@@ -329,6 +329,8 @@ def test_navigation_labels_frameless_pages_and_custom_shortcuts_dialog():
     assert "self.main_layout.addWidget(self.stack, 1)" in ui_source
     assert "QStackedWidget#pageStack {{ border: none; outline: none;" in ui_source
     assert "self.shortcutsWidget = ShortcutsWindow(self)" in ui_source
+    assert "self._show_page(6)" in ui_source
+    assert "def _show_tunnel_page(self)" in ui_source
     assert "self._show_page(5)" in ui_source
     assert "class ShortcutsWindow" in shortcuts_source
     assert 'QLabel#shortcutsKeycap' in shortcuts_source
