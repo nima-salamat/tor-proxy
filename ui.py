@@ -103,8 +103,10 @@ class UpdatesMenuButton(QToolButton):
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
-        center_x = self.rect().right() - 14
-        center_y = self.rect().center().y()
+        # Reserve a dedicated lower-right slot. Keep the glyph inset from the
+        # rounded border and away from the label/icon content area.
+        center_x = self.rect().right() - 9
+        center_y = self.rect().bottom() - 8
         path = QPainterPath()
         if self._menu_indicator_open:
             path.moveTo(center_x - 3, center_y + 1)
@@ -744,6 +746,15 @@ class Window(QMainWindow):
             }}
             QPushButton#topNavButton:checked:hover, QToolButton#updatesNavButton:checked:hover {{
                 background: {accent}; color: #ffffff; border-color: {accent};
+            }}
+            /* Reserve a clear lane for the bottom-right dropdown chevron. */
+            QToolButton#updatesNavButton {{ padding-right: 22px; }}
+            QToolButton#updatesNavButton::menu-indicator {{
+                image: none;
+                width: 12px;
+                height: 12px;
+                subcontrol-origin: padding;
+                subcontrol-position: bottom right;
             }}
             /* The chevron is painted by UpdatesMenuButton using the label color. */
             QToolButton#updatesNavButton::menu-indicator {{
