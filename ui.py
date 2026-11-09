@@ -655,9 +655,10 @@ class Window(QMainWindow):
         dark = (mode or CONFIG.get("mode", "dark")) == "dark"
         selected = self.stack.currentIndex() in {4, 5}
         menu_open = bool(getattr(self, "_updates_menu_open", False))
-        color = "#ffffff" if selected else ("#eff1f4" if dark else "#202832")
-        icon_name = "fa6s.cloud-arrow-up" if menu_open else "fa6s.cloud-arrow-down"
-        self.updates_nav_button.setIcon(qta.icon(icon_name, color=color))
+        color = "#ffffff" if selected or menu_open else ("#eff1f4" if dark else "#202832")
+        # Keep the cloud glyph unchanged; the separate menu-indicator chevron
+        # communicates the popup direction and is styled by the QSS :open state.
+        self.updates_nav_button.setIcon(qta.icon("fa6s.cloud-arrow-down", color=color))
     def _apply_shell_styles(self, mode=None):
         dark = (mode or CONFIG["mode"]) == "dark"
         border = "#3b4552" if dark else "#d7dee7"
@@ -693,6 +694,21 @@ class Window(QMainWindow):
             }}
             QToolButton#updatesNavButton:checked:hover {{
                 background: {accent}; color: #ffffff; border-color: {accent};
+            }}
+            /* Style the small native dropdown caret, not the cloud icon on the left. */
+            QToolButton#updatesNavButton::menu-indicator {{
+                image: none;
+                width: 0px; height: 0px;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 5px solid {text};
+            }}
+            QToolButton#updatesNavButton:checked::menu-indicator {{
+                border-top-color: #ffffff;
+            }}
+            QToolButton#updatesNavButton::menu-indicator:open {{
+                border-top: none;
+                border-bottom: 5px solid #ffffff;
             }}
             QPushButton#topNavExitButton {{
                 min-height: 32px; padding: 0 9px; margin: 0 1px; border: 1px solid {border};
