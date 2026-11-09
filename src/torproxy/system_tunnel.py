@@ -93,7 +93,12 @@ def _read_json(path: Path) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _apply_wfp_tun_exception(helper: Path, runner=subprocess.run) -> bool:
+def _apply_wfp_tun_exception(
+    helper: Path,
+    runner=subprocess.run,
+    *,
+    legacy_snapshot: Path | None = None,
+) -> bool:
     """Add the live TorProxy adapter LUID to an already-active WFP policy."""
     if not helper.is_file():
         return False
@@ -114,9 +119,14 @@ def _apply_wfp_tun_exception(helper: Path, runner=subprocess.run) -> bool:
     if status.returncode != 0:
         raise SystemTunnelError(f"The WFP kill switch status check failed: {status_text[-1000:]}")
     if status_text.startswith("INACTIVE"):
-        # The caller already validated the legacy firewall state. No WFP
-        # interface filter should be added when the WFP kill switch is absent.
-        return False
+        # Only an existing pre-WFP snapshot can justify relying on the legacy
+        # Windows Firewall interface-alias rule. Without it, the WFP policy
+        # disappeared between the UI preflight and this elevated helper.
+        if legacy_snapshot is not None and legacy_snapshot.is_file():
+            return False
+        raise SystemTunnelError(
+            "The WFP Kill Switch is no longer active; refusing to start the system tunnel."
+        )
     if status_text.startswith("INCOMPLETE"):
         raise SystemTunnelError(f"The WFP kill switch has an incomplete filter set: {status_text}")
     if not status_text.startswith("ACTIVE"):
@@ -159,7 +169,8 @@ def _enable_windows_wfp_tun_exception() -> bool:
     # They do not have the native WFP helper, so leave that legacy rule alone.
     if not helper.is_file():
         return False
-    return _apply_wfp_tun_exception(helper)
+    legacy_snapshot = user_directories().state / "killswitch" / "windows-firewall-snapshot.json"
+    return _apply_wfp_tun_exception(helper, legacy_snapshot=legacy_snapshot)
 
 
 def _interface_exists(name: str) -> bool:
