@@ -516,7 +516,7 @@ class Window(QMainWindow):
         self.updates_nav_button = QToolButton(menu_bar)
         self.updates_nav_button.setObjectName("updatesNavButton")
         self.updates_nav_button.setText("Updates")
-        self.updates_nav_button.setIcon(qta.icon("fa6s.cloud-arrow-down", color=icon_color))
+        self._sync_updates_nav_icon(mode)
         self.updates_nav_button.setIconSize(QSize(17, 17))
         self.updates_nav_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.updates_nav_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -638,6 +638,14 @@ class Window(QMainWindow):
         empty = self.notifications_menu.addAction("No notifications")
         empty.setEnabled(False)
 
+    def _sync_updates_nav_icon(self, mode=None):
+        """Keep the Updates icon white on its active accent background."""
+        dark = (mode or CONFIG["mode"]) == "dark"
+        selected = self.stack.currentIndex() in {4, 5}
+        color = "#ffffff" if selected else ("#eff1f4" if dark else "#202832")
+        self.updates_nav_button.setIcon(
+            qta.icon("fa6s.cloud-arrow-down", color=color)
+        )
     def _apply_shell_styles(self, mode=None):
         dark = (mode or CONFIG["mode"]) == "dark"
         border = "#3b4552" if dark else "#d7dee7"
@@ -744,6 +752,7 @@ class Window(QMainWindow):
                 self.page_action_group.setExclusive(True)
                 if hasattr(self, "updates_nav_button"):
                     self.updates_nav_button.setChecked(index in {4, 5})
+                    self._sync_updates_nav_icon()
             if hasattr(self, "page_nav_buttons"):
                 neutral_icon = "#eff1f4" if CONFIG["mode"] == "dark" else "#202832"
                 # Updates is a separate menu destination, not one of the regular
