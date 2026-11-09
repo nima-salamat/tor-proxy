@@ -119,9 +119,10 @@ function Set-SnapshotValue($snapshot, [string]$name, $value) {
     }
 }
 function Set-SnapshotLocalRulesEnabled($snapshot, [bool]$enabled) {
-    # NetSecurity's Name is an internal policy-store identifier (often a GUID),
-    # while INetFwRule.Name is the friendly rule name. Resolve the saved IDs
-    # through NetSecurity first, then address the matching COM entry by DisplayName.
+    # NetSecurity's Name is the stable policy-store ID (often a GUID), while
+    # INetFwRule.Name is only a friendly display name and is not unique.
+    # Resolve IDs first; use COM only where the friendly name is unique in the
+    # entire effective COM collection. Duplicate names are changed by GUID.
     $names = @($snapshot.disabledRules | ForEach-Object { [string]$_ } |
         Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
     if ($names.Count -eq 0) { return }
@@ -139,9 +140,8 @@ function Set-SnapshotLocalRulesEnabled($snapshot, [bool]$enabled) {
         Set-Phase ("Resolving {0} saved firewall IDs in PersistentStore..." -f $names.Count)
         $netRules = @(Get-NetFirewallRule -PolicyStore PersistentStore -Name $names -ErrorAction Stop)
 
-        # Build a one-to-one map from stable NetSecurity IDs to COM friendly names.
-        # Refuse duplicate DisplayNames: INetFwRules.Item cannot disambiguate them.
         $expectedByFriendlyName = @{}
+        $expectedById = @{}
         $resolvedIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         foreach ($netRule in $netRules) {
             $ruleId = [string]$netRule.Name
@@ -155,19 +155,22 @@ function Set-SnapshotLocalRulesEnabled($snapshot, [bool]$enabled) {
             if ([string]::IsNullOrWhiteSpace($friendlyName)) {
                 throw "Saved firewall rule $ruleId has no friendly DisplayName; refusing to guess its COM identity."
             }
-            if ($expectedByFriendlyName.ContainsKey($friendlyName)) {
-                throw "Multiple saved firewall rules share the COM friendly name '$friendlyName'; refusing an ambiguous update."
-            }
 
-            $expectedByFriendlyName[$friendlyName] = @{
+            $expected = @{
                 InternalName = $ruleId
+                FriendlyName = $friendlyName
                 Enabled = ([string]$netRule.Enabled -eq 'True')
             }
+            if (-not $expectedByFriendlyName.ContainsKey($friendlyName)) {
+                $expectedByFriendlyName[$friendlyName] = @()
+            }
+            $expectedByFriendlyName[$friendlyName] = @($expectedByFriendlyName[$friendlyName]) + @($expected)
+            $expectedById[$ruleId] = $expected
             [void]$resolvedIds.Add($ruleId)
         }
 
         $missingIds = @($names | Where-Object { -not $resolvedIds.Contains([string]$_) })
-        if ($expectedByFriendlyName.Count -eq 0) {
+        if ($expectedById.Count -eq 0) {
             $psExamples = @($netRules | Select-Object -First 6 | ForEach-Object {
                 "$([string]$_.Name) => $([string]$_.DisplayName)"
             }) -join ', '
@@ -178,28 +181,106 @@ function Set-SnapshotLocalRulesEnabled($snapshot, [bool]$enabled) {
         $policy = New-Object -ComObject HNetCfg.FwPolicy2
         $rules = $policy.Rules
         $totalRules = [int]$rules.Count
-        Set-Phase ("Updating {0} saved firewall rules by COM friendly name (collection contains {1} rules)..." -f $expectedByFriendlyName.Count, $totalRules)
 
+        # INetFwRules.Item accepts the friendly name. Count those names in the
+        # actual COM collection so a same-name rule from another policy source
+        # also routes through the unambiguous NetSecurity ID path.
+        $comNameCounts = @{}
+        $enumerated = 0
+        foreach ($candidate in $rules) {
+            $candidateName = [string]$candidate.Name
+            if (-not [string]::IsNullOrWhiteSpace($candidateName)) {
+                if (-not $comNameCounts.ContainsKey($candidateName)) {
+                    $comNameCounts[$candidateName] = 0
+                }
+                $comNameCounts[$candidateName]++
+            }
+            $enumerated++
+            if ([System.Runtime.InteropServices.Marshal]::IsComObject($candidate)) {
+                [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($candidate)
+            }
+        }
+        if ($enumerated -ne $totalRules) {
+            throw "Windows Firewall COM enumeration returned $enumerated rules but reported $totalRules; refusing an incomplete update."
+        }
+
+        $duplicateRuleIds = [System.Collections.Generic.List[string]]::new()
+        $duplicateChangeIds = [System.Collections.Generic.List[string]]::new()
+        $uniqueFriendlyNames = [System.Collections.Generic.List[string]]::new()
         foreach ($friendlyName in @($expectedByFriendlyName.Keys)) {
-            $expected = $expectedByFriendlyName[$friendlyName]
+            $entries = @($expectedByFriendlyName[$friendlyName])
+            $comCount = if ($comNameCounts.ContainsKey([string]$friendlyName)) { [int]$comNameCounts[[string]$friendlyName] } else { 0 }
+
+            if ($entries.Count -gt 1 -or $comCount -gt 1) {
+                foreach ($entry in $entries) {
+                    $duplicateRuleIds.Add([string]$entry.InternalName)
+                    if ([bool]$entry.Enabled -ne $enabled) {
+                        $duplicateChangeIds.Add([string]$entry.InternalName)
+                        $changed++
+                    }
+                }
+            } else {
+                $uniqueFriendlyNames.Add([string]$friendlyName)
+            }
+        }
+
+        # A duplicate COM friendly name cannot identify a unique INetFwRule.
+        # Use NetSecurity's stable GUID IDs for just those collisions, in one
+        # batch, and verify each exact rule before and after the update.
+        if ($duplicateRuleIds.Count -gt 0) {
+            $duplicateIds = $duplicateRuleIds.ToArray()
+            $before = @(Get-NetFirewallRule -PolicyStore PersistentStore -Name $duplicateIds -ErrorAction Stop)
+            if ($before.Count -ne $duplicateIds.Count) {
+                throw "Only $($before.Count) of $($duplicateIds.Count) duplicate-name firewall rules could be re-read before update."
+            }
+            foreach ($current in $before) {
+                $id = [string]$current.Name
+                if (-not $expectedById.ContainsKey($id) -or
+                    [string]$current.Direction -ne 'Outbound' -or
+                    [string]$current.Action -ne 'Allow' -or
+                    ([string]$current.Enabled -eq 'True') -ne [bool]$expectedById[$id].Enabled) {
+                    throw "Duplicate-name firewall rule $id changed after it was resolved; refusing to overwrite external changes."
+                }
+            }
+
+            if ($duplicateChangeIds.Count -gt 0) {
+                Set-Phase ("Updating {0} duplicate-display-name firewall rules by their unique GUID IDs..." -f $duplicateChangeIds.Count)
+                $enabledValue = if ($enabled) { 'True' } else { 'False' }
+                Set-NetFirewallRule -PolicyStore PersistentStore -Name ($duplicateChangeIds.ToArray()) -Enabled $enabledValue -ErrorAction Stop | Out-Null
+            }
+
+            $verifiedDuplicates = @(Get-NetFirewallRule -PolicyStore PersistentStore -Name $duplicateIds -ErrorAction Stop)
+            if ($verifiedDuplicates.Count -ne $duplicateIds.Count) {
+                throw "Only $($verifiedDuplicates.Count) of $($duplicateIds.Count) duplicate-name firewall rules were returned during verification."
+            }
+            foreach ($current in $verifiedDuplicates) {
+                $id = [string]$current.Name
+                if ([string]$current.Direction -ne 'Outbound' -or
+                    [string]$current.Action -ne 'Allow' -or
+                    ([string]$current.Enabled -eq 'True') -ne $enabled) {
+                    throw "Duplicate-name firewall rule $id did not reach the requested Enabled state."
+                }
+            }
+            $matched += $duplicateIds.Count
+        }
+
+        Set-Phase ("Updating {0} uniquely named firewall rules through COM; {1} duplicate names use GUID lookup..." -f $uniqueFriendlyNames.Count, $duplicateRuleIds.Count)
+        foreach ($friendlyName in $uniqueFriendlyNames) {
+            $expected = @($expectedByFriendlyName[$friendlyName])[0]
             $rule = $null
             try {
                 $rule = $rules.Item([string]$friendlyName)
             } catch {
-                # NetSecurity confirmed this rule exists. A COM miss here is a
-                # genuine cross-API identity mismatch, not a deleted snapshot rule.
-                throw ("COM could not resolve saved rule ID {0} using its friendly name '{1}': {2}" -f $expected.InternalName, $friendlyName, $_.Exception.Message)
+                throw ("COM could not resolve saved rule ID {0} using its unique friendly name '{1}': {2}" -f $expected.InternalName, $friendlyName, $_.Exception.Message)
             }
             if ($null -eq $rule) {
                 throw "COM returned no object for saved rule ID $($expected.InternalName) with friendly name '$friendlyName'."
             }
 
             try {
-                if ([string]$rule.Name -ine [string]$friendlyName) {
-                    throw "COM returned a different friendly name for saved rule ID $($expected.InternalName); refusing to modify it."
-                }
-                if ([int]$rule.Direction -ne 2 -or [int]$rule.Action -ne 1) {
-                    throw "Saved firewall rule ID $($expected.InternalName) no longer matches an outbound Allow rule in COM."
+                if ([string]$rule.Name -ine [string]$friendlyName -or
+                    [int]$rule.Direction -ne 2 -or [int]$rule.Action -ne 1) {
+                    throw "COM rule '$friendlyName' no longer matches saved outbound Allow rule ID $($expected.InternalName)."
                 }
                 if ([bool]$rule.Enabled -ne [bool]$expected.Enabled) {
                     throw "Saved firewall rule ID $($expected.InternalName) has different Enabled state in NetSecurity and COM; refusing to modify it."
@@ -207,7 +288,6 @@ function Set-SnapshotLocalRulesEnabled($snapshot, [bool]$enabled) {
 
                 $matched++
                 if ([bool]$rule.Enabled -ne $enabled) {
-                    # INetFwRule.Enabled is a VARIANT_BOOL COM property.
                     $rule.Enabled = [bool]$enabled
                     if ([bool]$rule.Enabled -ne $enabled) {
                         throw "Outbound firewall rule ID $($expected.InternalName) could not be changed through the Windows Firewall COM API."
@@ -219,13 +299,10 @@ function Set-SnapshotLocalRulesEnabled($snapshot, [bool]$enabled) {
                     [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($rule)
                 }
             }
-
-            if (($matched % 25) -eq 0) {
-                Set-Phase ("Updated {0}/{1} saved firewall rules through COM ({2:N1}s)..." -f $matched, $expectedByFriendlyName.Count, $timer.Elapsed.TotalSeconds)
-            }
         }
+
         $timer.Stop()
-        Set-Phase ("Windows Firewall COM updated {0} rules ({1} matched; {2} saved IDs no longer exist) in {3:N1}s." -f $changed, $matched, $missingIds.Count, $timer.Elapsed.TotalSeconds)
+        Set-Phase ("Windows Firewall updated {0} rules ({1} verified; {2} saved IDs no longer exist) in {3:N1}s." -f $changed, $matched, $missingIds.Count, $timer.Elapsed.TotalSeconds)
     }
     finally {
         if ($null -ne $rules -and [System.Runtime.InteropServices.Marshal]::IsComObject($rules)) {
