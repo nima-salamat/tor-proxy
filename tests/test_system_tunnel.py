@@ -33,7 +33,7 @@ def test_system_tunnel_config_uses_tcp_tor_socks_and_hijacks_dns(tmp_path, monke
     tor.write_bytes(b"test tor executable")
 
     config = manager.build_config(9150, tor_executables=[tor])
-    assert config["log"] == {"level": "info", "timestamp": True}
+    assert config["log"] == {"level": "warn", "timestamp": True}
     inbound = config["inbounds"][0]
     outbound = next(item for item in config["outbounds"] if item["tag"] == "tor-socks")
     rules = config["route"]["rules"]
@@ -562,6 +562,55 @@ def test_status_flags_an_untracked_tun_interface_as_unverified(tmp_path, monkeyp
     assert status["active"] is False
     assert status["verified"] is False
     assert "untracked" in status["detail"]
+
+
+def test_status_marks_a_dead_sing_box_pid_record_as_recoverable(tmp_path, monkeypatch):
+    manager = _manager(tmp_path)
+    manager.process_state_path.parent.mkdir(parents=True)
+    manager.process_state_path.write_text(json.dumps({"pid": 321}), encoding="utf-8")
+    monkeypatch.setattr(system_tunnel, "_process_matches", lambda _state: None)
+    monkeypatch.setattr(system_tunnel.psutil, "pid_exists", lambda _pid: False)
+    monkeypatch.setattr(system_tunnel, "_interface_exists", lambda _name: False)
+
+    status = manager.status()
+
+    assert status["active"] is False
+    assert status["verified"] is True
+    assert "safely remove it" in status["detail"]
+
+
+def test_status_allows_reaping_only_the_verified_sing_box_process_without_tun(tmp_path, monkeypatch):
+    manager = _manager(tmp_path)
+    manager.process_state_path.parent.mkdir(parents=True)
+    manager.process_state_path.write_text(json.dumps({"pid": 321}), encoding="utf-8")
+
+    class FakeProcess:
+        pid = 321
+
+    monkeypatch.setattr(system_tunnel, "_process_matches", lambda _state: FakeProcess())
+    monkeypatch.setattr(system_tunnel, "_interface_exists", lambda _name: False)
+
+    status = manager.status()
+
+    assert status["active"] is False
+    assert status["verified"] is True
+    assert status["pid"] == 321
+    assert "reaped by exact PID/image/config identity" in status["detail"]
+
+
+def test_status_refuses_to_reap_a_live_unmatched_sing_box_pid(tmp_path, monkeypatch):
+    manager = _manager(tmp_path)
+    manager.process_state_path.parent.mkdir(parents=True)
+    manager.process_state_path.write_text(json.dumps({"pid": 321}), encoding="utf-8")
+    monkeypatch.setattr(system_tunnel, "_process_matches", lambda _state: None)
+    monkeypatch.setattr(system_tunnel.psutil, "pid_exists", lambda _pid: True)
+    monkeypatch.setattr(system_tunnel, "_interface_exists", lambda _name: False)
+
+    status = manager.status()
+
+    assert status["active"] is False
+    assert status["verified"] is False
+    assert "refusing to terminate it" in status["detail"]
 
 
 def test_stop_refuses_to_claim_success_when_an_untracked_tun_interface_remains(tmp_path, monkeypatch):
