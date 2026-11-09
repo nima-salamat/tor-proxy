@@ -620,6 +620,11 @@ class ProxyWindow(QWidget):
             self.btn_status.setText("CONNECTED TO TOR")
             self.set_btn_status_style("connected")
             self._update_proxy_buttons()
+            self._update_tunnel_hint()
+            tunnel_page = getattr(self._parent, "tunnel_window", None)
+            refresh_tunnel_page = getattr(tunnel_page, "_refresh_state", None)
+            if callable(refresh_tunnel_page):
+                refresh_tunnel_page()
             self._apply_system_proxy_mode()
             self.timer_data_usage.start()
 
@@ -638,6 +643,12 @@ class ProxyWindow(QWidget):
             self.btn_status.setText("TOR STARTUP FAILED · SEE EVENT LOG")
             self.set_btn_status_style("disconnected")
 
+        self._update_proxy_buttons()
+        self._update_tunnel_hint()
+        tunnel_page = getattr(self._parent, "tunnel_window", None)
+        refresh_tunnel_page = getattr(tunnel_page, "_refresh_state", None)
+        if callable(refresh_tunnel_page):
+            refresh_tunnel_page()
         if self._parent is not None and hasattr(self._parent, "_show_home"):
             self._parent._show_home()
         if not self.logs_open:
@@ -834,6 +845,9 @@ class ProxyWindow(QWidget):
 
             self.running = True
             self.failed = False
+            # The Home action must switch to its waiting state while Tor bootstraps.
+            self._update_proxy_buttons()
+            self._update_tunnel_hint()
             # Don't mark connected True until your Data signals 100% (existing logic)
             self.logs_widget.update_log("Local proxy started; Tor bootstrap is in progress. Wait for the verified CONNECTED state.")
         except Exception as e:
@@ -852,12 +866,29 @@ class ProxyWindow(QWidget):
 
     # ===== helper worker (runs in background) =====
     def _check_ports_worker(self):
-        """Resolve persistent listener ports before starting Tor and the local proxy."""
+        """Reconcile any previous TorProxy TUN session before starting Tor."""
+        messages = []
         try:
-            ports, messages = resolve_listener_ports(CONFIG, strict_manual=True)
-        except PortAllocationError as exc:
-            return json.dumps([False, {}, [str(exc)]])
+            recovery = self.system_tunnel_manager.cleanup_previous_session()
+            if recovery and "No previous TorProxy tunnel state needs cleanup" not in recovery:
+                messages.append(recovery)
+        except Exception as exc:
+            return json.dumps([
+                False,
+                {},
+                [
+                    "The previous sing-box tunnel could not be safely reconciled. "
+                    "Tor was not started to avoid connecting while stale system routes may remain.",
+                    str(exc),
+                ],
+            ])
 
+        try:
+            ports, port_messages = resolve_listener_ports(CONFIG, strict_manual=True)
+        except PortAllocationError as exc:
+            return json.dumps([False, {}, [*messages, str(exc)]])
+
+        messages.extend(port_messages)
         messages.append("All four persistent listener ports are available.")
         return json.dumps([True, ports, messages])
 
@@ -877,6 +908,7 @@ class ProxyWindow(QWidget):
         self.btn_status.setText("DISCONNECTING…")
         self.set_btn_status_style("disconnecting")
         self._update_proxy_buttons()
+        self._update_tunnel_hint()
 
         worker = Worker(self._stop_services_worker)
         worker.signals.finished.connect(self._on_services_stopped)
@@ -889,9 +921,10 @@ class ProxyWindow(QWidget):
         """Perform blocking OS cleanup away from Qt's GUI thread; never touch widgets."""
         messages: list[str] = []
         tunnel_status = self.system_tunnel_manager.status()
-        if tunnel_status.get("active") or not tunnel_status.get("verified", True):
+        tunnel_record_exists = self.system_tunnel_manager.process_state_path.exists()
+        if tunnel_record_exists or tunnel_status.get("active") or not tunnel_status.get("verified", True):
             try:
-                messages.append(self.system_tunnel_manager.stop())
+                messages.append(self.system_tunnel_manager.cleanup_previous_session())
             except Exception as exc:
                 raise RuntimeError(
                     "System tunnel cleanup failed; Tor and its SOCKS listener were kept running: "
@@ -1055,11 +1088,13 @@ class ProxyWindow(QWidget):
                 state = manager.status()
                 tunnel_page = getattr(self._parent, "tunnel_window", None)
                 page_busy = bool(getattr(tunnel_page, "_busy", False))
-                busy = bool(getattr(self, "_system_tunnel_busy", False) or page_busy)
-                tor_ready = bool(
-                    self.running and self.connected
-                    and not self._stopping and not self._connect_operation_busy
+                busy = bool(
+                    getattr(self, "_system_tunnel_busy", False)
+                    or page_busy
+                    or self._stopping
+                    or self._connect_operation_busy
                 )
+                tor_ready = bool(self.running and self.connected and not self._stopping)
 
                 if state.get("active"):
                     message = (
@@ -1078,15 +1113,28 @@ class ProxyWindow(QWidget):
                     action_tooltip = "Stop the stale tunnel process and reconcile system routes."
                     show_action = True
                 elif installed_version:
-                    message = f"System tunnel installed · sing-box v{installed_version}"
-                    action_text = "Start"
+                    if self._connect_operation_busy:
+                        message = f"sing-box v{installed_version} installed · preparing Tor connection"
+                        action_text = "Preparing…"
+                        action_tooltip = "TorProxy is checking for leftover sing-box routes before connecting."
+                    elif self._stopping:
+                        message = f"sing-box v{installed_version} installed · disconnecting Tor"
+                        action_text = "Stopping…"
+                        action_tooltip = "The system tunnel is stopped before Tor disconnects."
+                    elif self.running and not self.connected:
+                        message = f"sing-box v{installed_version} installed · Tor is connecting"
+                        action_text = "Waiting for Tor"
+                        action_tooltip = "The Start action becomes available after Tor bootstrap and ControlPort verification."
+                    elif tor_ready:
+                        message = f"System tunnel ready to start · sing-box v{installed_version}"
+                        action_text = "Start"
+                        action_tooltip = "Start system-wide Tor routing."
+                    else:
+                        message = f"sing-box v{installed_version} installed · connect Tor to enable Start"
+                        action_text = "Waiting for Tor"
+                        action_tooltip = "Connect to Tor and wait for verified READY status before starting the tunnel."
                     action_icon = "fa6s.play"
                     action_enabled = tor_ready and not busy
-                    action_tooltip = (
-                        "Start system-wide Tor routing."
-                        if tor_ready else
-                        "Connect to Tor and wait for the verified connection before starting the tunnel."
-                    )
                     show_action = True
                 else:
                     message = "System tunnel is not installed · Install it from Updates → Tunnel"
