@@ -1476,3 +1476,61 @@ def test_open_browser_removes_a_deleted_cached_executable_immediately(qt_app, tm
         dialog.deleteLater()
         QThreadPool.globalInstance().waitForDone(4000)
         qt_app.processEvents()
+
+
+def test_sing_box_manager_uses_bundle_manager_visual_language_and_live_state_refresh():
+    repository = Path(__file__).resolve().parents[1]
+    tunnel_source = (repository / "ui_/window/tunnel_window.py").read_text(encoding="utf-8")
+    bundle_source = (repository / "ui_/window/updater_window.py").read_text(encoding="utf-8")
+
+    assert 'root.setContentsMargins(12, 7, 12, 8)' in tunnel_source
+    assert 'title.setObjectName("pageTitle")' in tunnel_source
+    assert 'self.release_panel.setObjectName("contentCard")' in tunnel_source
+    assert 'self.versions_list.setObjectName("releaseList")' in tunnel_source
+    assert 'self.btn_install.setObjectName("primaryButton")' in tunnel_source
+    assert 'self.progress.setObjectName("bundleProgress")' in tunnel_source
+    assert 'QLabel#pageTitle' in tunnel_source and 'QLabel#pageTitle' in bundle_source
+    assert 'QFrame#infoCard, QFrame#contentCard' in tunnel_source
+    assert 'QListWidget#releaseList' in tunnel_source and 'QListWidget#releaseList' in bundle_source
+    assert 'QPushButton#primaryButton' in bundle_source
+    assert 'self._state_refresh_timer.setInterval(1000)' in tunnel_source
+    assert 'self._state_refresh_timer.timeout.connect(self._refresh_state)' in tunnel_source
+    assert 'self.btn_start_stop.setIcon(qta.icon(action_icon' in tunnel_source
+    assert 'self._refresh_state()' in tunnel_source
+
+
+def test_advanced_settings_exposes_conservative_sing_box_recovery():
+    repository = Path(__file__).resolve().parents[1]
+    settings_source = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
+    tunnel_source = (repository / "src/torproxy/system_tunnel.py").read_text(encoding="utf-8")
+
+    assert 'self._section_title("System tunnel recovery")' in settings_source
+    assert 'QPushButton("Check / clean up", self)' in settings_source
+    assert 'self.btn_tunnel_recovery.clicked.connect(self.cleanup_system_tunnel)' in settings_source
+    assert 'QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No' in settings_source
+    assert 'Worker(manager.cleanup_previous_session)' in settings_source
+    assert 'def cleanup_previous_session(self)' in tunnel_source
+    assert 'An untracked TUN adapter is never deleted or adopted' in tunnel_source
+    assert 'self._tunnel_recovery_pool.start(worker)' in settings_source
+
+
+def test_connect_preflight_reconciles_previous_sing_box_state_before_starting_tor():
+    repository = Path(__file__).resolve().parents[1]
+    home_source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+    tunnel_source = (repository / "src/torproxy/system_tunnel.py").read_text(encoding="utf-8")
+
+    preflight = home_source[home_source.index("def _check_ports_worker"):home_source.index("def _request_stop_services")]
+    assert 'self.system_tunnel_manager.cleanup_previous_session()' in preflight
+    assert "Tor was not started to avoid connecting while stale system routes may remain." in preflight
+    assert 'tunnel_record_exists = self.system_tunnel_manager.process_state_path.exists()' in home_source
+    assert 'if tunnel_record_exists or tunnel_status.get("active")' in home_source
+    assert 'def cleanup_previous_session(self)' in tunnel_source
+
+
+def test_proxy_state_refreshes_the_tunnel_page_and_home_status():
+    repository = Path(__file__).resolve().parents[1]
+    home_source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+    update = home_source[home_source.index("def _update_proxy_buttons"):home_source.index("def _update_tunnel_hint")]
+    assert 'self._update_tunnel_hint()' in update
+    assert 'refresh_tunnel_page = getattr(tunnel_page, "_refresh_state", None)' in update
+    assert 'refresh_tunnel_page()' in update
