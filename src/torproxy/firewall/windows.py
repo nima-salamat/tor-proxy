@@ -492,6 +492,52 @@ try {
         throw 'The Windows NetSecurity PowerShell module is unavailable.'
     }
     $request = Get-Content -LiteralPath $RequestPath -Raw | ConvertFrom-Json
+    function Invoke-WfpHelper([string]$nativeAction, [string[]]$nativeArguments = @()) {
+        $helperPath = [string]$request.wfp_helper_path
+        if ([string]::IsNullOrWhiteSpace($helperPath) -or
+            -not [System.IO.File]::Exists($helperPath)) {
+            throw 'The native TorProxyWfpHelper.exe is missing. Reinstall the current Windows package; the legacy per-rule firewall updater is intentionally disabled.'
+        }
+        $arguments = @($nativeAction) + @($nativeArguments)
+        $output = @(& $helperPath @arguments 2>&1)
+        $exitCode = $LASTEXITCODE
+        $detail = ($output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+        if ($exitCode -ne 0) {
+            throw "Native Windows Filtering Platform helper failed (exit code $exitCode): $detail"
+        }
+        return $detail.Trim()
+    }
+
+    # New activations use one persistent WFP transaction. They do not change
+    # existing Windows Firewall rules or profile defaults.
+    if ($Action -eq 'activate') {
+        if (Test-Path -LiteralPath $SnapshotPath) {
+            throw 'A legacy Windows Firewall snapshot still exists. Run Restore saved firewall once before enabling the WFP kill switch.'
+        }
+        $programs = @($request.programs)
+        if ($programs.Count -lt 1) { throw 'At least one Tor executable must be allowlisted.' }
+        foreach ($program in $programs) {
+            if (-not [System.IO.File]::Exists([string]$program)) { throw "Allowed executable does not exist: $program" }
+        }
+        Set-Phase 'Installing persistent IPv4/IPv6 WFP filters in one transaction...'
+        $detail = Invoke-WfpHelper 'activate' $programs
+        Set-Phase 'Persistent WFP filter set committed and verified.'
+        Write-Result @{ ok = $true; active = $true; verified = $true; backend = 'WFP'; detail = $detail }
+        return
+    }
+
+    if ($Action -eq 'recover' -or $Action -eq 'deactivate' -or $Action -eq 'emergency') {
+        Set-Phase 'Removing TorProxy-owned persistent WFP filters in one transaction...'
+        $wfpRecovery = Invoke-WfpHelper 'recover'
+    }
+
+    if ($Action -eq 'status' -and -not (Test-Path -LiteralPath $SnapshotPath)) {
+        $detail = Invoke-WfpHelper 'status'
+        $active = $detail.StartsWith('ACTIVE', [System.StringComparison]::OrdinalIgnoreCase)
+        Write-Result @{ ok = $true; active = $active; verified = $true; backend = 'WFP'; detail = $detail }
+        return
+    }
+
     if ($Action -eq 'activate') {
         $programs = @($request.programs)
         if ($programs.Count -lt 1) { throw 'At least one Tor executable must be allowlisted.' }
