@@ -170,7 +170,7 @@ class TunnelManagerWindow(QWidget):
         self.btn_install = QPushButton("Install selected version")
         self.btn_install.setObjectName("primaryButton")
         self.btn_install.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_install.setIcon(qta.icon("fa6s.download", color="#ffffff"))
+        self.btn_install.setIcon(qta.icon("fa6s.download", color=text))
         self.btn_install.clicked.connect(self.install_selected)
         buttons.addWidget(self.btn_install)
 
@@ -777,7 +777,7 @@ class TunnelManagerWindow(QWidget):
             QListWidget#releaseList::item:hover {{ background: rgba(61, 174, 233, 0.10); }}
             QListWidget#releaseList::item:selected {{ background: {accent}; color: #ffffff; }}
             QPushButton {{ min-height: 28px; padding: 0 9px; border-radius: 6px; }}
-            QPushButton#primaryButton {{ font-weight: 650; }}
+            QPushButton#primaryButton {{ font-weight: 650; color: {text}; }}
             QPushButton#quietButton {{ min-height: 25px; }}
             QPushButton:disabled {{ color: {muted}; }}
             QProgressBar#bundleProgress {{ min-height: 7px; max-height: 7px; border: none; border-radius: 4px; background: {border}; }}
