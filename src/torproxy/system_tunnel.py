@@ -173,7 +173,12 @@ def _enable_windows_wfp_tun_exception(
     # Older releases use a persistent Windows Firewall interface-alias rule.
     # They do not have the native WFP helper, so leave that legacy rule alone.
     if not helper.is_file():
-        return False
+        if snapshot.is_file():
+            return False
+        raise SystemTunnelError(
+            "The native WFP recovery helper is missing; refusing to start a system tunnel "
+            "without verifying its interface exception."
+        )
     return _apply_wfp_tun_exception(helper, legacy_snapshot=snapshot)
 
 
