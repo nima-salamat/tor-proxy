@@ -349,6 +349,14 @@ def test_windows_first_activation_treats_missing_owned_group_as_empty():
     assert "Get-NetFirewallRule -PolicyStore ActiveStore -Group $Group -ErrorAction Stop" not in _POWERSHELL
 
 
+def test_optional_firewall_group_query_only_suppresses_expected_not_found():
+    assert "CmdletizationQuery_NotFound_RuleGroup*" in _POWERSHELL
+    assert "-ErrorAction SilentlyContinue -ErrorVariable queryErrors" in _POWERSHELL
+    assert "Where-Object {" in _POWERSHELL
+    assert "[string]$_.FullyQualifiedErrorId -notlike 'CmdletizationQuery_NotFound_RuleGroup*'" in _POWERSHELL
+    assert "throw $unexpectedErrors[0]" in _POWERSHELL
+
+
 def test_windows_saved_local_allow_rules_are_processed_as_a_batch():
     assert "function Set-SnapshotLocalRulesEnabled($snapshot, [bool]$enabled)" in _POWERSHELL
     assert "-Name $changeNames -Enabled $enabled -ErrorAction Stop" in _POWERSHELL
