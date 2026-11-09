@@ -196,7 +196,7 @@ def test_privileged_helper_uses_the_same_saved_host_policy_fragment_as_tun_build
         "action": "reject",
         "method": "default",
     }
-    assert rules[3]["domain_regex"] == [r"^[^.]*-api\\.glob\\.example$"]
+    assert rules[3]["domain_regex"] == [r"^[^.]*-api\.glob\.example$"]
     assert rules[4] == {
         "network": "tcp",
         "ip_cidr": ["192.0.2.10/32"],
