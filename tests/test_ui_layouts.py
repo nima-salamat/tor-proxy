@@ -231,10 +231,14 @@ def test_updates_navigation_keeps_theme_text_color_on_hover():
     assert "color: {text}; background: {hover}; border-color: {border};" in source
     assert "QToolButton#updatesNavButton:checked:hover {{" in source
     assert "background: {accent}; color: #ffffff; border-color: {accent};" in source
-    assert "QToolButton#updatesNavButton::menu-indicator {{" in source
-    assert "QToolButton#updatesNavButton:checked::menu-indicator {{" in source
-    assert "QToolButton#updatesNavButton::menu-indicator:open {{" in source
-    assert "border-bottom: 5px solid #ffffff;" in source
+    assert "QToolButton#updatesNavButton::menu-button {{" in source
+    assert "QToolButton#updatesNavButton:hover::menu-button {{" in source
+    assert "QToolButton#updatesNavButton:checked::menu-button {{" in source
+    assert "QToolButton#updatesNavButton:checked:hover::menu-button {{" in source
+    assert "subcontrol-position: right center;" in source
+    assert "image: none;" not in source[source.index("QToolButton#updatesNavButton"):source.index("QPushButton#topNavExitButton")]
+    assert "border-left: 4px solid transparent;" not in source
+    assert "border-right: 4px solid transparent;" not in source
 
 
 
