@@ -103,16 +103,14 @@ def test_system_tunnel_config_applies_saved_host_policy_before_default_tor_route
     config = manager.build_config(9150, tor_executables=[tor])
     rules = config["route"]["rules"]
 
-    assert rules[:4] == [
-        rules[0],
-        rules[1],
-        {"port": 53, "action": "hijack-dns"},
-        {
-            "ip_cidr": ["172.19.0.0/30", "fdfe:dcba:9876::/126"],
-            "action": "reject",
-            "method": "drop",
-        },
-    ]
+    assert rules[0]["outbound"] == "direct"
+    assert rules[1]["outbound"] == "direct"
+    assert rules[2] == {"port": 53, "action": "hijack-dns"}
+    assert rules[3] == {
+        "ip_cidr": ["172.19.0.0/30", "fdfe:dcba:9876::/126"],
+        "action": "reject",
+        "method": "drop",
+    }
     assert rules[4] == {"action": "sniff"}
 
     blocked = rules[5:11]
