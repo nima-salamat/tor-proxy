@@ -900,11 +900,11 @@ class SystemTunnelManager:
         """Verify Tor SOCKS can establish an outbound TCP stream before changing default routes."""
         with socket.create_connection(("127.0.0.1", socks_port), timeout=timeout) as sock:
             sock.settimeout(timeout)
-            sock.sendall(b"\\x05\\x01\\x00")
+            sock.sendall(b"\x05\x01\x00")
             greeting = cls._recv_exact(sock, 2)
-            if greeting != b"\\x05\\x00":
+            if greeting != b"\x05\x00":
                 raise OSError(f"Tor SOCKS authentication negotiation failed: {greeting!r}")
-            request = b"\\x05\\x01\\x00\\x01" + socket.inet_aton(target_ip) + struct.pack("!H", target_port)
+            request = b"\x05\x01\x00\x01" + socket.inet_aton(target_ip) + struct.pack("!H", target_port)
             sock.sendall(request)
             header = cls._recv_exact(sock, 4)
             if header[0] != 5 or header[1] != 0:
