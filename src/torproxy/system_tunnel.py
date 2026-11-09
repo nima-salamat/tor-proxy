@@ -1208,7 +1208,7 @@ class SystemTunnelManager:
                 raise SystemTunnelError(
                     str(state.get("detail") or "An untracked TUN interface requires manual inspection.")
                 )
-            return str(state.get("detail") or "No previous TorProxy tunnel state needs cleanup.")
+            return "No previous TorProxy tunnel state needs cleanup."
         return self.stop()
 
     def stop(self) -> str:
