@@ -196,7 +196,7 @@ class TunnelManagerWindow(QWidget):
         self.progress.setObjectName("bundleProgress")
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
-        self.progress.setTextVisible(True)
+        self.progress.setTextVisible(False)
         self.progress.hide()
         details_layout.addWidget(self.progress)
 
