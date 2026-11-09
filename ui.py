@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+import ctypes
 
 from PySide6.QtWidgets import (
     QApplication,
@@ -195,12 +196,59 @@ class Window(QMainWindow):
 
     def showEvent(self, event):
         super().showEvent(event)
+        # Apply after Qt has created the native HWND. DWM draws the subtle
+        # rounded frame itself, without changing our client area or hit testing.
+        QTimer.singleShot(0, self._apply_native_window_corners)
         QTimer.singleShot(0, self._refresh_layout_after_restore)
 
     def changeEvent(self, event):
         super().changeEvent(event)
-        if event.type() == QEvent.Type.WindowStateChange and not self.isMinimized():
-            QTimer.singleShot(0, self._refresh_layout_after_restore)
+        if event.type() == QEvent.Type.WindowStateChange:
+            # DWM suppresses rounding while maximized; re-apply the small
+            # restored-window preference after every maximize/restore transition.
+            QTimer.singleShot(0, self._apply_native_window_corners)
+            if not self.isMinimized():
+                QTimer.singleShot(0, self._refresh_layout_after_restore)
+
+    def _apply_native_window_corners(self):
+        """Request subtle native rounded corners for the restored Windows window."""
+        if not IS_WINDOWS:
+            return
+
+        # Windows 11 exposes this preference through DwmSetWindowAttribute.
+        # Older Windows builds reject the attribute; that is intentionally a no-op.
+        try:
+            hwnd = int(self.winId())
+            if not hwnd:
+                return
+            dwmapi = ctypes.WinDLL("dwmapi", use_last_error=True)
+            set_window_attribute = dwmapi.DwmSetWindowAttribute
+            set_window_attribute.argtypes = (
+                ctypes.c_void_p,
+                ctypes.c_uint,
+                ctypes.c_void_p,
+                ctypes.c_uint,
+            )
+            set_window_attribute.restype = ctypes.c_long
+
+            # DWMWA_WINDOW_CORNER_PREFERENCE = 33
+            # DWMWCP_DONOTROUND = 1; DWMWCP_ROUNDSMALL = 3.
+            preference = ctypes.c_int(
+                1 if self.isMaximized() or self.isFullScreen() else 3
+            )
+            result = set_window_attribute(
+                ctypes.c_void_p(hwnd),
+                33,
+                ctypes.byref(preference),
+                ctypes.sizeof(preference),
+            )
+            if result != 0:
+                logger.debug(
+                    "Windows DWM rounded-corner preference is unavailable (HRESULT 0x%08X).",
+                    result & 0xFFFFFFFF,
+                )
+        except (AttributeError, OSError, TypeError, ValueError):
+            logger.debug("Could not apply native rounded window corners.", exc_info=True)
 
     def _screen_for_geometry(self, geometry):
         center = geometry.center()
