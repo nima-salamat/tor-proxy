@@ -5,7 +5,7 @@ import ast
 from datetime import datetime, timezone
 
 import qtawesome as qta
-from PySide6.QtCore import Qt, QThreadPool, QUrl, Signal
+from PySide6.QtCore import Qt, QThreadPool, QUrl, Signal, QTimer
 from PySide6.QtGui import QDesktopServices, QPalette, QColor
 from PySide6.QtWidgets import (
     QFrame,
@@ -52,28 +52,29 @@ class TunnelManagerWindow(QWidget):
         self._selected_release_asset: dict | None = None
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(28, 22, 28, 18)
-        root.setSpacing(14)
+        root.setContentsMargins(12, 7, 12, 8)
+        root.setSpacing(7)
 
         header = QHBoxLayout()
         header.setSpacing(12)
         self.title_icon = QLabel()
-        self.title_icon.setFixedSize(32, 32)
+        self.title_icon.setObjectName("bundlePageIcon")
+        self.title_icon.setFixedSize(26, 26)
         self.title_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         header.addWidget(self.title_icon)
 
         titles = QVBoxLayout()
         titles.setSpacing(2)
-        title = QLabel("System tunnel")
-        title.setObjectName("tunnelPageTitle")
-        subtitle = QLabel("Manage the sing-box engine and system-wide Tor routing.")
-        subtitle.setObjectName("tunnelPageSubtitle")
+        title = QLabel("System Tunnel · sing-box")
+        title.setObjectName("pageTitle")
+        subtitle = QLabel("Install and manage the verified engine for system-wide Tor routing.")
+        subtitle.setObjectName("metadataLabel")
         titles.addWidget(title)
         titles.addWidget(subtitle)
         header.addLayout(titles, 1)
 
         self.btn_open_release = QPushButton("Official releases")
-        self.btn_open_release.setObjectName("tunnelSecondaryButton")
+        self.btn_open_release.setObjectName("quietButton")
         self.btn_open_release.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_open_release.setIcon(qta.icon("fa6s.arrow-up-right-from-square"))
         self.btn_open_release.clicked.connect(self.open_release_page)
@@ -88,47 +89,49 @@ class TunnelManagerWindow(QWidget):
         root.addWidget(self.latest_label)
 
         content = QHBoxLayout()
-        content.setSpacing(14)
+        content.setSpacing(10)
 
         self.release_panel = QFrame(self)
-        self.release_panel.setObjectName("tunnelReleasePanel")
+        self.release_panel.setObjectName("contentCard")
         self.release_panel.setMinimumWidth(220)
-        self.release_panel.setMaximumWidth(300)
+        self.release_panel.setMaximumWidth(420)
         release_layout = QVBoxLayout(self.release_panel)
-        release_layout.setContentsMargins(14, 14, 14, 14)
-        release_layout.setSpacing(9)
-        release_heading = QLabel("AVAILABLE VERSIONS")
-        release_heading.setObjectName("tunnelSectionLabel")
-        release_layout.addWidget(release_heading)
+        release_layout.setContentsMargins(12, 10, 12, 10)
+        release_layout.setSpacing(6)
+        release_heading_row = QHBoxLayout()
+        release_heading = QLabel("Available releases")
+        release_heading.setObjectName("sectionTitle")
+        release_heading_row.addWidget(release_heading, 1)
         self.versions_list = QListWidget(self.release_panel)
-        self.versions_list.setObjectName("tunnelVersionsList")
+        self.versions_list.setObjectName("releaseList")
         self.versions_list.setUniformItemSizes(True)
         self.versions_list.currentItemChanged.connect(self._on_version_changed)
         release_layout.addWidget(self.versions_list, 1)
         self.btn_check_latest = QPushButton("Check latest release")
-        self.btn_check_latest.setObjectName("tunnelSecondaryButton")
+        self.btn_check_latest.setObjectName("quietButton")
         self.btn_check_latest.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_check_latest.setIcon(qta.icon("fa6s.rotate"))
         self.btn_check_latest.clicked.connect(self.check_latest_release)
-        release_layout.addWidget(self.btn_check_latest)
-        content.addWidget(self.release_panel, 0)
+        release_heading_row.addWidget(self.btn_check_latest)
+        release_layout.addLayout(release_heading_row)
+        content.addWidget(self.release_panel, 2)
 
         details_panel = QFrame(self)
-        details_panel.setObjectName("tunnelDetailsPanel")
+        details_panel.setObjectName("contentCard")
         details_layout = QVBoxLayout(details_panel)
-        details_layout.setContentsMargins(18, 16, 18, 16)
-        details_layout.setSpacing(12)
+        details_layout.setContentsMargins(12, 10, 12, 10)
+        details_layout.setSpacing(6)
 
         self.selected_title = QLabel("sing-box")
-        self.selected_title.setObjectName("tunnelSelectedTitle")
+        self.selected_title.setObjectName("sectionTitle")
         details_layout.addWidget(self.selected_title)
 
         self.version_meta = QLabel("")
-        self.version_meta.setObjectName("tunnelVersionMeta")
+        self.version_meta.setObjectName("metadataLabel")
         details_layout.addWidget(self.version_meta)
 
         self.installed_state = QLabel("Checking engine installation…")
-        self.installed_state.setObjectName("tunnelInstalledState")
+        self.installed_state.setObjectName("stateLabel")
         self.installed_state.setWordWrap(True)
         details_layout.addWidget(self.installed_state)
 
@@ -137,23 +140,23 @@ class TunnelManagerWindow(QWidget):
             "against a SHA-256 digest pinned in TorProxy. The privileged helper validates the same "
             "archive and executable before starting the TUN interface."
         )
-        self.description.setObjectName("tunnelDescription")
+        self.description.setObjectName("mutedText")
         self.description.setWordWrap(True)
         details_layout.addWidget(self.description)
 
         route_card = QFrame(details_panel)
-        route_card.setObjectName("tunnelInfoCard")
+        route_card.setObjectName("infoCard")
         route_layout = QVBoxLayout(route_card)
         route_layout.setContentsMargins(12, 10, 12, 10)
         route_layout.setSpacing(4)
         route_title = QLabel("WHAT THE TUNNEL DOES")
-        route_title.setObjectName("tunnelSectionLabel")
+        route_title.setObjectName("metadataLabel")
         route_body = QLabel(
             "TCP traffic is explicitly routed through Tor. Client DNS uses local FakeIP mapping, "
             "then Tor resolves the original hostname through SOCKS. UDP and unmatched traffic are blocked."
         )
         route_body.setWordWrap(True)
-        route_body.setObjectName("tunnelRouteDescription")
+        route_body.setObjectName("mutedText")
         route_layout.addWidget(route_title)
         route_layout.addWidget(route_body)
         details_layout.addWidget(route_card)
@@ -161,20 +164,20 @@ class TunnelManagerWindow(QWidget):
         buttons = QHBoxLayout()
         buttons.setSpacing(8)
         self.btn_install = QPushButton("Install selected version")
-        self.btn_install.setObjectName("tunnelPrimaryButton")
+        self.btn_install.setObjectName("primaryButton")
         self.btn_install.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_install.setIcon(qta.icon("fa6s.download", color="#ffffff"))
         self.btn_install.clicked.connect(self.install_selected)
         buttons.addWidget(self.btn_install)
 
         self.btn_start_stop = QPushButton("Start system tunnel")
-        self.btn_start_stop.setObjectName("tunnelSecondaryButton")
+        self.btn_start_stop.setObjectName("quietButton")
         self.btn_start_stop.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_start_stop.clicked.connect(self.toggle_tunnel)
         buttons.addWidget(self.btn_start_stop)
 
         self.btn_test_connection = QPushButton("Test traffic")
-        self.btn_test_connection.setObjectName("tunnelSecondaryButton")
+        self.btn_test_connection.setObjectName("quietButton")
         self.btn_test_connection.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_test_connection.setToolTip(
             "Test Tor SOCKS and active TUN traffic without restarting the tunnel or requesting Administrator approval."
@@ -185,7 +188,7 @@ class TunnelManagerWindow(QWidget):
         details_layout.addLayout(buttons)
 
         self.progress = QProgressBar(details_panel)
-        self.progress.setObjectName("tunnelProgress")
+        self.progress.setObjectName("bundleProgress")
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.progress.setTextVisible(True)
@@ -193,7 +196,7 @@ class TunnelManagerWindow(QWidget):
         details_layout.addWidget(self.progress)
 
         self.status = QLabel("Select a verified version to install or manage the tunnel.")
-        self.status.setObjectName("tunnelOperationStatus")
+        self.status.setObjectName("statusMessage")
         self.status.setWordWrap(True)
         details_layout.addWidget(self.status)
         details_layout.addStretch(1)
@@ -204,6 +207,10 @@ class TunnelManagerWindow(QWidget):
         self.progress_changed.connect(self._on_progress)
         self._populate_versions()
         self._apply_local_styles(CONFIG.get("mode", "dark"))
+        self._state_refresh_timer = QTimer(self)
+        self._state_refresh_timer.setInterval(1000)
+        self._state_refresh_timer.timeout.connect(self._refresh_state)
+        self._state_refresh_timer.start()
 
     def _populate_versions(self) -> None:
         if self.manager is None:
@@ -700,58 +707,43 @@ class TunnelManagerWindow(QWidget):
         QDesktopServices.openUrl(QUrl("https://github.com/SagerNet/sing-box/releases"))
 
     def _apply_local_styles(self, mode: str = "dark") -> None:
+        """Use the compact surfaces and visual language of the Tor bundle manager."""
         dark = mode == "dark"
-        surface = "#151e29" if dark else "#ffffff"
-        field = "#0d151f" if dark else "#f4f6f8"
-        border = "#2d3a47" if dark else "#d8dee5"
-        text = "#edf2f7" if dark else "#202a35"
-        muted = "#9aa8b7" if dark else "#687582"
-        accent = "#1d8f88" if dark else "#087f79"
-        hover = "#233444" if dark else "#eaf0f4"
+        accent = "#3daee9" if dark else "#287db5"
+        border = "#414a56" if dark else "#d5dbe2"
+        surface = "#20252b" if dark else "#ffffff"
+        field = "#171c23" if dark else "#f8fafc"
+        text = "#eff1f4" if dark else "#202832"
+        muted = "#a6afb9" if dark else "#647080"
+        icon_color = "#dce8f4" if dark else "#334155"
         self.setStyleSheet(f"""
-            QFrame#tunnelReleasePanel, QFrame#tunnelDetailsPanel {{
-                background: {surface}; border: 1px solid {border}; border-radius: 12px;
-            }}
-            QFrame#tunnelInfoCard {{
-                background: {field}; border: 1px solid {border}; border-radius: 9px;
-            }}
-            QLabel#tunnelPageTitle, QLabel#tunnelSelectedTitle {{
-                background: transparent; color: {text}; font-size: 19px; font-weight: 750; border: none;
-            }}
-            QLabel#tunnelPageSubtitle, QLabel#tunnelVersionMeta, QLabel#tunnelDescription,
-            QLabel#tunnelRouteDescription, QLabel#tunnelOperationStatus {{
-                background: transparent; color: {muted}; border: none; font-size: 11px;
-            }}
-            QLabel#tunnelSectionLabel {{ background: transparent; color: {muted}; font-size: 9px; font-weight: 800; border: none; }}
-            QLabel#tunnelLatestNotice {{
-                background: {field}; color: {text}; border: 1px solid {border}; border-radius: 8px;
-                padding: 9px 12px; font-size: 11px;
-            }}
-            QLabel#tunnelInstalledState {{ background: transparent; color: {accent}; border: none; font-size: 11px; font-weight: 700; }}
-            QListWidget#tunnelVersionsList {{
-                background: {field}; color: {text}; border: 1px solid {border}; border-radius: 8px;
-                outline: none; padding: 4px;
-            }}
-            QListWidget#tunnelVersionsList::item {{ padding: 12px 9px; border-radius: 6px; }}
-            QListWidget#tunnelVersionsList::item:selected {{ background: {accent}; color: white; }}
-            QListWidget#tunnelVersionsList::item:hover:!selected {{ background: {hover}; }}
-            QPushButton#tunnelPrimaryButton, QPushButton#tunnelSecondaryButton {{
-                min-height: 34px; padding: 0 13px; border-radius: 8px; font-size: 11px; font-weight: 700;
-            }}
-            QPushButton#tunnelPrimaryButton {{ background: {accent}; color: white; border: 1px solid {accent}; }}
-            QPushButton#tunnelPrimaryButton:hover {{ background: #177c76; }}
-            QPushButton#tunnelSecondaryButton {{ background: {field}; color: {text}; border: 1px solid {border}; }}
-            QPushButton#tunnelSecondaryButton:hover {{ background: {hover}; }}
-            QPushButton:disabled {{ color: {muted}; background: {field}; border-color: {border}; }}
-            QProgressBar#tunnelProgress {{
-                min-height: 7px; max-height: 7px; border: none; border-radius: 4px; background: {border};
-            }}
-            QProgressBar#tunnelProgress::chunk {{ background: {accent}; border-radius: 4px; }}
+            QLabel#pageTitle {{ color: {text}; font-size: 20px; font-weight: 750; background: transparent; }}
+            QLabel#bundlePageIcon {{ background: transparent; border: none; }}
+            QLabel#sectionTitle {{ color: {text}; font-size: 13px; font-weight: 700; background: transparent; }}
+            QLabel#metadataLabel, QLabel#stateLabel {{ color: {muted}; font-size: 11px; background: transparent; }}
+            QLabel#mutedText {{ color: {muted}; font-size: 10px; background: transparent; }}
+            QLabel#statusMessage {{ color: {text}; font-size: 11px; background: transparent; }}
+            QLabel#tunnelLatestNotice {{ background: {surface}; color: {muted}; border: 1px solid {border}; border-radius: 8px; padding: 7px 11px; font-size: 11px; }}
+            QFrame#infoCard, QFrame#contentCard {{ background: {surface}; border: 1px solid {border}; border-radius: 9px; }}
+            QListWidget#releaseList {{ background: {field}; border: 1px solid {border}; border-radius: 7px; padding: 4px; color: {text}; outline: none; }}
+            QListWidget#releaseList::item {{ min-height: 34px; padding: 6px 8px; border-radius: 5px; }}
+            QListWidget#releaseList::item:hover {{ background: rgba(61, 174, 233, 0.10); }}
+            QListWidget#releaseList::item:selected {{ background: {accent}; color: #ffffff; }}
+            QPushButton {{ min-height: 28px; padding: 0 9px; border-radius: 6px; }}
+            QPushButton#primaryButton {{ font-weight: 650; }}
+            QPushButton#quietButton {{ min-height: 25px; }}
+            QPushButton:disabled {{ color: {muted}; }}
+            QProgressBar#bundleProgress {{ min-height: 7px; max-height: 7px; border: none; border-radius: 4px; background: {border}; }}
+            QProgressBar#bundleProgress::chunk {{ background: {accent}; border: none; border-radius: 4px; }}
+            QFrame#contentCard QLabel {{ background: transparent; }}
         """)
-        self.title_icon.setPixmap(qta.icon("fa6s.network-wired", color=accent).pixmap(30, 30))
-        self.btn_open_release.setIcon(qta.icon("fa6s.arrow-up-right-from-square", color=text))
-        self.btn_check_latest.setIcon(qta.icon("fa6s.rotate", color=text))
+        self.title_icon.setPixmap(qta.icon("fa6s.network-wired", color=accent).pixmap(22, 22))
+        self.btn_open_release.setIcon(qta.icon("fa6s.arrow-up-right-from-square", color=icon_color))
+        self.btn_check_latest.setIcon(qta.icon("fa6s.rotate", color=icon_color))
         self.btn_install.setIcon(qta.icon("fa6s.download", color="#ffffff"))
+        self.btn_start_stop.setIcon(qta.icon("fa6s.stop" if self.manager and self.manager.status().get("active") else "fa6s.play", color=icon_color))
+        self.btn_test_connection.setIcon(qta.icon("fa6s.flask", color=icon_color))
+
 
 
 __all__ = ["TunnelManagerWindow"]
