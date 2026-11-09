@@ -219,7 +219,7 @@ def get_bundle_links(
     version: str,
     base_url: str = TOR_BUNDLE_BASE_URL,
     *,
-    require_signature: bool = True,
+    require_signature: bool = False,
     proxy_url: str | None = None,
     allow_direct: bool = False,
 ) -> list[str]:
@@ -288,7 +288,7 @@ def download_file(
     base_url: str = TOR_BUNDLE_BASE_URL,
     progress_callback=None,
     cancel_event=None,
-    verify_signature: bool = True,
+    verify_signature: bool = False,
     proxy_url: str | None = None,
     allow_direct: bool = False,
 ) -> Path:
@@ -584,7 +584,7 @@ def _copy_limited_local_file(
 def import_local_bundle(
     filename: str | os.PathLike[str],
     *,
-    verify_signature: bool = True,
+    verify_signature: bool = False,
     proxy_url: str | None = None,
     allow_direct: bool = False,
     progress_callback=None,
