@@ -53,12 +53,12 @@ def test_system_tunnel_config_uses_tcp_tor_socks_and_hijacks_dns(tmp_path, monke
     assert expected_names.issubset(set(rules[0]["process_name"]))
     assert str(manager.engine_path.resolve()) in rules[1]["process_path"]
     assert str(tor.resolve()) in rules[1]["process_path"]
-    assert rules[2] == {
-        "ip_cidr": ["172.19.0.1/32", "fdfe:dcba:9876::1/128"],
+    assert rules[2] == {"action": "hijack-dns"}
+    assert rules[3] == {
+        "ip_cidr": ["172.19.0.0/30", "fdfe:dcba:9876::/126"],
         "action": "reject",
         "method": "drop",
     }
-    assert rules[3] == {"action": "hijack-dns"}
     assert rules[4] == {"network": "udp", "action": "reject", "method": "default"}
     assert config["route"]["final"] == "tor-socks"
 
@@ -294,8 +294,9 @@ def test_windows_tun_config_is_ipv4_only_and_uses_gvisor_stack(tmp_path, monkeyp
     assert "auto_redirect" not in inbound
     assert inbound["address"] == ["172.19.0.1/30"]
     assert inbound["dns_address"] == ["172.19.0.2"]
-    assert config["route"]["rules"][2] == {
-        "ip_cidr": ["172.19.0.1/32"],
+    assert config["route"]["rules"][2] == {"action": "hijack-dns"}
+    assert config["route"]["rules"][3] == {
+        "ip_cidr": ["172.19.0.0/30"],
         "action": "reject",
         "method": "drop",
     }
