@@ -47,11 +47,50 @@ def test_system_tunnel_config_uses_tcp_tor_socks_and_hijacks_dns(tmp_path, monke
     assert outbound["network"] == "tcp"
     assert config["dns"]["servers"][0]["detour"] == "tor-socks"
     assert rules[0]["outbound"] == "direct"
-    assert str(manager.engine_path.resolve()) in rules[0]["process_path"]
-    assert str(tor.resolve()) in rules[0]["process_path"]
-    assert rules[1] == {"action": "hijack-dns"}
-    assert rules[2] == {"network": "udp", "action": "reject", "method": "default"}
+    assert {"tor", "sing-box"}.issubset(set(rules[0]["process_name"]))
+    assert str(manager.engine_path.resolve()) in rules[1]["process_path"]
+    assert str(tor.resolve()) in rules[1]["process_path"]
+    assert rules[2] == {"action": "hijack-dns"}
+    assert rules[3] == {"network": "udp", "action": "reject", "method": "default"}
     assert config["route"]["final"] == "tor-socks"
+
+
+
+def test_windows_and_linux_helpers_share_one_complete_argument_builder(tmp_path, monkeypatch):
+    manager = _manager(tmp_path)
+    args = manager._helper_action_arguments("start", tmp_path / "helper.json")
+    mapping = {args[i]: args[i + 1] for i in range(0, len(args) - 1, 2) if args[i].startswith("--")}
+    assert mapping["--version"] == manager.version
+    assert mapping["--source-url"] == manager.platform_asset["url"]
+    assert mapping["--archive-type"] == manager.platform_asset["archive"]
+    assert "--release-sha256" in mapping
+    assert "--archive-sha256" in mapping
+    assert "--result" in mapping
+
+
+def test_system_tunnel_start_rolls_back_when_tun_has_no_outbound_tcp_tls(tmp_path, monkeypatch):
+    manager = _manager(tmp_path)
+    monkeypatch.setattr(manager, "is_installed", lambda: True)
+    monkeypatch.setattr(system_tunnel, "_interface_exists", lambda _name: False)
+    monkeypatch.setattr(manager, "_write_and_check_config", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(manager, "_invoke_helper", lambda _action: {"ok": True, "active": True})
+    real_connect = system_tunnel.socket.create_connection
+    stopped = []
+
+    def fake_connect(address, timeout=None, **kwargs):
+        if address == ("127.0.0.1", 9150):
+            class Listener:
+                def __enter__(self): return self
+                def __exit__(self, *_args): return False
+            return Listener()
+        raise OSError("simulated blackholed TUN traffic")
+
+    monkeypatch.setattr(system_tunnel.socket, "create_connection", fake_connect)
+    monkeypatch.setattr(manager, "stop", lambda: stopped.append(True) or "stopped")
+    with pytest.raises(SystemTunnelError, match="stopped automatically"):
+        manager.start(9150, tor_executables=[tmp_path / "tor"])
+    assert stopped == [True]
+    monkeypatch.setattr(system_tunnel.socket, "create_connection", real_connect)
 
 
 def test_tunnel_engine_download_refuses_an_unspecified_network_route(tmp_path, monkeypatch):
