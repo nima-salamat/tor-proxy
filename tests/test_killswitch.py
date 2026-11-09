@@ -365,7 +365,8 @@ def test_windows_saved_local_allow_rules_use_direct_com_name_lookups():
     assert "$rules = $policy.Rules" in helper
     assert "foreach ($name in $names)" in helper
     assert "$rules.Item([string]$name)" in helper
-    assert "[int]$_.Exception.HResult -eq -2147024894" in helper
+    assert "$exception.InnerException" in helper
+    assert "[int]$exception.HResult -eq -2147024894" in helper
     assert "$rule.Enabled = [bool]$enabled" in helper
     assert "Saved name examples:" in helper
     assert "COM name examples:" in helper
