@@ -147,6 +147,44 @@ def test_supported_sing_box_versions_have_pinned_platform_assets(tmp_path):
         assert asset["executable"] in {"sing-box.exe", "sing-box"}
 
 
+def test_upstream_release_can_be_selected_only_with_explicit_approval(tmp_path, monkeypatch):
+    monkeypatch.setattr(system_tunnel.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(system_tunnel.platform, "machine", lambda: "AMD64")
+    manager = _manager(tmp_path)
+    asset = {
+        "url": "https://github.com/SagerNet/sing-box/releases/download/v1.15.0/sing-box-1.15.0-windows-amd64.zip",
+        "filename": "sing-box-1.15.0-windows-amd64.zip",
+        "archive": "zip",
+        "size": 32 * 1024 * 1024,
+        "sha256": "a" * 64,
+    }
+
+    with pytest.raises(SystemTunnelError, match="explicitly accept"):
+        manager.select_version("1.15.0", release_asset=asset)
+
+    manager.select_version("1.15.0", release_asset=asset, allow_unpinned=True)
+
+    assert manager.version == "1.15.0"
+    assert manager.platform_asset["url"] == asset["url"]
+    assert manager.platform_asset["sha256"] == "a" * 64
+
+
+def test_upstream_release_asset_rejects_non_github_download_hosts(tmp_path, monkeypatch):
+    monkeypatch.setattr(system_tunnel.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(system_tunnel.platform, "machine", lambda: "AMD64")
+    manager = _manager(tmp_path)
+    asset = {
+        "url": "https://example.invalid/sing-box-1.15.0-windows-amd64.zip",
+        "filename": "sing-box-1.15.0-windows-amd64.zip",
+        "archive": "zip",
+        "size": 1024,
+        "sha256": "a" * 64,
+    }
+
+    with pytest.raises(SystemTunnelError, match="exact official SagerNet GitHub"):
+        manager.select_version("1.15.0", release_asset=asset, allow_unpinned=True)
+
+
 def test_version_selection_uses_a_version_specific_archive_and_rejects_unpinned_versions(tmp_path):
     manager = _manager(tmp_path)
     latest_archive = manager.archive_path
