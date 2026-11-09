@@ -373,13 +373,13 @@ def test_windows_saved_local_allow_rules_are_processed_in_one_com_collection_pas
     activation_end = _POWERSHELL.index("elseif ($Action -eq 'deactivate')", activation_start)
     activation_script = _POWERSHELL[activation_start:activation_end]
     assert "Set-SnapshotLocalRulesEnabled $snapshot $false" in activation_script
-    assert "Disabling saved local outbound Allow rules in one batch" in activation_script
+    assert "Disabling saved local outbound Allow rules through COM" in activation_script
 
     recovery_start = _POWERSHELL.index("elseif ($Action -eq 'recover')")
     recovery_end = _POWERSHELL.index("elseif ($Action -eq 'emergency')", recovery_start)
     recovery_script = _POWERSHELL[recovery_start:recovery_end]
     assert "Set-SnapshotLocalRulesEnabled $snapshot $true" in recovery_script
-    assert "Restoring saved local outbound Allow rules in one batch" in recovery_script
+    assert "Restoring saved local outbound Allow rules through COM" in recovery_script
 
 
 def test_windows_profile_updates_use_netsecurity_enum_strings():
