@@ -69,8 +69,9 @@ def test_previous_default_on_openpgp_preference_is_migrated_to_off(tmp_path):
 
     assert loaded["verify_tor_signatures"] is False
     saved = json.loads(path.read_text(encoding="utf-8"))
-    assert saved["schema_version"] == 2
+    assert saved["schema_version"] == 3
     assert saved["verify_tor_signatures"] is False
+    assert saved["theme_preference"] == "dark"
 
 
 def test_schema_two_preserves_an_explicit_openpgp_opt_in(tmp_path):
@@ -85,7 +86,53 @@ def test_schema_two_preserves_an_explicit_openpgp_opt_in(tmp_path):
     store = AppConfig()
     store.path = path
 
-    assert store.load()["verify_tor_signatures"] is True
+    loaded = store.load()
+    assert loaded["verify_tor_signatures"] is True
+    assert loaded["theme_preference"] == "dark"
+    assert json.loads(path.read_text(encoding="utf-8"))["schema_version"] == 3
+
+
+def test_new_install_uses_system_theme_preference_by_default(tmp_path):
+    assert DEFAULT_DATA["theme_preference"] == "system"
+
+    store = AppConfig()
+    store.path = tmp_path / "fresh-config.json"
+    loaded = store.load()
+
+    assert loaded["theme_preference"] == "system"
+    assert json.loads(store.path.read_text(encoding="utf-8"))["theme_preference"] == "system"
+
+
+def test_existing_theme_preference_is_preserved_during_schema_migration(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({
+        "schema_version": 2,
+        "mode": "light",
+        "verify_tor_signatures": True,
+    }), encoding="utf-8")
+    store = AppConfig()
+    store.path = path
+
+    loaded = store.load()
+
+    assert loaded["mode"] == "light"
+    assert loaded["theme_preference"] == "light"
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["schema_version"] == 3
+    assert saved["theme_preference"] == "light"
+    assert saved["verify_tor_signatures"] is True
+
+
+def test_theme_preference_accepts_system_light_and_dark_but_rejects_other_values():
+    for preference in ("system", "light", "dark"):
+        data = dict(DEFAULT_DATA)
+        data["theme_preference"] = preference
+        AppConfig._validate(data)
+
+    data = dict(DEFAULT_DATA)
+    data["theme_preference"] = "automatic"
+    with pytest.raises(AppConfigError, match="theme_preference"):
+        AppConfig._validate(data)
 
 
 def test_app_configuration_defaults_to_no_sni_override_and_normalizes_custom_host():
