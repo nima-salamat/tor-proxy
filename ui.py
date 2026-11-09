@@ -516,7 +516,6 @@ class Window(QMainWindow):
         self.updates_nav_button = QToolButton(menu_bar)
         self.updates_nav_button.setObjectName("updatesNavButton")
         self.updates_nav_button.setText("Updates")
-        self._updates_menu_open = False
         self._sync_updates_nav_icon()
         self.updates_nav_button.setIconSize(QSize(17, 17))
         self.updates_nav_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
@@ -639,25 +638,19 @@ class Window(QMainWindow):
         empty.setEnabled(False)
 
     def _on_updates_menu_about_to_show(self):
-        """Track popup visibility without treating the menu as an active page."""
-        self._updates_menu_open = True
-        # The blue checked state represents navigation to Bundles/Tunnel only.
-        self.updates_nav_button.setChecked(self.stack.currentIndex() in {4, 5})
+        """Refresh the Updates button from the currently selected destination."""
         self._sync_updates_nav_icon()
 
     def _on_updates_menu_about_to_hide(self):
-        """Restore the normal Updates icon after the popup closes."""
-        self._updates_menu_open = False
-        self.updates_nav_button.setChecked(self.stack.currentIndex() in {4, 5})
+        """Keep the Updates button tied to the selected destination after closing."""
         self._sync_updates_nav_icon()
 
     def _sync_updates_nav_icon(self, mode=None):
-        """Keep the cloud icon contrast in sync with page and popup state."""
+        """Make the Updates text, cloud icon, and native caret share one state."""
         dark = (mode or CONFIG.get("mode", "dark")) == "dark"
         selected = self.stack.currentIndex() in {4, 5}
-        menu_open = bool(getattr(self, "_updates_menu_open", False))
-        color = "#ffffff" if selected or menu_open else ("#eff1f4" if dark else "#202832")
-        # Keep the cloud glyph unchanged; only its contrast follows popup visibility.
+        self.updates_nav_button.setChecked(selected)
+        color = "#ffffff" if selected else ("#eff1f4" if dark else "#202832")
         self.updates_nav_button.setIcon(qta.icon("fa6s.cloud-arrow-down", color=color))
     def _apply_shell_styles(self, mode=None):
         dark = (mode or CONFIG["mode"]) == "dark"
