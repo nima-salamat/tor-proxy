@@ -69,6 +69,14 @@ class UpdatesMenuButton(QToolButton):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._menu_indicator_color = QColor("#202832")
+        self._menu_indicator_open = False
+
+    def setMenuIndicatorOpen(self, opened):
+        """Point the chevron upward only while its popup is open."""
+        opened = bool(opened)
+        if opened != self._menu_indicator_open:
+            self._menu_indicator_open = opened
+            self.update()
 
     def setMenuIndicatorColor(self, color):
         """Set the dropdown chevron to the exact foreground used by the label."""
@@ -95,10 +103,10 @@ class UpdatesMenuButton(QToolButton):
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
-        center_x = self.rect().right() - 11
+        center_x = self.rect().right() - 14
         center_y = self.rect().center().y()
         path = QPainterPath()
-        if self.menu().isVisible():
+        if self._menu_indicator_open:
             path.moveTo(center_x - 3, center_y + 1)
             path.lineTo(center_x, center_y - 2)
             path.lineTo(center_x + 3, center_y + 1)
@@ -694,15 +702,17 @@ class Window(QMainWindow):
         empty.setEnabled(False)
 
     def _on_updates_menu_about_to_show(self):
-        """Refresh the Updates button from the currently selected destination."""
+        """Point the dropdown chevron upward while the menu is visible."""
+        self.updates_nav_button.setMenuIndicatorOpen(True)
         self._sync_updates_nav_icon()
 
     def _on_updates_menu_about_to_hide(self):
-        """Keep the Updates button tied to the selected destination after closing."""
+        """Restore the dropdown chevron after the menu closes."""
+        self.updates_nav_button.setMenuIndicatorOpen(False)
         self._sync_updates_nav_icon()
 
     def _sync_updates_nav_icon(self, mode=None):
-        """Make the Updates text, cloud icon, and native caret share one state."""
+        """Make the Updates text, cloud icon, and dropdown chevron share one state."""
         dark = (mode or CONFIG.get("mode", "dark")) == "dark"
         selected = self.stack.currentIndex() in {4, 5}
         self.updates_nav_button.setChecked(selected)
