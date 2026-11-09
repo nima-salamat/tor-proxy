@@ -166,9 +166,8 @@ class TorManager:
     def _stop_stale_managed_tor_processes(self) -> None:
         """Reap Tor children left behind by an exited TorProxy UI, but only for our exact torrc."""
         target_torrc = os.path.normcase(str(self.torrc_path.resolve()))
-        target_executable = os.path.normcase(str(Path(self.settings.executable).expanduser().resolve()))
         matching = []
-        for process in psutil.process_iter(["pid", "name", "cmdline", "exe"]):
+        for process in psutil.process_iter(["pid", "name", "cmdline"]):
             try:
                 info = process.info
                 if int(info.get("pid") or 0) == os.getpid():
@@ -178,15 +177,9 @@ class TorManager:
                 executable_name = Path(str(command[0])).name.casefold() if command else ""
                 if name not in {"tor", "tor.exe"} and executable_name not in {"tor", "tor.exe"}:
                     continue
-                # Match the exact bundled Tor executable as well as its dedicated torrc.
-                # A different Tor installation must never be killed just because it
-                # happens to use a conflicting loopback port.
-                reported_executable = info.get("exe") or (command[0] if command else "")
-                actual_executable = os.path.normcase(
-                    str(Path(str(reported_executable)).expanduser().resolve())
-                ) if reported_executable else ""
-                if actual_executable != target_executable:
-                    continue
+                # The per-user torrc path is TorProxy's ownership marker. Keep
+                # this check independent of the selected bundle version so a child
+                # from an older Expert Bundle can still be reaped after an update.
                 uses_managed_torrc = any(
                     argument
                     and os.path.normcase(str(Path(str(argument).strip('"')).resolve())) == target_torrc
@@ -205,7 +198,7 @@ class TorManager:
             return
         process_ids = [process.pid for process in matching]
         LOGGER.warning(
-            "Found stale Tor process(es) %s using TorProxy's exact executable and dedicated torrc; stopping them "
+            "Found stale Tor process(es) %s still using TorProxy's dedicated torrc; stopping them "
             "before reusing the data directory.",
             process_ids,
         )
