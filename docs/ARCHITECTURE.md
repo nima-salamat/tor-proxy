@@ -19,7 +19,7 @@ flowchart TD
 
 ## Process lifecycle
 
-`TorManager` owns only the subprocess it creates. It validates the executable and generated torrc, uses Tor's configuration verification mode before launch, redirects child output to a file rather than leaving pipes undrained, and polls the process while waiting for the authenticated ControlPort and bootstrap status. Startup has a deadline. Shutdown requests termination of the managed child, waits a bounded interval, then force-terminates if required.
+`TorManager` owns only the subprocess it creates. Before reusing its listener ports and data directory it reaps stale Tor children only when both the executable path and the dedicated TorProxy `torrc` match; a different Tor installation is never killed just because it uses a conflicting port. It validates the executable and generated torrc, uses Tor's configuration verification mode before launch, redirects child output to a file rather than leaving pipes undrained, and polls the process while waiting for the authenticated ControlPort and bootstrap status. Startup has a deadline. Shutdown requests termination of the managed child, waits a bounded interval, then force-terminates if required.
 
 States are `STOPPED`, `STARTING`, `BOOTSTRAPPING`, `READY`, `STOPPING`, and `FAILED`. `READY` means Tor reported a completed bootstrap, the ControlPort responded after authentication, the control endpoint identified the managed PID, and the SOCKS TCP listener accepted a connection. It does not mean every destination is reachable; the proxied IP check tests a real request separately.
 
@@ -31,7 +31,7 @@ The HTTP proxy is an independent local service. It is loopback-only. HTTP absolu
 - `TorRunner` runs blocking supervisor work on a dedicated Python thread and emits Qt signals for logs and failures.
 - HTTP requests run in handler threads.
 - HTTP request handlers run in threads because proxy work is predominantly socket I/O; the local listener and its lifecycle remain in a dedicated background thread.
-- The traffic tracker drains a bounded, non-blocking byte-event queue and persists totals plus minute-level upload/download history to a per-user SQLite database on its own background thread. It never writes to disk from a socket handler; old minute buckets are pruned after 180 days.
+- The traffic tracker drains a bounded, non-blocking byte-event queue and persists totals plus minute-level upload/download history to a per-user SQLite database on its own background thread. It accounts for HTTP-proxy relay bytes and samples the TorProxy TUN adapter counters once per second, away from socket callbacks; it never writes to disk from a relay handler. Old minute buckets are pruned after 180 days.
 - Network requests and bundle installation run in UI worker tasks; results/errors return through worker signals.
 - TorProxy-owned HTTP requests share an explicit-route client. When Tor is READY, release discovery, artifact checks, archive/signature downloads, and pinned-key retrieval use the live loopback SOCKS5H endpoint with remote DNS. When Tor is not READY, direct bootstrap requires a separate per-operation user confirmation; a failed Tor request never falls back to direct networking.
 
