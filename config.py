@@ -29,7 +29,7 @@ BUNDLE_DIR = str(user_directories().data / "bundles")
 CHECKSUM_FILE = "sha256sums.txt"
 TOR_BUNDLE_BASE_URL = "https://dist.torproject.org/torbrowser/"
 TOR_BUNDLE_FALLBACK_URL = "https://archive.torproject.org/tor-package-archive/torbrowser/"
-CURRENT_CONFIG_SCHEMA = 2
+CURRENT_CONFIG_SCHEMA = 3
 
 DEFAULT_DATA: dict[str, Any] = {
     "schema_version": CURRENT_CONFIG_SCHEMA,
@@ -38,6 +38,7 @@ DEFAULT_DATA: dict[str, Any] = {
     "auto_prune_bridges": False,
     "webtunnel_sni_imitation": "",
     "mode": "dark",
+    "theme_preference": "system",
     "tor_port": None,
     "tor_port_checked": False,
     "proxy_port": None,
@@ -105,6 +106,8 @@ class Config:
     def _validate(data: dict[str, Any]) -> None:
         if data.get("mode", "dark") not in {"dark", "light"}:
             raise ConfigError("mode must be 'dark' or 'light'.")
+        if data.get("theme_preference", "system") not in {"system", "dark", "light"}:
+            raise ConfigError("theme_preference must be 'system', 'dark', or 'light'.")
         if data.get("system_proxy_mode", "unchanged") not in {"set", "unchanged", "clear"}:
             raise ConfigError("system_proxy_mode must be 'set', 'unchanged', or 'clear'.")
 
@@ -189,7 +192,12 @@ class Config:
                 merged = dict(DEFAULT_DATA)
                 merged.update(payload)
                 schema_version = payload.get("schema_version", 1)
-                if type(schema_version) is not int or schema_version < CURRENT_CONFIG_SCHEMA:
+                if "theme_preference" not in payload:
+                    # Older exports stored only the effective theme. Preserve
+                    # that explicit choice instead of silently switching users
+                    # to system-following mode on import.
+                    merged["theme_preference"] = payload.get("mode", "dark")
+                if type(schema_version) is not int or schema_version < 2:
                     merged["verify_tor_signatures"] = False
                 self._validate(merged)
                 self._save_data(merged)
@@ -230,7 +238,9 @@ class Config:
                     merged = dict(DEFAULT_DATA)
                 if source is not None:
                     legacy_schema = raw.get("schema_version", 1)
-                    if type(legacy_schema) is not int or legacy_schema < CURRENT_CONFIG_SCHEMA:
+                    if "theme_preference" not in raw:
+                        merged["theme_preference"] = raw.get("mode", "dark")
+                    if type(legacy_schema) is not int or legacy_schema < 2:
                         merged["verify_tor_signatures"] = False
                 self._validate(merged)
                 self._save_data(merged)
@@ -245,8 +255,13 @@ class Config:
             merged = dict(DEFAULT_DATA)
             merged.update({key: value for key, value in raw.items() if key in LEGACY_KEYS})
             schema_version = raw.get("schema_version", 1)
-            if type(schema_version) is not int or schema_version < CURRENT_CONFIG_SCHEMA:
+            migrated = "theme_preference" not in raw
+            if migrated:
+                merged["theme_preference"] = raw.get("mode", "dark")
+            if type(schema_version) is not int or schema_version < 2:
                 merged["verify_tor_signatures"] = False
+                migrated = True
+            if migrated or type(schema_version) is not int or schema_version < CURRENT_CONFIG_SCHEMA:
                 self._validate(merged)
                 self._save_data(merged)
             else:
