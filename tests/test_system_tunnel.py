@@ -54,6 +54,84 @@ def test_system_tunnel_config_uses_tcp_tor_socks_and_hijacks_dns(tmp_path, monke
     assert config["route"]["final"] == "tor-socks"
 
 
+def test_windows_wfp_tun_exception_is_installed_after_live_adapter_creation(tmp_path):
+    helper = tmp_path / "TorProxyWfpHelper.exe"
+    helper.write_bytes(b"test helper")
+    calls = []
+
+    class Result:
+        def __init__(self, stdout, returncode=0):
+            self.stdout = stdout
+            self.returncode = returncode
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        assert kwargs["timeout"] == 10
+        if args[-1] == "status":
+            return Result("ACTIVE filters=11 tun_interface_allowed=false")
+        assert args[-1] == "allow-tun"
+        return Result("ACTIVE filters=13 tun_interface_allowed=true")
+
+    enabled = system_tunnel._apply_wfp_tun_exception(helper, fake_run)
+
+    assert enabled is True
+    assert calls == [
+        [str(helper), "status"],
+        [str(helper), "allow-tun"],
+    ]
+
+
+def test_windows_wfp_tun_exception_does_not_add_permit_without_active_killswitch(tmp_path):
+    helper = tmp_path / "TorProxyWfpHelper.exe"
+    helper.write_bytes(b"test helper")
+    calls = []
+
+    class Result:
+        returncode = 0
+        stdout = "INACTIVE filters=0 tun_interface_allowed=false"
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        return Result()
+
+    enabled = system_tunnel._apply_wfp_tun_exception(helper, fake_run)
+
+    assert enabled is False
+    assert calls == [[str(helper), "status"]]
+
+
+def test_windows_wfp_tun_exception_refuses_incomplete_filter_policy(tmp_path):
+    helper = tmp_path / "TorProxyWfpHelper.exe"
+    helper.write_bytes(b"test helper")
+
+    class Result:
+        returncode = 0
+        stdout = "INCOMPLETE filters=4 tun_interface_allowed=false"
+
+    with pytest.raises(SystemTunnelError, match="incomplete filter set"):
+        system_tunnel._apply_wfp_tun_exception(helper, lambda *_args, **_kwargs: Result())
+
+
+def test_windows_wfp_tun_exception_requires_verified_adapter_luid_result(tmp_path):
+    helper = tmp_path / "TorProxyWfpHelper.exe"
+    helper.write_bytes(b"test helper")
+
+    class Result:
+        def __init__(self, stdout, returncode=0):
+            self.stdout = stdout
+            self.returncode = returncode
+
+    responses = iter([
+        Result("ACTIVE filters=11 tun_interface_allowed=false"),
+        Result("ACTIVE filters=11 tun_interface_allowed=false"),
+    ])
+
+    with pytest.raises(SystemTunnelError, match="did not confirm its exact interface exception"):
+        system_tunnel._apply_wfp_tun_exception(
+            helper, lambda *_args, **_kwargs: next(responses)
+        )
+
+
 def test_system_tunnel_config_requires_a_valid_tor_executable(tmp_path):
     manager = _manager(tmp_path)
     with pytest.raises(SystemTunnelError, match="Tor executable"):
