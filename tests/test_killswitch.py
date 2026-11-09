@@ -202,9 +202,6 @@ def test_linux_helper_dispatch_rejects_malformed_cgroup_arguments(capsys):
     assert "Unsupported firewall helper action" in captured.out
 
 
-@pytest.mark.skipif(os.name == "nt", reason="The Linux firewall backend requires Linux cgroup v2.")
-
-
 def test_linux_backend_reports_a_bounded_helper_timeout():
     from torproxy.firewall.linux import HELPER_TIMEOUT_SECONDS, LinuxFirewallBackend
 
@@ -222,6 +219,7 @@ def test_linux_backend_reports_a_bounded_helper_timeout():
     assert calls[0][1]["timeout"] == HELPER_TIMEOUT_SECONDS == 180
 
 
+@pytest.mark.skipif(os.name == "nt", reason="The Linux firewall backend requires Linux cgroup v2.")
 def test_linux_backend_passes_numeric_cgroup_id_and_level_without_shell(monkeypatch):
     from torproxy.firewall import linux
 
