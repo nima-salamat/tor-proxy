@@ -254,12 +254,16 @@ def test_updates_nav_icon_and_text_follow_only_the_active_updates_page(monkeypat
     class _Button:
         icon = None
         checked = None
+        indicator_color = None
 
         def setIcon(self, icon):
             self.icon = icon
 
         def setChecked(self, checked):
             self.checked = checked
+
+        def setMenuIndicatorColor(self, color):
+            self.indicator_color = color
 
     fake = SimpleNamespace(
         stack=_Stack(4),
@@ -272,6 +276,7 @@ def test_updates_nav_icon_and_text_follow_only_the_active_updates_page(monkeypat
     ui.Window._sync_updates_nav_icon(fake, "light")
     assert fake.updates_nav_button.checked is True
     assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-down", "#ffffff")
+    assert fake.updates_nav_button.indicator_color == "#ffffff"
 
     fake.stack.page = 5
     ui.Window._sync_updates_nav_icon(fake, "dark")
@@ -283,16 +288,19 @@ def test_updates_nav_icon_and_text_follow_only_the_active_updates_page(monkeypat
     ui.Window._sync_updates_nav_icon(fake, "light")
     assert fake.updates_nav_button.checked is False
     assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-down", "#202832")
+    assert fake.updates_nav_button.indicator_color == "#202832"
 
     ui.Window._on_updates_menu_about_to_show(fake)
     assert fake.updates_nav_button.checked is False
     assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-down", "#202832")
+    assert fake.updates_nav_button.indicator_color == "#202832"
 
     # Switching into an Updates page while the popup is shown follows page state.
     fake.stack.page = 4
     ui.Window._on_updates_menu_about_to_show(fake)
     assert fake.updates_nav_button.checked is True
     assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-down", "#ffffff")
+    assert fake.updates_nav_button.indicator_color == "#ffffff"
 
     ui.Window._on_updates_menu_about_to_hide(fake)
     assert fake.updates_nav_button.checked is True
@@ -304,6 +312,48 @@ def test_updates_nav_icon_and_text_follow_only_the_active_updates_page(monkeypat
     assert fake.updates_nav_button.checked is False
     ui.Window._sync_updates_nav_icon(fake, "dark")
     assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-down", "#eff1f4")
+
+
+def test_updates_dropdown_chevron_uses_explicit_theme_foreground(qt_app):
+    from PySide6.QtGui import QColor, QImage
+    from PySide6.QtWidgets import QMenu
+    from PySide6.QtCore import Qt
+    import ui
+
+    button = ui.UpdatesMenuButton()
+    menu = QMenu(button)
+    button.setMenu(menu)
+    button.setPopupMode(ui.QToolButton.ToolButtonPopupMode.InstantPopup)
+    button.setStyleSheet(
+        "QToolButton::menu-indicator { image: none; width: 12px; }"
+    )
+    button.resize(150, 36)
+    button.setMenuIndicatorColor("#202832")
+    button.show()
+    qt_app.processEvents()
+
+    def rendered_chevron_pixel():
+        image = QImage(button.size(), QImage.Format.Format_ARGB32)
+        image.fill(Qt.GlobalColor.transparent)
+        button.render(image)
+        return image.pixelColor(button.width() - 11, button.height() // 2 + 2)
+
+    dark_text_pixel = rendered_chevron_pixel()
+    assert dark_text_pixel.red() < 70
+    assert dark_text_pixel.green() < 80
+    assert dark_text_pixel.blue() < 90
+
+    button.setMenuIndicatorColor("#ffffff")
+    qt_app.processEvents()
+    white_text_pixel = rendered_chevron_pixel()
+    assert white_text_pixel.red() > 230
+    assert white_text_pixel.green() > 230
+    assert white_text_pixel.blue() > 230
+
+    button.close()
+    menu.deleteLater()
+    button.deleteLater()
+    qt_app.processEvents()
 
 
 def test_updates_menu_initialization_avoids_undefined_mode_and_tracks_popup_state():
@@ -320,6 +370,10 @@ def test_updates_menu_initialization_avoids_undefined_mode_and_tracks_popup_stat
     assert 'self.updates_nav_button.setIcon(qta.icon("fa6s.cloud-arrow-down", color=color))' in source
     assert 'self.updates_nav_button.setChecked(selected)' in source
     assert 'color = "#ffffff" if selected else ("#eff1f4" if dark else "#202832")' in source
+    assert 'self.updates_nav_button.setMenuIndicatorColor(color)' in source
+    assert "class UpdatesMenuButton(QToolButton):" in source
+    assert "QToolButton#updatesNavButton::menu-indicator {{" in source
+    assert "image: none;" in source
     assert "_updates_menu_open" not in source
     assert "QPushButton#topNavButton, QToolButton#updatesNavButton {{" in source
     assert "QToolButton#updatesNavButton::menu-button" not in source
