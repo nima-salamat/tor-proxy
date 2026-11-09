@@ -305,8 +305,10 @@ def test_windows_backend_includes_the_native_wfp_helper_path_in_request(tmp_path
     )
     backend.activate((str(executable.resolve()),))
 
+    persisted_helper = tmp_path / "state" / "native" / "TorProxyWfpHelper.exe"
     assert calls[0][0] == "activate"
-    assert calls[0][1]["wfp_helper_path"] == str(helper.resolve())
+    assert calls[0][1]["wfp_helper_path"] == str(persisted_helper)
+    assert persisted_helper.read_bytes() == b"test stub"
     assert calls[0][1]["programs"] == [str(executable.resolve())]
 
 
