@@ -798,10 +798,22 @@ class SystemTunnelManager:
                     "sing-box 1.15 and newer use the new native TUN stack; the legacy stack option must be omitted."
                 )
 
+        # Answer client DNS locally with synthetic addresses. The reverse mapping
+        # restores the requested hostname for the SOCKS5 request, allowing Tor to
+        # resolve it at the exit without opening a DoH connection inside gVisor.
+        fakeip_server = {
+            "type": "fakeip",
+            "tag": "tor-fakeip",
+            "inet4_range": "198.18.0.0/15",
+        }
+        if not windows_tun:
+            fakeip_server["inet6_range"] = "2001:2::/48"
+
         return {
             "log": {"level": "info", "timestamp": True},
             "dns": {
                 "servers": [
+                    fakeip_server,
                     {
                         "type": "https",
                         "tag": "tor-doh",
@@ -810,9 +822,13 @@ class SystemTunnelManager:
                         "path": "/dns-query",
                         "tls": {"enabled": True, "server_name": "cloudflare-dns.com"},
                         "detour": "tor-socks",
-                    }
+                    },
                 ],
+                # Client queries use FakeIP. sing-box skips FakeIP servers for
+                # internal lookups and uses this Tor-routed fallback instead.
+                "rules": [{"action": "route", "server": "tor-fakeip"}],
                 "final": "tor-doh",
+                "reverse_mapping": True,
             },
             "inbounds": [tun],
             "outbounds": [
@@ -1341,15 +1357,27 @@ def _helper_start(args: Any) -> dict[str, Any]:
         raise SystemTunnelError("The privileged helper rejected an unexpected outbound configuration.")
     dns = config.get("dns", {})
     servers = dns.get("servers", [])
-    if set(dns) != {"servers", "final"} or dns.get("final") != "tor-doh" or len(servers) != 1:
-        raise SystemTunnelError("The privileged helper rejected the DNS configuration.")
-    if servers[0] != {
+    expected_fakeip_server = {
+        "type": "fakeip", "tag": "tor-fakeip", "inet4_range": "198.18.0.0/15"
+    }
+    if not windows_tun:
+        expected_fakeip_server["inet6_range"] = "2001:2::/48"
+    expected_tor_doh_server = {
         "type": "https", "tag": "tor-doh", "server": "1.1.1.1", "server_port": 443,
         "path": "/dns-query",
         "tls": {"enabled": True, "server_name": "cloudflare-dns.com"},
         "detour": "tor-socks",
-    }:
-        raise SystemTunnelError("DNS must use the pinned HTTPS resolver through Tor SOCKS.")
+    }
+    if (
+        set(dns) != {"servers", "rules", "final", "reverse_mapping"}
+        or dns.get("final") != "tor-doh"
+        or dns.get("reverse_mapping") is not True
+        or dns.get("rules") != [{"action": "route", "server": "tor-fakeip"}]
+        or servers != [expected_fakeip_server, expected_tor_doh_server]
+    ):
+        raise SystemTunnelError(
+            "DNS must use local FakeIP with reverse mapping and a Tor-routed internal fallback."
+        )
     route = config.get("route", {})
     if set(route) != {"auto_detect_interface", "rules", "final"} or route.get("auto_detect_interface") is not True or route.get("final") != "block":
         raise SystemTunnelError("The privileged helper rejected the routing defaults.")
