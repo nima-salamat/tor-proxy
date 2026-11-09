@@ -1534,3 +1534,19 @@ def test_proxy_state_refreshes_the_tunnel_page_and_home_status():
     assert 'self._update_tunnel_hint()' in update
     assert 'refresh_tunnel_page = getattr(tunnel_page, "_refresh_state", None)' in update
     assert 'refresh_tunnel_page()' in update
+
+
+
+def test_main_window_requests_small_dwm_corners_only_when_restored():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui.py").read_text(encoding="utf-8")
+
+    assert "def _apply_native_window_corners(self):" in source
+    assert "if not IS_WINDOWS:" in source
+    assert "ctypes.WinDLL(\"dwmapi\"" in source
+    assert "# DWMWA_WINDOW_CORNER_PREFERENCE = 33" in source
+    assert "# DWMWCP_DONOTROUND = 1; DWMWCP_ROUNDSMALL = 3." in source
+    assert "1 if self.isMaximized() or self.isFullScreen() else 3" in source
+    assert "QTimer.singleShot(0, self._apply_native_window_corners)" in source
+    assert "setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground" not in source
+
