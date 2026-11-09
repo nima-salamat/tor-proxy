@@ -276,6 +276,12 @@ def test_windows_wfp_source_uses_persistent_filters_and_one_transaction():
     assert "FWPM_CONDITION_ICMP_TYPE" not in source
     assert "FWPM_SESSION_FLAG_DYNAMIC" not in source
     assert "FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT" not in source
+    assert "void allowTunnelInterface()" in source
+    assert 'action == L"allow-tun"' in source
+    assert 'ConvertInterfaceNameToLuidW(L"TorProxy"' in source
+    assert "removeTunnelPermitFilters(engine.get())" in source
+    assert "matchesTunnelLuid" in source
+    assert "tun_interface_allowed=" in source
 
 
 def test_windows_wfp_cmake_target_is_installed_with_the_desktop_package():
@@ -473,6 +479,7 @@ def test_windows_helper_reports_wfp_phases_without_affecting_firewall_work():
     assert "Progress reporting must never prevent a firewall operation." in _POWERSHELL
     assert "Installing persistent IPv4/IPv6 WFP filters in one transaction" in _POWERSHELL
     assert "Removing TorProxy-owned persistent WFP filters in one transaction" in _POWERSHELL
+    assert "$tunAllowed = $detail -match 'tun_interface_allowed=true'" in _POWERSHELL
 
 
 def test_linux_install_is_idempotent_without_restarting_the_live_drop_chain(tmp_path, monkeypatch):
