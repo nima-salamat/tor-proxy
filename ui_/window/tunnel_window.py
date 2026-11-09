@@ -102,11 +102,6 @@ class TunnelManagerWindow(QWidget):
         release_heading = QLabel("Available releases")
         release_heading.setObjectName("sectionTitle")
         release_heading_row.addWidget(release_heading, 1)
-        self.versions_list = QListWidget(self.release_panel)
-        self.versions_list.setObjectName("releaseList")
-        self.versions_list.setUniformItemSizes(True)
-        self.versions_list.currentItemChanged.connect(self._on_version_changed)
-        release_layout.addWidget(self.versions_list, 1)
         self.btn_check_latest = QPushButton("Check latest release")
         self.btn_check_latest.setObjectName("quietButton")
         self.btn_check_latest.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -114,6 +109,11 @@ class TunnelManagerWindow(QWidget):
         self.btn_check_latest.clicked.connect(self.check_latest_release)
         release_heading_row.addWidget(self.btn_check_latest)
         release_layout.addLayout(release_heading_row)
+        self.versions_list = QListWidget(self.release_panel)
+        self.versions_list.setObjectName("releaseList")
+        self.versions_list.setUniformItemSizes(True)
+        self.versions_list.currentItemChanged.connect(self._on_version_changed)
+        release_layout.addWidget(self.versions_list, 1)
         content.addWidget(self.release_panel, 2)
 
         details_panel = QFrame(self)
@@ -329,8 +329,18 @@ class TunnelManagerWindow(QWidget):
     def _refresh_state(self) -> None:
         if self.manager is None:
             return
-        status = self.manager.status()
-        installed_version = self.manager.installed_version
+        try:
+            status = self.manager.status()
+            installed_version = self.manager.installed_version
+        except Exception as exc:
+            logger = __import__("logging").getLogger(__name__)
+            logger.debug("Could not refresh system tunnel state: %s", exc)
+            self.installed_state.setText("Tunnel state is unavailable · inspect the event log")
+            self.btn_start_stop.setText("Status unavailable")
+            self.btn_start_stop.setEnabled(False)
+            self.btn_test_connection.setEnabled(False)
+            self.btn_start_stop.setIcon(qta.icon("fa6s.triangle-exclamation"))
+            return
         selected_version = self._selected_version()
         try:
             selected_installed = self.manager.is_installed()
@@ -384,6 +394,15 @@ class TunnelManagerWindow(QWidget):
         else:
             self.btn_start_stop.setText("Start system tunnel")
             self.btn_start_stop.setEnabled(not self._busy)
+
+        if status.get("active"):
+            action_icon = "fa6s.stop"
+        elif not status.get("verified", True):
+            action_icon = "fa6s.arrows-rotate"
+        else:
+            action_icon = "fa6s.play"
+        self.btn_start_stop.setIcon(qta.icon(action_icon, color=icon_color))
+        self.btn_test_connection.setIcon(qta.icon("fa6s.flask", color=icon_color))
 
     def _resolve_network_route(self, purpose: str) -> tuple[str | None, bool] | None:
         """Prefer the ready Tor SOCKS listener; direct bootstrap always needs consent."""
@@ -716,6 +735,7 @@ class TunnelManagerWindow(QWidget):
         text = "#eff1f4" if dark else "#202832"
         muted = "#a6afb9" if dark else "#647080"
         icon_color = "#dce8f4" if dark else "#334155"
+        self._style_icon_color = icon_color
         self.setStyleSheet(f"""
             QLabel#pageTitle {{ color: {text}; font-size: 20px; font-weight: 750; background: transparent; }}
             QLabel#bundlePageIcon {{ background: transparent; border: none; }}
@@ -741,7 +761,7 @@ class TunnelManagerWindow(QWidget):
         self.btn_open_release.setIcon(qta.icon("fa6s.arrow-up-right-from-square", color=icon_color))
         self.btn_check_latest.setIcon(qta.icon("fa6s.rotate", color=icon_color))
         self.btn_install.setIcon(qta.icon("fa6s.download", color="#ffffff"))
-        self.btn_start_stop.setIcon(qta.icon("fa6s.stop" if self.manager and self.manager.status().get("active") else "fa6s.play", color=icon_color))
+        self.btn_start_stop.setIcon(qta.icon("fa6s.play", color=icon_color))
         self.btn_test_connection.setIcon(qta.icon("fa6s.flask", color=icon_color))
 
 
