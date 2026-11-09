@@ -393,7 +393,9 @@ def test_windows_activation_uses_transactional_wfp_without_per_rule_updates():
     assert "Set-NetFirewallProfile" not in activation_script
     assert "Set-SnapshotLocalRulesEnabled" not in activation_script
     assert "Save-Snapshot" not in activation_script
-    assert "do not change existing Windows Firewall rules or profile defaults" in _POWERSHELL
+    assert "Set-NetFirewallProfile" not in activation_script
+    assert "Get-NetFirewallRule" not in activation_script
+    assert "Invoke-WfpHelper 'activate' $programs" in activation_script
 
 
 def test_windows_legacy_recovery_only_suppresses_missing_owned_rule_groups():
