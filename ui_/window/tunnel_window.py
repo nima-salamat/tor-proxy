@@ -382,6 +382,21 @@ class TunnelManagerWindow(QWidget):
             allow_direct=allow_direct,
         )
 
+    def toggle_tunnel_from_home(self) -> None:
+        """Start the installed version from Home without changing the page selection."""
+        if self._busy or self.manager is None:
+            return
+        state = self.manager.status()
+        if not state.get("active") and state.get("verified", True):
+            installed_version = self.manager.installed_version
+            if installed_version:
+                for index in range(self.versions_list.count()):
+                    item = self.versions_list.item(index)
+                    if str(item.data(Qt.ItemDataRole.UserRole)) == installed_version:
+                        self.versions_list.setCurrentItem(item)
+                        break
+        self.toggle_tunnel()
+
     def toggle_tunnel(self) -> None:
         if self._busy or self.manager is None or self.proxy is None:
             return
