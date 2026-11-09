@@ -70,6 +70,44 @@ def test_windows_and_linux_helpers_share_one_complete_argument_builder(tmp_path,
     assert "--result" in mapping
 
 
+def test_socks5_connect_probe_sends_protocol_bytes_and_completes_connect(monkeypatch):
+    class FakeSocket:
+        def __init__(self):
+            self.responses = bytearray(bytes((5, 0, 5, 0, 0, 1, 1, 1, 1, 1, 1, 187)))
+            self.sent = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def settimeout(self, _timeout):
+            pass
+
+        def sendall(self, payload):
+            self.sent.append(payload)
+
+        def recv(self, size):
+            result = bytes(self.responses[:size])
+            del self.responses[:size]
+            return result
+
+    fake = FakeSocket()
+    monkeypatch.setattr(
+        system_tunnel.socket,
+        "create_connection",
+        lambda _address, timeout=None: fake,
+    )
+
+    SystemTunnelManager._socks5_connect_probe(9150, "1.1.1.1", 443)
+
+    assert fake.sent == [
+        bytes((5, 1, 0)),
+        bytes((5, 1, 0, 1, 1, 1, 1, 1, 187)),
+    ]
+
+
 def test_system_tunnel_start_rolls_back_when_tun_has_no_outbound_tcp_tls(tmp_path, monkeypatch):
     manager = _manager(tmp_path)
     monkeypatch.setattr(manager, "is_installed", lambda: True)
