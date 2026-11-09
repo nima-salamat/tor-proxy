@@ -1161,6 +1161,16 @@ def test_home_places_system_proxy_and_tunnel_controls_in_one_row():
     assert "self.home_layout.addLayout(proxy_row)" not in source
 
 
+def test_home_proxy_controls_hide_explanatory_copy_and_blend_with_home_surface():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+
+    assert "self.proxy_status_label.setVisible(False)" in source
+    assert "proxy_controls_layout.addWidget(self.proxy_status_label)" not in source
+    assert "background: transparent; color: {text};" in source
+    assert "QFrame#systemProxyControls" not in source
+
+
 def test_home_tunnel_controls_start_and_stop_installed_engine_without_showing_manage():
     repository = Path(__file__).resolve().parents[1]
     home_source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
