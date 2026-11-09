@@ -14,6 +14,7 @@ import platform
 import re
 import shutil
 import socket
+import ssl
 import stat
 import subprocess
 import sys
@@ -895,7 +896,32 @@ class SystemTunnelManager:
         result = self._invoke_helper("start")
         if not result.get("ok") or not result.get("active"):
             raise SystemTunnelError(str(result.get("error") or result.get("detail") or "Tunnel start failed."))
-        return str(result.get("detail") or "System tunnel started.")
+
+        # Validate a real outbound connection from this ordinary, non-bypassed
+        # TorProxy process. This catches a TUN that creates an adapter but blackholes
+        # every application flow because the Tor/sing-box bypass rules are wrong.
+        try:
+            with socket.create_connection(("1.1.1.1", 443), timeout=10) as raw:
+                raw.settimeout(10)
+                with ssl.create_default_context().wrap_socket(
+                    raw, server_hostname="cloudflare-dns.com"
+                ) as verified:
+                    if not verified.getpeercert():
+                        raise ssl.SSLError("The Cloudflare TLS peer did not provide a certificate.")
+        except (OSError, ssl.SSLError) as exc:
+            try:
+                self.stop()
+            except Exception as stop_exc:
+                raise SystemTunnelError(
+                    "sing-box created the TUN interface, but the outbound TCP/TLS probe through Tor failed "
+                    f"({exc}); automatic tunnel rollback also failed ({stop_exc}). Check the tunnel state and routes."
+                ) from exc
+            raise SystemTunnelError(
+                "sing-box created the TUN interface, but ordinary TCP/TLS traffic could not pass through "
+                "Tor to Cloudflare (1.1.1.1:443). The tunnel was stopped automatically instead of leaving "
+                "your network blackholed. Check Tor SOCKS connectivity and the process-bypass routes."
+            ) from exc
+        return "System tunnel started; outbound TCP/TLS through Tor was verified."
 
     def stop(self) -> str:
         result = self._invoke_helper("stop", timeout=HELPER_STOP_TIMEOUT_SECONDS + 20)
@@ -909,6 +935,28 @@ class SystemTunnelManager:
         main_script = Path(__file__).resolve().parents[2] / "main.py"
         return [sys.executable, str(main_script), "--system-tunnel-helper"]
 
+    def _helper_action_arguments(self, action: str, result_path: Path) -> list[str]:
+        """Build one identical, parser-compatible argument list for Linux and Windows."""
+        manifest = _read_json(self.install_manifest) or {}
+        asset = self.platform_asset
+        return [
+            action,
+            "--version", self.version,
+            "--engine", str(self.engine_path),
+            "--config", str(self.config_path),
+            "--state", str(self.process_state_path),
+            "--log", str(self.log_path),
+            "--sha256", self.engine_sha256 if action == "start" else "",
+            "--archive", str(self.archive_path),
+            "--archive-sha256", str(manifest.get("archive_sha256") or asset.get("sha256") or ""),
+            "--release-sha256", str(asset.get("sha256") or ""),
+            "--source-url", str(asset["url"]),
+            "--archive-type", str(asset["archive"]),
+            *(["--unverified-release"] if self.version not in _ENGINE_RELEASES else []),
+            "--interface", self.interface_name,
+            "--result", str(result_path),
+        ]
+
     def _invoke_helper(self, action: str, timeout: float = HELPER_START_TIMEOUT_SECONDS + 20) -> dict[str, Any]:
         if os.name == "nt":
             return self._invoke_windows_helper(action, timeout)
@@ -920,21 +968,7 @@ class SystemTunnelManager:
         command = [
             pkexec,
             *self._helper_base(),
-            action,
-            "--version", self.version,
-            "--engine", str(self.engine_path),
-            "--config", str(self.config_path),
-            "--state", str(self.process_state_path),
-            "--log", str(self.log_path),
-            "--sha256", self.engine_sha256 if action == "start" else "",
-            "--archive", str(self.archive_path),
-            "--archive-sha256", str((_read_json(self.install_manifest) or {}).get("archive_sha256") or self.platform_asset.get("sha256") or ""),
-            "--release-sha256", str(self.platform_asset.get("sha256") or ""),
-            "--source-url", str(self.platform_asset["url"]),
-            "--archive-type", self.platform_asset["archive"],
-            *(["--unverified-release"] if self.version not in _ENGINE_RELEASES else []),
-            "--interface", self.interface_name,
-            "--result", str(result_path),
+            *self._helper_action_arguments(action, result_path),
         ]
         try:
             completed = subprocess.run(
@@ -959,20 +993,7 @@ class SystemTunnelManager:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         result_path = self.state_dir / f"helper-result-{uuid.uuid4().hex}.json"
         result_path.unlink(missing_ok=True)
-        command = [
-            action,
-            "--version", self.version,
-            "--engine", str(self.engine_path),
-            "--config", str(self.config_path),
-            "--state", str(self.process_state_path),
-            "--log", str(self.log_path),
-            "--sha256", self.engine_sha256 if action == "start" else "",
-            "--archive", str(self.archive_path),
-            "--archive-sha256", self.platform_asset["sha256"],
-            "--archive-type", self.platform_asset["archive"],
-            "--interface", self.interface_name,
-            "--result", str(result_path),
-        ]
+        command = self._helper_action_arguments(action, result_path)
         base = self._helper_base()
         if getattr(sys, "frozen", False):
             executable, params = base[0], subprocess.list2cmdline([*base[1:], *command])
