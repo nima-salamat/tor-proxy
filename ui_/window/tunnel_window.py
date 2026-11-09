@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+import logging
 from datetime import datetime, timezone
 
 import qtawesome as qta
@@ -29,6 +30,8 @@ from torproxy.system_tunnel import (
     SystemTunnelError,
 )
 from ui_.worker.worker import Worker
+
+logger = logging.getLogger(__name__)
 
 
 class TunnelManagerWindow(QWidget):
@@ -333,7 +336,6 @@ class TunnelManagerWindow(QWidget):
             status = self.manager.status()
             installed_version = self.manager.installed_version
         except Exception as exc:
-            logger = __import__("logging").getLogger(__name__)
             logger.debug("Could not refresh system tunnel state: %s", exc)
             self.installed_state.setText("Tunnel state is unavailable · inspect the event log")
             self.btn_start_stop.setText("Status unavailable")
@@ -401,8 +403,8 @@ class TunnelManagerWindow(QWidget):
             action_icon = "fa6s.arrows-rotate"
         else:
             action_icon = "fa6s.play"
-        self.btn_start_stop.setIcon(qta.icon(action_icon, color=icon_color))
-        self.btn_test_connection.setIcon(qta.icon("fa6s.flask", color=icon_color))
+        self.btn_start_stop.setIcon(qta.icon(action_icon, color=self._style_icon_color))
+        self.btn_test_connection.setIcon(qta.icon("fa6s.flask", color=self._style_icon_color))
 
     def _resolve_network_route(self, purpose: str) -> tuple[str | None, bool] | None:
         """Prefer the ready Tor SOCKS listener; direct bootstrap always needs consent."""
