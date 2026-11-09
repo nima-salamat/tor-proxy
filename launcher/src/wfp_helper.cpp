@@ -44,9 +44,8 @@ std::wstring errorMessage(const wchar_t* operation, DWORD status) {
 
 void requireSuccess(DWORD status, const wchar_t* operation) {
     if (status != ERROR_SUCCESS) {
-        throw std::runtime_error(
-            std::string(errorMessage(operation, status).begin(),
-                        errorMessage(operation, status).end()));
+        const std::wstring message = errorMessage(operation, status);
+        throw std::runtime_error(narrow(message));
     }
 }
 
@@ -168,7 +167,7 @@ void addFilter(
     }
 
     FWPM_FILTER0 filter{};
-    CoCreateGuid(&filter.filterKey);
+    requireSuccess(CoCreateGuid(&filter.filterKey), L"CoCreateGuid");
     filter.displayData.name = const_cast<wchar_t*>(displayName);
     filter.flags = FWPM_FILTER_FLAG_PERSISTENT;
     filter.providerKey = const_cast<GUID*>(&kProviderKey);
@@ -181,10 +180,11 @@ void addFilter(
     filter.filterCondition = rawConditions.empty() ? nullptr : rawConditions.data();
 
     const DWORD status = FwpmFilterAdd0(engine, &filter, nullptr, nullptr);
-    for (const auto& condition : conditions) {
+    for (auto& condition : const_cast<std::vector<Condition>&>(conditions)) {
         if (condition.blobToFree) {
-            FwpmFreeMemory0(reinterpret_cast<void**>(
-                const_cast<FWP_BYTE_BLOB**>(&condition.blobToFree)));
+            FWP_BYTE_BLOB* blob = condition.blobToFree;
+            FwpmFreeMemory0(reinterpret_cast<void**>(&blob));
+            condition.blobToFree = nullptr;
         }
     }
     requireSuccess(status, L"FwpmFilterAdd0");
