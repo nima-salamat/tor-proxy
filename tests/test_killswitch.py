@@ -359,6 +359,8 @@ def test_windows_kill_switch_checks_effective_policy_but_snapshots_local_setting
     assert "function Assert-EffectiveOutboundAction" in _POWERSHELL
     assert "foreach ($serviceName in @('BFE', 'MpsSvc'))" in _POWERSHELL
     assert "Required Windows filtering service $serviceName is not running." in _POWERSHELL
+    assert "DisabledInterfaceAliases" in _POWERSHELL
+    assert "excludes interface filtering for: $names" in _POWERSHELL
     assert "Assert-EffectiveOutboundAction 'Block'" in _POWERSHELL
     assert "Assert-EffectiveOutboundAction 'Allow'" in _POWERSHELL
     assert "The effective Windows Firewall $name profile could not be read from ActiveStore." in _POWERSHELL
