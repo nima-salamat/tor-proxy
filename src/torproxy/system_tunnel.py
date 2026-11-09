@@ -836,14 +836,14 @@ class SystemTunnelManager:
             },
         }
 
-    def _write_config(
+    def _write_and_check_config(
         self,
         socks_port: int,
         tor_executables: list[str | Path],
         *,
         tun_stack: str | None = None,
     ) -> None:
-        """Persist the generated config; the privileged helper validates it before launch."""
+        """Validate the generated config before crossing the privileged boundary."""
         config = self.build_config(
             socks_port, tor_executables=tor_executables, tun_stack=tun_stack
         )
@@ -851,6 +851,17 @@ class SystemTunnelManager:
         _atomic_json(self.config_path, config)
         if os.name != "nt":
             self.config_path.chmod(0o600)
+        check = subprocess.run(
+            [str(self.engine_path), "check", "-c", str(self.config_path)],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        if check.returncode != 0:
+            detail = (check.stderr or check.stdout or "sing-box rejected the generated config").strip()
+            raise SystemTunnelError(detail[-1200:])
 
     def is_running(self) -> bool:
         state = _read_json(self.process_state_path)
@@ -909,7 +920,7 @@ class SystemTunnelManager:
         server_name: str | None = None,
         timeout: float = 15.0,
     ) -> None:
-        """Verify a real TCP connection, and optionally TLS, through Tor before routing."""
+        """Verify Tor SOCKS TCP/TLS reachability for the explicit traffic diagnostic."""
         with socket.create_connection(("127.0.0.1", socks_port), timeout=timeout) as sock:
             sock.settimeout(timeout)
             sock.sendall(b"\x05\x01\x00")
@@ -940,19 +951,6 @@ class SystemTunnelManager:
             ("8.8.8.8", "dns.google"),
             ("9.9.9.9", "dns.quad9.net"),
         )
-
-    def _windows_tun_stack_candidates(self) -> tuple[str | None, ...]:
-        if platform.system() != "Windows":
-            return (None,)
-        version_parts = tuple(int(part) for part in self.version.split("."))
-        if version_parts >= (1, 15, 0):
-            # sing-box 1.15+ has its own TCP/IP stack; the old "stack" setting
-            # is deprecated and should be omitted rather than guessed.
-            return (None,)
-        # Try the most broadly compatible userspace stack first, then the
-        # Windows system and mixed implementations. Some endpoint security
-        # drivers filter these stacks differently.
-        return ("gvisor", "system", "mixed")
 
     @classmethod
     def _verify_tunnel_tcp_tls(
@@ -995,7 +993,7 @@ class SystemTunnelManager:
         # For Windows versions before 1.15 the default is gvisor, which is
         # also the first/default choice in v2rayN. Do not trial-run other stacks:
         # each start/stop crosses UAC and a network probe is not a TUN health check.
-        self._write_config(socks_port, tor_executables)
+        self._write_and_check_config(socks_port, tor_executables)
         result = self._invoke_helper("start")
         if not result.get("ok") or not result.get("active"):
             raise SystemTunnelError(

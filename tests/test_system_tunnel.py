@@ -124,7 +124,7 @@ def test_windows_start_uses_one_gvisor_attempt_without_network_probes_or_restart
     monkeypatch.setattr(system_tunnel, "_interface_exists", lambda _name: False)
 
     config_writes = []
-    monkeypatch.setattr(manager, "_write_config", lambda *args, **kwargs: config_writes.append((args, kwargs)))
+    monkeypatch.setattr(manager, "_write_and_check_config", lambda *args, **kwargs: config_writes.append((args, kwargs)))
     helper_actions = []
     monkeypatch.setattr(
         manager, "_invoke_helper",
@@ -158,7 +158,6 @@ def test_system_tunnel_115_uses_native_stack_without_legacy_stack_option(tmp_pat
     config = manager.build_config(9150, tor_executables=[tor])
 
     assert "stack" not in config["inbounds"][0]
-    assert manager._windows_tun_stack_candidates() == (None,)
 
 
 def test_socks5_connect_probe_can_verify_tls_before_tun_start(monkeypatch):
@@ -211,7 +210,7 @@ def test_system_tunnel_start_does_not_gate_startup_on_network_connectivity(tmp_p
     monkeypatch.setattr(manager, "is_installed", lambda: True)
     monkeypatch.setattr(system_tunnel, "_interface_exists", lambda _name: False)
     config_writes = []
-    monkeypatch.setattr(manager, "_write_config", lambda *args, **kwargs: config_writes.append((args, kwargs)))
+    monkeypatch.setattr(manager, "_write_and_check_config", lambda *args, **kwargs: config_writes.append((args, kwargs)))
     helper_actions = []
     monkeypatch.setattr(
         manager, "_invoke_helper",
