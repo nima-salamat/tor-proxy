@@ -517,7 +517,7 @@ def test_stale_tor_cleanup_targets_only_process_using_exact_managed_torrc(tmp_pa
     class FakeProcess:
         def __init__(self, pid, name, cmdline):
             self.pid = pid
-            self.info = {"pid": pid, "name": name, "cmdline": cmdline}
+            self.info = {"pid": pid, "name": name, "cmdline": cmdline, "exe": cmdline[0]}
             self.terminated = False
             self.killed = False
 
