@@ -222,6 +222,17 @@ def test_theme_sync_and_titlebar_use_fontawesome_icons_and_consistent_corner_bac
 
 
 
+
+def test_updates_navigation_keeps_theme_text_color_on_hover():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui.py").read_text(encoding="utf-8")
+
+    assert "QToolButton#updatesNavButton:hover {{" in source
+    assert "color: {text}; background: {hover}; border-color: {border};" in source
+    assert "QToolButton#updatesNavButton:checked:hover {{" in source
+    assert "background: {accent}; color: #ffffff; border-color: {accent};" in source
+
+
 def test_manage_proxy_disable_dispatches_explicit_clear_to_the_current_platform(monkeypatch):
     import set_proxy
 
