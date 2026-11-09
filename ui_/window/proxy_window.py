@@ -428,6 +428,7 @@ class ProxyWindow(QWidget):
             QComboBox#systemProxyMode QAbstractItemView::item:selected {{ background: {accent}; color: #ffffff; }}
             QPushButton#secondaryAction {{ min-height: 36px; padding: 0 14px; border-radius: 8px; background: transparent; color: {text}; border: 1px solid {border}; font-weight: 600; }}
             QPushButton#secondaryAction:hover {{ background: rgba(71, 163, 242, 0.12); border-color: {accent}; }}
+            QPushButton#secondaryAction:disabled {{ color: {muted}; }}
             QPushButton#secondaryAction:checked {{ background: rgba(71, 163, 242, 0.18); border-color: {accent}; }}
             QFrame#systemProxyControls {{ background: transparent; border: none; }}
             QFrame#systemTunnelHint {{ background: transparent; border: 1px solid {border}; border-radius: 8px; }}
