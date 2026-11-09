@@ -63,7 +63,7 @@ def _read_system_tun_io_counters() -> tuple[int, int] | None:
     """
     try:
         counters = psutil.net_io_counters(pernic=True) or {}
-    except (OSError, RuntimeError, AttributeError, TypeError):
+    except (OSError, RuntimeError, AttributeError, TypeError, psutil.Error):
         logger.debug("Could not read per-interface traffic counters.", exc_info=True)
         return None
     for name, counter in counters.items():
