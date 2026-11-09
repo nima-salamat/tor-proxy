@@ -251,7 +251,11 @@ void addProviderAndSublayer(HANDLE engine) {
         const_cast<wchar_t*>(L"TorProxy application exceptions and default deny");
     sublayer.flags = FWPM_SUBLAYER_FLAG_PERSISTENT;
     sublayer.providerKey = const_cast<GUID*>(&kProviderKey);
-    sublayer.weight = 0x100;
+    // Run before standard firewall sublayers so TorProxy's hard default
+    // block cannot be bypassed by ordinary lower-priority Allow rules.
+    // The Tor app permits remain soft, allowing lower-priority security
+    // providers to veto them.
+    sublayer.weight = 0xFFFF;
     status = FwpmSubLayerAdd0(engine, &sublayer, nullptr);
     if (status != ERROR_SUCCESS && status != FWP_E_ALREADY_EXISTS) {
         requireSuccess(status, L"FwpmSubLayerAdd0");
