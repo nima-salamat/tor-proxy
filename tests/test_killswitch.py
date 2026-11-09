@@ -356,8 +356,11 @@ def test_windows_kill_switch_checks_effective_policy_but_snapshots_local_setting
     assert "Get-NetFirewallProfile -PolicyStore ActiveStore" in _POWERSHELL
     assert "Get-NetFirewallProfile -PolicyStore PersistentStore" in _POWERSHELL
     assert "$profiles = Get-PersistentProfiles" in _POWERSHELL
-    assert "$effectiveProfiles = Get-ActiveProfiles" in _POWERSHELL
-    assert "Effective Windows Firewall profile" in _POWERSHELL
+    assert "function Assert-EffectiveOutboundAction" in _POWERSHELL
+    assert "Assert-EffectiveOutboundAction 'Block'" in _POWERSHELL
+    assert "Assert-EffectiveOutboundAction 'Allow'" in _POWERSHELL
+    assert "The effective Windows Firewall $name profile could not be read from ActiveStore." in _POWERSHELL
+    assert "Effective Windows Firewall profile $name does not enforce outbound $expectedAction." in _POWERSHELL
     assert "Set-NetFirewallProfile -PolicyStore PersistentStore" in _POWERSHELL
 
 
