@@ -357,21 +357,20 @@ def test_optional_firewall_group_query_only_suppresses_expected_not_found():
     assert "throw $unexpectedErrors[0]" in _POWERSHELL
 
 
-def test_windows_saved_local_allow_rules_use_direct_com_name_lookups():
+def test_windows_saved_local_allow_rules_map_internal_ids_to_com_friendly_names():
     start = _POWERSHELL.index("function Set-SnapshotLocalRulesEnabled")
     end = _POWERSHELL.index("function Set-SnapshotProfile", start)
     helper = _POWERSHELL[start:end]
-    assert "New-Object -ComObject HNetCfg.FwPolicy2" in helper
-    assert "$rules = $policy.Rules" in helper
-    assert "foreach ($name in $names)" in helper
-    assert "$rules.Item([string]$name)" in helper
-    assert "$exception.InnerException" in helper
-    assert "[int]$exception.HResult -eq -2147024894" in helper
+    assert "Get-NetFirewallRule -PolicyStore PersistentStore -Name $names" in helper
+    assert "$netRule.DisplayName" in helper
+    assert "$rules.Item([string]$friendlyName)" in helper
+    assert "$rule.Name -ine [string]$friendlyName" in helper
     assert "$rule.Enabled = [bool]$enabled" in helper
-    assert "Saved name examples:" in helper
-    assert "COM name examples:" in helper
+    assert "Multiple saved firewall rules share the COM friendly name" in helper
+    assert "Get-NetFirewallRule" in helper
     assert "Set-NetFirewallRule" not in helper
-    assert "Get-NetFirewallRule" not in helper
+    assert "Saved firewall rule ID" in helper
+    assert "FinalReleaseComObject" in helper
 
     activation_start = _POWERSHELL.index("if ($Action -eq 'activate')")
     activation_end = _POWERSHELL.index("elseif ($Action -eq 'deactivate')", activation_start)
@@ -392,23 +391,20 @@ def test_windows_profile_updates_use_netsecurity_enum_strings():
     assert _POWERSHELL.count("Set-SnapshotProfile $saved") == 2
 
 
-def test_windows_saved_rule_updates_use_native_firewall_com_not_netsecurity_cim():
+def test_windows_saved_rule_updates_use_com_friendly_names_after_internal_id_resolution():
     start = _POWERSHELL.index("function Set-SnapshotLocalRulesEnabled")
     end = _POWERSHELL.index("function Set-SnapshotProfile", start)
     helper = _POWERSHELL[start:end]
 
-    assert "New-Object -ComObject HNetCfg.FwPolicy2" in helper
-    assert "$rules = $policy.Rules" in helper
-    assert "foreach ($name in $names)" in helper
-    assert "$rules.Item([string]$name)" in helper
-    assert "$rule.Enabled = [bool]$enabled" in helper
+    assert "Get-NetFirewallRule -PolicyStore PersistentStore -Name $names" in helper
+    assert "$netRule.Name" in helper
+    assert "$netRule.DisplayName" in helper
+    assert "$rules.Item([string]$friendlyName)" in helper
     assert "[int]$rule.Direction -ne 2" in helper
     assert "[int]$rule.Action -ne 1" in helper
+    assert "$rule.Enabled = [bool]$enabled" in helper
     assert "FinalReleaseComObject" in helper
-    assert "Set-NetFirewallRule" not in helper
-    assert "Get-NetFirewallRule" not in helper
-    assert "None of the {0} saved firewall rules were found through INetFwRules::Item" in helper
-    assert "COM collection contains {1} rules" in helper
+    assert "Multiple saved firewall rules share the COM friendly name" in helper
     assert "Windows Firewall COM updated" in helper
 
 
