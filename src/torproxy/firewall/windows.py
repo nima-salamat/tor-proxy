@@ -524,12 +524,19 @@ function Assert-ManagedState($snapshot, $requireRules = $true) {
     }
 }
 try {
-    Set-Phase 'Loading Windows Firewall management module...'
-    Import-Module NetSecurity -ErrorAction Stop
-    if (-not (Get-Command Get-NetFirewallProfile -ErrorAction SilentlyContinue)) {
-        throw 'The Windows NetSecurity PowerShell module is unavailable.'
-    }
+    Set-Phase 'Loading the firewall action request...'
     $request = Get-Content -LiteralPath $RequestPath -Raw | ConvertFrom-Json
+    # The new WFP activation/status path does not depend on NetSecurity.
+    # Load the legacy module only for existing snapshot restoration or
+    # emergency reconciliation of a previous TorProxy version.
+    if (($Action -eq 'recover' -or $Action -eq 'deactivate' -or $Action -eq 'emergency') -or
+        (Test-Path -LiteralPath $SnapshotPath)) {
+        Set-Phase 'Loading legacy Windows Firewall recovery module...'
+        Import-Module NetSecurity -ErrorAction Stop
+        if (-not (Get-Command Get-NetFirewallProfile -ErrorAction SilentlyContinue)) {
+            throw 'The Windows NetSecurity PowerShell module is unavailable for legacy snapshot recovery.'
+        }
+    }
     function Invoke-WfpHelper([string]$nativeAction, [string[]]$nativeArguments = @()) {
         $helperPath = [string]$request.wfp_helper_path
         if ([string]::IsNullOrWhiteSpace($helperPath) -or
