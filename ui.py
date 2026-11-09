@@ -1125,17 +1125,7 @@ class Window(QMainWindow):
     def _set_theme(self, mode, *, preference=None):
         if mode not in {"dark", "light"}:
             return
-
-        try:
-            if preference is None:
-                if CONFIG.get("mode") != mode:
-                    CONFIG["mode"] = mode
-            else:
-                if preference not in {"system", "dark", "light"}:
-                    return
-                CONFIG.update_many({"mode": mode, "theme_preference": preference})
-        except (ValueError, OSError, KeyError):
-            logger.exception("Could not persist the selected theme preference.")
+        if preference is not None and preference not in {"system", "dark", "light"}:
             return
 
         app = QApplication.instance()
@@ -1153,6 +1143,16 @@ class Window(QMainWindow):
             self._cancel_theme_reveal()
             old_snapshot = self.grab()
             reveal_origin = self._theme_reveal_origin()
+
+        try:
+            if preference is None:
+                if CONFIG.get("mode") != mode:
+                    CONFIG["mode"] = mode
+            else:
+                CONFIG.update_many({"mode": mode, "theme_preference": preference})
+        except (ValueError, OSError, KeyError):
+            logger.exception("Could not persist the selected theme preference.")
+            return
 
         if app is not None:
             app.setStyleSheet(_theme_stylesheet(mode))
