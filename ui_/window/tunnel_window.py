@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import qtawesome as qta
 from PySide6.QtCore import Qt, QThreadPool, QUrl, Signal, QTimer
-from PySide6.QtGui import QDesktopServices, QPalette, QColor
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QProgressBar,
     QPushButton,
-    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
