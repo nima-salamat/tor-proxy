@@ -1880,3 +1880,41 @@ def test_main_window_requests_small_dwm_corners_only_when_restored():
     assert "QTimer.singleShot(0, self._apply_native_window_corners)" in source
     assert "setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground" not in source
 
+
+
+def test_tray_menu_uses_a_modern_theme_aware_floating_surface():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui.py").read_text(encoding="utf-8")
+
+    # The tray popup is a designed application surface, not an unstyled
+    # platform-default menu with a few isolated actions.
+    assert "QWidgetAction" in source
+    assert 'self.tray_menu.setObjectName("trayContextMenu")' in source
+    assert "self.tray_menu.setMinimumWidth(286)" in source
+    assert 'self.tray_menu_header_action.setDefaultWidget(self.tray_menu_header)' in source
+    assert 'QLabel("Quick controls", self.tray_menu_header)' in source
+    assert 'QLabel("SYSTEM PROXY", self.tray_proxy_section)' in source
+
+    theme_start = source.index("def _sync_tray_menu_theme(self, mode=None):")
+    theme_end = source.index("def _theme_reveal_origin", theme_start)
+    theme_sync = source[theme_start:theme_end]
+    assert "QMenu#trayContextMenu" in theme_sync
+    assert "QMenu#trayContextMenu::item:selected" in theme_sync
+    assert "QMenu#trayContextMenu::separator" in theme_sync
+    assert "QMenu#trayContextMenu::indicator:checked" in theme_sync
+    assert 'surface = "#171e29"' in theme_sync
+    assert 'surface = "#ffffff"' in theme_sync
+    assert 'hover = "#29384d"' in theme_sync
+    assert 'hover = "#edf3fb"' in theme_sync
+    assert '"fa6s.eye" if hidden else "fa6s.eye-slash"' in theme_sync
+    assert '"set": "fa6s.link"' in theme_sync
+    assert '"clear": "fa6s.link-slash"' in theme_sync
+    assert 'qta.icon("fa6s.right-from-bracket", color=danger)' in theme_sync
+
+    local_theme_start = source.index("def _apply_local_theme_styles(self, mode):")
+    local_theme_end = source.index("def _sync_tray_menu_theme", local_theme_start)
+    assert "self._sync_tray_menu_theme(mode)" in source[local_theme_start:local_theme_end]
+    assert "self._sync_tray_menu_theme()" in source[
+        source.index("self._sync_tray_system_proxy_actions()"):
+        source.index("# Do not give the menu to the shell:")
+    ]
