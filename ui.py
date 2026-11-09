@@ -34,6 +34,7 @@ from qdarkstyle.light.palette import LightPalette
 from PySide6.QtCore import QEvent, QTimer, Qt, Signal, QSize, QPoint
 import qtawesome as qta
 from ui_.window.theme_transition import CircularThemeReveal
+from ui_.window.theme import resolve_system_theme
 from utils import resource_path
 import logging
 from config import CONFIG, IS_WINDOWS
@@ -211,6 +212,16 @@ class Window(QMainWindow):
         self._state_timer.start()
         self._update_global_state()
         self._set_theme(CONFIG["mode"])
+        # Qt 6.5+ forwards native desktop appearance changes through QStyleHints.
+        # Only follow these changes while the user preference remains System.
+        try:
+            self._system_theme_hints = QGuiApplication.styleHints()
+            self._system_theme_hints.colorSchemeChanged.connect(
+                self._on_system_color_scheme_changed
+            )
+        except (AttributeError, RuntimeError):
+            self._system_theme_hints = None
+            logger.debug("Live system theme notifications are unavailable.", exc_info=True)
         # Warm the alternate look while the top-level window is still hidden.
         # This moves lazy QSS parsing and child-widget repolishing out of the first click.
         self._prewarm_theme_stylesheets()
@@ -1111,8 +1122,20 @@ class Window(QMainWindow):
         if getattr(self, "_theme_reveal", None) is overlay:
             self._theme_reveal = None
 
-    def _set_theme(self, mode):
+    def _set_theme(self, mode, *, preference=None):
         if mode not in {"dark", "light"}:
+            return
+
+        try:
+            if preference is None:
+                if CONFIG.get("mode") != mode:
+                    CONFIG["mode"] = mode
+            else:
+                if preference not in {"system", "dark", "light"}:
+                    return
+                CONFIG.update_many({"mode": mode, "theme_preference": preference})
+        except (ValueError, OSError, KeyError):
+            logger.exception("Could not persist the selected theme preference.")
             return
 
         app = QApplication.instance()
@@ -1131,7 +1154,6 @@ class Window(QMainWindow):
             old_snapshot = self.grab()
             reveal_origin = self._theme_reveal_origin()
 
-        CONFIG["mode"] = mode
         if app is not None:
             app.setStyleSheet(_theme_stylesheet(mode))
         if hasattr(self, "settingWidget"):
@@ -1141,24 +1163,17 @@ class Window(QMainWindow):
         self._apply_local_theme_styles(mode)
 
         # Capture the actual widgets after the new palette and all page-local
-        # styles have been applied. Keep the Settings switch live above the frozen
-        # snapshots when its thumb is still animating at the midpoint trigger.
+        # styles have been applied. The three-way selector commits immediately,
+        # so there is no animated thumb that needs to remain above the reveal.
         if should_animate and old_snapshot is not None and not old_snapshot.isNull():
             new_snapshot = self.grab()
             if not new_snapshot.isNull():
-                setting_switch = getattr(self.settingWidget, "theme_switch", None)
-                live_widgets = (
-                    (setting_switch,)
-                    if setting_switch is not None and setting_switch.is_interacting
-                    else ()
-                )
                 overlay = CircularThemeReveal(
                     self,
                     old_snapshot,
                     new_snapshot,
                     reveal_origin,
                     duration_ms=460,
-                    live_widgets=live_widgets,
                 )
                 overlay.setGeometry(self.rect())
                 overlay.finished.connect(
@@ -1169,8 +1184,30 @@ class Window(QMainWindow):
                 overlay.raise_()
                 overlay.start()
 
+    def _set_theme_preference(self, preference):
+        """Apply and persist one of the three supported theme preferences."""
+        if preference not in {"system", "light", "dark"}:
+            return
+        mode = (
+            resolve_system_theme(QApplication.instance())
+            if preference == "system"
+            else preference
+        )
+        self._set_theme(mode, preference=preference)
+
+    def _on_system_color_scheme_changed(self, _scheme=None):
+        """Refresh the UI when the OS changes appearance while System is selected."""
+        if CONFIG.get("theme_preference", "system") != "system":
+            return
+        mode = resolve_system_theme(QApplication.instance())
+        if mode != CONFIG.get("mode"):
+            self._set_theme(mode)
+
     def _toggle_theme(self):
-        self._set_theme("light" if CONFIG["mode"] == "dark" else "dark")
+        # The title-bar shortcut is an explicit override, not a temporary
+        # departure from System mode that would be undone by the next OS event.
+        mode = "light" if CONFIG["mode"] == "dark" else "dark"
+        self._set_theme(mode, preference=mode)
 
     def ask_close(self):
         """Perform a deliberate application exit from either Exit command."""
