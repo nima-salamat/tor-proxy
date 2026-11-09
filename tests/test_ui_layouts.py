@@ -1138,7 +1138,7 @@ def test_legacy_kill_switch_ui_and_tunnel_dependency_are_removed():
     assert '("Tunnel"' not in shell_source
     assert "updates_nav_button" in shell_source
     assert "def _show_tunnel_page(self)" in shell_source
-\n
+
 def test_home_tunnel_controls_start_and_stop_installed_engine_without_showing_manage():
     repository = Path(__file__).resolve().parents[1]
     home_source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
