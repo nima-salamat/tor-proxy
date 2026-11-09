@@ -374,7 +374,7 @@ def test_windows_saved_local_allow_rules_map_internal_ids_to_com_friendly_names(
     assert "$duplicateRuleIds.Add([string]$entry.InternalName)" in helper
     assert "$fallbackRuleIds.Add([string]$expected.InternalName)" in helper
     assert "$comCount -ne 1" in helper
-    assert "Set-SnapshotRulesByInternalIds $fallbackRuleIds.ToArray()" in helper
+    assert "Set-SnapshotRulesByInternalIds ($fallbackRuleIds.ToArray())" in helper
     assert "Set-NetFirewallRule" not in helper
     assert "Set-NetFirewallRule -PolicyStore PersistentStore -Name ($changeIds.ToArray()) -Enabled $enabledValue" in fallback
     assert "Get-NetFirewallRule -PolicyStore PersistentStore -Name $ruleIds" in fallback
