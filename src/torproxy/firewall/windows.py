@@ -256,7 +256,6 @@ function Set-SnapshotLocalRulesEnabled($snapshot, [bool]$enabled) {
         }
 
         $duplicateRuleIds = [System.Collections.Generic.List[string]]::new()
-        $duplicateChangeIds = [System.Collections.Generic.List[string]]::new()
         $uniqueFriendlyNames = [System.Collections.Generic.List[string]]::new()
         foreach ($friendlyName in @($expectedByFriendlyName.Keys)) {
             $entries = @($expectedByFriendlyName[$friendlyName])
@@ -269,10 +268,6 @@ function Set-SnapshotLocalRulesEnabled($snapshot, [bool]$enabled) {
             if ($entries.Count -gt 1 -or $comCount -ne 1) {
                 foreach ($entry in $entries) {
                     $duplicateRuleIds.Add([string]$entry.InternalName)
-                    if ([bool]$entry.Enabled -ne $enabled) {
-                        $duplicateChangeIds.Add([string]$entry.InternalName)
-                        $changed++
-                    }
                 }
             } else {
                 $uniqueFriendlyNames.Add([string]$friendlyName)
