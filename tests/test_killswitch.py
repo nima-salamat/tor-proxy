@@ -315,7 +315,11 @@ def test_windows_firewall_helper_is_strict_about_outbound_exceptions():
     assert "Get-SnapshotValue $snapshot 'blockSharedAccess') -and $sharedAccessRuleNames.ContainsKey([string]$_.Name)" in _POWERSHELL
     assert "Set-Phase 'Reading the effective outbound firewall rules...'" in _POWERSHELL
     assert "$ProgressPath = $ResultPath + '.progress'" in _POWERSHELL
-    assert "Set-NetFirewallRule" not in _POWERSHELL
+    # Legacy snapshot restoration may use the bounded GUID-scoped fallback,
+    # but activation must not invoke it until after its own safe snapshot checks.
+    fallback_start = _POWERSHELL.index("function Set-SnapshotRulesByInternalIds")
+    fallback_end = _POWERSHELL.index("function Set-SnapshotLocalRulesEnabled", fallback_start)
+    assert "Set-NetFirewallRule" in _POWERSHELL[fallback_start:fallback_end]
     assert "TorProxy Kill Switch" in _POWERSHELL
     assert "original snapshot is missing" in _POWERSHELL
     assert "could not be restored to its saved state" in _POWERSHELL
@@ -417,7 +421,7 @@ def test_windows_saved_rule_updates_handle_duplicate_and_com_missing_names_by_gu
     assert "$fallbackRuleIds.Add([string]$expected.InternalName)" in helper
     assert "[int]$exception.HResult -eq -2147024894" in helper
     assert "if (-not $isMissing) { throw }" in helper
-    assert "Set-SnapshotRulesByInternalIds $fallbackRuleIds.ToArray()" in helper
+    assert "Set-SnapshotRulesByInternalIds ($fallbackRuleIds.ToArray())" in helper
     assert "$rules.Item([string]$friendlyName)" in helper
     assert "[int]$rule.Direction -ne 2" in helper
     assert "[int]$rule.Action -ne 1" in helper
