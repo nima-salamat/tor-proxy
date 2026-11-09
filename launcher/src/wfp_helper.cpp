@@ -1,6 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <objbase.h>
 #include <fwpmu.h>
 #include <fwpmtypes.h>
 #include <rpc.h>
