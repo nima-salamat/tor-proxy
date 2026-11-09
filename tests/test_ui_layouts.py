@@ -325,43 +325,69 @@ def test_updates_nav_icon_and_text_follow_only_the_active_updates_page(monkeypat
     assert fake.updates_nav_button.indicator_color == "#eff1f4"
 
 
-def test_updates_dropdown_chevron_uses_explicit_theme_foreground(qt_app):
+def test_updates_dropdown_chevron_is_inside_the_reserved_bottom_right_slot(qt_app):
     from PySide6.QtGui import QImage
     from PySide6.QtWidgets import QMenu
     from PySide6.QtCore import Qt
     import ui
 
     button = ui.UpdatesMenuButton()
+    button.setObjectName("updatesNavButton")
+    button.setText("Updates")
+    button.setToolButtonStyle(ui.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
     menu = QMenu(button)
     button.setMenu(menu)
     button.setPopupMode(ui.QToolButton.ToolButtonPopupMode.InstantPopup)
     button.setStyleSheet(
-        "QToolButton::menu-indicator { image: none; width: 12px; }"
+        "QToolButton#updatesNavButton { min-height: 32px; padding: 0 22px 0 8px; }"
+        "QToolButton#updatesNavButton::menu-indicator { image: none; width: 12px; "
+        "height: 12px; subcontrol-origin: padding; subcontrol-position: bottom right; }"
     )
     button.resize(150, 36)
     button.setMenuIndicatorColor("#202832")
     button.show()
     qt_app.processEvents()
 
-    def rendered_chevron_pixel(vertical_offset):
+    def chevron_pixels(color):
         image = QImage(button.size(), QImage.Format.Format_ARGB32)
         image.fill(Qt.GlobalColor.transparent)
         button.render(image)
-        return image.pixelColor(button.width() - 15, button.rect().center().y() + vertical_offset)
+        points = []
+        for y in range(image.height()):
+            for x in range(image.width()):
+                pixel = image.pixelColor(x, y)
+                if color == "dark" and pixel.red() < 80 and pixel.green() < 90 and pixel.blue() < 100:
+                    points.append((x, y))
+                elif color == "light" and pixel.red() > 225 and pixel.green() > 225 and pixel.blue() > 225:
+                    points.append((x, y))
+        return points
 
     button.setMenuIndicatorOpen(False)
-    dark_text_pixel = rendered_chevron_pixel(2)
-    assert dark_text_pixel.red() < 70
-    assert dark_text_pixel.green() < 80
-    assert dark_text_pixel.blue() < 90
+    dark_points = chevron_pixels("dark")
+    dark_chevron = [
+        (x, y) for x, y in dark_points
+        if button.width() - 16 <= x <= button.width() - 5
+        and button.height() - 16 <= y <= button.height() - 5
+    ]
+    assert dark_chevron, "Dark dropdown chevron should be visible in the bottom-right slot."
+    assert min(x for x, _ in dark_chevron) >= button.width() - 15
+    assert max(x for x, _ in dark_chevron) <= button.width() - 6
+    assert min(y for _, y in dark_chevron) > button.height() // 2
+    assert max(y for _, y in dark_chevron) <= button.height() - 5
 
     button.setMenuIndicatorColor("#ffffff")
     button.setMenuIndicatorOpen(True)
     qt_app.processEvents()
-    white_text_pixel = rendered_chevron_pixel(-2)
-    assert white_text_pixel.red() > 230
-    assert white_text_pixel.green() > 230
-    assert white_text_pixel.blue() > 230
+    white_points = chevron_pixels("light")
+    white_chevron = [
+        (x, y) for x, y in white_points
+        if button.width() - 16 <= x <= button.width() - 5
+        and button.height() - 16 <= y <= button.height() - 5
+    ]
+    assert white_chevron, "White dropdown chevron should stay inside the bottom-right slot."
+    assert min(y for _, y in white_chevron) > button.height() // 2
+    assert max(x for x, _ in white_chevron) <= button.width() - 6
+    assert max(y for _, y in white_chevron) <= button.height() - 5
 
     button.close()
     menu.deleteLater()
@@ -386,7 +412,9 @@ def test_updates_menu_initialization_avoids_undefined_mode_and_tracks_popup_stat
     assert 'self.updates_nav_button.setMenuIndicatorColor(color)' in source
     assert "class UpdatesMenuButton(QToolButton):" in source
     assert "QToolButton#updatesNavButton::menu-indicator {{" in source
-    assert "image: none;" in source
+    assert "subcontrol-position: bottom right;" in source
+    assert "QToolButton#updatesNavButton {{ padding-right: 22px; }}" in source
+    assert "center_y = self.rect().bottom() - 8" in source
     assert "_updates_menu_open" not in source
     assert "QPushButton#topNavButton, QToolButton#updatesNavButton {{" in source
     assert "QToolButton#updatesNavButton::menu-button" not in source
