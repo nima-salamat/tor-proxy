@@ -139,6 +139,7 @@ def main() -> int:
     from torproxy.paths import user_directories
     from ui import Window
     from ui_.window.dialogs import QMessageBox
+    from ui_.window.theme import resolve_system_theme
     from utils import resource_path
 
     enable_crash_reporting()
@@ -154,6 +155,18 @@ def main() -> int:
         if not notify_launcher("failed", message):
             QMessageBox.critical(None, "TorProxy configuration error", str(exc))
         return 2
+
+    # Resolve System before the first stylesheet is installed, so first-run
+    # startup already matches the desktop appearance without a light/dark flash.
+    theme_preference = CONFIG.get("theme_preference", "system")
+    startup_mode = (
+        resolve_system_theme(app)
+        if theme_preference == "system"
+        else theme_preference
+    )
+    if CONFIG.get("mode") != startup_mode:
+        CONFIG["mode"] = startup_mode
+
     configure_logging()
     notify_launcher("starting", "Preparing TorProxy settings…")
     app.setApplicationName("TorProxy")
