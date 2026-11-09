@@ -172,6 +172,16 @@ class TunnelManagerWindow(QWidget):
         self.btn_start_stop.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_start_stop.clicked.connect(self.toggle_tunnel)
         buttons.addWidget(self.btn_start_stop)
+
+        self.btn_test_connection = QPushButton("Test traffic")
+        self.btn_test_connection.setObjectName("tunnelSecondaryButton")
+        self.btn_test_connection.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_test_connection.setToolTip(
+            "Test Tor SOCKS and active TUN traffic without restarting the tunnel or requesting Administrator approval."
+        )
+        self.btn_test_connection.clicked.connect(self.test_tunnel_traffic)
+        self.btn_test_connection.setEnabled(False)
+        buttons.addWidget(self.btn_test_connection)
         details_layout.addLayout(buttons)
 
         self.progress = QProgressBar(details_panel)
@@ -340,6 +350,10 @@ class TunnelManagerWindow(QWidget):
             self.installed_state.setText("Not installed · Download the selected engine to enable the tunnel.")
 
         self.versions_list.setEnabled(not self._busy and not status.get("active"))
+        tor_ready = bool(self.proxy and self.proxy.running and self.proxy.connected)
+        self.btn_test_connection.setEnabled(
+            not self._busy and bool(status.get("active")) and tor_ready
+        )
         self.btn_install.setEnabled(
             self._platform_supported and not self._busy and not status.get("active") and not selected_installed
         )
@@ -513,6 +527,30 @@ class TunnelManagerWindow(QWidget):
             tor_executables=executables,
         )
 
+    def test_tunnel_traffic(self) -> None:
+        """Run the optional connectivity diagnostic without changing privileged state."""
+        if self._busy or self.manager is None or self.proxy is None:
+            return
+        state = self.manager.status()
+        if not state.get("active") or not state.get("verified"):
+            QMessageBox.information(
+                self, "Tunnel is not active",
+                "Start the system tunnel before testing its traffic.",
+            )
+            return
+        tor = getattr(self.proxy, "tor", None)
+        if not (self.proxy.running and self.proxy.connected and tor is not None):
+            QMessageBox.information(
+                self, "Tor is not ready",
+                "Reconnect to Tor before testing tunnel traffic.",
+            )
+            return
+        self._run_operation(
+            "test",
+            self.manager.test_connection,
+            int(tor.socks_port),
+        )
+
     def _run_operation(self, operation: str, method, *args, **kwargs) -> None:
         self._busy = True
         self._operation = operation
@@ -525,6 +563,7 @@ class TunnelManagerWindow(QWidget):
             "install": "Downloading and verifying the selected sing-box release…",
             "start": "Requesting permission and creating the TUN interface…",
             "stop": "Stopping sing-box and verifying route cleanup…",
+            "test": "Testing Tor SOCKS and traffic through the active TUN…",
         }.get(operation, "Working…"))
         self._refresh_state()
         worker = Worker(method, *args, **kwargs)

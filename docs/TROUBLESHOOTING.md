@@ -3,15 +3,16 @@
 
 ### Windows system tunnel starts but traffic times out
 
-For sing-box versions before 1.15, TorProxy automatically tests `gvisor`, `system`, and `mixed` stacks. It first proves a complete TLS handshake through Tor SOCKS, then checks the same destination through the TUN; failed stacks are stopped before the next is tried. With sing-box 1.15+, the new built-in TUN stack is used instead of the deprecated stack setting.
+Starting the tunnel creates the configured TUN interface and verifies the sing-box process identity. It does not perform an external internet/TLS test and does not cycle through alternative stacks. On Windows with sing-box versions before 1.15, the default `gvisor` stack is used (the first/default choice in v2rayN as well); sing-box 1.15+ uses its built-in stack and omits the deprecated `stack` field. Start invokes one elevated helper; a later Stop is a separate privileged operation and therefore asks for approval separately. There should not be repeated UAC prompts during one Start operation.
 
-If the SOCKS TLS preflight succeeds but every TUN stack fails, the Tor exit is reachable and the failure is isolated to Windows TUN forwarding or a host network filter. Check Windows Security/third-party antivirus network shield and firewall history; allow the installed `sing-box.exe` and the TorProxy TUN adapter in the security product. A sing-box report with similar Windows symptoms identified Avast's network filtering as the cause rather than sing-box itself: https://github.com/SagerNet/sing-box/issues/4348. Do not disable Windows Firewall globally. A read-only adapter-binding overview can be collected with:
+To test actual forwarding, keep Tor connected and the tunnel active, then use **Updates → Tunnel → Test traffic**. This performs the external TLS checks separately and does not request Administrator approval, stop the tunnel, or change routes. If it fails while the TUN interface remains active, the tunnel is left running for inspection rather than automatically restarted.
+
+If the TUN interface starts but traffic times out, the issue is isolated to forwarding after TUN creation. Check Windows Security/third-party antivirus network shield and firewall history; allow the installed `sing-box.exe` and the TorProxy TUN adapter in the security product. A sing-box report with similar Windows symptoms identified antivirus/network filtering as a cause rather than a TUN defect: https://github.com/SagerNet/sing-box/issues/4348. Do not disable Windows Firewall globally. A read-only adapter-binding overview can be collected with:
 ```powershell
 Get-NetAdapterBinding -Name "*" |
     Where-Object Enabled |
     Format-Table Name, DisplayName, ComponentID -AutoSize
 ```
-TorProxy stops each failed TUN attempt and restores routes before trying another stack.
 
 ## Tor does not start
 

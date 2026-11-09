@@ -1184,6 +1184,12 @@ def test_tunnel_manager_is_a_versioned_updates_page_with_explicit_network_routes
     assert "_resolve_network_route" in tunnel_source
     assert "allow_direct=allow_direct" in tunnel_source
     assert "create_session(proxy_url, allow_direct=allow_direct)" in engine_source
+    assert 'self.btn_test_connection = QPushButton("Test traffic")' in tunnel_source
+    assert 'self.btn_test_connection.clicked.connect(self.test_tunnel_traffic)' in tunnel_source
+    assert "def test_tunnel_traffic(self)" in tunnel_source
+    assert "self.manager.test_connection" in tunnel_source
+    assert "def test_connection(self, socks_port:" in engine_source
+    assert 'result = self._invoke_helper("start")' in engine_source
     assert "_apply_wfp_tun_exception" not in engine_source
 
 

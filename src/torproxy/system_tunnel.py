@@ -836,13 +836,14 @@ class SystemTunnelManager:
             },
         }
 
-    def _write_and_check_config(
+    def _write_config(
         self,
         socks_port: int,
         tor_executables: list[str | Path],
         *,
         tun_stack: str | None = None,
     ) -> None:
+        """Persist the generated config; the privileged helper validates it before launch."""
         config = self.build_config(
             socks_port, tor_executables=tor_executables, tun_stack=tun_stack
         )
@@ -850,17 +851,6 @@ class SystemTunnelManager:
         _atomic_json(self.config_path, config)
         if os.name != "nt":
             self.config_path.chmod(0o600)
-        check = subprocess.run(
-            [str(self.engine_path), "check", "-c", str(self.config_path)],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            timeout=20,
-            check=False,
-        )
-        if check.returncode != 0:
-            detail = (check.stderr or check.stdout or "sing-box rejected the generated config").strip()
-            raise SystemTunnelError(detail[-1200:])
 
     def is_running(self) -> bool:
         state = _read_json(self.process_state_path)
@@ -965,12 +955,17 @@ class SystemTunnelManager:
         return ("gvisor", "system", "mixed")
 
     @classmethod
-    def _verify_tunnel_tcp_tls(cls, target: tuple[str, str]) -> None:
-        """Verify a TLS flow through the active TUN using the same endpoint proven via Tor SOCKS."""
+    def _verify_tunnel_tcp_tls(
+        cls,
+        target: tuple[str, str],
+        *,
+        timeout: float = 15.0,
+    ) -> None:
+        """Verify a TLS flow through the active TUN."""
         address, server_name = target
         try:
-            with socket.create_connection((address, 443), timeout=15) as raw:
-                raw.settimeout(15)
+            with socket.create_connection((address, 443), timeout=timeout) as raw:
+                raw.settimeout(timeout)
                 with ssl.create_default_context().wrap_socket(
                     raw, server_hostname=server_name
                 ) as verified:
@@ -982,6 +977,14 @@ class SystemTunnelManager:
             ) from exc
 
     def start(self, socks_port: int, *, tor_executables: list[str | Path]) -> str:
+        """Start sing-box once; connectivity checks are an explicit, separate action."""
+        current = self.status()
+        if current.get("active"):
+            return str(current.get("detail") or "System tunnel is already active.")
+        if not current.get("verified", True):
+            raise SystemTunnelError(
+                str(current.get("detail") or "The previous tunnel state must be reconciled before starting.")
+            )
         if not self.is_installed():
             raise SystemTunnelError("Install the verified sing-box engine first.")
         if _interface_exists(self.interface_name):
@@ -989,61 +992,55 @@ class SystemTunnelManager:
                 f"The {self.interface_name} interface already exists outside TorProxy; refusing to take it over."
             )
 
-        # First prove end-to-end TLS through Tor's own SOCKS proxy. A TCP-only
-        # CONNECT can succeed even when Tor exits cannot complete application TLS.
-        verified_target = None
-        preflight_errors = []
+        # For Windows versions before 1.15 the default is gvisor, which is
+        # also the first/default choice in v2rayN. Do not trial-run other stacks:
+        # each start/stop crosses UAC and a network probe is not a TUN health check.
+        self._write_config(socks_port, tor_executables)
+        result = self._invoke_helper("start")
+        if not result.get("ok") or not result.get("active"):
+            raise SystemTunnelError(
+                str(result.get("error") or result.get("detail") or "Tunnel start failed.")
+            )
+        return (
+            "System tunnel started; the sing-box process and TUN interface are active. "
+            "Use Test traffic to verify end-to-end connectivity separately."
+        )
+
+    def test_connection(self, socks_port: int, *, timeout: float = 8.0) -> str:
+        """Run explicit network diagnostics without restarting or elevating the tunnel."""
+        current = self.status()
+        if not current.get("active") or not current.get("verified"):
+            raise SystemTunnelError(
+                str(current.get("detail") or "Start and verify the system tunnel before testing traffic.")
+            )
+
+        failures: list[str] = []
         for target_ip, server_name in self._probe_targets():
             try:
                 self._socks5_connect_probe(
-                    socks_port, target_ip, 443, server_name=server_name, timeout=15
+                    socks_port,
+                    target_ip,
+                    443,
+                    server_name=server_name,
+                    timeout=timeout,
                 )
-                verified_target = (target_ip, server_name)
-                break
-            except (OSError, ssl.SSLError) as exc:
-                preflight_errors.append(f"{target_ip} ({server_name}): {exc}")
-        if verified_target is None:
-            raise SystemTunnelError(
-                "Tor's SOCKS listener is open, but a complete TLS connection through Tor could not be verified. "
-                "The system tunnel was not started. "
-                + " | ".join(preflight_errors)
-            )
+            except (OSError, ssl.SSLError, SystemTunnelError) as exc:
+                failures.append(f"Tor SOCKS {target_ip}: {exc}")
+                continue
 
-        stack_failures = []
-        candidates = self._windows_tun_stack_candidates()
-        for tun_stack in candidates:
-            self._write_and_check_config(
-                socks_port, tor_executables, tun_stack=tun_stack
-            )
-            result = self._invoke_helper("start")
-            if not result.get("ok") or not result.get("active"):
-                raise SystemTunnelError(
-                    str(result.get("error") or result.get("detail") or "Tunnel start failed.")
-                )
             try:
-                self._verify_tunnel_tcp_tls(verified_target)
-                stack_label = tun_stack or "sing-box native"
+                self._verify_tunnel_tcp_tls((target_ip, server_name), timeout=timeout)
                 return (
-                    f"System tunnel started; TCP/TLS traffic through Tor was verified "
-                    f"using the {stack_label} TUN stack."
+                    f"Tunnel traffic verified: TLS to {server_name} passed through "
+                    "the active TUN and Tor SOCKS outbound."
                 )
             except SystemTunnelError as exc:
-                try:
-                    self.stop()
-                except Exception as stop_exc:
-                    raise SystemTunnelError(
-                        f"{exc} Automatic tunnel rollback failed ({stop_exc}); "
-                        "the system tunnel may still be active. Reconcile it before retrying."
-                    ) from exc
-                stack_failures.append(f"{tun_stack or 'native'}: {exc}")
+                failures.append(str(exc))
 
         raise SystemTunnelError(
-            "Tor SOCKS completed a TLS connection before TUN startup, but Windows TUN traffic failed "
-            "with every compatible stack. This isolates the problem to TUN forwarding or a Windows "
-            "network-filter/antivirus driver rather than Tor bootstrap or the exit TLS path. "
-            + " | ".join(stack_failures)
-            + " Check endpoint-security network shields and adapter filtering rules; TorProxy restored "
-            "the routes after each failed attempt."
+            "The TUN process and interface are active, but end-to-end traffic could not be verified. "
+            "The tunnel was left running for inspection; no automatic restart or route change was attempted. "
+            + " | ".join(failures)
         )
 
     def stop(self) -> str:

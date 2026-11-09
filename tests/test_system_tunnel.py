@@ -117,38 +117,33 @@ def test_socks5_connect_probe_sends_protocol_bytes_and_completes_connect(monkeyp
     ]
 
 
-def test_windows_legacy_tun_stack_fallback_tries_all_options_until_traffic_works(tmp_path, monkeypatch):
+def test_windows_start_uses_one_gvisor_attempt_without_network_probes_or_restarts(tmp_path, monkeypatch):
     monkeypatch.setattr(system_tunnel.platform, "system", lambda: "Windows")
     manager = _manager(tmp_path)
     monkeypatch.setattr(manager, "is_installed", lambda: True)
     monkeypatch.setattr(system_tunnel, "_interface_exists", lambda _name: False)
-    monkeypatch.setattr(
-        manager, "_socks5_connect_probe",
-        lambda *_args, **_kwargs: None,
-    )
-    configured = []
-    monkeypatch.setattr(
-        manager, "_write_and_check_config",
-        lambda _port, _tor, *, tun_stack=None: configured.append(tun_stack),
-    )
+
+    config_writes = []
+    monkeypatch.setattr(manager, "_write_config", lambda *args, **kwargs: config_writes.append((args, kwargs)))
+    helper_actions = []
     monkeypatch.setattr(
         manager, "_invoke_helper",
-        lambda _action: {"ok": True, "active": True},
+        lambda action: helper_actions.append(action) or {"ok": True, "active": True},
     )
-    stopped = []
-    monkeypatch.setattr(manager, "stop", lambda: stopped.append(True) or "stopped")
-    def verify(_target):
-        if configured[-1] != "mixed":
-            raise SystemTunnelError("simulated stack forwarding failure")
-    monkeypatch.setattr(manager, "_verify_tunnel_tcp_tls", verify)
+    monkeypatch.setattr(manager, "_socks5_connect_probe",
+                        lambda *_args, **_kwargs: pytest.fail("Start must not run remote network probes"))
+    monkeypatch.setattr(manager, "_verify_tunnel_tcp_tls",
+                        lambda *_args, **_kwargs: pytest.fail("Start must not probe TUN traffic"))
+    monkeypatch.setattr(manager, "stop",
+                        lambda: pytest.fail("Start must not stop/restart the tunnel automatically"))
 
     result = manager.start(9150, tor_executables=[tmp_path / "tor.exe"])
 
-    assert configured == ["gvisor", "system", "mixed"]
-    assert stopped == [True, True]
-    assert "mixed TUN stack" in result
-
-
+    assert len(config_writes) == 1
+    assert config_writes[0][0] == (9150, [tmp_path / "tor.exe"])
+    assert config_writes[0][1] == {}
+    assert helper_actions == ["start"]
+    assert "Test traffic" in result
 def test_system_tunnel_115_uses_native_stack_without_legacy_stack_option(tmp_path, monkeypatch):
     monkeypatch.setattr(system_tunnel.platform, "system", lambda: "Windows")
     manager = _manager(tmp_path)
@@ -209,33 +204,57 @@ def test_socks5_connect_probe_can_verify_tls_before_tun_start(monkeypatch):
     )
 
 
-def test_system_tunnel_start_rolls_back_when_tun_has_no_outbound_tcp_tls(tmp_path, monkeypatch):
+def test_system_tunnel_start_does_not_gate_startup_on_network_connectivity(tmp_path, monkeypatch):
     manager = _manager(tmp_path)
     monkeypatch.setattr(manager, "is_installed", lambda: True)
     monkeypatch.setattr(system_tunnel, "_interface_exists", lambda _name: False)
-    monkeypatch.setattr(manager, "_write_and_check_config", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(manager, "_invoke_helper", lambda _action: {"ok": True, "active": True})
-    monkeypatch.setattr(manager, "_socks5_connect_probe", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(manager, "_verify_tunnel_tcp_tls", lambda _target: (_ for _ in ()).throw(
-        SystemTunnelError("probe timeout")
-    ))
-    real_connect = system_tunnel.socket.create_connection
-    stopped = []
+    config_writes = []
+    monkeypatch.setattr(manager, "_write_config", lambda *args, **kwargs: config_writes.append((args, kwargs)))
+    helper_actions = []
+    monkeypatch.setattr(
+        manager, "_invoke_helper",
+        lambda action: helper_actions.append(action) or {"ok": True, "active": True},
+    )
+    monkeypatch.setattr(manager, "_socks5_connect_probe",
+                        lambda *_args, **_kwargs: pytest.fail("Network testing belongs to test_connection"))
+    monkeypatch.setattr(manager, "_verify_tunnel_tcp_tls",
+                        lambda *_args, **_kwargs: pytest.fail("Network testing belongs to test_connection"))
+    monkeypatch.setattr(manager, "stop",
+                        lambda: pytest.fail("A failed external probe must not roll back a created TUN"))
 
-    def fake_connect(address, timeout=None, **kwargs):
-        if address == ("127.0.0.1", 9150):
-            class Listener:
-                def __enter__(self): return self
-                def __exit__(self, *_args): return False
-            return Listener()
-        raise OSError("simulated blackholed TUN traffic")
+    result = manager.start(9150, tor_executables=[tmp_path / "tor"])
 
-    monkeypatch.setattr(system_tunnel.socket, "create_connection", fake_connect)
-    monkeypatch.setattr(manager, "stop", lambda: stopped.append(True) or "stopped")
-    with pytest.raises(SystemTunnelError, match="stopped automatically"):
-        manager.start(9150, tor_executables=[tmp_path / "tor"])
-    assert stopped == [True]
-    monkeypatch.setattr(system_tunnel.socket, "create_connection", real_connect)
+    assert config_writes
+    assert helper_actions == ["start"]
+    assert "TUN interface are active" in result
+def test_test_connection_runs_remote_checks_without_starting_or_stopping_helper(tmp_path, monkeypatch):
+    manager = _manager(tmp_path)
+    monkeypatch.setattr(manager, "status", lambda: {"active": True, "verified": True, "detail": "active"})
+    socks_calls = []
+    tun_calls = []
+    monkeypatch.setattr(manager, "_socks5_connect_probe", lambda *args, **kwargs: socks_calls.append((args, kwargs)))
+    monkeypatch.setattr(manager, "_verify_tunnel_tcp_tls", lambda *args, **kwargs: tun_calls.append((args, kwargs)))
+    monkeypatch.setattr(manager, "_invoke_helper",
+                        lambda *_args, **_kwargs: pytest.fail("Traffic tests must not request elevation"))
+
+    result = manager.test_connection(9150, timeout=3.0)
+
+    assert "Tunnel traffic verified" in result
+    assert len(socks_calls) == 1
+    assert socks_calls[0][0] == (9150, "1.1.1.1", 443)
+    assert socks_calls[0][1]["server_name"] == "cloudflare-dns.com"
+    assert socks_calls[0][1]["timeout"] == 3.0
+    assert tun_calls == [((("1.1.1.1", "cloudflare-dns.com"),), {"timeout": 3.0})]
+
+
+def test_test_connection_refuses_to_probe_when_tunnel_is_not_active(tmp_path, monkeypatch):
+    manager = _manager(tmp_path)
+    monkeypatch.setattr(manager, "status", lambda: {"active": False, "verified": True, "detail": "stopped"})
+    monkeypatch.setattr(manager, "_socks5_connect_probe",
+                        lambda *_args, **_kwargs: pytest.fail("A stopped tunnel must not be probed"))
+
+    with pytest.raises(SystemTunnelError, match="stopped"):
+        manager.test_connection(9150)
 
 
 def test_windows_tun_config_forces_gvisor_stack_for_known_windows_forwarding_failure(tmp_path, monkeypatch):
