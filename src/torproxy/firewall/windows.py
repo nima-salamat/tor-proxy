@@ -119,60 +119,88 @@ function Set-SnapshotValue($snapshot, [string]$name, $value) {
     }
 }
 function Set-SnapshotLocalRulesEnabled($snapshot, [bool]$enabled) {
-    # Use the native Windows Firewall COM collection rather than the NetSecurity
-    # CIM provider. The latter can spend a long time materializing and updating
-    # hundreds of rule objects even when passed a single -Name array.
+    # Use the documented INetFwRules::Item(name) lookup instead of relying on
+    # PowerShell's COM _NewEnum projection to compare every rule name.
     $names = @($snapshot.disabledRules | ForEach-Object { [string]$_ } |
         Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
     if ($names.Count -eq 0) { return }
-
-    $wanted = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    foreach ($name in $names) { [void]$wanted.Add([string]$name) }
 
     $policy = $null
     $rules = $null
     $matched = 0
     $changed = 0
+    $missing = @()
     $timer = [System.Diagnostics.Stopwatch]::StartNew()
     try {
         $policy = New-Object -ComObject HNetCfg.FwPolicy2
         $rules = $policy.Rules
         $totalRules = [int]$rules.Count
-        Set-Phase ("Updating {0} saved local firewall rules through COM (firewall contains {1} rules)..." -f $names.Count, $totalRules)
+        Set-Phase ("Looking up {0} saved local firewall rules by COM name (collection contains {1} rules)..." -f $names.Count, $totalRules)
 
-        foreach ($rule in $rules) {
-            $ruleName = [string]$rule.Name
-            if (-not $wanted.Contains($ruleName)) { continue }
-
-            # A snapshot entry must still identify an enabled outbound Allow rule.
-            # Do not modify an unrelated rule if Windows policy has drifted.
-            if ([int]$rule.Direction -ne 2 -or [int]$rule.Action -ne 1) {
-                throw "Saved firewall rule $ruleName no longer matches an outbound Allow rule; refusing to modify it."
-            }
-
-            $matched++
-            if ([bool]$rule.Enabled -ne $enabled) {
-                # INetFwRule.Enabled is a VARIANT_BOOL COM property. Passing a
-                # PowerShell Boolean is correct here (unlike NetSecurity's enum parameter).
-                $rule.Enabled = [bool]$enabled
-                if ([bool]$rule.Enabled -ne $enabled) {
-                    throw "Outbound firewall rule $ruleName could not be changed through the Windows Firewall COM API."
+        foreach ($name in $names) {
+            $rule = $null
+            try {
+                $rule = $rules.Item([string]$name)
+            } catch {
+                # INetFwRules::Item documents ERROR_FILE_NOT_FOUND for a name
+                # which is no longer present. Other COM failures are not misses.
+                if ([int]$_.Exception.HResult -eq -2147024894) {
+                    $missing += [string]$name
+                    continue
                 }
-                $changed++
+                throw
+            }
+            if ($null -eq $rule) {
+                $missing += [string]$name
+                continue
             }
 
-            if (($matched % 100) -eq 0) {
+            try {
+                # A snapshot entry must still identify an outbound Allow rule.
+                # Do not modify an unrelated rule if Windows policy has drifted.
+                if ([int]$rule.Direction -ne 2 -or [int]$rule.Action -ne 1) {
+                    throw "Saved firewall rule $name no longer matches an outbound Allow rule; refusing to modify it."
+                }
+
+                $matched++
+                if ([bool]$rule.Enabled -ne $enabled) {
+                    # INetFwRule.Enabled is a VARIANT_BOOL COM property.
+                    $rule.Enabled = [bool]$enabled
+                    if ([bool]$rule.Enabled -ne $enabled) {
+                        throw "Outbound firewall rule $name could not be changed through the Windows Firewall COM API."
+                    }
+                    $changed++
+                }
+            } finally {
+                if ([System.Runtime.InteropServices.Marshal]::IsComObject($rule)) {
+                    [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($rule)
+                }
+            }
+
+            if (($matched % 25) -eq 0) {
                 Set-Phase ("Updated {0}/{1} saved firewall rules through COM ({2:N1}s)..." -f $matched, $names.Count, $timer.Elapsed.TotalSeconds)
             }
         }
         $timer.Stop()
 
-        # A missing rule may have been removed by the administrator since the
-        # snapshot was taken. That is safe to skip; zero matches is not verifiable.
+        # If nothing matched, capture a few collection names and snapshot names.
+        # This makes policy-store/name mismatches diagnosable without exposing
+        # the full firewall inventory in routine logs.
         if ($matched -eq 0 -and $names.Count -gt 0) {
-            throw ("None of the {0} saved firewall rules were found in the Windows Firewall COM collection; the update could not be verified." -f $names.Count)
+            $comExamples = @()
+            try {
+                foreach ($candidate in $rules) {
+                    if ($comExamples.Count -ge 6) { break }
+                    $comExamples += [string]$candidate.Name
+                }
+            } catch {
+                $comExamples = @('<COM rule enumeration unavailable>')
+            }
+            $savedExamples = @($names | Select-Object -First 6) -join ', '
+            $currentExamples = if ($comExamples.Count -gt 0) { $comExamples -join ', ' } else { '<no COM rules returned>' }
+            throw ("None of the {0} saved firewall rules were found through INetFwRules::Item; the COM collection contains {1} rules. Saved name examples: {2}. COM name examples: {3}." -f $names.Count, $totalRules, $savedExamples, $currentExamples)
         }
-        Set-Phase ("Windows Firewall COM updated {0} rules ({1} matched) in {2:N1}s." -f $changed, $matched, $timer.Elapsed.TotalSeconds)
+        Set-Phase ("Windows Firewall COM updated {0} rules ({1} matched; {2} missing) in {3:N1}s." -f $changed, $matched, $missing.Count, $timer.Elapsed.TotalSeconds)
     }
     finally {
         if ($null -ne $rules -and [System.Runtime.InteropServices.Marshal]::IsComObject($rules)) {
