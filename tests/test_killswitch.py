@@ -346,8 +346,19 @@ def test_linux_install_is_idempotent_without_restarting_the_live_drop_chain(tmp_
 
 def test_windows_helper_can_restore_a_partially_applied_policy():
     assert "Assert-ManagedState $snapshot $false" in _POWERSHELL
-    assert "$currentProfiles = Get-ActiveProfiles" in _POWERSHELL
+    assert "$currentProfiles = Get-PersistentProfiles" in _POWERSHELL
     assert "DefaultOutboundAction" in _POWERSHELL
+
+
+def test_windows_kill_switch_checks_effective_policy_but_snapshots_local_settings():
+    # The local persistent store is reversible configuration; ActiveStore is
+    # the merged policy that Windows Firewall actually enforces.
+    assert "Get-NetFirewallProfile -PolicyStore ActiveStore" in _POWERSHELL
+    assert "Get-NetFirewallProfile -PolicyStore PersistentStore" in _POWERSHELL
+    assert "$profiles = Get-PersistentProfiles" in _POWERSHELL
+    assert "$effectiveProfiles = Get-ActiveProfiles" in _POWERSHELL
+    assert "Effective Windows Firewall profile" in _POWERSHELL
+    assert "Set-NetFirewallProfile -PolicyStore PersistentStore" in _POWERSHELL
 
 
 
