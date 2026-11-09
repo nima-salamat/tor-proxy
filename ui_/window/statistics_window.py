@@ -366,9 +366,10 @@ class StatisticsWindow(QWidget):
         root.addLayout(charts, 1)
 
         self.data_note = QLabel(
-            "History records HTTP proxy traffic and cumulative TorProxy TUN adapter counters; upload and download are shown separately. "
+            "The legacy all-time total is preserved; directional history starts with this tracking version. "
+            "History records HTTP proxy traffic and cumulative TorProxy TUN adapter counters, with upload and download shown separately. "
             "Minute-level history is kept for up to 180 days; live rate and peak reset each launch. "
-            "TUN counters are sampled by the background accounting worker and do not depend on opening this page."
+            "TUN counters are sampled in the background, independent of this page, and exclude unrelated system traffic."
         )
         self.data_note.setObjectName("statisticsNote")
         self.data_note.setWordWrap(True)
