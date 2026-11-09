@@ -204,6 +204,7 @@ def test_windows_and_linux_helpers_share_one_complete_argument_builder(tmp_path,
             mapping[flag] = args[index + 1]
             index += 2
     assert mapping["--version"] == manager.version
+    assert mapping["--policy-dir"] == str(manager.directories.config)
     assert mapping["--source-url"] == manager.platform_asset["url"]
     assert mapping["--archive-type"] == manager.platform_asset["archive"]
     assert "--release-sha256" in mapping
@@ -734,6 +735,66 @@ def test_stop_refuses_to_clear_a_stale_process_record_when_tun_adapter_remains(t
     with pytest.raises(SystemTunnelError, match="adapter remains"):
         system_tunnel._helper_stop(state_path, "torproxy-tun")
     assert state_path.exists()
+
+
+
+def test_cleanup_previous_session_stops_only_when_a_state_record_exists(tmp_path, monkeypatch):
+    manager = _manager(tmp_path)
+    calls = []
+    monkeypatch.setattr(
+        manager, "status",
+        lambda: {"active": False, "verified": True, "detail": "A stale sing-box PID record was found."},
+    )
+    monkeypatch.setattr(manager, "stop", lambda: calls.append("stop") or "Stale tunnel state removed.")
+    manager.process_state_path.parent.mkdir(parents=True)
+    manager.process_state_path.write_text(json.dumps({"pid": 321}), encoding="utf-8")
+
+    result = manager.cleanup_previous_session()
+
+    assert result == "Stale tunnel state removed."
+    assert calls == ["stop"]
+
+
+def test_cleanup_previous_session_does_not_request_elevation_when_nothing_is_left(tmp_path, monkeypatch):
+    manager = _manager(tmp_path)
+    calls = []
+    monkeypatch.setattr(
+        manager, "status",
+        lambda: {"active": False, "verified": True, "detail": "System tunnel is stopped."},
+    )
+    monkeypatch.setattr(manager, "stop", lambda: calls.append("stop") or "stopped")
+
+    result = manager.cleanup_previous_session()
+
+    assert result == "System tunnel is stopped."
+    assert calls == []
+
+
+def test_cleanup_previous_session_refuses_untracked_adapter_without_process_record(tmp_path, monkeypatch):
+    manager = _manager(tmp_path)
+    calls = []
+    monkeypatch.setattr(
+        manager, "status",
+        lambda: {"active": False, "verified": False, "detail": "An untracked TorProxy adapter exists."},
+    )
+    monkeypatch.setattr(manager, "stop", lambda: calls.append("stop") or "stopped")
+
+    with pytest.raises(SystemTunnelError, match="untracked TorProxy adapter"):
+        manager.cleanup_previous_session()
+    assert calls == []
+
+
+def test_stop_removes_corrupt_state_record_only_when_no_tun_adapter_exists(tmp_path, monkeypatch):
+    state_path = tmp_path / "tunnel-state.json"
+    state_path.write_text("{corrupt", encoding="utf-8")
+    monkeypatch.setattr(system_tunnel, "_interface_exists", lambda _name: False)
+
+    result = system_tunnel._helper_stop(state_path, "torproxy-tun")
+
+    assert result["ok"] is True
+    assert result["active"] is False
+    assert "unreadable stale tunnel record" in result["detail"]
+    assert not state_path.exists()
 
 
 def test_tunnel_process_uses_graceful_termination_on_linux(monkeypatch):
