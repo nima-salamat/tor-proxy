@@ -756,11 +756,6 @@ class Window(QMainWindow):
                 subcontrol-origin: padding;
                 subcontrol-position: bottom right;
             }}
-            /* The chevron is painted by UpdatesMenuButton using the label color. */
-            QToolButton#updatesNavButton::menu-indicator {{
-                image: none;
-                width: 12px;
-            }}
             QPushButton#topNavExitButton {{
                 min-height: 32px; padding: 0 9px; margin: 0 1px; border: 1px solid {border};
                 border-radius: 7px; color: {text}; background: transparent; font-size: 9pt; font-weight: 700;
