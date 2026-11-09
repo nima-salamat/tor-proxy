@@ -138,6 +138,7 @@ class ShortcutsWindow(QWidget):
             layout.setSpacing(12)
 
             icon_label = QLabel(row)
+            icon_label.setObjectName("shortcutsRowIcon")
             icon_label.setFixedSize(24, 24)
             icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             layout.addWidget(icon_label)
@@ -281,6 +282,7 @@ class ShortcutsWindow(QWidget):
             QLabel#shortcutsCategory {{ color: {accent}; background: transparent; font-size: 10px; font-weight: 850; padding: 14px 8px 4px; }}
             QFrame#shortcutsRow {{ background: transparent; border: none; border-bottom: 1px solid {border}; border-radius: 6px; }}
             QFrame#shortcutsRow:hover {{ background: {hover}; }}
+            QLabel#shortcutsRowIcon, QFrame#shortcutsRow:hover QLabel#shortcutsRowIcon {{ background: transparent; border: none; }}
             QLabel#shortcutsRowTitle {{ color: {text}; background: transparent; font-size: 12px; font-weight: 700; }}
             QLabel#shortcutsRowDescription {{ color: {muted}; background: transparent; font-size: 10px; }}
             QLabel#shortcutsKeycap {{ color: {text}; background: {panel}; border: 1px solid {border}; border-bottom: 2px solid {border}; border-radius: 5px; padding: 4px 7px; min-width: 18px; font-size: 10px; font-weight: 800; }}
