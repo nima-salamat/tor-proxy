@@ -202,7 +202,7 @@ Applications configured manually to use `127.0.0.1:<shown-proxy-port>` do not re
 
 Manage the system-wide Tor tunnel from **Updates → Tunnel**. The page lists stable sing-box versions whose official Windows/Linux archives have been pinned and SHA-256 verified by this TorProxy build. Choose a version, install it, and use the same page to start or stop system routing. Windows requests Administrator approval for TUN routing; Linux uses PolicyKit (pkexec).
 
-The page can check GitHub for the latest stable sing-box release. A newer upstream release is shown in the version list as **not verified** when this TorProxy build does not yet have a reviewed platform digest; it stays disabled until a later TorProxy update pins it. This avoids executing a release that has not been integrity-pinned.
+The page can check GitHub for the latest stable sing-box release. A newer upstream release is shown in the version list as **not verified** when this TorProxy build does not yet have a reviewed platform digest; it stays disabled until a later TorProxy update pins it. This avoids executing a release that has not been integrity-pinned. The Tunnel manager uses the same compact cards, typography, release list, button hierarchy, colors and progress treatment as the Tor Bundle updater. Its status refreshes while open, so Start is enabled only after Tor reaches verified READY and returns to Waiting for Tor when Tor disconnects.
 
 Tunnel-engine downloads and release checks use Tor's loopback SOCKS5H route when Tor is READY. When Tor is stopped, TorProxy asks for explicit permission before making that individual request directly. A failed Tor-routed request never falls back automatically to a direct connection.
 
@@ -210,7 +210,7 @@ The TUN routes supported system TCP connections explicitly through Tor's local S
 
 **This is a TCP-only tunnel, not a general-purpose UDP VPN.** Tor's SOCKS interface cannot carry arbitrary UDP: unsupported UDP traffic is rejected rather than routed directly. Apps that require UDP/QUIC, real-time media, games, or other unsupported protocols may fail. Strict routing can also affect virtual machines, containers, local-network discovery, or LAN access. The feature supports Windows x64 and glibc-based Linux x86_64; macOS, Android, ARM, and musl-based Linux are not supported.
 
-Stop the system tunnel before disconnecting Tor or exiting TorProxy. If the process identity cannot be verified or the TUN interface cannot be removed, TorProxy keeps Tor running and blocks application exit rather than claiming routes were safely restored.
+Before a new Tor connection, TorProxy checks for a previous sing-box process-state record and reconciles it through the privileged helper. It stops a process only when its saved PID, executable path, start time and config identity still match; an unreadable stale record is removed only when the TUN interface is absent. Settings → Advanced also provides an explicit emergency inspection/cleanup action for the same managed state. An orphaned adapter or a live PID with a mismatched identity is deliberately not removed: the app cannot prove that such routes belong to this sing-box session. In that case Connect is blocked and the exact state must be inspected manually. Stop the system tunnel before disconnecting Tor or exiting TorProxy. If the process identity cannot be verified or the TUN interface cannot be removed, TorProxy keeps Tor running and blocks application exit rather than claiming routes were safely restored.
 
 ## Configuration and data paths
 
