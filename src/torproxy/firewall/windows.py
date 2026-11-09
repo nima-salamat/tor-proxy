@@ -131,7 +131,9 @@ function Set-SnapshotLocalRulesEnabled($snapshot, [bool]$enabled) {
         [string]$_.Enabled -ne ([string]$enabled)
     } | ForEach-Object { [string]$_.Name } | Sort-Object -Unique)
     if ($changeNames.Count -gt 0) {
-        Set-NetFirewallRule -PolicyStore PersistentStore -Name $changeNames -Enabled $enabled -ErrorAction Stop | Out-Null
+        # NetSecurity's -Enabled parameter is an enum (True/False), not Boolean.
+        $enabledValue = if ($enabled) { 'True' } else { 'False' }
+        Set-NetFirewallRule -PolicyStore PersistentStore -Name $changeNames -Enabled $enabledValue -ErrorAction Stop | Out-Null
     }
 
     # Re-read once and verify the batch. Missing rules are tolerated because an
@@ -147,6 +149,11 @@ function Set-SnapshotLocalRulesEnabled($snapshot, [bool]$enabled) {
         }
         throw "Outbound firewall rule $first could not be disabled for Kill Switch protection."
     }
+}
+function Set-SnapshotProfile($saved) {
+    # Set-NetFirewallProfile uses the GpoBoolean enum, not System.Boolean.
+    $enabledValue = if ([bool]$saved.Enabled) { 'True' } else { 'False' }
+    Set-NetFirewallProfile -PolicyStore PersistentStore -Profile ([string]$saved.Name) -Enabled $enabledValue -DefaultOutboundAction ([string]$saved.DefaultOutboundAction)
 }
 function Format-FilterValue($value) {
     if ($null -eq $value) { return 'Any' }
@@ -436,7 +443,7 @@ try {
             foreach ($saved in $snapshot.profiles) {
                 $current = $currentProfiles | Where-Object { $_.Name -eq $saved.Name } | Select-Object -First 1
                 if ($null -ne $current -and [bool]$current.Enabled -and [string]$current.DefaultOutboundAction -eq 'Block') {
-                    Set-NetFirewallProfile -PolicyStore PersistentStore -Profile ([string]$saved.Name) -Enabled ([bool]$saved.Enabled) -DefaultOutboundAction ([string]$saved.DefaultOutboundAction)
+                    Set-SnapshotProfile $saved
                 }
             }
             Set-Phase 'Restoring saved local outbound Allow rules in one batch...'
@@ -487,7 +494,7 @@ try {
                 $applied = [bool]$current.Enabled -and [string]$current.DefaultOutboundAction -eq 'Block'
                 if ($original) { continue }
                 if ($applied) {
-                    Set-NetFirewallProfile -PolicyStore PersistentStore -Profile ([string]$saved.Name) -Enabled ([bool]$saved.Enabled) -DefaultOutboundAction ([string]$saved.DefaultOutboundAction)
+                    Set-SnapshotProfile $saved
                 } else {
                     $name = [string]$saved.Name
                     $preservedProfiles[$name] = @{
