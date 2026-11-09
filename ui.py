@@ -701,6 +701,9 @@ class Window(QMainWindow):
         if proxy_widget is None:
             self.global_state.setText("● Initializing")
             return
+        refresh_tunnel = getattr(proxy_widget, "_update_tunnel_hint", None)
+        if callable(refresh_tunnel):
+            refresh_tunnel()
         tor = getattr(proxy_widget, "tor", None)
         if tor is not None and not getattr(tor, "path_set", False):
             # The notification bell carries actionable setup warnings; keep the
