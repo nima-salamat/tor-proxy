@@ -417,7 +417,7 @@ void activate(const std::vector<std::wstring>& programs) {
     transaction.commit();
 
     const UINT32 installed = enumerateOwnedFilters(engine.get(), nullptr);
-    if (installed < 10) {
+    if (installed < 11) {
         Transaction cleanup(engine.get());
         removeOwnedFilters(engine.get());
         cleanup.commit();
@@ -439,7 +439,7 @@ void allowTunnelInterface() {
 
     Engine engine;
     const UINT32 existing = enumerateOwnedFilters(engine.get(), nullptr);
-    if (existing < 10) {
+    if (existing < 11) {
         throw std::runtime_error("TorProxy WFP kill switch is not active; refusing to add a tunnel-only permit.");
     }
 
@@ -473,7 +473,7 @@ void status() {
     Engine engine;
     const UINT32 count = enumerateOwnedFilters(engine.get(), nullptr);
     const UINT32 tunnelPermits = getCurrentTunnelPermitCount(engine.get());
-    const wchar_t* state = count >= 10 ? L"ACTIVE" : (count == 0 ? L"INACTIVE" : L"INCOMPLETE");
+    const wchar_t* state = count >= 11 ? L"ACTIVE" : (count == 0 ? L"INACTIVE" : L"INCOMPLETE");
     std::wcout << state << L" filters=" << count
                << L" tun_interface_allowed=" << (tunnelPermits >= 2 ? L"true" : L"false")
                << L"\n";
