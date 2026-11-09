@@ -43,11 +43,13 @@ function Get-PersistentProfiles {
     return @(Get-NetFirewallProfile -PolicyStore PersistentStore -Profile Domain,Private,Public | Select-Object Name,Enabled,DefaultOutboundAction)
 }
 function Assert-EffectiveOutboundAction([string]$expectedAction) {
-    # Firewall profile settings are ineffective if the filtering services are stopped.
-    foreach ($serviceName in @('BFE', 'MpsSvc')) {
-        $service = Get-Service -Name $serviceName -ErrorAction Stop
-        if ([string]$service.Status -ne 'Running') {
-            throw "Required Windows filtering service $serviceName is not running."
+    if ($expectedAction -eq 'Block') {
+        # Firewall profile settings are ineffective if the filtering services are stopped.
+        foreach ($serviceName in @('BFE', 'MpsSvc')) {
+            $service = Get-Service -Name $serviceName -ErrorAction Stop
+            if ([string]$service.Status -ne 'Running') {
+                throw "Required Windows filtering service $serviceName is not running."
+            }
         }
     }
     $profiles = @(Get-ActiveProfiles)
@@ -59,12 +61,14 @@ function Assert-EffectiveOutboundAction([string]$expectedAction) {
         if (-not [bool]$profile.Enabled -or [string]$profile.DefaultOutboundAction -ne $expectedAction) {
             throw "Effective Windows Firewall profile $name does not enforce outbound $expectedAction."
         }
-        $disabledInterfaces = @($profile.DisabledInterfaceAliases | Where-Object {
-            -not [string]::IsNullOrWhiteSpace([string]$_)
-        })
-        if ($disabledInterfaces.Count -gt 0) {
-            $names = ($disabledInterfaces | ForEach-Object { [string]$_ }) -join ', '
-            throw "Effective Windows Firewall profile $name excludes interface filtering for: $names."
+        if ($expectedAction -eq 'Block') {
+            $disabledInterfaces = @($profile.DisabledInterfaceAliases | Where-Object {
+                -not [string]::IsNullOrWhiteSpace([string]$_)
+            })
+            if ($disabledInterfaces.Count -gt 0) {
+                $names = ($disabledInterfaces | ForEach-Object { [string]$_ }) -join ', '
+                throw "Effective Windows Firewall profile $name excludes interface filtering for: $names."
+            }
         }
     }
 }
