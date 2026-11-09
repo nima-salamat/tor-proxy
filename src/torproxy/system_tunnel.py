@@ -775,8 +775,9 @@ class SystemTunnelManager:
         if platform.system() == "Linux":
             tun["auto_redirect"] = True
         elif platform.system() == "Windows":
-            # sing-box Windows system/mixed TUN stacks have a reported
-            # forwarding blackhole on some Windows 11 builds; gvisor works.
+            # Prefer gvisor on Windows as a compatibility fallback for
+            # installations affected by system/mixed TUN forwarding issues.
+            # Host antivirus/network-filter drivers can still block the adapter.
             tun["stack"] = "gvisor"
 
         return {
