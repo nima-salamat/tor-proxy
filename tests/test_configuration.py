@@ -49,6 +49,45 @@ def test_legacy_migration_preserves_supported_values():
     assert migrated["newnym_interval_seconds"] == 30
     assert migrated["data_usage_bytes"] == 123
 
+def test_app_configuration_defaults_openpgp_signature_verification_to_off():
+    assert DEFAULT_DATA["verify_tor_signatures"] is False
+
+
+def test_previous_default_on_openpgp_preference_is_migrated_to_off(tmp_path):
+    from config import Config as AppConfig
+
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({
+        "schema_version": 1,
+        "verify_tor_signatures": True,
+        "mode": "dark",
+    }), encoding="utf-8")
+    store = AppConfig()
+    store.path = path
+
+    loaded = store.load()
+
+    assert loaded["verify_tor_signatures"] is False
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["schema_version"] == 2
+    assert saved["verify_tor_signatures"] is False
+
+
+def test_schema_two_preserves_an_explicit_openpgp_opt_in(tmp_path):
+    from config import Config as AppConfig
+
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({
+        "schema_version": 2,
+        "verify_tor_signatures": True,
+        "mode": "dark",
+    }), encoding="utf-8")
+    store = AppConfig()
+    store.path = path
+
+    assert store.load()["verify_tor_signatures"] is True
+
+
 def test_app_configuration_defaults_to_no_sni_override_and_normalizes_custom_host():
     data = dict(DEFAULT_DATA)
     assert data["webtunnel_sni_imitation"] == ""
