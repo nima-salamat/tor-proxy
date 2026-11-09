@@ -128,6 +128,51 @@ def _host_rule_route_fields(rule) -> dict[str, list[str]]:
     raise SystemTunnelError("The saved host rule uses an unsupported match mode.")
 
 
+def _load_host_rules_file(config_dir: Path, filename: str) -> HostRules:
+    """Load the persisted user-owned host policy without silently dropping bad rules."""
+    path = Path(config_dir) / filename
+    if not path.exists():
+        return HostRules()
+    try:
+        if path.stat().st_size > 1024 * 1024:
+            raise ValueError("the file exceeds the 1 MiB safety limit")
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+            raise ValueError("the file must contain a JSON list of strings")
+        return HostRules.from_values(raw)
+    except (OSError, ValueError, json.JSONDecodeError, HostRuleError) as exc:
+        raise SystemTunnelError(
+            f"Saved host-policy file '{filename}' could not be loaded: {exc}. "
+            "Fix or remove that file before starting the system tunnel."
+        ) from exc
+
+
+def _build_host_policy_route_rules(config_dir: Path) -> tuple[list[dict[str, Any]], bool]:
+    """Build the exact TCP-only policy fragment used by both parent and elevated helper."""
+    blocked = _load_host_rules_file(config_dir, "blocked_hosts.json")
+    excluded = _load_host_rules_file(config_dir, "exclude_hosts.json")
+    rules: list[dict[str, Any]] = []
+    for rule in blocked.rules:
+        rules.append({
+            "network": "tcp",
+            **_host_rule_route_fields(rule),
+            "action": "reject",
+            "method": "default",
+        })
+    for rule in excluded.rules:
+        rules.append({
+            "network": "tcp",
+            **_host_rule_route_fields(rule),
+            "action": "route",
+            "outbound": "direct",
+        })
+    sniff_required = any(
+        any(key in rule for key in ("domain", "domain_suffix", "domain_regex"))
+        for rule in rules
+    )
+    return rules, sniff_required
+
+
 def _normalize_upstream_asset(
     version: str,
     raw_asset: dict[str, Any],
@@ -774,23 +819,7 @@ class SystemTunnelManager:
     def _load_saved_host_rules(self, filename: str) -> HostRules:
         """Read the same per-user rule file used by the loopback HTTP proxy."""
         config_dir = getattr(self.directories, "config", None)
-        if config_dir is None:
-            return HostRules()
-        path = Path(config_dir) / filename
-        if not path.exists():
-            return HostRules()
-        try:
-            if path.stat().st_size > 1024 * 1024:
-                raise ValueError("the file exceeds the 1 MiB safety limit")
-            raw = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
-                raise ValueError("the file must contain a JSON list of strings")
-            return HostRules.from_values(raw)
-        except (OSError, ValueError, json.JSONDecodeError, HostRuleError) as exc:
-            raise SystemTunnelError(
-                f"Saved host-policy file '{filename}' could not be loaded: {exc}. "
-                "Fix or remove that file before starting the system tunnel."
-            ) from exc
+        return HostRules() if config_dir is None else _load_host_rules_file(Path(config_dir), filename)
 
     def build_config(
         self,
@@ -858,23 +887,8 @@ class SystemTunnelManager:
         if not windows_tun:
             fakeip_server["inet6_range"] = "2001:2::/48"
 
-        blocked_hosts = self._load_saved_host_rules("blocked_hosts.json")
-        excluded_hosts = self._load_saved_host_rules("exclude_hosts.json")
-        host_policy_rules: list[dict[str, Any]] = []
-        for rule in blocked_hosts.rules:
-            host_policy_rules.append({
-                "network": "tcp",
-                **_host_rule_route_fields(rule),
-                "action": "reject",
-                "method": "default",
-            })
-        for rule in excluded_hosts.rules:
-            host_policy_rules.append({
-                "network": "tcp",
-                **_host_rule_route_fields(rule),
-                "action": "route",
-                "outbound": "direct",
-            })
+        policy_dir = Path(getattr(self.directories, "config", user_directories().config))
+        host_policy_rules, sniff_required = _build_host_policy_route_rules(policy_dir)
 
         route_rules = [
             {
@@ -907,10 +921,6 @@ class SystemTunnelManager:
         if host_policy_rules:
             # Domain metadata is recovered from the FakeIP reverse mapping or
             # sniffed from HTTP/TLS. These rules apply before the catch-all Tor route.
-            sniff_required = any(
-                any(key in rule for key in ("domain", "domain_suffix", "domain_regex"))
-                for rule in host_policy_rules
-            )
             insertion = [{"network": "tcp", "action": "sniff"}] if sniff_required else []
             route_rules[4:4] = insertion + host_policy_rules
 
@@ -1185,6 +1195,22 @@ class SystemTunnelManager:
             + f" | Inspect sing-box warnings/errors in {self.log_path}; routine per-connection INFO logging is disabled to reduce disk I/O."
         )
 
+    def cleanup_previous_session(self) -> str:
+        """Stop only a recorded TorProxy tunnel left by an earlier/failed session.
+
+        An untracked TUN adapter is never deleted or adopted: without a verified
+        process record, its routes cannot safely be attributed to TorProxy.
+        """
+        state = self.status()
+        record_exists = self.process_state_path.exists()
+        if not record_exists:
+            if not state.get("verified", True):
+                raise SystemTunnelError(
+                    str(state.get("detail") or "An untracked TUN interface requires manual inspection.")
+                )
+            return str(state.get("detail") or "No previous TorProxy tunnel state needs cleanup.")
+        return self.stop()
+
     def stop(self) -> str:
         result = self._invoke_helper("stop", timeout=HELPER_STOP_TIMEOUT_SECONDS + 20)
         if not result.get("ok") or result.get("active"):
@@ -1206,6 +1232,7 @@ class SystemTunnelManager:
             "--version", self.version,
             "--engine", str(self.engine_path),
             "--config", str(self.config_path),
+            "--policy-dir", str(self.directories.config),
             "--state", str(self.process_state_path),
             "--log", str(self.log_path),
             "--sha256", self.engine_sha256 if action == "start" else "",
@@ -1484,18 +1511,29 @@ def _helper_start(args: Any) -> dict[str, Any]:
     ):
         raise SystemTunnelError("The privileged helper rejected the routing defaults.")
     route_rules = route.get("rules", [])
+    expected_host_rules, sniff_required = _build_host_policy_route_rules(
+        Path(args.policy_dir).resolve()
+    )
+    policy_prefix = [{"network": "tcp", "action": "sniff"}] if sniff_required else []
+    expected_policy_tail = [
+        *policy_prefix,
+        *expected_host_rules,
+        {"network": "udp", "action": "reject", "method": "default"},
+        {"network": "tcp", "action": "route", "outbound": "tor-socks"},
+    ]
     if (
-        len(route_rules) != 6
+        len(route_rules) < 6
         or route_rules[2] != {"port": 53, "action": "hijack-dns"}
         or route_rules[3] != {
             "ip_cidr": expected_tun_networks,
             "action": "reject",
             "method": "drop",
         }
-        or route_rules[4] != {"network": "udp", "action": "reject", "method": "default"}
-        or route_rules[5] != {"network": "tcp", "action": "route", "outbound": "tor-socks"}
+        or route_rules[4:] != expected_policy_tail
     ):
-        raise SystemTunnelError("The privileged helper rejected the DNS/UDP route ordering.")
+        raise SystemTunnelError(
+            "The privileged helper rejected the host-policy, DNS or UDP/TCP route ordering."
+        )
 
     name_rule = route_rules[0]
     process_names = name_rule.get("process_name") if isinstance(name_rule, dict) else None
@@ -1723,6 +1761,13 @@ def _helper_stop(state_path: Path, interface_name: str) -> dict[str, Any]:
                 f"The {interface_name} interface exists without a verified sing-box process record. "
                 "The helper refused to claim that the system routes were restored."
             )
+        if state_path.exists():
+            state_path.unlink(missing_ok=True)
+            return {
+                "ok": True,
+                "active": False,
+                "detail": "Removed an unreadable stale tunnel record; no TUN interface or process was present.",
+            }
         return {"ok": True, "active": False, "detail": "No system tunnel process or TUN interface is recorded."}
     process = _process_matches(state)
     if process is None:
@@ -1764,6 +1809,7 @@ def system_tunnel_helper_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--version", required=True)
     parser.add_argument("--engine", required=True)
     parser.add_argument("--config", required=True)
+    parser.add_argument("--policy-dir", required=True)
     parser.add_argument("--state", required=True)
     parser.add_argument("--log", required=True)
     parser.add_argument("--sha256", required=True)
