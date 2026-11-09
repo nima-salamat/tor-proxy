@@ -353,6 +353,7 @@ def test_application_message_prompts_use_the_shared_custom_dialog():
         "ui_/window/block_host_window.py",
         "ui_/window/exclude_host_window.py",
         "ui_/window/updater_window.py",
+        "ui_/window/tunnel_window.py",
     )
     for relative_path in paths:
         source = (repository / relative_path).read_text(encoding="utf-8")
@@ -1146,6 +1147,19 @@ def test_legacy_kill_switch_ui_and_tunnel_dependency_are_removed():
     assert "self.page_nav_group.setExclusive(False)" in shell_source
     assert "self.page_nav_group.setExclusive(True)" in shell_source
     assert "def _show_tunnel_page(self)" in shell_source
+
+
+def test_home_places_system_proxy_and_tunnel_controls_in_one_row():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+
+    assert "service_controls_row = QHBoxLayout()" in source
+    assert "service_controls_row.addWidget(proxy_controls, 1)" in source
+    assert "service_controls_row.addWidget(self.system_tunnel_hint, 2)" in source
+    assert "self.home_layout.addLayout(service_controls_row)" in source
+    assert "self.home_layout.addWidget(self.system_tunnel_hint)" not in source
+    assert "self.home_layout.addLayout(proxy_row)" not in source
+
 
 def test_home_tunnel_controls_start_and_stop_installed_engine_without_showing_manage():
     repository = Path(__file__).resolve().parents[1]
