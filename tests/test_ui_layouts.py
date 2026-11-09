@@ -311,7 +311,8 @@ def test_updates_menu_initialization_avoids_undefined_mode_and_tracks_popup_stat
     assert 'self.updates_menu.aboutToHide.connect(self._on_updates_menu_about_to_hide)' in menu_builder
     assert 'def _on_updates_menu_about_to_show(self):' in source
     assert 'def _on_updates_menu_about_to_hide(self):' in source
-    assert 'icon_name = "fa6s.cloud-arrow-up" if menu_open else "fa6s.cloud-arrow-down"' in source
+    assert 'self.updates_nav_button.setIcon(qta.icon("fa6s.cloud-arrow-down", color=color))' in source
+    assert 'icon_name = "fa6s.cloud-arrow-up" if menu_open else "fa6s.cloud-arrow-down"' not in source
 
 
 def test_manage_proxy_disable_dispatches_explicit_clear_to_the_current_platform(monkeypatch):
