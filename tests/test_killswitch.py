@@ -282,6 +282,9 @@ def test_windows_wfp_source_uses_persistent_filters_and_one_transaction():
     assert "removeTunnelPermitFilters(engine.get())" in source
     assert "matchesTunnelLuid" in source
     assert "tun_interface_allowed=" in source
+    assert "installed < 11" in source
+    assert "existing < 11" in source
+    assert "count >= 11" in source
 
 
 def test_windows_wfp_cmake_target_is_installed_with_the_desktop_package():
