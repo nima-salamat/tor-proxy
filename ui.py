@@ -1005,7 +1005,6 @@ class Window(QMainWindow):
             accent = "#5797ed"
             divider = "#303b4c"
             danger = "#ef7777"
-            danger_hover = "#3b2930"
         else:
             surface = "#ffffff"
             border = "#dfe6ef"
@@ -1015,7 +1014,6 @@ class Window(QMainWindow):
             accent = "#2878d0"
             divider = "#e7ecf2"
             danger = "#c94343"
-            danger_hover = "#fff0f0"
 
         menu.setStyleSheet(f"""
             QMenu#trayContextMenu {{
