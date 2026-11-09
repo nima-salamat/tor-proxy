@@ -194,9 +194,12 @@ def main() -> int:
                 return app.exec()
             finally:
                 try:
-                    win.proxyWidget._stop_services()
+                    # The Qt close path already performs asynchronous shutdown.
+                    # This is a final idempotent cleanup after app.exec() returns,
+                    # when no GUI event loop remains to protect from blocking.
+                    win.proxyWidget._stop_services_worker()
                 except Exception:
-                    LOGGER.exception("Error during application shutdown.")
+                    LOGGER.exception("Error during final application shutdown cleanup.")
     except portalocker.exceptions.LockException:
         message = "TorProxy is already running. Close the existing instance first."
         if not notify_launcher("failed", message):
