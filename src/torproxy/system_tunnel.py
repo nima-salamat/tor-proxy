@@ -848,6 +848,10 @@ class SystemTunnelManager:
             ],
             "route": {
                 "auto_detect_interface": True,
+                # With multiple DNS servers (FakeIP + DoH), sing-box 1.14+
+                # requires an explicit resolver for domain-based dial fields.
+                # The DoH endpoint is an IP literal and itself detours via Tor.
+                "default_domain_resolver": "tor-doh",
                 "rules": [
                     {
                         "process_name": sorted({Path(path).name.casefold() for path in bypass_paths}),
@@ -1379,7 +1383,12 @@ def _helper_start(args: Any) -> dict[str, Any]:
             "DNS must use local FakeIP with reverse mapping and a Tor-routed internal fallback."
         )
     route = config.get("route", {})
-    if set(route) != {"auto_detect_interface", "rules", "final"} or route.get("auto_detect_interface") is not True or route.get("final") != "block":
+    if (
+        set(route) != {"auto_detect_interface", "default_domain_resolver", "rules", "final"}
+        or route.get("auto_detect_interface") is not True
+        or route.get("default_domain_resolver") != "tor-doh"
+        or route.get("final") != "block"
+    ):
         raise SystemTunnelError("The privileged helper rejected the routing defaults.")
     route_rules = route.get("rules", [])
     if (
