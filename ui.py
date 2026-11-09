@@ -231,8 +231,8 @@ class Window(QMainWindow):
         self.tray_menu_header = QWidget(self.tray_menu)
         self.tray_menu_header.setObjectName("trayMenuHeader")
         header_layout = QVBoxLayout(self.tray_menu_header)
-        header_layout.setContentsMargins(14, 10, 14, 8)
-        header_layout.setSpacing(2)
+        header_layout.setContentsMargins(14, 8, 14, 6)
+        header_layout.setSpacing(1)
         self.tray_menu_title = QLabel("TorProxy", self.tray_menu_header)
         self.tray_menu_title.setObjectName("trayMenuTitle")
         self.tray_menu_subtitle = QLabel("Quick controls", self.tray_menu_header)
@@ -254,7 +254,7 @@ class Window(QMainWindow):
         self.tray_proxy_section = QWidget(self.tray_menu)
         self.tray_proxy_section.setObjectName("trayMenuSection")
         proxy_section_layout = QHBoxLayout(self.tray_proxy_section)
-        proxy_section_layout.setContentsMargins(14, 5, 12, 2)
+        proxy_section_layout.setContentsMargins(14, 3, 12, 0)
         self.tray_proxy_section_label = QLabel("SYSTEM PROXY", self.tray_proxy_section)
         self.tray_proxy_section_label.setObjectName("trayMenuSectionLabel")
         proxy_section_layout.addWidget(self.tray_proxy_section_label)
@@ -1021,13 +1021,13 @@ class Window(QMainWindow):
                 color: {text};
                 border: 1px solid {border};
                 border-radius: 14px;
-                padding: 7px;
+                padding: 6px;
             }}
             QMenu#trayContextMenu::item {{
                 color: {text};
                 background: transparent;
-                padding: 9px 14px 9px 12px;
-                margin: 2px 4px;
+                padding: 7px 14px 7px 12px;
+                margin: 1px 4px;
                 min-height: 20px;
                 border-radius: 8px;
             }}
@@ -1041,7 +1041,7 @@ class Window(QMainWindow):
             QMenu#trayContextMenu::separator {{
                 height: 1px;
                 background-color: {divider};
-                margin: 5px 12px;
+                margin: 4px 12px;
             }}
             QMenu#trayContextMenu::indicator {{
                 width: 14px;
