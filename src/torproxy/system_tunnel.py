@@ -863,7 +863,8 @@ class SystemTunnelManager:
                         "action": "route",
                         "outbound": "direct",
                     },
-                    {"action": "hijack-dns"},
+                    # An action-only hijack rule is a catch-all and would consume browser TCP streams.
+                    {"port": 53, "action": "hijack-dns"},
                     {
                         # Windows uses 172.19.0.1/30; Linux also has the IPv6 /126.
                         # Drop the entire TUN subnet after DNS interception so
@@ -1393,7 +1394,7 @@ def _helper_start(args: Any) -> dict[str, Any]:
     route_rules = route.get("rules", [])
     if (
         len(route_rules) != 6
-        or route_rules[2] != {"action": "hijack-dns"}
+        or route_rules[2] != {"port": 53, "action": "hijack-dns"}
         or route_rules[3] != {
             "ip_cidr": expected_tun_networks,
             "action": "reject",
