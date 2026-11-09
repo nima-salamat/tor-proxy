@@ -857,8 +857,12 @@ class SystemTunnelManager:
                         "method": "drop",
                     },
                     {"network": "udp", "action": "reject", "method": "default"},
+                    # Do not rely on the implicit final outbound for browser TCP.
+                    # Every non-bypassed TCP connection must explicitly use Tor.
+                    {"network": "tcp", "action": "route", "outbound": "tor-socks"},
                 ],
-                "final": "tor-socks",
+                # Fail closed for ICMP and any traffic not explicitly handled above.
+                "final": "block",
             },
         }
 
@@ -1347,11 +1351,11 @@ def _helper_start(args: Any) -> dict[str, Any]:
     }:
         raise SystemTunnelError("DNS must use the pinned HTTPS resolver through Tor SOCKS.")
     route = config.get("route", {})
-    if set(route) != {"auto_detect_interface", "rules", "final"} or route.get("auto_detect_interface") is not True or route.get("final") != "tor-socks":
+    if set(route) != {"auto_detect_interface", "rules", "final"} or route.get("auto_detect_interface") is not True or route.get("final") != "block":
         raise SystemTunnelError("The privileged helper rejected the routing defaults.")
     route_rules = route.get("rules", [])
     if (
-        len(route_rules) != 5
+        len(route_rules) != 6
         or route_rules[2] != {"action": "hijack-dns"}
         or route_rules[3] != {
             "ip_cidr": expected_tun_networks,
@@ -1359,6 +1363,7 @@ def _helper_start(args: Any) -> dict[str, Any]:
             "method": "drop",
         }
         or route_rules[4] != {"network": "udp", "action": "reject", "method": "default"}
+        or route_rules[5] != {"network": "tcp", "action": "route", "outbound": "tor-socks"}
     ):
         raise SystemTunnelError("The privileged helper rejected the DNS/UDP route ordering.")
 
