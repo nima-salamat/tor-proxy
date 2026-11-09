@@ -143,8 +143,18 @@ function Set-SnapshotLocalRulesEnabled($snapshot, [bool]$enabled) {
                 $rule = $rules.Item([string]$name)
             } catch {
                 # INetFwRules::Item documents ERROR_FILE_NOT_FOUND for a name
-                # which is no longer present. Other COM failures are not misses.
-                if ([int]$_.Exception.HResult -eq -2147024894) {
+                # which is no longer present. PowerShell may wrap COMException
+                # in MethodInvocationException, so inspect the inner chain too.
+                $exception = $_.Exception
+                $isMissing = $false
+                while ($null -ne $exception) {
+                    if ([int]$exception.HResult -eq -2147024894) {
+                        $isMissing = $true
+                        break
+                    }
+                    $exception = $exception.InnerException
+                }
+                if ($isMissing) {
                     $missing += [string]$name
                     continue
                 }
