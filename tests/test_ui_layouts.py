@@ -705,7 +705,15 @@ def test_theme_switch_is_animated_and_exit_confirmation_is_persistent():
     assert '"confirm_exit"' in config_source
     assert 'self.chk_confirm_exit.setChecked(bool(CONFIG["confirm_exit"]))' in settings_source
     assert 'CONFIG["confirm_exit"] = enabled' in settings_source
-    assert 'self.theme_switch.modeChanged.connect(self.change_mode)' in settings_source
+    assert 'self.theme_mode_buttons = {}' in settings_source
+    assert '("system", "System"), ("light", "Light"), ("dark", "Dark")' in settings_source
+    assert 'button.clicked.connect(' in settings_source
+    assert 'self._set_theme_preference(preference)' in settings_source
+    assert '"theme_preference": "system"' in config_source
+    assert 'CONFIG.update_many({"mode": mode, "theme_preference": preference})' in ui_source
+    assert 'self._system_theme_hints.colorSchemeChanged.connect(' in ui_source
+    assert 'def _on_system_color_scheme_changed(self, _scheme=None)' in ui_source
+    assert 'self._set_theme(mode, preference=mode)' in ui_source
     assert 'self._animation.setDuration(220)' in switch_source
     assert 'self._icons = {' in switch_source
     assert 'icon = self._icons[self._mode]' in switch_source
@@ -1988,3 +1996,67 @@ def test_disabled_home_action_text_uses_the_theme_muted_foreground():
     assert 'self.btn_open_browser.setEnabled(False)' in source
     assert "QPushButton#secondaryAction:disabled {{ color: {muted}; }}" in source
     assert 'muted = "#aab4c1" if dark else "#667386"' in source
+
+
+def test_system_theme_detection_prefers_qt_platform_color_scheme(qt_app):
+    from PySide6.QtCore import Qt
+    from ui_.window.theme import resolve_system_theme
+
+    class _StyleHints:
+        def __init__(self, scheme):
+            self._scheme = scheme
+
+        def colorScheme(self):
+            return self._scheme
+
+    class _FakeApplication:
+        def __init__(self, scheme):
+            self._hints = _StyleHints(scheme)
+
+        def styleHints(self):
+            return self._hints
+
+    assert resolve_system_theme(_FakeApplication(Qt.ColorScheme.Dark)) == "dark"
+    assert resolve_system_theme(_FakeApplication(Qt.ColorScheme.Light)) == "light"
+
+
+def test_system_theme_detection_falls_back_to_platform_window_palette(qt_app):
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QColor, QPalette
+    from ui_.window.theme import resolve_system_theme
+
+    class _StyleHints:
+        def colorScheme(self):
+            return Qt.ColorScheme.Unknown
+
+    class _FakeApplication:
+        def __init__(self, window_color):
+            self._palette = QPalette()
+            self._palette.setColor(QPalette.ColorRole.Window, QColor(window_color))
+
+        def styleHints(self):
+            return _StyleHints()
+
+        def palette(self):
+            return self._palette
+
+    assert resolve_system_theme(_FakeApplication("#202630")) == "dark"
+    assert resolve_system_theme(_FakeApplication("#ffffff")) == "light"
+
+
+def test_system_theme_selector_and_live_os_updates_are_wired_into_the_app():
+    repository = Path(__file__).resolve().parents[1]
+    settings_source = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
+    ui_source = (repository / "ui.py").read_text(encoding="utf-8")
+    main_source = (repository / "main.py").read_text(encoding="utf-8")
+
+    assert 'self.theme_mode_selector.setObjectName("themeModeSelector")' in settings_source
+    assert 'button.setObjectName("themeModeOption")' in settings_source
+    assert "System follows your desktop setting" in settings_source
+    assert "QPushButton#themeModeOption:checked" in settings_source
+    assert 'CONFIG.get("theme_preference", "system") != "system"' in ui_source
+    assert "resolve_system_theme(QApplication.instance())" in ui_source
+    assert "self._system_theme_hints.colorSchemeChanged.connect(" in ui_source
+    assert 'theme_preference = CONFIG.get("theme_preference", "system")' in main_source
+    assert "resolve_system_theme(app)" in main_source
+    assert main_source.index("resolve_system_theme(app)") < main_source.index("app.setStyleSheet")
