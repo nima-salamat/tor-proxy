@@ -695,20 +695,26 @@ class Window(QMainWindow):
             QToolButton#updatesNavButton:checked:hover {{
                 background: {accent}; color: #ffffff; border-color: {accent};
             }}
-            /* Style the small native dropdown caret, not the cloud icon on the left. */
+            /* Keep Qt's native caret; only remove the split-button seam. */
+            QToolButton#updatesNavButton::menu-button {{
+                border: none;
+                background: transparent;
+                width: 13px;
+                border-top-right-radius: 7px;
+                border-bottom-right-radius: 7px;
+            }}
+            QToolButton#updatesNavButton:hover::menu-button {{
+                background: {hover};
+            }}
+            QToolButton#updatesNavButton:checked::menu-button {{
+                background: {accent};
+            }}
+            QToolButton#updatesNavButton:checked:hover::menu-button {{
+                background: {accent};
+            }}
             QToolButton#updatesNavButton::menu-indicator {{
-                image: none;
-                width: 0px; height: 0px;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-top: 5px solid {text};
-            }}
-            QToolButton#updatesNavButton:checked::menu-indicator {{
-                border-top-color: #ffffff;
-            }}
-            QToolButton#updatesNavButton::menu-indicator:open {{
-                border-top: none;
-                border-bottom: 5px solid #ffffff;
+                subcontrol-origin: padding;
+                subcontrol-position: right center;
             }}
             QPushButton#topNavExitButton {{
                 min-height: 32px; padding: 0 9px; margin: 0 1px; border: 1px solid {border};
