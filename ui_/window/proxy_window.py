@@ -173,6 +173,12 @@ class ProxyWindow(QWidget):
         self.system_tunnel_hint_label.setObjectName("systemTunnelHintLabel")
         self.system_tunnel_hint_label.setWordWrap(False)
         tunnel_hint_layout.addWidget(self.system_tunnel_hint_label, 1)
+        self.btn_system_tunnel_action = QPushButton("Start", self.system_tunnel_hint)
+        self.btn_system_tunnel_action.setObjectName("systemTunnelAction")
+        self.btn_system_tunnel_action.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_system_tunnel_action.clicked.connect(self.toggle_system_tunnel)
+        tunnel_hint_layout.addWidget(self.btn_system_tunnel_action)
+
         self.btn_system_tunnel_manage = QPushButton("Manage", self.system_tunnel_hint)
         self.btn_system_tunnel_manage.setObjectName("systemTunnelManage")
         self.btn_system_tunnel_manage.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -404,6 +410,9 @@ class ProxyWindow(QWidget):
             QPushButton#secondaryAction:checked {{ background: rgba(71, 163, 242, 0.18); border-color: {accent}; }}
             QFrame#systemTunnelHint {{ background: {surface}; border: 1px solid {border}; border-radius: 8px; }}
             QLabel#systemTunnelHintLabel {{ color: {muted}; background: transparent; border: none; font-size: 10px; }}
+            QPushButton#systemTunnelAction {{ min-height: 27px; padding: 0 11px; border-radius: 7px; background: {accent}; color: #ffffff; border: 1px solid {accent}; font-size: 10px; font-weight: 750; }}
+            QPushButton#systemTunnelAction:hover {{ background: {hover}; color: {text}; border-color: {accent}; }}
+            QPushButton#systemTunnelAction:disabled {{ background: {field}; color: {muted}; border-color: {border}; }}
             QPushButton#systemTunnelManage {{ min-height: 27px; padding: 0 9px; border-radius: 7px; background: {field}; color: {text}; border: 1px solid {border}; font-size: 10px; font-weight: 700; }}
             QPushButton#systemTunnelManage:hover {{ background: {hover}; border-color: {accent}; }}
         """)
@@ -951,29 +960,104 @@ class ProxyWindow(QWidget):
 
 
     def _update_tunnel_hint(self):
-        """Keep Home's tunnel summary compact; lifecycle controls live in Updates."""
+        """Refresh the compact Home status and expose the correct tunnel action."""
         label = getattr(self, "system_tunnel_hint_label", None)
         if label is None:
             return
+
+        action_button = getattr(self, "btn_system_tunnel_action", None)
+        manage_button = getattr(self, "btn_system_tunnel_manage", None)
         manager = getattr(self, "system_tunnel_manager", None)
+        show_action = False
+        show_manage = False
+        action_text = "Start"
+        action_icon = "fa6s.play"
+        action_enabled = False
+        action_tooltip = "Connect to Tor before starting the system tunnel."
+        self._home_tunnel_action = "toggle"
+
         if manager is None:
             message = "System tunnel is unavailable · Open Updates → Tunnel"
+            show_manage = True
         else:
+            installed_version = None
             try:
-                state = manager.status()
                 installed_version = manager.installed_version
+                state = manager.status()
+                tunnel_page = getattr(self._parent, "tunnel_window", None)
+                page_busy = bool(getattr(tunnel_page, "_busy", False))
+                busy = bool(getattr(self, "_system_tunnel_busy", False) or page_busy)
+                tor_ready = bool(
+                    self.running and self.connected
+                    and not self._stopping and not self._connect_operation_busy
+                )
+
                 if state.get("active"):
-                    message = f"System tunnel active · sing-box v{installed_version or 'verified'}"
+                    message = (
+                        f"System tunnel active · sing-box v{installed_version or 'verified'}"
+                    )
+                    action_text = "Stop"
+                    action_icon = "fa6s.stop"
+                    action_enabled = not busy
+                    action_tooltip = "Stop the system tunnel and remove its routes safely."
+                    show_action = True
                 elif not state.get("verified", True):
-                    message = "System tunnel needs reconciliation · Open Updates → Tunnel"
-                elif not installed_version:
-                    message = "System tunnel is not installed · Install it from Updates → Tunnel"
+                    message = "System tunnel needs route reconciliation"
+                    action_text = "Reconcile"
+                    action_icon = "fa6s.arrows-rotate"
+                    action_enabled = not busy
+                    action_tooltip = "Stop the stale tunnel process and reconcile system routes."
+                    show_action = True
+                elif installed_version:
+                    message = f"System tunnel installed · sing-box v{installed_version}"
+                    action_text = "Start"
+                    action_icon = "fa6s.play"
+                    action_enabled = tor_ready and not busy
+                    action_tooltip = (
+                        "Start system-wide Tor routing."
+                        if tor_ready else
+                        "Connect to Tor and wait for the verified connection before starting the tunnel."
+                    )
+                    show_action = True
                 else:
-                    message = f"System tunnel engine installed · v{installed_version}"
+                    message = "System tunnel is not installed · Install it from Updates → Tunnel"
+                    show_manage = True
             except Exception as exc:
                 logger.debug("Could not refresh system tunnel summary: %s", exc)
-                message = "System tunnel status is unavailable · Open Updates → Tunnel"
+                if installed_version:
+                    message = "System tunnel status is unavailable · Open its manager to inspect it"
+                    action_text = "Open"
+                    action_icon = "fa6s.arrow-up-right-from-square"
+                    action_enabled = True
+                    action_tooltip = "Open the Tunnel page to inspect the current system state."
+                    self._home_tunnel_action = "open"
+                    show_action = True
+                else:
+                    message = "System tunnel is not installed or unavailable · Open Updates → Tunnel"
+                    show_manage = True
+
         label.setText(message)
+        if action_button is not None:
+            action_button.setText(action_text)
+            action_button.setIcon(qta.icon(action_icon, color="#ffffff"))
+            action_button.setToolTip(action_tooltip)
+            action_button.setEnabled(action_enabled)
+            action_button.setVisible(show_action)
+        if manage_button is not None:
+            manage_button.setVisible(show_manage)
+
+    def toggle_system_tunnel(self):
+        """Use the Tunnel page's existing guarded worker for Home Start/Stop actions."""
+        if getattr(self, "_home_tunnel_action", "toggle") == "open":
+            self.open_tunnel_manager()
+            return
+        tunnel_page = getattr(self._parent, "tunnel_window", None)
+        callback = getattr(tunnel_page, "toggle_tunnel_from_home", None)
+        if callable(callback):
+            callback()
+            self._update_tunnel_hint()
+            return
+        self.open_tunnel_manager()
 
     def open_tunnel_manager(self):
         """Navigate to the dedicated engine and tunnel management page."""
