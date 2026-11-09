@@ -60,6 +60,9 @@ class SettingWindow(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._parent = parent
+        self._tunnel_recovery_pool = QThreadPool(self)
+        self._tunnel_recovery_worker = None
+        self._tunnel_recovery_busy = False
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(10, 8, 10, 8)
         main_layout.setSpacing(8)
@@ -772,7 +775,110 @@ class SettingWindow(QWidget):
         details.setWordWrap(True)
         details.setObjectName("signatureVerificationDetails")
         self.advanced_page_layout.addWidget(details)
+
+        self.advanced_page_layout.addSpacing(14)
+        self.advanced_page_layout.addWidget(self._section_title("System tunnel recovery"))
+        self.advanced_page_layout.addWidget(
+            self._description(
+                "Check for a sing-box process or TUN session left behind by an interrupted TorProxy run. "
+                "Cleanup is limited to a process whose saved PID, executable, start time and config identity match. "
+                "An untracked adapter or unknown process is never terminated or removed automatically."
+            )
+        )
+        recovery_row = QFrame(self)
+        recovery_row.setObjectName("settingsRowCard")
+        recovery_layout = QHBoxLayout(recovery_row)
+        recovery_layout.setContentsMargins(14, 10, 14, 10)
+        recovery_layout.setSpacing(12)
+        recovery_copy = QVBoxLayout()
+        recovery_copy.setSpacing(3)
+        recovery_title = QLabel("Emergency sing-box cleanup")
+        recovery_title.setObjectName("settingsFieldLabel")
+        self.lbl_tunnel_recovery_status = self._description(
+            "No cleanup has been requested."
+        )
+        recovery_copy.addWidget(recovery_title)
+        recovery_copy.addWidget(self.lbl_tunnel_recovery_status)
+        recovery_layout.addLayout(recovery_copy, 1)
+        self.btn_tunnel_recovery = QPushButton("Check / clean up", self)
+        self.btn_tunnel_recovery.setObjectName("settingsActionButton")
+        self.btn_tunnel_recovery.setIcon(qta.icon("fa6s.broom"))
+        self.btn_tunnel_recovery.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_tunnel_recovery.clicked.connect(self.cleanup_system_tunnel)
+        recovery_layout.addWidget(self.btn_tunnel_recovery, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.advanced_page_layout.addWidget(recovery_row)
         self.advanced_page_layout.addStretch(1)
+
+
+    def cleanup_system_tunnel(self):
+        """Offer conservative cleanup of a recorded, app-managed sing-box session."""
+        if self._tunnel_recovery_busy:
+            return
+        proxy_widget = getattr(self._parent, "proxyWidget", None)
+        manager = getattr(proxy_widget, "system_tunnel_manager", None)
+        if manager is None:
+            QMessageBox.warning(self, "System tunnel recovery", "The system tunnel manager is unavailable.")
+            return
+        reply = QMessageBox.question(
+            self,
+            "Check / clean up sing-box",
+            (
+                "TorProxy will inspect the saved sing-box process record. If it can verify that the "
+                "process belongs to this installation, it will request the required permission and stop "
+                "it gracefully so its TUN routes can be released. An unknown process or untracked TUN "
+                "adapter will not be terminated or removed.\n\n"
+                "Continue?"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self._tunnel_recovery_busy = True
+        self.btn_tunnel_recovery.setEnabled(False)
+        self.lbl_tunnel_recovery_status.setText("Inspecting saved process identity and TUN state…")
+        worker = Worker(manager.cleanup_previous_session)
+        worker.signals.finished.connect(self._on_tunnel_recovery_finished)
+        worker.signals.error.connect(self._on_tunnel_recovery_failed)
+        self._tunnel_recovery_worker = worker
+        self._tunnel_recovery_pool.start(worker)
+
+    def _finish_tunnel_recovery(self):
+        self._tunnel_recovery_busy = False
+        self._tunnel_recovery_worker = None
+        self.btn_tunnel_recovery.setEnabled(True)
+
+    def _refresh_tunnel_views_after_recovery(self):
+        proxy_widget = getattr(self._parent, "proxyWidget", None)
+        if proxy_widget is not None:
+            refresh_home = getattr(proxy_widget, "_update_tunnel_hint", None)
+            if callable(refresh_home):
+                refresh_home()
+        tunnel_page = getattr(self._parent, "tunnel_window", None)
+        refresh_page = getattr(tunnel_page, "_refresh_state", None)
+        if callable(refresh_page):
+            refresh_page()
+        logs_widget = getattr(proxy_widget, "logs_widget", None)
+        if logs_widget is not None:
+            logs_widget.update_log("Emergency sing-box cleanup completed from Settings → Advanced.")
+
+    def _on_tunnel_recovery_finished(self, result):
+        self._finish_tunnel_recovery()
+        message = str(result or "No previous TorProxy tunnel state needed cleanup.")
+        self.lbl_tunnel_recovery_status.setText(message)
+        self._refresh_tunnel_views_after_recovery()
+
+    def _on_tunnel_recovery_failed(self, error):
+        self._finish_tunnel_recovery()
+        detail = str(error or "Unknown sing-box recovery error.")
+        self.lbl_tunnel_recovery_status.setText("Cleanup could not be verified. See Event Log.")
+        proxy_widget = getattr(self._parent, "proxyWidget", None)
+        logs_widget = getattr(proxy_widget, "logs_widget", None)
+        if logs_widget is not None:
+            logs_widget.update_log("Emergency sing-box cleanup failed: " + detail, level="error")
+        QMessageBox.warning(self, "System tunnel recovery", detail)
+        self._refresh_tunnel_views_after_recovery()
 
     def signature_verification_changed(self, state):
         enabled = bool(state)
