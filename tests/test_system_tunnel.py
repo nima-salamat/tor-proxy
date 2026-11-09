@@ -161,6 +161,54 @@ def test_system_tunnel_config_applies_saved_host_policy_before_default_tor_route
     assert rules[14] == {"network": "tcp", "action": "route", "outbound": "tor-socks"}
 
 
+
+def test_privileged_helper_uses_the_same_saved_host_policy_fragment_as_tun_builder(tmp_path):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "blocked_hosts.json").write_text(
+        json.dumps(["blocked.example", "=exact.example", "*.suffix.example", "*-api.glob.example", "192.0.2.10"]),
+        encoding="utf-8",
+    )
+    (config_dir / "exclude_hosts.json").write_text(
+        json.dumps(["excluded.example", "shared.example"]),
+        encoding="utf-8",
+    )
+
+    rules, sniff_required = system_tunnel._build_host_policy_route_rules(config_dir)
+
+    assert sniff_required is True
+    assert rules[0] == {
+        "network": "tcp",
+        "domain": ["blocked.example"],
+        "domain_suffix": [".blocked.example"],
+        "action": "reject",
+        "method": "default",
+    }
+    assert rules[1] == {
+        "network": "tcp",
+        "domain": ["exact.example"],
+        "action": "reject",
+        "method": "default",
+    }
+    assert rules[2] == {
+        "network": "tcp",
+        "domain_suffix": [".suffix.example"],
+        "action": "reject",
+        "method": "default",
+    }
+    assert rules[3]["domain_regex"] == [r"^[^.]*-api\\.glob\\.example$"]
+    assert rules[4] == {
+        "network": "tcp",
+        "ip_cidr": ["192.0.2.10/32"],
+        "action": "reject",
+        "method": "default",
+    }
+    assert rules[5]["action"] == "route"
+    assert rules[5]["outbound"] == "direct"
+    assert rules[6]["domain"] == ["shared.example"]
+    assert rules[6]["outbound"] == "direct"
+
+
 def test_system_tunnel_fails_closed_when_saved_host_policy_is_invalid(tmp_path, monkeypatch):
     monkeypatch.setattr(system_tunnel.platform, "system", lambda: "Linux")
     manager = _manager(tmp_path)
