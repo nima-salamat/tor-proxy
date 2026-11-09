@@ -18,7 +18,7 @@ The project is being modernized from a flat desktop utility into a testable Pyth
 - Home-page **Open Browser** launcher for detected Chromium and Firefox-family browsers, using isolated per-browser profiles and the existing TorProxy HTTP proxy.
 - Listener ports are allocated once, persisted in the per-user configuration, and reused on later launches; automatic ports are repaired only when a conflict is detected.
 - System-wide Tor tunnel on Windows x64 and glibc-based Linux x86_64, managed from **Updates → Tunnel**. It downloads a selected, SHA-256-pinned sing-box release and uses a dedicated TUN interface rather than changing each application's proxy settings.
-- Tor Expert Bundle downloads use Tor's live SOCKS5H route whenever Tor is READY, are restricted to official distribution hosts, and are safely extracted. OpenPGP publisher-signature verification is enabled by default and checks the pinned Tor signing-key fingerprint.
+- Tor Expert Bundle downloads use Tor's live SOCKS5H route whenever Tor is READY, are restricted to official distribution hosts, and are safely extracted. OpenPGP publisher-signature verification is optional and disabled by default; it can be enabled to check the pinned Tor signing-key fingerprint.
 - Versioned configuration, per-user writable data paths, atomic settings writes, tests, and CI.
 
 ## Architecture
@@ -64,7 +64,7 @@ Portable builds are published on the [GitHub Releases page](https://github.com/n
 - On minimal Linux installations, Qt may need system graphics/display libraries. The bundled Linux Tor executable also requires the system `libevent-2.1.so.7` runtime. On Ubuntu 22.04, install these with `sudo apt-get install libegl1 libgl1 libxcb-cursor0 libxkbcommon-x11-0 libevent-2.1-7`.
 - Packages use PyInstaller's **one-directory** layout: the downloadable archive is compressed, but startup avoids one-file extraction to a temporary directory. The build uses OpenCV's headless wheel to avoid shipping an unnecessary second Qt GUI stack.
 - The `without-tor-bundle` packages keep the original smaller, on-demand download behavior. The `with-tor-bundle` packages contain exactly one bundle selected from the official Tor distribution listing: stable releases are preferred, then supported alpha releases, and only the newest release with an exact OS/CPU Expert Bundle plus detached signature is downloaded. The build verifies the detached signature against TorProxy's pinned Tor signing-key fingerprint before packaging; missing bundles or failed verification stop the build. The archive, signature sidecar and verification marker are retained so the application can re-check the bundle before selecting it.
-- GnuPG is installed as a build dependency for signature verification. For manual on-demand downloads it is still needed by default; users can explicitly disable publisher authentication in Settings → Advanced. The ZBar decoder is optional because the built-in OpenCV QR decoder remains available.
+- GnuPG is only needed when the optional OpenPGP publisher-signature check is enabled in Settings → Advanced. The ZBar decoder is optional because the built-in OpenCV QR decoder remains available.
 - Windows binaries are not Authenticode-signed by this workflow, so Windows SmartScreen may show an unrecognized-app warning.
 
 Pushing a version tag such as `v2.0.1` builds four portable packages (Windows/Linux, each with and without Tor) and publishes them with `SHA256SUMS.txt`. The release build discovers the current stable-first Tor version separately on each runner, chooses the first release that has that runner's exact x86_64 Expert Bundle and detached signature, and downloads only that one archive. Running **Build and release → Run workflow** from Actions builds and smoke-tests all package variants as workflow artifacts, without publishing a release.
@@ -81,7 +81,7 @@ The launcher uses a separate Qt 6.8.3 runtime deployed beside the application. I
 
 ### Prerequisites
 
-Install Python 3.10 or newer. GnuPG (`gpg`) is needed for the default OpenPGP signature verification in Settings → Advanced; disabling that check is less secure. On Debian/Ubuntu, the optional QR-code feature needs native ZBar:
+Install Python 3.10 or newer. GnuPG (`gpg`) is needed only when optional OpenPGP signature verification is enabled in Settings → Advanced. On Debian/Ubuntu, the optional QR-code feature needs native ZBar:
 
 ```bash
 sudo apt-get update
@@ -119,10 +119,10 @@ The first launch migrates an existing root-level `config.json` into the per-user
 1. Open the application's Tor bundle/update view.
 2. Retrieve the official release list.
 3. Select a release for the current supported OS/CPU.
-4. Confirm download and watch the status until safe extraction finishes; the default OpenPGP check must pass.
+4. Confirm download and watch the status until safe extraction finishes; the optional OpenPGP check must pass when enabled.
 5. Review the bundle's trust label, then select it as the default Tor executable. The bundle page also offers **Import .tar.gz** for a locally saved Expert Bundle. Select the exact current-platform archive; a matching `.asc` beside it is verified when OpenPGP is enabled.
 
-Downloads and imported archives are stored in the current user's application-data directory, not inside the installed source tree. Unsafe archive entries and path traversal are always rejected. OpenPGP verification is on by default; invalid/missing signatures or an unavailable GnuPG runtime stop signed installation. A manually imported archive without a verified signature is explicitly marked `LOCAL · UNSIGNED` and requires confirmation before it can be selected as the default.
+Downloads and imported archives are stored in the current user's application-data directory, not inside the installed source tree. Unsafe archive entries and path traversal are always rejected. OpenPGP verification is off by default. When explicitly enabled, invalid/missing signatures or an unavailable GnuPG runtime stop signed installation. A manually imported archive without a verified signature is explicitly marked `LOCAL · UNSIGNED` and requires confirmation before it can be selected as the default.
 
 Older repository versions included large archives in `bundles/`. These are no longer required in source control. Existing local archives that lack a verifiable `.asc` signature are not automatically trusted by the updater; download a verified bundle again, or explicitly select a local Tor executable whose origin you trust.
 
@@ -132,7 +132,7 @@ The updater recognizes numeric stable releases with either two or three componen
 
 The bundle page displays transfer bytes and, when the server advertises a usable `Content-Length`, percentage, speed and an approximate remaining-time estimate. Unknown transfer lengths use an indeterminate progress bar. When enabled, signature verification appears as a distinct stage; safe archive extraction and installation are always shown separately. A completed transfer alone never counts as an installed bundle. Cancellation is available during network transfer and is disabled during stages that cannot be safely interrupted.
 
-OpenPGP verification is enabled by default and can be disabled in Settings → Advanced. When enabled, the detached signature is checked against the independently pinned Tor signing-key fingerprint and GnuPG is discovered from `PATH`, common installation paths, or `TORPROXY_GPG_EXECUTABLE`. If no verifier can be started, the signed installation stops. When OpenPGP is disabled, TorProxy labels the installation `HTTPS ONLY · UNSIGNED` and does not claim publisher authentication; choose that mode only if you accept the reduced security guarantee.
+OpenPGP verification is disabled by default and can be enabled in Settings → Advanced. When enabled, the detached signature is checked against the independently pinned Tor signing-key fingerprint and GnuPG is discovered from `PATH`, common installation paths, or `TORPROXY_GPG_EXECUTABLE`. If no verifier can be started, the signed installation stops. When OpenPGP is disabled, TorProxy labels the installation `HTTPS ONLY · UNSIGNED` and does not claim publisher authentication; choose that mode only if you accept the reduced security guarantee.
 
 ## Start Tor and configure an application
 
@@ -223,7 +223,7 @@ Traffic usage counts bytes observed in both directions for proxied HTTP requests
 - The default HTTP proxy, SOCKS, ControlPort, and DNS listeners bind to loopback.
 - The ControlPort is cookie-authenticated; the controller must identify the Tor process launched by this application.
 - The IP checker has no direct-network fallback.
-- With OpenPGP verification enabled, downloads fail closed when a signature or pinned-key check fails; safe extraction checks always apply.
+- When OpenPGP verification is explicitly enabled, downloads fail closed when a signature or pinned-key check fails; safe extraction checks always apply in either mode.
 - Logs avoid recording request URLs and query strings, but local logs and host-rule lists should still be treated as user data.
 - Direct exclusions intentionally bypass Tor.
 - System-proxy restoration can fail safely if another program changes settings.
