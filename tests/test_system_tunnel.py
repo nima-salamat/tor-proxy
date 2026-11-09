@@ -845,6 +845,32 @@ def test_stop_removes_corrupt_state_record_only_when_no_tun_adapter_exists(tmp_p
     assert not state_path.exists()
 
 
+
+def test_stop_removes_malformed_record_only_when_no_process_or_tun_adapter_exists(tmp_path, monkeypatch):
+    state_path = tmp_path / "tunnel-state.json"
+    state_path.write_text(json.dumps({"unexpected": "no saved PID"}), encoding="utf-8")
+    monkeypatch.setattr(system_tunnel, "_process_matches", lambda _state: None)
+    monkeypatch.setattr(system_tunnel.psutil, "pid_exists", lambda _pid: False)
+    monkeypatch.setattr(system_tunnel, "_interface_exists", lambda _name: False)
+
+    result = system_tunnel._helper_stop(state_path, "torproxy-tun")
+
+    assert result["ok"] is True
+    assert "malformed tunnel record" in result["detail"]
+    assert not state_path.exists()
+
+
+def test_stop_retains_malformed_record_when_tun_adapter_is_still_present(tmp_path, monkeypatch):
+    state_path = tmp_path / "tunnel-state.json"
+    state_path.write_text(json.dumps({"unexpected": "no saved PID"}), encoding="utf-8")
+    monkeypatch.setattr(system_tunnel, "_process_matches", lambda _state: None)
+    monkeypatch.setattr(system_tunnel, "_interface_exists", lambda _name: True)
+
+    with pytest.raises(SystemTunnelError, match="adapter remains"):
+        system_tunnel._helper_stop(state_path, "torproxy-tun")
+    assert state_path.exists()
+
+
 def test_tunnel_process_uses_graceful_termination_on_linux(monkeypatch):
     class FakeProcess:
         pid = 4321
