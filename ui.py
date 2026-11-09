@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QPushButton,
+    QToolButton,
     QButtonGroup,
     QFrame,
     QSystemTrayIcon
@@ -32,6 +33,7 @@ from ui_.window.setting_window import SettingWindow
 from ui_.window.block_host_window import BlcokHostsWindow
 from ui_.window.exclude_host_window import ExcludeHostsWindow
 from ui_.window.updater_window import UpdaterWindow
+from ui_.window.tunnel_window import TunnelManagerWindow
 from ui_.window.dialogs import QMessageBox, ExitConfirmDialog
 from ui_.window.shortcuts_window import ShortcutsWindow
 from ui_.window.statistics_window import StatisticsWindow
@@ -82,6 +84,8 @@ class Window(QMainWindow):
         self.stack.addWidget(self.exclude_host_window)
         self.updater_window = UpdaterWindow(self)
         self.stack.addWidget(self.updater_window)
+        self.tunnel_window = TunnelManagerWindow(self)
+        self.stack.addWidget(self.tunnel_window)
         self.shortcutsWidget = ShortcutsWindow(self)
         self.stack.addWidget(self.shortcutsWidget)
         self.statisticsWidget = StatisticsWindow(self.proxyWidget, self)
@@ -412,23 +416,24 @@ class Window(QMainWindow):
         self.main_layout.addWidget(menu_bar)
 
         actions = [
-            ("Home", "Home", "Ctrl+H", "fa6s.house", self._show_home),
-            ("Settings", "Settings", "Ctrl+S", "fa6s.gear", self._show_setting),
-            ("Block Host", "Blocked host rules", "Ctrl+B", "fa6s.shield-halved", self._show_block_host),
-            ("Exclude Host", "Bypass rules", "Ctrl+E", "fa6s.route", self._show_exclude_host),
-            ("Bundles", "Tor bundles and updates", "Ctrl+U", "fa6s.boxes-stacked", self._show_updater),
-            ("Help", "Keyboard shortcuts", "F1", "fa6s.circle-question", self._show_help),
+            ("Home", "Home", "Ctrl+H", "fa6s.house", self._show_home, 0),
+            ("Settings", "Settings", "Ctrl+S", "fa6s.gear", self._show_setting, 1),
+            ("Block Host", "Blocked host rules", "Ctrl+B", "fa6s.shield-halved", self._show_block_host, 2),
+            ("Exclude Host", "Bypass rules", "Ctrl+E", "fa6s.route", self._show_exclude_host, 3),
+            ("Help", "Keyboard shortcuts", "F1", "fa6s.circle-question", self._show_help, 6),
         ]
         self.page_action_group = QActionGroup(self)
         self.page_action_group.setExclusive(True)
         self.page_actions = []
         self.page_icon_names = []
         self.page_nav_buttons = []
+        self.page_nav_page_indices = []
+        self.page_action_pages = []
         self.page_nav_group = QButtonGroup(self)
         self.page_nav_group.setExclusive(True)
         icon_color = "#eff1f4" if CONFIG["mode"] == "dark" else "#202832"
 
-        for index, (label, tooltip, shortcut, icon_name, callback) in enumerate(actions):
+        for index, (label, tooltip, shortcut, icon_name, callback, page_index) in enumerate(actions):
             action = QAction(label, self)
             action.setIcon(qta.icon(icon_name, color=icon_color))
             action.setCheckable(True)
@@ -440,6 +445,7 @@ class Window(QMainWindow):
             self.addAction(action)
             self.page_actions.append(action)
             self.page_icon_names.append(icon_name)
+            self.page_action_pages.append(page_index)
 
             button = QPushButton(label, menu_bar)
             button.setObjectName("topNavButton")
@@ -450,11 +456,42 @@ class Window(QMainWindow):
             button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             button.clicked.connect(callback)
             menu_layout.addWidget(button)
-            self.page_nav_group.addButton(button, index)
+            self.page_nav_group.addButton(button, page_index)
             self.page_nav_buttons.append(button)
+            self.page_nav_page_indices.append(page_index)
             if label == "Help":
                 self.help_action = action
                 self.help_nav_button = button
+
+        self.updates_nav_button = QToolButton(menu_bar)
+        self.updates_nav_button.setObjectName("updatesNavButton")
+        self.updates_nav_button.setText("Updates")
+        self.updates_nav_button.setIcon(qta.icon("fa6s.cloud-arrow-down", color=icon_color))
+        self.updates_nav_button.setIconSize(QSize(17, 17))
+        self.updates_nav_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.updates_nav_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.updates_nav_button.setCheckable(True)
+        self.updates_nav_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.updates_nav_button.setToolTip("Manage Tor bundles and the system tunnel")
+        self.updates_menu = QMenu(self.updates_nav_button)
+        self.bundles_update_action = self.updates_menu.addAction(
+            qta.icon("fa6s.boxes-stacked", color=icon_color), "Bundles"
+        )
+        self.bundles_update_action.setToolTip("Download and manage Tor Expert Bundles")
+        self.bundles_update_action.triggered.connect(self._show_updater)
+        self.bundles_update_action.setShortcut("Ctrl+U")
+        self.bundles_update_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+        self.addAction(self.bundles_update_action)
+        self.tunnel_update_action = self.updates_menu.addAction(
+            qta.icon("fa6s.network-wired", color=icon_color), "Tunnel"
+        )
+        self.tunnel_update_action.setToolTip("Install and manage the system tunnel engine")
+        self.tunnel_update_action.triggered.connect(self._show_tunnel_page)
+        self.updates_nav_button.setMenu(self.updates_menu)
+        self.updates_menu.aboutToHide.connect(
+            lambda: self.updates_nav_button.setChecked(self.stack.currentIndex() in {4, 5})
+        )
+        menu_layout.addWidget(self.updates_nav_button)
 
         self.exit_action = QAction("Exit", self)
         self.exit_action.setIcon(qta.icon("fa6s.right-from-bracket", color=icon_color))
@@ -573,6 +610,13 @@ class Window(QMainWindow):
                 border-bottom: 2px solid #9bd8ff; font-weight: 750;
             }}
             QPushButton#topNavButton:checked:hover {{ background: {accent}; color: #ffffff; }}
+            QToolButton#updatesNavButton {{
+                min-height: 32px; padding: 0 8px; margin: 0 1px; border: 1px solid transparent;
+                border-bottom: 2px solid transparent; border-radius: 7px;
+                color: {text}; background: transparent; font-size: 9pt; font-weight: 650;
+            }}
+            QToolButton#updatesNavButton:hover {{ background: {hover}; border-color: {border}; }}
+            QToolButton#updatesNavButton:checked {{ background: {accent}; color: #ffffff; border: 1px solid {accent}; }}
             QPushButton#topNavExitButton {{
                 min-height: 32px; padding: 0 9px; margin: 0 1px; border: 1px solid {border};
                 border-radius: 7px; color: {text}; background: transparent; font-size: 9pt; font-weight: 700;
@@ -603,6 +647,9 @@ class Window(QMainWindow):
             action.setIcon(qta.icon(icon_name, color=color))
             if index < len(self.page_nav_buttons):
                 self.page_nav_buttons[index].setIcon(qta.icon(icon_name, color=color))
+        self.updates_nav_button.setIcon(qta.icon("fa6s.cloud-arrow-down", color=icon_color))
+        self.bundles_update_action.setIcon(qta.icon("fa6s.boxes-stacked", color=icon_color))
+        self.tunnel_update_action.setIcon(qta.icon("fa6s.network-wired", color=icon_color))
         self.exit_action.setIcon(qta.icon("fa6s.right-from-bracket", color=icon_color))
         self.exit_nav_button.setIcon(qta.icon("fa6s.right-from-bracket", color=icon_color))
         self.toggle_btn.setIcon(qta.icon("fa6s.sun" if dark else "fa6s.moon", color=icon_color))
@@ -634,21 +681,19 @@ class Window(QMainWindow):
         if 0 <= index < self.stack.count():
             self.stack.setCurrentIndex(index)
             if hasattr(self, "page_actions"):
-                if index < len(self.page_actions):
-                    self.page_actions[index].setChecked(True)
-                elif hasattr(self, "page_action_group"):
-                    # The Statistics page is opened contextually from Home, not as
-                    # another permanent top-level navigation item.
-                    self.page_action_group.setExclusive(False)
-                    for action in self.page_actions:
-                        action.setChecked(False)
-                    self.page_action_group.setExclusive(True)
+                self.page_action_group.setExclusive(False)
+                for action, page_index in zip(self.page_actions, self.page_action_pages):
+                    action.setChecked(page_index == index)
+                self.page_action_group.setExclusive(True)
+                if hasattr(self, "updates_nav_button"):
+                    self.updates_nav_button.setChecked(index in {4, 5})
             if hasattr(self, "page_nav_buttons"):
                 neutral_icon = "#eff1f4" if CONFIG["mode"] == "dark" else "#202832"
-                for page_index, button in enumerate(self.page_nav_buttons):
+                for page_index, button, icon_name in zip(
+                    self.page_nav_page_indices, self.page_nav_buttons, self.page_icon_names
+                ):
                     selected = page_index == index
                     button.setChecked(selected)
-                    icon_name = self.page_icon_names[page_index]
                     button.setIcon(qta.icon(icon_name, color="#ffffff" if selected else neutral_icon))
             self._update_global_state()
     def _update_global_state(self):
@@ -709,6 +754,8 @@ class Window(QMainWindow):
     def _apply_local_theme_styles(self, mode):
         if hasattr(self, "updater_window"):
             self.updater_window._apply_local_styles(mode)
+        if hasattr(self, "tunnel_window"):
+            self.tunnel_window._apply_local_styles(mode)
         for page in (
             getattr(self, "settingWidget", None),
             getattr(self, "block_host_window", None),
@@ -830,7 +877,7 @@ class Window(QMainWindow):
             
     
     def _show_help(self):
-        self._show_page(5)
+        self._show_page(6)
 
     def _show_statistics(self):
         self._show_page(self.stack.indexOf(self.statisticsWidget))
@@ -852,6 +899,9 @@ class Window(QMainWindow):
 
     def _show_updater(self):
         self._show_page(4)
+
+    def _show_tunnel_page(self):
+        self._show_page(5)
 
     def _notify(self, title, message):
         self.tray_icon.showMessage(title, message, QSystemTrayIcon.Information, 2000)

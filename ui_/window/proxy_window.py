@@ -26,7 +26,6 @@ from ui_.btn.pulse_button import PulseButton
 from ui_.worker.worker import Worker
 from ui_.worker.utils import Data
 from config import CONFIG
-from torproxy.killswitch import KillSwitchManager, KillSwitchError
 from ui_.window.dialogs import QMessageBox
 from torproxy.paths import user_directories
 from torproxy.system_tunnel import SystemTunnelManager
@@ -35,7 +34,6 @@ from ui_.window.open_browser_dialog import OpenBrowserDialog
 import json
 import logging
 import threading
-from pathlib import Path
 import qtawesome as qta
 
 logger = logging.getLogger(__name__)
@@ -57,7 +55,6 @@ class ProxyWindow(QWidget):
         self._parent = parent
         self._operation_lock = threading.RLock()
         self._connect_operation_busy = False
-        self._killswitch_operation_active = False
         # Resolve listener ports before building the services. Automatic values
         # are saved once, reused on later launches and repaired only on conflict.
         self.listener_ports, self._port_initialization_messages = resolve_listener_ports(
@@ -73,13 +70,6 @@ class ProxyWindow(QWidget):
         self.system_tunnel_manager = SystemTunnelManager()
         self._system_tunnel_busy = False
         self._system_tunnel_worker = None
-        try:
-            self.killswitch_manager = KillSwitchManager()
-            self._killswitch_unavailable = None
-        except KillSwitchError as exc:
-            self.killswitch_manager = None
-            self._killswitch_unavailable = str(exc)
-        self.tor.killswitch_manager = self.killswitch_manager
         self.tor.bridge = CONFIG["bridge"]
         self.tor.bridges = CONFIG["bridges"]
         self.tor.app_window = self
@@ -174,33 +164,22 @@ class ProxyWindow(QWidget):
         self.proxy_status_label.setWordWrap(True)
         self.home_layout.addWidget(self.proxy_status_label)
 
-        self.system_tunnel_card = QFrame(self.home_content)
-        self.system_tunnel_card.setObjectName("systemTunnelCard")
-        tunnel_card_layout = QHBoxLayout(self.system_tunnel_card)
-        tunnel_card_layout.setContentsMargins(14, 10, 14, 10)
-        tunnel_card_layout.setSpacing(14)
-        tunnel_text_layout = QVBoxLayout()
-        tunnel_text_layout.setContentsMargins(0, 0, 0, 0)
-        tunnel_text_layout.setSpacing(3)
-        self.system_tunnel_title = QLabel("SYSTEM-WIDE TOR TUNNEL")
-        self.system_tunnel_title.setObjectName("systemTunnelTitle")
-        self.system_tunnel_description = QLabel(
-            "Route system TCP traffic through Tor. DNS is sent over Tor; unsupported UDP is blocked."
-        )
-        self.system_tunnel_description.setObjectName("systemTunnelDescription")
-        self.system_tunnel_description.setWordWrap(True)
-        self.system_tunnel_status = QLabel("Engine not installed")
-        self.system_tunnel_status.setObjectName("systemTunnelStatus")
-        tunnel_text_layout.addWidget(self.system_tunnel_title)
-        tunnel_text_layout.addWidget(self.system_tunnel_description)
-        tunnel_text_layout.addWidget(self.system_tunnel_status)
-        tunnel_card_layout.addLayout(tunnel_text_layout, 1)
-        self.btn_system_tunnel = QPushButton("Install engine", self.system_tunnel_card)
-        self.btn_system_tunnel.setObjectName("systemTunnelAction")
-        self.btn_system_tunnel.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_system_tunnel.clicked.connect(self.toggle_system_tunnel)
-        tunnel_card_layout.addWidget(self.btn_system_tunnel, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.home_layout.addWidget(self.system_tunnel_card)
+        self.system_tunnel_hint = QFrame(self.home_content)
+        self.system_tunnel_hint.setObjectName("systemTunnelHint")
+        tunnel_hint_layout = QHBoxLayout(self.system_tunnel_hint)
+        tunnel_hint_layout.setContentsMargins(10, 5, 10, 5)
+        tunnel_hint_layout.setSpacing(10)
+        self.system_tunnel_hint_label = QLabel("System tunnel is not installed · Manage it in Updates")
+        self.system_tunnel_hint_label.setObjectName("systemTunnelHintLabel")
+        self.system_tunnel_hint_label.setWordWrap(False)
+        tunnel_hint_layout.addWidget(self.system_tunnel_hint_label, 1)
+        self.btn_system_tunnel_manage = QPushButton("Manage", self.system_tunnel_hint)
+        self.btn_system_tunnel_manage.setObjectName("systemTunnelManage")
+        self.btn_system_tunnel_manage.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_system_tunnel_manage.setIcon(qta.icon("fa6s.arrow-right"))
+        self.btn_system_tunnel_manage.clicked.connect(self.open_tunnel_manager)
+        tunnel_hint_layout.addWidget(self.btn_system_tunnel_manage)
+        self.home_layout.addWidget(self.system_tunnel_hint)
 
         self.tor_ip_label = QLabel("Exit IP: not checked")
         self.tor_ip_label.setObjectName("exitIpLabel")
@@ -421,13 +400,10 @@ class ProxyWindow(QWidget):
             QPushButton#secondaryAction {{ min-height: 36px; padding: 0 14px; border-radius: 8px; background: transparent; color: {text}; border: 1px solid {border}; font-weight: 600; }}
             QPushButton#secondaryAction:hover {{ background: rgba(71, 163, 242, 0.12); border-color: {accent}; }}
             QPushButton#secondaryAction:checked {{ background: rgba(71, 163, 242, 0.18); border-color: {accent}; }}
-            QFrame#systemTunnelCard {{ background: {surface}; border: 1px solid {border}; border-radius: 11px; }}
-            QLabel#systemTunnelTitle {{ color: {text}; background: transparent; border: none; font-size: 10px; font-weight: 800; letter-spacing: 0.8px; }}
-            QLabel#systemTunnelDescription {{ color: {muted}; background: transparent; border: none; font-size: 10px; }}
-            QLabel#systemTunnelStatus {{ color: {accent}; background: transparent; border: none; font-size: 10px; font-weight: 700; }}
-            QPushButton#systemTunnelAction {{ min-height: 34px; padding: 0 13px; border-radius: 8px; background: {accent}; color: #ffffff; border: none; font-weight: 700; }}
-            QPushButton#systemTunnelAction:hover {{ background: #2989d0; }}
-            QPushButton#systemTunnelAction:disabled {{ background: {border}; color: {muted}; }}
+            QFrame#systemTunnelHint {{ background: {surface}; border: 1px solid {border}; border-radius: 8px; }}
+            QLabel#systemTunnelHintLabel {{ color: {muted}; background: transparent; border: none; font-size: 10px; }}
+            QPushButton#systemTunnelManage {{ min-height: 27px; padding: 0 9px; border-radius: 7px; background: {field}; color: {text}; border: 1px solid {border}; font-size: 10px; font-weight: 700; }}
+            QPushButton#systemTunnelManage:hover {{ background: {hover}; border-color: {accent}; }}
         """)
         self.logs_widget.apply_theme(CONFIG["mode"])
         icon_color = "#eff1f4" if dark else "#202832"
@@ -651,11 +627,6 @@ class ProxyWindow(QWidget):
             self.logs_widget.update_log("Tor connect/disconnect is temporarily disabled while the system tunnel changes.")
             return
         with self._operation_lock:
-            if self._killswitch_operation_active:
-                QMessageBox.information(
-                    self, "Network protection", "Wait until the Kill Switch operation finishes before connecting."
-                )
-                return
             if self.running:
                 self.connect_btn.set_disconnecting()
                 self._stop_services()
@@ -790,210 +761,12 @@ class ProxyWindow(QWidget):
             self.connect_btn.setEnabled(True)
 
     # ===== helper worker (runs in background) =====
-    def set_kill_switch_enabled(self, enabled: bool) -> str:
-        """Serialize firewall changes against Tor connection transitions."""
-        if not enabled:
-            tunnel_state = self.system_tunnel_manager.status()
-            if tunnel_state.get("active") or not tunnel_state.get("verified", True):
-                raise KillSwitchError("Stop or reconcile the system-wide tunnel before disabling Kill Switch.")
-        with self._operation_lock:
-            if self._connect_operation_busy or self.running or self._stopping:
-                raise KillSwitchError("Finish connecting or disconnecting Tor before changing Kill Switch.")
-            if self._killswitch_operation_active:
-                raise KillSwitchError("Another Kill Switch operation is already running.")
-            self._killswitch_operation_active = True
-        try:
-            return self._apply_kill_switch_enabled(bool(enabled))
-        finally:
-            with self._operation_lock:
-                self._killswitch_operation_active = False
-
-    def _run_kill_switch_recovery(self, *, emergency: bool = False) -> str:
-        """Restore firewall connectivity without racing Tor startup or another policy change."""
-        tunnel_manager = getattr(self, "system_tunnel_manager", None)
-        if tunnel_manager is not None:
-            tunnel_state = tunnel_manager.status()
-            if tunnel_state.get("active") or not tunnel_state.get("verified", True):
-                raise KillSwitchError("Stop or reconcile the system-wide tunnel before recovering the Kill Switch.")
-
-        with self._operation_lock:
-            if self._connect_operation_busy or self.running or self._stopping:
-                raise KillSwitchError("Disconnect Tor before recovering the system firewall.")
-            if self._killswitch_operation_active:
-                raise KillSwitchError("A Kill Switch operation is still running; recovery will be queued by Settings.")
-            self._killswitch_operation_active = True
-        try:
-            manager = getattr(self, "killswitch_manager", None)
-            if manager is None:
-                raise KillSwitchError(
-                    getattr(self, "_killswitch_unavailable", None)
-                    or "Kill Switch recovery is unavailable on this operating system."
-                )
-            if emergency:
-                outcome = manager.emergency_recover()
-                detail = str(outcome.get("detail", "")).strip() if isinstance(outcome, dict) else ""
-                message = (
-                    "Emergency recovery completed. Windows Firewall remains enabled; outbound traffic is allowed, "
-                    "and only TorProxy-owned firewall rules were removed."
-                )
-            else:
-                outcome = manager.recover()
-                detail = str(outcome.get("detail", "")).strip() if isinstance(outcome, dict) else ""
-                message = (
-                    "The saved firewall configuration was restored and verified. "
-                    "The Kill Switch is now disabled."
-                )
-            if detail:
-                message += " " + detail
-            try:
-                CONFIG["kill_switch_enabled"] = False
-            except Exception as exc:
-                raise KillSwitchError(
-                    f"The firewall was recovered, but TorProxy could not save the disabled preference: {exc}. "
-                    "Keep the Kill Switch off in Settings before restarting the app."
-                ) from exc
-            return message
-        finally:
-            with self._operation_lock:
-                self._killswitch_operation_active = False
-
-    def recover_kill_switch(self) -> str:
-        """Restore the original firewall snapshot, including a partially applied enable."""
-        return self._run_kill_switch_recovery(emergency=False)
-
-    def emergency_recover_kill_switch(self) -> str:
-        """Use the explicit outbound-Allow fallback while keeping the OS firewall enabled."""
-        return self._run_kill_switch_recovery(emergency=True)
-
-    def _apply_kill_switch_enabled(self, enabled: bool) -> str:
-        """Apply the OS firewall policy and keep the saved preference consistent."""
-        enabled = bool(enabled)
-        manager = getattr(self, "killswitch_manager", None)
-        if manager is None:
-            raise KillSwitchError(
-                getattr(self, "_killswitch_unavailable", None)
-                or "Kill Switch is unavailable on this operating system."
-            )
-        if enabled:
-            tor_state = str(getattr(self.tor, "state", "STOPPED")).upper()
-            if self.running or tor_state in {"STARTING", "BOOTSTRAPPING", "READY"}:
-                raise KillSwitchError("Disconnect Tor before enabling Kill Switch so its process can be isolated safely.")
-            if not self.tor.update_path(CONFIG["tor_path"]) or not self.tor.tor_path:
-                raise KillSwitchError("Select a valid Tor Expert Bundle before enabling Kill Switch.")
-            programs = [self.tor.tor_path]
-            if self.tor.bridge and self.tor.lyrebird_path and Path(self.tor.lyrebird_path).is_file():
-                programs.append(self.tor.lyrebird_path)
-
-            # A previous failed enable/disable can leave a saved snapshot behind
-            # while the persistent preference is off. Reconcile that partial state
-            # before taking a fresh snapshot. Do not do this during normal connection
-            # preflight when Kill Switch is already configured as active.
-            if not bool(CONFIG["kill_switch_enabled"]):
-                recovery_state = manager.recovery_state()
-                if recovery_state.get("snapshot_exists"):
-                    recovered = manager.recover()
-                    recovery_detail = str(recovered.get("detail", "")).strip() if isinstance(recovered, dict) else ""
-                    logger.warning(
-                        "Reconciled a pending Kill Switch snapshot before activation: %s",
-                        recovery_detail or "recovery completed",
-                    )
-
-            try:
-                manager.activate(programs)
-            except Exception as activation_error:
-                # Windows writes its recovery snapshot before the first firewall
-                # mutation. Only invoke rollback when that transaction marker
-                # exists; an early preflight rejection must not be mistaken for
-                # a failed rollback (for example, a Group Policy restriction).
-                try:
-                    recovery_state = manager.recovery_state()
-                    if recovery_state.get("available"):
-                        if recovery_state.get("snapshot_exists"):
-                            manager.recover()
-                            logger.info("Rolled back the partial Windows Kill Switch activation.")
-                        else:
-                            logger.info(
-                                "Kill Switch activation stopped before a Windows snapshot was created; "
-                                "no TorProxy firewall changes were committed."
-                            )
-                    else:
-                        manager.recover()
-                except Exception as recovery_error:
-                    raise KillSwitchError(
-                        f"Firewall activation failed: {activation_error}. "
-                        f"Automatic recovery also failed: {recovery_error}. "
-                        "The firewall state is not confirmed. Use Restore saved firewall or Emergency network recovery."
-                    ) from activation_error
-                try:
-                    CONFIG["kill_switch_enabled"] = False
-                except Exception as preference_error:
-                    logger.exception("Could not clear the Kill Switch preference after rollback.")
-                    raise KillSwitchError(
-                        f"Activation failed and the firewall recovery completed, but the off preference could not be saved: {preference_error}. "
-                        "Do not restart TorProxy until the Kill Switch preference is confirmed off."
-                    ) from activation_error
-                raise KillSwitchError(
-                    f"Kill Switch was not enabled: {activation_error}. "
-                    "TorProxy removed its partial rules and reconciled the saved firewall state. "
-                    "Review the firewall profile settings; you can retry after they are consistent."
-                ) from activation_error
-
-            try:
-                CONFIG["kill_switch_enabled"] = True
-            except Exception as save_error:
-                try:
-                    manager.deactivate()
-                except Exception as recovery_error:
-                    raise KillSwitchError(
-                        f"Firewall protection was applied but its preference could not be saved: {save_error}. "
-                        f"Automatic firewall recovery also failed: {recovery_error}. "
-                        "Inspect the firewall state before reconnecting."
-                    ) from save_error
-                raise KillSwitchError(
-                    f"Could not save the Kill Switch preference; the firewall policy was safely restored: {save_error}"
-                ) from save_error
-            return "Kill Switch enabled. Outbound traffic is restricted to Tor and essential local network control."
-
-        # Remove the firewall policy first. If restoring it fails, retain the
-        # enabled preference so a subsequent connect cannot silently bypass it.
-        manager.deactivate()
-        try:
-            CONFIG["kill_switch_enabled"] = False
-        except Exception as exc:
-            raise KillSwitchError(
-                f"The firewall policy was restored, but the disabled preference could not be saved: {exc}. "
-                "The saved preference remains enabled and will re-apply protection before the next Tor start."
-            ) from exc
-        return "Kill Switch disabled and the previously saved firewall policy restored."
-
     def _check_ports_worker(self):
-        """Resolve persistent listener ports and verify the Kill Switch before start."""
+        """Resolve persistent listener ports before starting Tor and the local proxy."""
         try:
             ports, messages = resolve_listener_ports(CONFIG, strict_manual=True)
         except PortAllocationError as exc:
             return json.dumps([False, {}, [str(exc)]])
-
-        failures = []
-        if CONFIG["kill_switch_enabled"]:
-            try:
-                if self.killswitch_manager is None:
-                    raise KillSwitchError(
-                        self._killswitch_unavailable or "Kill Switch backend is unavailable."
-                    )
-                if not self.tor.update_path(CONFIG["tor_path"]) or not self.tor.tor_path:
-                    raise KillSwitchError("The configured Tor executable is unavailable.")
-                programs = [self.tor.tor_path]
-                if self.tor.bridge and self.tor.lyrebird_path and Path(self.tor.lyrebird_path).is_file():
-                    programs.append(self.tor.lyrebird_path)
-                self.killswitch_manager.activate(programs)
-                messages.append("Kill Switch firewall policy was re-applied before starting Tor.")
-            except Exception as exc:
-                failures.append(f"Kill Switch could not be verified or activated: {exc}")
-
-        if failures:
-            messages.append("Connection preflight failed.")
-            messages.extend(failures)
-            return json.dumps([False, {}, messages])
 
         messages.append("All four persistent listener ports are available.")
         return json.dumps([True, ports, messages])
@@ -1010,7 +783,7 @@ class ProxyWindow(QWidget):
         self.set_btn_status_style("disconnecting")
 
         # Release system routes before stopping Tor. If elevated cleanup fails,
-        # preserve the Tor process and default-deny Kill Switch.
+        # keep Tor running until the TUN routes can be reconciled safely.
         tunnel_status = self.system_tunnel_manager.status()
         if tunnel_status.get("active") or not tunnel_status.get("verified", True):
             try:
@@ -1023,16 +796,15 @@ class ProxyWindow(QWidget):
                 self.connect_btn.setEnabled(True)
                 self.btn_status.setText("TUNNEL STILL ACTIVE · TOR LEFT RUNNING")
                 self.set_btn_status_style("connected" if self.connected else "disconnected")
-                self.system_tunnel_status.setText("Tunnel stop failed — Kill Switch retained")
                 self.logs_widget.update_log(f"System tunnel cleanup failed; Tor was not stopped: {exc}", level="error")
                 QMessageBox.warning(
                     self, "System tunnel is still active",
-                    "TorProxy kept Tor and the Kill Switch running because it could not confirm "
-                    "that the system TUN routes were removed. Resolve the tunnel stop error before disconnecting.",
+                    "TorProxy kept Tor running because it could not confirm that the system TUN routes were removed. "
+                    "Resolve the tunnel stop error before disconnecting.",
                 )
-                self._update_system_tunnel_controls()
+                self._update_tunnel_hint()
                 return False
-        self._update_system_tunnel_controls()
+        self._update_tunnel_hint()
 
         # Restore a policy-managed proxy when the app disconnects in Set mode.
         # Explicit app exit also cleans up TorProxy's own proxy assignment.
@@ -1087,7 +859,7 @@ class ProxyWindow(QWidget):
         self._update_proxy_buttons()
         self._update_proxy_mode_status()
         self._stopping = False
-        self._update_system_tunnel_controls()
+        self._update_tunnel_hint()
         return True
 
     # ----- proxy manual control handlers (new) -----
@@ -1173,136 +945,36 @@ class ProxyWindow(QWidget):
                 "Connect to Tor and wait for the verified bootstrap to finish first."
             )
         self._update_proxy_mode_status()
-        self._update_system_tunnel_controls()
+        self._update_tunnel_hint()
 
 
-    def _update_system_tunnel_controls(self):
-        """Refresh the Home tunnel card from verified local engine/process state."""
-        if not hasattr(self, "btn_system_tunnel"):
+    def _update_tunnel_hint(self):
+        """Keep Home's tunnel summary compact; lifecycle controls live in Updates."""
+        label = getattr(self, "system_tunnel_hint_label", None)
+        if label is None:
             return
-        if self._system_tunnel_busy:
-            self.btn_system_tunnel.setEnabled(False)
-            self.btn_system_tunnel.setText("Working…")
-            self.system_tunnel_status.setText("Applying system tunnel changes")
-            return
-
-        status = self.system_tunnel_manager.status()
-        installed = self.system_tunnel_manager.is_installed()
-        self.btn_system_tunnel.setEnabled(True)
-        if status.get("active"):
-            self.btn_system_tunnel.setText("Stop tunnel")
-            self.system_tunnel_status.setText("Active · system TCP routed through Tor")
-            self.system_tunnel_description.setText(
-                "System TCP uses Tor. DNS uses DoH over Tor; UDP is blocked to prevent direct leaks."
-            )
-            return
-        if not status.get("verified", True):
-            self.btn_system_tunnel.setText("Reconcile tunnel")
-            self.system_tunnel_status.setText("Tunnel process state needs recovery")
-            self.system_tunnel_description.setText(
-                "TorProxy only stops a process whose PID, executable and start time match its saved record."
-            )
-            return
-        if not installed:
-            self.btn_system_tunnel.setText("Install engine")
-            self.system_tunnel_status.setText("Engine not installed")
-            self.system_tunnel_description.setText(
-                "Downloads and verifies the official sing-box 1.14.4 engine."
-            )
-            return
-        self.btn_system_tunnel.setText("Start system tunnel")
-        if not self.running or not self.connected:
-            self.system_tunnel_status.setText("Ready · waiting for Tor")
-            self.system_tunnel_description.setText(
-                "Install the engine now; connect to Tor before starting system-wide routing."
-            )
-        elif not bool(CONFIG["kill_switch_enabled"]):
-            self.system_tunnel_status.setText("Kill Switch required")
-            self.system_tunnel_description.setText(
-                "Enable Kill Switch while disconnected, then reconnect Tor before starting the system tunnel."
-            )
+        manager = getattr(self, "system_tunnel_manager", None)
+        if manager is None:
+            message = "System tunnel is unavailable · Open Updates → Tunnel"
         else:
-            self.system_tunnel_status.setText("Ready to start")
-            self.system_tunnel_description.setText(
-                "System TCP routes through Tor, DNS uses DoH over Tor, and UDP is rejected rather than sent directly."
-            )
+            try:
+                state = manager.status()
+                installed_version = manager.installed_version
+                if state.get("active"):
+                    message = f"System tunnel active · sing-box v{installed_version or 'verified'}"
+                elif not state.get("verified", True):
+                    message = "System tunnel needs reconciliation · Open Updates → Tunnel"
+                elif not installed_version:
+                    message = "System tunnel is not installed · Install it from Updates → Tunnel"
+                else:
+                    message = f"System tunnel engine installed · v{installed_version}"
+            except Exception as exc:
+                logger.debug("Could not refresh system tunnel summary: %s", exc)
+                message = "System tunnel status is unavailable · Open Updates → Tunnel"
+        label.setText(message)
 
-    def toggle_system_tunnel(self):
-        """Install, start or stop the verified system tunnel from Home."""
-        if self._system_tunnel_busy:
-            return
-        status = self.system_tunnel_manager.status()
-        if status.get("active") or not status.get("verified", True):
-            self._run_system_tunnel_action("stop", self.system_tunnel_manager.stop)
-            return
-        if not self.system_tunnel_manager.is_installed():
-            self._run_system_tunnel_action("install", self.system_tunnel_manager.install_engine)
-            return
-        if not self.running or not self.connected:
-            QMessageBox.information(
-                self, "System-wide tunnel",
-                "Connect to Tor and wait until its ControlPort and SOCKS listener are verified before starting the tunnel.",
-            )
-            return
-        if not bool(CONFIG["kill_switch_enabled"]):
-            QMessageBox.information(
-                self, "Kill Switch required",
-                "For leak protection, disconnect Tor, enable Kill Switch in Settings, reconnect Tor, "
-                "then start the system-wide tunnel.",
-            )
-            return
-        firewall = self.killswitch_manager.status() if self.killswitch_manager is not None else {}
-        if not firewall.get("active") or not firewall.get("verified"):
-            QMessageBox.warning(
-                self, "Network protection",
-                "TorProxy could not verify the active Kill Switch. The system tunnel was not started.",
-            )
-            return
-        if not firewall.get("tun_interface_allowed") and firewall.get("backend") != "WFP":
-            QMessageBox.information(
-                self, "Update Kill Switch rules",
-                "This legacy Kill Switch policy has no verified system-tunnel interface exception. "
-                "While disconnected, disable and re-enable Kill Switch once, then reconnect Tor.",
-            )
-            return
-        # The WFP backend adds the exact adapter-LUID exception from its
-        # already-elevated sing-box helper after the TorProxy TUN adapter exists.
-        tor_paths = [self.tor.tor_path, self.tor.lyrebird_path]
-        self._run_system_tunnel_action(
-            "start",
-            lambda: self.system_tunnel_manager.start(
-                int(self.tor.socks_port),
-                tor_executables=[path for path in tor_paths if path],
-            ),
-        )
-
-    def _run_system_tunnel_action(self, action: str, operation):
-        self._system_tunnel_busy = True
-        self._update_system_tunnel_controls()
-        worker = Worker(operation)
-        worker.signals.finished.connect(
-            lambda message, operation_name=action:
-                self._on_system_tunnel_action_finished(operation_name, message)
-        )
-        worker.signals.error.connect(
-            lambda error, operation_name=action:
-                self._on_system_tunnel_action_failed(operation_name, error)
-        )
-        self._system_tunnel_worker = worker
-        self.thread_pool.start(worker)
-
-    def _on_system_tunnel_action_finished(self, action: str, message: str):
-        self._system_tunnel_busy = False
-        self._system_tunnel_worker = None
-        self.system_tunnel_status.setText(str(message))
-        self.logs_widget.update_log(f"System tunnel {action}: {message}")
-        self._update_system_tunnel_controls()
-
-    def _on_system_tunnel_action_failed(self, action: str, error: str):
-        self._system_tunnel_busy = False
-        self._system_tunnel_worker = None
-        detail = str(error or "Unknown system tunnel error.")
-        self.system_tunnel_status.setText(f"{action.title()} failed — see Event Log")
-        self.logs_widget.update_log(f"System tunnel {action} failed: {detail}", level="error")
-        self._update_system_tunnel_controls()
-        QMessageBox.warning(self, "System-wide tunnel", detail)
+    def open_tunnel_manager(self):
+        """Navigate to the dedicated engine and tunnel management page."""
+        callback = getattr(self._parent, "_show_tunnel_page", None)
+        if callable(callback):
+            callback()

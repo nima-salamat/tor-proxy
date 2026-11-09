@@ -430,12 +430,6 @@ class UpdaterWindow(QWidget):
                 "{} was not started. Wait until Tor reaches READY; TorProxy will not bypass a connecting Tor instance.".format(purpose),
             )
             return None
-        if CONFIG["kill_switch_enabled"]:
-            QMessageBox.information(
-                self, "Kill Switch is active",
-                "The system-wide Kill Switch blocks direct bootstrap traffic. Connect Tor first, or deliberately disable the Kill Switch before using direct bootstrap.",
-            )
-            return None
         reply = QMessageBox.question(
             self,
             "Allow direct bootstrap connection?",

@@ -1112,41 +1112,51 @@ def test_statistics_page_is_reachable_from_proxy_traffic_and_uses_live_direction
 
 
 
-def test_kill_switch_is_configurable_and_preflighted_before_services_start():
+def test_legacy_kill_switch_ui_and_tunnel_dependency_are_removed():
     repository = Path(__file__).resolve().parents[1]
     settings_source = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
     home_source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
-    proxy_source = (repository / "proxy.py").read_text(encoding="utf-8")
-    config_source = (repository / "config.py").read_text(encoding="utf-8")
+    tor_source = (repository / "tor.py").read_text(encoding="utf-8")
+    tunnel_source = (repository / "src/torproxy/system_tunnel.py").read_text(encoding="utf-8")
+    shell_source = (repository / "ui.py").read_text(encoding="utf-8")
 
-    assert '"kill_switch_enabled": False' in config_source
-    assert 'self.chk_kill_switch = QCheckBox("Enable", self)' in settings_source
-    assert "def kill_switch_changed(self, checked: bool)" in settings_source
-    assert 'self.chk_kill_switch.setChecked(bool(CONFIG["kill_switch_enabled"]))' in settings_source
-    assert "self.kill_switch_progress.setRange(0, 0)" in settings_source
-    assert "self.kill_switch_progress.show()" in settings_source
-    assert "self.kill_switch_progress.hide()" in settings_source
-    assert "if self._kill_switch_busy:" in settings_source
-    assert "self._kill_switch_pending_state = checked if checked != requested else None" in settings_source
-    assert "The current firewall operation will finish first." in settings_source
-    kill_switch_handler = settings_source[
-        settings_source.index("def kill_switch_changed"):
-        settings_source.index("def signature_verification_changed")
-    ]
-    assert "self.chk_kill_switch.setEnabled(False)" not in kill_switch_handler
-    assert "def set_kill_switch_enabled(self, enabled: bool)" in home_source
-    assert "self._connect_operation_busy = True" in home_source
-    assert "if self._killswitch_operation_active:" in home_source
-    assert "self._apply_kill_switch_enabled(bool(enabled))" in home_source
-    assert "self.killswitch_manager.activate(programs)" in home_source
-    assert 'if CONFIG["kill_switch_enabled"]:' in home_source
-    assert 'if not bool(CONFIG["kill_switch_enabled"]):' in home_source
-    assert "recovery_state = manager.recovery_state()" in home_source
-    assert "recovered = manager.recover()" in home_source
-    assert home_source.index("recovered = manager.recover()") < home_source.index("manager.activate(programs)")
-    assert "preservedProfiles" in (repository / "src/torproxy/firewall/windows.py").read_text(encoding="utf-8")
-    assert 'return "blocked" if CONFIG["kill_switch_enabled"] else "direct"' in proxy_source
+    assert "Kill Switch" not in settings_source
+    assert "killSwitch" not in settings_source
+    assert "KillSwitchManager" not in home_source
+    assert "kill_switch_enabled" not in home_source
+    assert "Kill Switch" not in home_source
+    assert "isolate_in_cgroup=" not in tor_source
+    assert "cgroup_callback=" not in tor_source
+    assert "_enable_windows_wfp_tun_exception" not in tunnel_source
+    assert "_apply_wfp_tun_exception" not in tunnel_source
+    assert "Kill Switch" not in tunnel_source
+    assert "systemTunnelCard" not in home_source
+    assert "systemTunnelHint" in home_source
+    assert "TunnelManagerWindow" in shell_source
+    assert '("Tunnel"' not in shell_source
+    assert "updates_nav_button" in shell_source
+    assert "def _show_tunnel_page(self)" in shell_source
 
+
+def test_tunnel_manager_is_a_versioned_updates_page_with_explicit_network_routes():
+    repository = Path(__file__).resolve().parents[1]
+    ui_source = (repository / "ui.py").read_text(encoding="utf-8")
+    tunnel_source = (repository / "ui_/window/tunnel_window.py").read_text(encoding="utf-8")
+    engine_source = (repository / "src/torproxy/system_tunnel.py").read_text(encoding="utf-8")
+
+    assert "TunnelManagerWindow(self)" in ui_source
+    assert "updates_nav_button" in ui_source
+    assert "bundles_update_action" in ui_source
+    assert "tunnel_update_action" in ui_source
+    assert "def _show_tunnel_page(self)" in ui_source
+    assert "AVAILABLE VERSIONS" in tunnel_source
+    assert "check_latest_release" in tunnel_source
+    assert "upstream-unpinned" in tunnel_source
+    assert "Install selected version" in tunnel_source
+    assert "_resolve_network_route" in tunnel_source
+    assert "allow_direct=allow_direct" in tunnel_source
+    assert "create_session(proxy_url, allow_direct=allow_direct)" in engine_source
+    assert "_apply_wfp_tun_exception" not in engine_source
 
 
 def test_bundle_manager_exposes_manual_import_and_tor_only_network_routing():
@@ -1156,7 +1166,7 @@ def test_bundle_manager_exposes_manual_import_and_tor_only_network_routing():
     assert "self.btn_import_bundle.clicked.connect(self.choose_local_bundle)" in updater_source
     assert 'tor_socks_proxy_url("127.0.0.1", port)' in updater_source
     assert "Allow direct bootstrap connection?" in updater_source
-    assert 'if CONFIG["kill_switch_enabled"]:' in updater_source
+    assert 'if CONFIG["kill_switch_enabled"]:' not in updater_source
     assert "LOCAL · UNSIGNED" in updater_source
 
 

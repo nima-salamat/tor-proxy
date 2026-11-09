@@ -54,94 +54,59 @@ def test_system_tunnel_config_uses_tcp_tor_socks_and_hijacks_dns(tmp_path, monke
     assert config["route"]["final"] == "tor-socks"
 
 
-def test_windows_wfp_tun_exception_is_installed_after_live_adapter_creation(tmp_path):
-    helper = tmp_path / "TorProxyWfpHelper.exe"
-    helper.write_bytes(b"test helper")
-    calls = []
+def test_tunnel_engine_download_refuses_an_unspecified_network_route(tmp_path, monkeypatch):
+    manager = _manager(tmp_path)
+    monkeypatch.setattr(manager, "is_running", lambda: False)
 
-    class Result:
-        def __init__(self, stdout, returncode=0):
-            self.stdout = stdout
-            self.returncode = returncode
+    def reject_route(*_args, **_kwargs):
+        raise system_tunnel.NetworkRouteError("No explicit route was selected.")
 
-    def fake_run(args, **kwargs):
-        calls.append(args)
-        assert kwargs["timeout"] == 10
-        if args[-1] == "status":
-            return Result("ACTIVE filters=11 tun_interface_allowed=false")
-        assert args[-1] == "allow-tun"
-        return Result("ACTIVE filters=13 tun_interface_allowed=true")
-
-    enabled = system_tunnel._apply_wfp_tun_exception(helper, fake_run)
-
-    assert enabled is True
-    assert calls == [
-        [str(helper), "status"],
-        [str(helper), "allow-tun"],
-    ]
+    monkeypatch.setattr(system_tunnel, "create_session", reject_route)
+    with pytest.raises(SystemTunnelError, match="safe sing-box download route"):
+        manager.install_engine("1.14.4")
 
 
-def test_windows_wfp_tun_exception_fails_closed_without_active_policy(tmp_path):
-    helper = tmp_path / "TorProxyWfpHelper.exe"
-    helper.write_bytes(b"test helper")
+def test_latest_tunnel_release_check_refuses_an_unspecified_network_route(monkeypatch):
+    def reject_route(*_args, **_kwargs):
+        raise system_tunnel.NetworkRouteError("No explicit route was selected.")
 
-    class Result:
-        returncode = 0
-        stdout = "INACTIVE filters=0 tun_interface_allowed=false"
-
-    with pytest.raises(SystemTunnelError, match="WFP Kill Switch is no longer active"):
-        system_tunnel._apply_wfp_tun_exception(
-            helper, lambda *_args, **_kwargs: Result()
-        )
+    monkeypatch.setattr(system_tunnel, "create_session", reject_route)
+    with pytest.raises(SystemTunnelError, match="safe release-check route"):
+        SystemTunnelManager.check_latest_release()
 
 
-def test_windows_wfp_tun_exception_preserves_a_legacy_snapshot_policy(tmp_path):
-    helper = tmp_path / "TorProxyWfpHelper.exe"
-    helper.write_bytes(b"test helper")
-    snapshot = tmp_path / "windows-firewall-snapshot.json"
-    snapshot.write_text('{"version": 1}', encoding="utf-8")
+def test_supported_sing_box_versions_have_pinned_platform_assets(tmp_path):
+    manager = _manager(tmp_path)
 
-    class Result:
-        returncode = 0
-        stdout = "INACTIVE filters=0 tun_interface_allowed=false"
-
-    enabled = system_tunnel._apply_wfp_tun_exception(
-        helper, lambda *_args, **_kwargs: Result(), legacy_snapshot=snapshot
-    )
-
-    assert enabled is False
+    assert manager.supported_versions() == ("1.14.4", "1.14.3", "1.14.2")
+    for version in manager.supported_versions():
+        manager.select_version(version)
+        asset = manager.platform_asset
+        assert f"/v{version}/" in asset["url"]
+        assert len(asset["sha256"]) == 64
+        assert asset["archive"] in {"zip", "tar.gz"}
+        assert asset["executable"] in {"sing-box.exe", "sing-box"}
 
 
-def test_windows_wfp_tun_exception_refuses_incomplete_filter_policy(tmp_path):
-    helper = tmp_path / "TorProxyWfpHelper.exe"
-    helper.write_bytes(b"test helper")
+def test_version_selection_uses_a_version_specific_archive_and_rejects_unpinned_versions(tmp_path):
+    manager = _manager(tmp_path)
+    latest_archive = manager.archive_path
 
-    class Result:
-        returncode = 0
-        stdout = "INCOMPLETE filters=4 tun_interface_allowed=false"
+    manager.select_version("1.14.3")
 
-    with pytest.raises(SystemTunnelError, match="incomplete filter set"):
-        system_tunnel._apply_wfp_tun_exception(helper, lambda *_args, **_kwargs: Result())
+    assert manager.archive_path != latest_archive
+    assert "1.14.3" in manager.archive_path.name
+    with pytest.raises(SystemTunnelError, match="not been pinned"):
+        manager.select_version("1.14.1")
 
 
-def test_windows_wfp_tun_exception_requires_verified_adapter_luid_result(tmp_path):
-    helper = tmp_path / "TorProxyWfpHelper.exe"
-    helper.write_bytes(b"test helper")
+def test_active_tunnel_cannot_change_engine_version(tmp_path, monkeypatch):
+    manager = _manager(tmp_path)
+    manager.select_version("1.14.4")
+    monkeypatch.setattr(manager, "is_running", lambda: True)
 
-    class Result:
-        def __init__(self, stdout, returncode=0):
-            self.stdout = stdout
-            self.returncode = returncode
-
-    responses = iter([
-        Result("ACTIVE filters=11 tun_interface_allowed=false"),
-        Result("ACTIVE filters=11 tun_interface_allowed=false"),
-    ])
-
-    with pytest.raises(SystemTunnelError, match="did not confirm its exact interface exception"):
-        system_tunnel._apply_wfp_tun_exception(
-            helper, lambda *_args, **_kwargs: next(responses)
-        )
+    with pytest.raises(SystemTunnelError, match="Stop the active"):
+        manager.select_version("1.14.3")
 
 
 def test_system_tunnel_config_requires_a_valid_tor_executable(tmp_path):

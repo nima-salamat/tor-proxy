@@ -17,8 +17,7 @@ The project is being modernized from a flat desktop utility into a testable Pyth
 - Explicit opt-in for system proxy changes, snapshot-based restoration, and protection against overwriting later external changes.
 - Home-page **Open Browser** launcher for detected Chromium and Firefox-family browsers, using isolated per-browser profiles and the existing TorProxy HTTP proxy.
 - Listener ports are allocated once, persisted in the per-user configuration, and reused on later launches; automatic ports are repaired only when a conflict is detected.
-- Optional system-wide Kill Switch using Windows Defender Firewall or Linux nftables/cgroup v2. The firewall remains default-deny until explicitly disabled; applications must still use TorProxy’s loopback HTTP proxy.
-- Experimental system-wide Tor tunnel on Windows x64 and glibc-based Linux x86_64. It downloads a pinned sing-box runtime on demand, verifies the upstream archive and extracted files, and uses a dedicated TUN interface rather than changing each application's proxy settings.
+- System-wide Tor tunnel on Windows x64 and glibc-based Linux x86_64, managed from **Updates → Tunnel**. It downloads a selected, SHA-256-pinned sing-box release and uses a dedicated TUN interface rather than changing each application's proxy settings.
 - Tor Expert Bundle downloads use Tor's live SOCKS5H route whenever Tor is READY, are restricted to official distribution hosts, and are safely extracted. OpenPGP publisher-signature verification is enabled by default and checks the pinned Tor signing-key fingerprint.
 - Versioned configuration, per-user writable data paths, atomic settings writes, tests, and CI.
 
@@ -150,7 +149,7 @@ Do not expose the local HTTP proxy, SOCKS port, or ControlPort to a LAN. The app
 
 When Tor is fully READY, choose **Home → Open Browser** to launch an installed browser through the existing loopback HTTP proxy. TorProxy currently discovers common Chromium-family browsers (Chrome, Chromium, Edge, Brave, Vivaldi, Opera, Opera GX, Yandex and Ungoogled Chromium) and Firefox-family browsers (Firefox, Firefox ESR, LibreWolf, Waterfox, Floorp and Zen Browser) on Windows and Linux. Windows discovery combines the `Clients\StartMenuInternet` browser registrations, Start Menu `.lnk` shortcuts, `App Paths`, uninstall metadata and per-user/per-machine installation locations; Linux discovery reads XDG `.desktop` launchers (including their `Name`, `Exec`, `TryExec` and `Icon` fields), Flatpak/Snap exports and `PATH`. Browser cards use the installed executable/shortcut icon on Windows and the desktop-theme icon on Linux, with a browser-specific fallback. **Add custom browser** stores an additional executable in the user's configuration directory.
 
-Each browser receives its own TorProxy profile under the per-user application-data directory. Chromium launches with a single `--proxy-server=http://127.0.0.1:<port>` and a separate `--user-data-dir`; Firefox receives managed HTTP/HTTPS proxy preferences in its dedicated `user.js` and starts with `--profile`. Firefox's profile-scoped remoting reuses an already-running TorProxy Firefox profile on repeated launches; a changed proxy port gets a different profile directory. The user's normal browser profile and system-wide proxy settings are not modified. TorProxy does not add an explicit `direct://` route to Chromium's proxy argument. Firefox's isolated profile disables its proxy-failure direct failover preference for system requests. These are browser-level controls, not an OS firewall; enable the system Kill Switch when machine-wide blocking of direct outbound connections is required.
+Each browser receives its own TorProxy profile under the per-user application-data directory. Chromium launches with a single `--proxy-server=http://127.0.0.1:<port>` and a separate `--user-data-dir`; Firefox receives managed HTTP/HTTPS proxy preferences in its dedicated `user.js` and starts with `--profile`. Firefox's profile-scoped remoting reuses an already-running TorProxy Firefox profile on repeated launches; a changed proxy port gets a different profile directory. The user's normal browser profile and system-wide proxy settings are not modified. TorProxy does not add an explicit `direct://` route to Chromium's proxy argument. Firefox's isolated profile disables its proxy-failure direct failover preference for system requests. These are browser-level controls, not an OS firewall. The system tunnel is managed separately in Updates → Tunnel and does not provide operating-system firewall enforcement.
 
 Tor Browser is intentionally excluded from this generic launcher because it manages its own Tor process and browser profile; it should be launched separately. The last known inventory is cached in a small SQLite database under the per-user application data directory (`browser_inventory.sqlite3`). Opening the dialog reads that local snapshot immediately and schedules a fresh OS scan on Qt's global `QThreadPool`; while the scan spinner is visible, cached entries remain usable. When discovery finishes, one SQLite transaction replaces the snapshot so uninstalled browsers disappear from both the cache and the UI. Before launching a cached entry, TorProxy checks its executable again; a missing or moved executable is removed immediately and reported without waiting for discovery. The Refresh control starts another background scan.
 
@@ -199,20 +198,19 @@ The system-proxy control currently supports Windows Internet Settings and GNOME 
 
 Applications configured manually to use `127.0.0.1:<shown-proxy-port>` do not require system-wide proxy changes.
 
-## System-wide Tor tunnel (experimental)
+## System-wide Tor tunnel
 
-The Home page includes a **System-wide Tor tunnel** card. The engine is installed on demand from the official sing-box release; TorProxy pins the supported version and verifies the downloaded archive and extracted executable/runtime files before use. Windows requests administrator approval for TUN routing; Linux uses PolicyKit (pkexec).
+Manage the system-wide Tor tunnel from **Updates → Tunnel**. The page lists stable sing-box versions whose official Windows/Linux archives have been pinned and SHA-256 verified by this TorProxy build. Choose a version, install it, and use the same page to start or stop system routing. Windows requests Administrator approval for TUN routing; Linux uses PolicyKit (pkexec).
 
-1. Install the tunnel engine from the Home card.
-2. Disconnect Tor and enable the existing **Kill Switch** in Settings.
-3. Reconnect Tor and wait for READY, then choose **Start system tunnel** on Home.
-4. Stop the system tunnel before disabling Kill Switch or changing its firewall policy.
+The page can check GitHub for the latest stable sing-box release. A newer upstream release is shown in the version list as **not verified** when this TorProxy build does not yet have a reviewed platform digest; it stays disabled until a later TorProxy update pins it. This avoids executing a release that has not been integrity-pinned.
 
-The TUN routes system TCP connections through Tor's local SOCKS listener. DNS is hijacked to TorProxy's TUN DNS endpoint and resolved with DNS-over-HTTPS through Tor. The Tor process itself is excluded from the TUN to prevent a routing loop; its network access remains governed by the Kill Switch. The firewall allows only the dedicated TorProxy (Windows) or torproxy-tun (Linux) interface in addition to the existing narrow Tor exceptions.
+Tunnel-engine downloads and release checks use Tor's loopback SOCKS5H route when Tor is READY. When Tor is stopped, TorProxy asks for explicit permission before making that individual request directly. A failed Tor-routed request never falls back automatically to a direct connection.
 
-**This is a TCP-only Tor tunnel, not a general-purpose UDP VPN.** Tor's SOCKS interface cannot carry arbitrary UDP: unsupported UDP traffic is rejected rather than sent directly. Apps that require UDP/QUIC, real-time media, games, or other unsupported protocols may fail. Strict routing can also affect virtual machines, containers, local-network discovery, or access to LAN devices. The first version supports Windows x64 and glibc-based Linux x86_64 only; it does not enable this feature on macOS, Android, ARM, or musl-based Linux.
+The TUN routes supported system TCP connections through Tor's local SOCKS listener. DNS is hijacked to the TUN DNS endpoint and resolved with DNS-over-HTTPS through Tor. The Tor and sing-box executable paths bypass the TUN to prevent a routing loop. This feature is independent of the retired Kill Switch and does not install or require a system-wide firewall policy.
 
-If the tunnel cannot be stopped or its process identity cannot be verified, TorProxy keeps Tor and Kill Switch running and blocks application exit rather than leaving the system in an uncertain routing state.
+**This is a TCP-only tunnel, not a general-purpose UDP VPN.** Tor's SOCKS interface cannot carry arbitrary UDP: unsupported UDP traffic is rejected rather than routed directly. Apps that require UDP/QUIC, real-time media, games, or other unsupported protocols may fail. Strict routing can also affect virtual machines, containers, local-network discovery, or LAN access. The feature supports Windows x64 and glibc-based Linux x86_64; macOS, Android, ARM, and musl-based Linux are not supported.
+
+Stop the system tunnel before disconnecting Tor or exiting TorProxy. If the process identity cannot be verified or the TUN interface cannot be removed, TorProxy keeps Tor running and blocks application exit rather than claiming routes were safely restored.
 
 ## Configuration and data paths
 
@@ -229,7 +227,7 @@ Traffic usage counts bytes observed in both directions for proxied HTTP requests
 - Logs avoid recording request URLs and query strings, but local logs and host-rule lists should still be treated as user data.
 - Direct exclusions intentionally bypass Tor.
 - System-proxy restoration can fail safely if another program changes settings.
-- The loopback HTTP proxy by itself is not a firewall: applications can ignore it. The optional system-wide Kill Switch adds outbound firewall enforcement. The experimental System-wide Tor tunnel adds TUN routing for TCP and explicitly blocks unsupported UDP rather than falling back to a direct connection.
+- The loopback HTTP proxy and system tunnel are not an operating-system firewall. Applications can ignore a per-app proxy or use network paths that do not traverse the TUN. The system tunnel routes supported TCP traffic through Tor and rejects unsupported UDP while it is active.
 - CI tests use fakes/local servers; they do not prove real-world anonymity or verify every OS integration.
 
 Read [Security](docs/SECURITY.md) and [Troubleshooting](docs/TROUBLESHOOTING.md) before reporting an issue.

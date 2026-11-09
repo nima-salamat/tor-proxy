@@ -30,7 +30,7 @@ Writes use a unique temporary file, restrictive permissions where supported, and
 | `MaxCircuitDirtiness` | Tor circuit dirtiness in seconds | `600` |
 | `newnym_interval` | Legacy preference in milliseconds | `0`; automatic rotation disabled |
 | `system_proxy_auto` | Reserved compatibility preference | `false`; never automatically changes OS settings |
-| `kill_switch_enabled` | Persistent system-wide outbound firewall protection | `false`; Windows Defender Firewall or Linux nftables/cgroup v2 |
+| `kill_switch_enabled` | Legacy preference accepted only when parsing older configuration files; ignored by the current application | `false` |
 | `data_usage` | Aggregate proxy byte count | `0` |
 | `log_level` | Logging verbosity | `INFO` |
 
@@ -72,19 +72,14 @@ The optional `auto_prune_bridges` preference performs individual, isolated bridg
 System proxy changes happen only when the user explicitly selects the system-proxy action. The app stores a snapshot and restores it only if it still owns the active values. If another process changes the setting, restoration is refused and requires manual inspection.
 
 
-## Kill Switch
+## Legacy Kill Switch preference
 
-`kill_switch_enabled` is an opt-in, persistent firewall preference. Enabling it requires administrator approval and a valid selected Tor executable. Disconnect Tor before enabling it so the firewall can be installed before the managed Tor process starts.
+The `kill_switch_enabled` key remains in the supported-key list so older `config.json` files can be read without losing unrelated settings. The current application does not display this preference, activate an operating-system firewall policy, or use it to gate Tor, direct-exclusion, bundle, or system-tunnel operations.
 
-- Windows: administrator/UAC approval, Windows Defender Firewall, and no unmanaged/Group Policy outbound Allow rules that prevent strict verification.
-- Linux: PolicyKit (`pkexec`), nftables, systemd user scopes, unified cgroup v2, and support for nftables `socket cgroupv2` matching. UID-wide exceptions are deliberately not used.
-- Applications must be configured to use TorProxy's local HTTP proxy. Other applications' direct outbound connections are blocked, not transparently redirected.
-- Direct Exclude Host rules are blocked while Kill Switch is enabled.
-- The firewall policy intentionally remains active after Tor stops, TorProxy exits, and system restart. Turn the setting off explicitly to restore the saved state. If another administrator or security product changes the firewall policy, restoration may be refused to avoid overwriting external changes.
-
+Persistent firewall rules created by an older release are separate OS state and are not removed by deleting this configuration key. Restore those rules with the recovery controls in the older release that created them; do not delete unrelated firewall state manually.
 
 ## Bundle downloads and local imports
 
-When Tor reaches READY, TorProxy's own release-list, artifact, archive, detached-signature, and pinned-key requests use its live local SOCKS5H listener, including remote DNS. Direct bootstrap is a separate, explicitly confirmed operation and is unavailable while the Kill Switch is active. Network failures never trigger an automatic direct fallback.
+When Tor reaches READY, TorProxy's own release-list, artifact, archive, detached-signature, and pinned-key requests use its live local SOCKS5H listener, including remote DNS. Direct bootstrap is a separate, explicitly confirmed operation. Network failures never trigger an automatic direct fallback.
 
 OpenPGP signature verification is enabled by default. To import a local Tor Expert Bundle, open Bundles → Import .tar.gz and select the exact archive matching this device's OS and architecture. A matching `.asc` file beside it is checked against the pinned Tor key when signature verification is enabled. An import without verified publisher signature is marked `LOCAL · UNSIGNED`, is never mislabeled as an HTTPS download, and requires an explicit trust confirmation before setting it as the default.

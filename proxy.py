@@ -384,8 +384,7 @@ def _route_for_host(host: str) -> str:
     if blocked.matches(normalized):
         return "blocked"
     if excluded.matches(normalized):
-        # A direct exclusion would defeat the system-wide Kill Switch.
-        return "blocked" if CONFIG["kill_switch_enabled"] else "direct"
+        return "direct"
     return "tor"
 
 
@@ -477,7 +476,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             host, port = _parse_authority(self.path)
             route = _route_for_host(host)
             if route == "blocked":
-                self.send_error(403, "Destination blocked by host policy or active Kill Switch")
+                self.send_error(403, "Destination blocked by host policy")
                 return
             remote = _connect_upstream(host, port, route, self.server.tor_socks_port)
             self.connection.settimeout(RELAY_IDLE_TIMEOUT_SECONDS)

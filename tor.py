@@ -9,7 +9,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
 
-from config import BUNDLE_DIR, CONFIG, IS_WINDOWS, IS_LINUX
+from config import BUNDLE_DIR, CONFIG, IS_WINDOWS
 from proxy import ProxyHandler, ThreadedHTTPServer, worker_data_usage_tracker
 from torproxy.paths import user_directories
 from torproxy.tor_manager import TorManager, TorManagerError, TorSettings
@@ -160,7 +160,6 @@ class TorRunner(QObject):
         self.geoip6_path: str | None = None
         self.path_set = False
         self.manager: TorManager | None = None
-        self.killswitch_manager = None
         self.app_window = None
         self._stopping = threading.Event()
         self._last_report: tuple[str, int | None, str] | None = None
@@ -210,9 +209,6 @@ class TorRunner(QObject):
             webtunnel_sni_imitation=str(CONFIG["webtunnel_sni_imitation"] or ""),
             max_circuit_dirtiness_seconds=max(10, min(86400, int(self.MaxCircuitDirtiness))),
             new_circuit_period_seconds=max(10, min(86400, int(self.NewCircuitPeriod))),
-            isolate_in_cgroup=bool(CONFIG["kill_switch_enabled"] and IS_LINUX),
-            cgroup_callback=(getattr(self.killswitch_manager, "set_tor_cgroup", None)
-                             if CONFIG["kill_switch_enabled"] and IS_LINUX else None),
         ))
 
     def generate_torcc(self):

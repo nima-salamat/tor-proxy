@@ -27,31 +27,67 @@ from typing import Any
 import psutil
 import requests
 
+from .network import NetworkRouteError, create_session
 from .paths import user_directories
 
 
-SING_BOX_VERSION = "1.14.4"
-SING_BOX_RELEASE = f"https://github.com/SagerNet/sing-box/releases/download/v{SING_BOX_VERSION}"
+SING_BOX_LATEST_VERSION = "1.14.4"
+# Only stable releases with reviewed platform SHA-256 digests can be installed.
+# New upstream versions remain visible in the UI but cannot execute until pinned here.
+SUPPORTED_SING_BOX_VERSIONS = ("1.14.4", "1.14.3", "1.14.2")
+SING_BOX_VERSION = SING_BOX_LATEST_VERSION
+SING_BOX_RELEASES_API = "https://api.github.com/repos/SagerNet/sing-box/releases/latest"
 TUN_INTERFACE_WINDOWS = "TorProxy"
 TUN_INTERFACE_LINUX = "torproxy-tun"
 MAX_ENGINE_ARCHIVE_BYTES = 64 * 1024 * 1024
 HELPER_START_TIMEOUT_SECONDS = 25.0
 HELPER_STOP_TIMEOUT_SECONDS = 15.0
 
-_ENGINE_ASSETS = {
-    ("Windows", "amd64"): {
-        "url": f"{SING_BOX_RELEASE}/sing-box-{SING_BOX_VERSION}-windows-amd64.zip",
-        "sha256": "99185d75d314a07dbba4a130c8ad986cbeb629a07927975636b341ca61f991df",
-        "archive": "zip",
-        "executable": "sing-box.exe",
+_SING_BOX_RELEASE_METADATA = {
+    "1.14.4": {"published_at": "2026-10-24T01:04:25Z", "asset_sizes": {"Windows": 32891280, "Linux": 32527188}},
+    "1.14.3": {"published_at": "2026-10-09T05:35:00Z", "asset_sizes": {"Windows": 32853953, "Linux": 32493273}},
+    "1.14.2": {"published_at": "2026-09-24T11:47:08Z", "asset_sizes": {"Windows": 32857903, "Linux": 32500990}},
+}
+
+_ENGINE_RELEASES = {
+    "1.14.4": {
+        ("Windows", "amd64"): {
+            "url": "https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-windows-amd64.zip",
+            "sha256": "99185d75d314a07dbba4a130c8ad986cbeb629a07927975636b341ca61f991df",
+            "archive": "zip", "executable": "sing-box.exe",
+        },
+        ("Linux", "x86_64"): {
+            "url": "https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-linux-amd64-glibc.tar.gz",
+            "sha256": "231e57c18378f780a08de832844a1ca9716e17a7bcf82964b350844d243c03ac",
+            "archive": "tar.gz", "executable": "sing-box",
+        },
     },
-    ("Linux", "x86_64"): {
-        "url": f"{SING_BOX_RELEASE}/sing-box-{SING_BOX_VERSION}-linux-amd64-glibc.tar.gz",
-        "sha256": "231e57c18378f780a08de832844a1ca9716e17a7bcf82964b350844d243c03ac",
-        "archive": "tar.gz",
-        "executable": "sing-box",
+    "1.14.3": {
+        ("Windows", "amd64"): {
+            "url": "https://github.com/SagerNet/sing-box/releases/download/v1.14.3/sing-box-1.14.3-windows-amd64.zip",
+            "sha256": "d8b86ef58936dba9230ec6a57ffa4243933f3c14ef4809828b6c553440ed1518",
+            "archive": "zip", "executable": "sing-box.exe",
+        },
+        ("Linux", "x86_64"): {
+            "url": "https://github.com/SagerNet/sing-box/releases/download/v1.14.3/sing-box-1.14.3-linux-amd64-glibc.tar.gz",
+            "sha256": "cadbaded70a635d0c37bf52614d8e3116542243247211e0b441328595c62acb6",
+            "archive": "tar.gz", "executable": "sing-box",
+        },
+    },
+    "1.14.2": {
+        ("Windows", "amd64"): {
+            "url": "https://github.com/SagerNet/sing-box/releases/download/v1.14.2/sing-box-1.14.2-windows-amd64.zip",
+            "sha256": "c2d8bfff918755808781dfdeeb8581b6c91eb3a243d9a7b55483cfc0c0684d32",
+            "archive": "zip", "executable": "sing-box.exe",
+        },
+        ("Linux", "x86_64"): {
+            "url": "https://github.com/SagerNet/sing-box/releases/download/v1.14.2/sing-box-1.14.2-linux-amd64-glibc.tar.gz",
+            "sha256": "5c7bc18461827b28d0e5ee7e89d33b276d3ff7c818531104c8e8d26d85b0656e",
+            "archive": "tar.gz", "executable": "sing-box",
+        },
     },
 }
+_ENGINE_ASSETS = _ENGINE_RELEASES[SING_BOX_VERSION]
 
 
 class SystemTunnelError(RuntimeError):
@@ -93,95 +129,6 @@ def _read_json(path: Path) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _apply_wfp_tun_exception(
-    helper: Path,
-    runner=subprocess.run,
-    *,
-    legacy_snapshot: Path | None = None,
-) -> bool:
-    """Add the live TorProxy adapter LUID to an already-active WFP policy."""
-    if not helper.is_file():
-        return False
-    try:
-        status = runner(
-            [str(helper), "status"],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise SystemTunnelError(f"Could not inspect the WFP kill switch before enabling the TUN interface: {exc}") from exc
-
-    status_text = (status.stdout or "").strip()
-    if status.returncode != 0:
-        raise SystemTunnelError(f"The WFP kill switch status check failed: {status_text[-1000:]}")
-    if status_text.startswith("INACTIVE"):
-        # Only an existing pre-WFP snapshot can justify relying on the legacy
-        # Windows Firewall interface-alias rule. Without it, the WFP policy
-        # disappeared between the UI preflight and this elevated helper.
-        if legacy_snapshot is not None and legacy_snapshot.is_file():
-            return False
-        raise SystemTunnelError(
-            "The WFP Kill Switch is no longer active; refusing to start the system tunnel."
-        )
-    if status_text.startswith("INCOMPLETE"):
-        raise SystemTunnelError(f"The WFP kill switch has an incomplete filter set: {status_text}")
-    if not status_text.startswith("ACTIVE"):
-        raise SystemTunnelError(f"The WFP kill switch returned an unknown status: {status_text}")
-
-    try:
-        update = runner(
-            [str(helper), "allow-tun"],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise SystemTunnelError(f"Could not add the exact TorProxy TUN interface exception to WFP: {exc}") from exc
-
-    update_text = (update.stdout or "").strip()
-    if update.returncode != 0 or "tun_interface_allowed=true" not in update_text:
-        raise SystemTunnelError(
-            "The TUN adapter exists, but WFP did not confirm its exact interface exception: "
-            f"{update_text[-1000:]}"
-        )
-    return True
-
-
-def _enable_windows_wfp_tun_exception(
-    *,
-    helper_path: Path | None = None,
-    legacy_snapshot: Path | None = None,
-) -> bool:
-    """Add the current TorProxy adapter LUID to the active WFP policy, if present."""
-    if os.name != "nt":
-        return False
-
-    state_root = user_directories().state
-    helper = helper_path or (
-        state_root / "killswitch" / "native" / "TorProxyWfpHelper.exe"
-    )
-    snapshot = legacy_snapshot or (
-        state_root / "killswitch" / "windows-firewall-snapshot.json"
-    )
-    # Older releases use a persistent Windows Firewall interface-alias rule.
-    # They do not have the native WFP helper, so leave that legacy rule alone.
-    if not helper.is_file():
-        if snapshot.is_file():
-            return False
-        raise SystemTunnelError(
-            "The native WFP recovery helper is missing; refusing to start a system tunnel "
-            "without verifying its interface exception."
-        )
-    return _apply_wfp_tun_exception(helper, legacy_snapshot=snapshot)
-
-
 def _interface_exists(name: str) -> bool:
     if os.name == "nt":
         return any(existing.casefold() == name.casefold() for existing in psutil.net_if_addrs())
@@ -218,25 +165,95 @@ def _process_matches(state: dict[str, Any]) -> psutil.Process | None:
 class SystemTunnelManager:
     """Install and supervise sing-box without changing the user's system proxy."""
 
-    def __init__(self, directories=None):
+    def __init__(self, directories=None, version: str | None = None):
         self.directories = directories or user_directories()
         self.runtime_dir = self.directories.data / "system-tunnel"
         self.engine_dir = self.runtime_dir / "engine"
         self.state_dir = self.directories.state / "system-tunnel"
         self.engine_path = self.engine_dir / ("sing-box.exe" if os.name == "nt" else "sing-box")
         self.install_manifest = self.runtime_dir / "engine.json"
-        self.archive_path = self.runtime_dir / f"sing-box-{SING_BOX_VERSION}-{platform.system().lower()}.archive"
         self.config_path = self.state_dir / "sing-box.json"
         self.process_state_path = self.state_dir / "sing-box-process.json"
         self.log_path = self.directories.logs / "system-tunnel.log"
+        manifest = _read_json(self.install_manifest)
+        saved_version = str(manifest.get("version", "")) if manifest else ""
+        self.version = version or (
+            saved_version if saved_version in SUPPORTED_SING_BOX_VERSIONS else SING_BOX_LATEST_VERSION
+        )
+        self.archive_path = self._archive_path_for(self.version)
         self._install_state_cache: tuple[tuple[str, int, int], ...] | None = None
         self._install_state_result = False
+
+    def _archive_path_for(self, version: str) -> Path:
+        return self.runtime_dir / f"sing-box-{version}-{platform.system().lower()}.archive"
+
+    @property
+    def installed_version(self) -> str | None:
+        manifest = _read_json(self.install_manifest)
+        version = str(manifest.get("version", "")) if manifest else ""
+        return version if version in SUPPORTED_SING_BOX_VERSIONS else None
+
+    @staticmethod
+    def supported_versions() -> tuple[str, ...]:
+        return SUPPORTED_SING_BOX_VERSIONS
+
+    @staticmethod
+    def release_metadata(version: str) -> dict[str, Any]:
+        if version not in _SING_BOX_RELEASE_METADATA:
+            raise SystemTunnelError(f"Unsupported sing-box version: {version}")
+        return {"version": version, **_SING_BOX_RELEASE_METADATA[version]}
+
+    def select_version(self, version: str) -> None:
+        if version not in SUPPORTED_SING_BOX_VERSIONS:
+            raise SystemTunnelError(
+                "That sing-box version has not been pinned and verified by this TorProxy release."
+            )
+        if self.is_running() and version != self.version:
+            raise SystemTunnelError("Stop the active system tunnel before changing its engine version.")
+        self.version = version
+        self.archive_path = self._archive_path_for(version)
+        self._install_state_cache = None
+        self._install_state_result = False
+
+    @staticmethod
+    def check_latest_release(
+        proxy_url: str | None = None,
+        *,
+        allow_direct: bool = False,
+    ) -> dict[str, Any]:
+        session = None
+        try:
+            session = create_session(proxy_url, allow_direct=allow_direct)
+            response = session.get(
+                SING_BOX_RELEASES_API, timeout=(8, 12),
+                headers={"Accept": "application/vnd.github+json", "User-Agent": "TorProxy-System-Tunnel"},
+            )
+            response.raise_for_status()
+            release = response.json()
+            if not isinstance(release, dict):
+                raise SystemTunnelError("GitHub returned an invalid release response.")
+        except NetworkRouteError as exc:
+            raise SystemTunnelError(f"Could not select a safe release-check route: {exc}") from exc
+        except (requests.RequestException, ValueError, AttributeError) as exc:
+            raise SystemTunnelError(f"Could not check the latest sing-box release: {exc}") from exc
+        finally:
+            if session is not None:
+                session.close()
+        tag = str(release.get("tag_name", "")).removeprefix("v")
+        if release.get("draft") or release.get("prerelease") or not tag:
+            raise SystemTunnelError("GitHub did not return a stable sing-box release.")
+        return {
+            "version": tag,
+            "published_at": str(release.get("published_at", "")),
+            "url": str(release.get("html_url", "https://github.com/SagerNet/sing-box/releases")),
+            "supported": tag in SUPPORTED_SING_BOX_VERSIONS,
+        }
 
     @property
     def platform_asset(self) -> dict[str, str]:
         system = platform.system()
         machine = platform.machine().lower()
-        asset = _ENGINE_ASSETS.get((system, machine))
+        asset = _ENGINE_RELEASES.get(self.version, {}).get((system, machine))
         if asset is None:
             supported = "Windows x64 and glibc-based Linux x86_64"
             raise SystemTunnelError(
@@ -268,7 +285,7 @@ class SystemTunnelManager:
 
     def is_installed(self) -> bool:
         manifest = _read_json(self.install_manifest)
-        if not manifest or manifest.get("version") != SING_BOX_VERSION:
+        if not manifest or manifest.get("version") != self.version:
             self._install_state_cache = None
             self._install_state_result = False
             return False
@@ -325,8 +342,17 @@ class SystemTunnelManager:
             self._install_state_result = False
             return False
 
-    def install_engine(self) -> str:
-        """Download a pinned upstream archive, verify it, and atomically install its runtime files."""
+    def install_engine(
+        self,
+        version: str | None = None,
+        progress_callback=None,
+        *,
+        proxy_url: str | None = None,
+        allow_direct: bool = False,
+    ) -> str:
+        """Download a pinned release through Tor or an explicitly authorized direct route."""
+        if version is not None:
+            self.select_version(version)
         if self.is_running():
             raise SystemTunnelError("Stop the active system tunnel before updating its engine.")
         asset = self.platform_asset
@@ -334,10 +360,14 @@ class SystemTunnelManager:
         staged_archive = self.runtime_dir / f".sing-box-{uuid.uuid4().hex}.archive"
         staged_dir = self.runtime_dir / f".engine-stage-{uuid.uuid4().hex}"
         backup_dir = self.runtime_dir / f".engine-backup-{uuid.uuid4().hex}"
+        session = None
         try:
+            session = create_session(proxy_url, allow_direct=allow_direct)
             total = 0
             digest = hashlib.sha256()
-            with requests.get(
+            if progress_callback:
+                progress_callback("download", 0, 0, f"Downloading sing-box {self.version}…")
+            with session.get(
                 asset["url"], stream=True, timeout=(15, 45),
                 headers={"User-Agent": "TorProxy-System-Tunnel"},
             ) as response:
@@ -354,11 +384,15 @@ class SystemTunnelManager:
                             raise SystemTunnelError("The sing-box release archive exceeded the size limit.")
                         digest.update(chunk)
                         output.write(chunk)
+                        if progress_callback:
+                            progress_callback("download", total, int(declared or 0), "Downloading official sing-box archive…")
                     output.flush()
                     os.fsync(output.fileno())
             archive_digest = digest.hexdigest()
             if archive_digest != asset["sha256"]:
                 raise SystemTunnelError("sing-box archive SHA-256 verification failed.")
+            if progress_callback:
+                progress_callback("verify", total, total, "Archive SHA-256 verified; checking runtime files…")
 
             staged_dir.mkdir(mode=0o700)
             if asset["archive"] == "zip":
@@ -375,11 +409,13 @@ class SystemTunnelManager:
                 text=True, timeout=10, check=False,
             )
             version_text = (version.stdout or "").strip()
-            if version.returncode != 0 or SING_BOX_VERSION not in version_text:
+            if version.returncode != 0 or self.version not in version_text:
                 raise SystemTunnelError(
-                    f"The downloaded engine did not report the expected version {SING_BOX_VERSION}: "
+                    f"The downloaded engine did not report the expected version {self.version}: "
                     f"{version_text[:240]}"
                 )
+            if progress_callback:
+                progress_callback("install", total, total, f"Verified sing-box {self.version}; installing engine files…")
 
             if self.engine_dir.exists():
                 os.replace(self.engine_dir, backup_dir)
@@ -389,7 +425,7 @@ class SystemTunnelManager:
                 _atomic_json(
                     self.install_manifest,
                     {
-                        "version": SING_BOX_VERSION,
+                        "version": self.version,
                         "archive_sha256": archive_digest,
                         "source": asset["url"],
                         "files": files,
@@ -405,10 +441,16 @@ class SystemTunnelManager:
                 shutil.rmtree(backup_dir, ignore_errors=True)
             self._install_state_cache = None
             self._install_state_result = False
-            return f"sing-box {SING_BOX_VERSION} installed; archive and runtime files verified."
+            if progress_callback:
+                progress_callback("complete", total, total, f"sing-box {self.version} installed and verified.")
+            return f"sing-box {self.version} installed; archive and runtime files verified."
+        except NetworkRouteError as exc:
+            raise SystemTunnelError(f"Could not select a safe sing-box download route: {exc}") from exc
         except requests.RequestException as exc:
             raise SystemTunnelError(f"Could not download sing-box: {exc}") from exc
         finally:
+            if session is not None:
+                session.close()
             staged_archive.unlink(missing_ok=True)
             if staged_dir.exists():
                 shutil.rmtree(staged_dir, ignore_errors=True)
@@ -732,6 +774,7 @@ class SystemTunnelManager:
             pkexec,
             *self._helper_base(),
             action,
+            "--version", self.version,
             "--engine", str(self.engine_path),
             "--config", str(self.config_path),
             "--state", str(self.process_state_path),
@@ -768,6 +811,7 @@ class SystemTunnelManager:
         result_path.unlink(missing_ok=True)
         command = [
             action,
+            "--version", self.version,
             "--engine", str(self.engine_path),
             "--config", str(self.config_path),
             "--state", str(self.process_state_path),
@@ -856,9 +900,11 @@ def _helper_start(args: Any) -> dict[str, Any]:
     config_path = Path(args.config).resolve()
     state_path = Path(args.state).resolve()
     log_path = Path(args.log).resolve()
-    expected_asset = _ENGINE_ASSETS.get((platform.system(), platform.machine().lower()))
+    expected_asset = _ENGINE_RELEASES.get(str(getattr(args, "version", "")), {}).get(
+        (platform.system(), platform.machine().lower())
+    )
     if expected_asset is None:
-        raise SystemTunnelError("The privileged helper does not support this platform.")
+        raise SystemTunnelError("The privileged helper rejected an unsupported or unpinned sing-box version/platform.")
     expected_executable = expected_asset["executable"]
     expected_interface = TUN_INTERFACE_WINDOWS if os.name == "nt" else TUN_INTERFACE_LINUX
     if args.interface != expected_interface or engine.name != expected_executable or engine.parent.name != "engine":
@@ -866,7 +912,7 @@ def _helper_start(args: Any) -> dict[str, Any]:
     if args.archive_type != expected_asset["archive"] or args.archive_sha256 != expected_asset["sha256"]:
         raise SystemTunnelError("The privileged helper rejected unpinned archive metadata.")
     archive = Path(args.archive).resolve()
-    expected_archive_name = f"sing-box-{SING_BOX_VERSION}-{platform.system().lower()}.archive"
+    expected_archive_name = f"sing-box-{args.version}-{platform.system().lower()}.archive"
     if archive.name != expected_archive_name or not archive.is_file():
         raise SystemTunnelError("The privileged helper rejected an unexpected sing-box archive path.")
     if _sha256(archive) != expected_asset["sha256"]:
@@ -1040,34 +1086,6 @@ def _helper_start(args: Any) -> dict[str, Any]:
             if process.poll() is not None or _process_matches(record) is None:
                 state_path.unlink(missing_ok=True)
                 raise SystemTunnelError("sing-box did not remain healthy after creating its TUN interface.")
-            try:
-                if os.name == "nt":
-                    state_root = Path(args.state).resolve().parent.parent
-                    _enable_windows_wfp_tun_exception(
-                        helper_path=state_root / "killswitch" / "native" / "TorProxyWfpHelper.exe",
-                        legacy_snapshot=state_root / "killswitch" / "windows-firewall-snapshot.json",
-                    )
-            except SystemTunnelError as exc:
-                # This helper already runs with the administrator token. Install
-                # the interface-LUID exception here, after Wintun has created the
-                # adapter, so startup needs no second UAC prompt.
-                try:
-                    _stop_verified_process(psutil.Process(process.pid), record)
-                    cleanup_deadline = time.monotonic() + 5.0
-                    while _interface_exists(args.interface) and time.monotonic() < cleanup_deadline:
-                        time.sleep(0.1)
-                    if _interface_exists(args.interface):
-                        raise SystemTunnelError(
-                            "WFP rejected the TUN exception and sing-box stopped, but the adapter remains."
-                        )
-                    state_path.unlink(missing_ok=True)
-                except Exception as cleanup_error:
-                    raise SystemTunnelError(
-                        "WFP rejected the TUN exception and the tunnel could not be fully rolled back; "
-                        "the Kill Switch remains active. "
-                        f"Original error: {exc}; cleanup error: {cleanup_error}"
-                    ) from cleanup_error
-                raise
             return {"ok": True, "active": True, "pid": process.pid, "detail": "System TUN interface is active."}
         time.sleep(0.25)
 
@@ -1150,7 +1168,7 @@ def _stop_verified_process(process: psutil.Process, state: dict[str, Any]) -> No
             return
 
     # Last resort is deliberately identity-checked and followed by a TUN
-    # interface disappearance check before the Kill Switch can be released.
+    # interface disappearance check before reporting the tunnel stopped.
     current = _process_matches(state)
     if current is None or current.pid != process.pid:
         raise SystemTunnelError("The tunnel process identity changed while stopping; refusing to terminate it.")
@@ -1197,7 +1215,7 @@ def _helper_stop(state_path: Path, interface_name: str) -> dict[str, Any]:
     if _interface_exists(interface_name):
         raise SystemTunnelError(
             f"sing-box stopped, but the {interface_name} adapter is still present. "
-            "TorProxy retained the process record and Kill Switch so the adapter is not treated as a safe disconnect."
+            "TorProxy retained the process record because route removal could not be verified."
         )
     state_path.unlink(missing_ok=True)
     return {"ok": True, "active": False, "detail": "System tunnel stopped; sing-box released its TUN routes."}
@@ -1209,6 +1227,7 @@ def system_tunnel_helper_main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(prog="torproxy-system-tunnel-helper")
     parser.add_argument("action", choices=("start", "stop"))
+    parser.add_argument("--version", required=True)
     parser.add_argument("--engine", required=True)
     parser.add_argument("--config", required=True)
     parser.add_argument("--state", required=True)

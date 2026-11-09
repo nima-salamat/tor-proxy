@@ -261,12 +261,12 @@ def test_http_request_is_forwarded_through_socks_with_remote_dns(monkeypatch, ca
 
 
 
-def test_direct_exclusions_are_blocked_while_kill_switch_is_enabled(monkeypatch):
+def test_legacy_kill_switch_preference_does_not_change_direct_exclusion_routing(monkeypatch):
     monkeypatch.setattr(proxy_module, "_blocked_rules", HostRules())
     monkeypatch.setattr(
         proxy_module, "_excluded_rules", HostRules.from_values(["*.example"])
     )
     monkeypatch.setitem(proxy_module.CONFIG.data, "kill_switch_enabled", True)
 
-    assert proxy_module._route_for_host("safe.example") == "blocked"
+    assert proxy_module._route_for_host("safe.example") == "direct"
     assert proxy_module._route_for_host("unlisted.example.net") == "tor"
