@@ -366,11 +366,13 @@ def test_windows_saved_local_allow_rules_map_internal_ids_to_com_friendly_names(
     assert "$rules.Item([string]$friendlyName)" in helper
     assert "$rule.Name -ine [string]$friendlyName" in helper
     assert "$rule.Enabled = [bool]$enabled" in helper
-    assert "Multiple saved firewall rules share the COM friendly name" in helper
-    assert "Get-NetFirewallRule" in helper
-    assert "Set-NetFirewallRule" not in helper
-    assert "Saved firewall rule ID" in helper
+    assert "$comNameCounts[$candidateName]++" in helper
+    assert "$duplicateChangeIds.ToArray()" in helper
+    assert "Set-NetFirewallRule -PolicyStore PersistentStore -Name ($duplicateChangeIds.ToArray()) -Enabled $enabledValue" in helper
+    assert "Get-NetFirewallRule -PolicyStore PersistentStore -Name $duplicateIds" in helper
     assert "FinalReleaseComObject" in helper
+    assert "Set-NetFirewallRule" in helper
+    assert "Multiple saved firewall rules share the COM friendly name" not in helper
 
     activation_start = _POWERSHELL.index("if ($Action -eq 'activate')")
     activation_end = _POWERSHELL.index("elseif ($Action -eq 'deactivate')", activation_start)
@@ -382,7 +384,6 @@ def test_windows_saved_local_allow_rules_map_internal_ids_to_com_friendly_names(
     recovery_script = _POWERSHELL[recovery_start:recovery_end]
     assert "Set-SnapshotLocalRulesEnabled $snapshot $true" in recovery_script
 
-
 def test_windows_profile_updates_use_netsecurity_enum_strings():
     assert "function Set-SnapshotProfile($saved)" in _POWERSHELL
     assert "$enabledValue = if ([bool]$saved.Enabled) { 'True' } else { 'False' }" in _POWERSHELL
@@ -391,22 +392,21 @@ def test_windows_profile_updates_use_netsecurity_enum_strings():
     assert _POWERSHELL.count("Set-SnapshotProfile $saved") == 2
 
 
-def test_windows_saved_rule_updates_use_com_friendly_names_after_internal_id_resolution():
+def test_windows_saved_rule_updates_handle_duplicate_friendly_names_by_guid():
     start = _POWERSHELL.index("function Set-SnapshotLocalRulesEnabled")
     end = _POWERSHELL.index("function Set-SnapshotProfile", start)
     helper = _POWERSHELL[start:end]
 
-    assert "Get-NetFirewallRule -PolicyStore PersistentStore -Name $names" in helper
-    assert "$netRule.Name" in helper
-    assert "$netRule.DisplayName" in helper
+    assert "$expectedByFriendlyName[$friendlyName]" in helper
+    assert "$comNameCounts" in helper
+    assert "$duplicateRuleIds.Add([string]$entry.InternalName)" in helper
+    assert "Set-NetFirewallRule -PolicyStore PersistentStore -Name ($duplicateChangeIds.ToArray())" in helper
+    assert "$enabledValue = if ($enabled) { 'True' } else { 'False' }" in helper
+    assert "Duplicate-name firewall rule $id did not reach the requested Enabled state." in helper
     assert "$rules.Item([string]$friendlyName)" in helper
     assert "[int]$rule.Direction -ne 2" in helper
     assert "[int]$rule.Action -ne 1" in helper
-    assert "$rule.Enabled = [bool]$enabled" in helper
-    assert "FinalReleaseComObject" in helper
-    assert "Multiple saved firewall rules share the COM friendly name" in helper
-    assert "Windows Firewall COM updated" in helper
-
+    assert "Windows Firewall updated" in helper
 
 def test_windows_helper_reports_the_current_phase_without_affecting_firewall_work():
     assert "function Set-Phase([string]$phase)" in _POWERSHELL
