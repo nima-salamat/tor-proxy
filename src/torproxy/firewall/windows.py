@@ -211,7 +211,11 @@ function Set-SnapshotLocalRulesEnabled($snapshot, [bool]$enabled) {
             $entries = @($expectedByFriendlyName[$friendlyName])
             $comCount = if ($comNameCounts.ContainsKey([string]$friendlyName)) { [int]$comNameCounts[[string]$friendlyName] } else { 0 }
 
-            if ($entries.Count -gt 1 -or $comCount -gt 1) {
+            # COM lookup is safe only when the exact friendly name was
+            # observed exactly once in the COM collection. Zero matches means
+            # the rule is NetSecurity-only (for example, a package/AppContainer
+            # rule); more than one means the friendly name is ambiguous.
+            if ($entries.Count -gt 1 -or $comCount -ne 1) {
                 foreach ($entry in $entries) {
                     $duplicateRuleIds.Add([string]$entry.InternalName)
                     if ([bool]$entry.Enabled -ne $enabled) {
