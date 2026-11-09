@@ -320,7 +320,7 @@ def test_updates_nav_icon_and_text_follow_only_the_active_updates_page(monkeypat
 
 
 def test_updates_dropdown_chevron_uses_explicit_theme_foreground(qt_app):
-    from PySide6.QtGui import QColor, QImage
+    from PySide6.QtGui import QImage
     from PySide6.QtWidgets import QMenu
     from PySide6.QtCore import Qt
     import ui
@@ -341,7 +341,7 @@ def test_updates_dropdown_chevron_uses_explicit_theme_foreground(qt_app):
         image = QImage(button.size(), QImage.Format.Format_ARGB32)
         image.fill(Qt.GlobalColor.transparent)
         button.render(image)
-        return image.pixelColor(button.width() - 11, button.height() // 2 + 2)
+        return image.pixelColor(button.width() - 12, button.rect().center().y() + 2)
 
     dark_text_pixel = rendered_chevron_pixel()
     assert dark_text_pixel.red() < 70
