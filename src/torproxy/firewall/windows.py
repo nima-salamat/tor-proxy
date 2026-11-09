@@ -591,7 +591,8 @@ try {
     if ($Action -eq 'status' -and -not (Test-Path -LiteralPath $SnapshotPath)) {
         $detail = Invoke-WfpHelper 'status'
         $active = $detail.StartsWith('ACTIVE', [System.StringComparison]::OrdinalIgnoreCase)
-        Write-Result @{ ok = $true; active = $active; verified = $true; backend = 'WFP'; detail = $detail }
+        $verified = $active -or $detail.StartsWith('INACTIVE', [System.StringComparison]::OrdinalIgnoreCase)
+        Write-Result @{ ok = $true; active = $active; verified = $verified; backend = 'WFP'; detail = $detail }
         return
     }
 
