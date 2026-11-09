@@ -170,7 +170,7 @@ function Set-SnapshotLocalRulesEnabled($snapshot, [bool]$enabled) {
         # A missing rule may have been removed by the administrator since the
         # snapshot was taken. That is safe to skip; zero matches is not verifiable.
         if ($matched -eq 0 -and $names.Count -gt 0) {
-            throw "None of the {0} saved firewall rules were found in the Windows Firewall COM collection; the update could not be verified." -f $names.Count
+            throw ("None of the {0} saved firewall rules were found in the Windows Firewall COM collection; the update could not be verified." -f $names.Count)
         }
         Set-Phase ("Windows Firewall COM updated {0} rules ({1} matched) in {2:N1}s." -f $changed, $matched, $timer.Elapsed.TotalSeconds)
     }
