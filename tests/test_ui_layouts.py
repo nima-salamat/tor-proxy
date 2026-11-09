@@ -33,6 +33,80 @@ def _message_handler_capture():
     return warnings, previous, qInstallMessageHandler
 
 
+def test_settings_navigation_icons_follow_the_selected_page_and_theme(monkeypatch):
+    from types import MethodType, SimpleNamespace
+    import ui_.window.setting_window as settings
+
+    class _PageStack:
+        def __init__(self):
+            self.current = 0
+
+        def count(self):
+            return 4
+
+        def setCurrentIndex(self, index):
+            self.current = index
+
+    class _Button:
+        def __init__(self, checked=False):
+            self.checked = checked
+            self.icon = None
+
+        def setChecked(self, checked):
+            self.checked = checked
+
+        def isChecked(self):
+            return self.checked
+
+        def setIcon(self, icon):
+            self.icon = icon
+
+    buttons = [_Button(index == 0) for index in range(4)]
+    fake = SimpleNamespace(
+        page_setting=_PageStack(),
+        settings_nav_buttons=buttons,
+        settings_nav_icon_names=(
+            "fa6s.sliders", "fa6s.link", "fa6s.network-wired", "fa6s.shield-halved"
+        ),
+    )
+    fake._sync_settings_nav_icons = MethodType(
+        settings.SettingWindow._sync_settings_nav_icons, fake
+    )
+    monkeypatch.setattr(settings, "CONFIG", {"mode": "light"})
+    monkeypatch.setattr(settings.qta, "icon", lambda name, color: (name, color))
+
+    # Changing tabs must recolor both the new active icon and the old inactive one.
+    settings.SettingWindow._set_settings_page(fake, 1)
+    assert fake.page_setting.current == 1
+    assert [button.checked for button in buttons] == [False, True, False, False]
+    assert buttons[0].icon == ("fa6s.sliders", "#243143")
+    assert buttons[1].icon == ("fa6s.link", "#ffffff")
+
+    # Returning to General restores its active white icon.
+    settings.SettingWindow._set_settings_page(fake, 0)
+    assert [button.checked for button in buttons] == [True, False, False, False]
+    assert buttons[0].icon == ("fa6s.sliders", "#ffffff")
+    assert buttons[1].icon == ("fa6s.link", "#243143")
+
+    # Theme changes retain the active/inactive distinction.
+    settings.SettingWindow._sync_settings_nav_icons(fake, "dark")
+    assert buttons[0].icon == ("fa6s.sliders", "#ffffff")
+    assert buttons[1].icon == ("fa6s.link", "#f3f6fa")
+
+
+def test_bundle_primary_action_icons_follow_button_text_in_both_themes():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/updater_window.py").read_text(encoding="utf-8")
+    start = source.index("def _apply_local_styles")
+    end = source.index("def _copy_bundle_source_url", start)
+    styles = source[start:end]
+
+    assert 'QPushButton#primaryButton {{ font-weight: 650; color: {text}; }}' in styles
+    assert 'self.btn_get_versions.setIcon(qta.icon("fa6s.arrows-rotate", color=text))' in styles
+    assert 'self.btn_set_default_version.setIcon(qta.icon("fa6s.check", color=text))' in styles
+    assert 'self.btn_retry.setIcon(qta.icon("fa6s.rotate-right", color=text))' in styles
+
+
 def test_settings_and_main_window_construct_without_duplicate_layout_warning(qt_app, monkeypatch):
     try:
         import ui
