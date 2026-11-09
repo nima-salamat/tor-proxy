@@ -234,7 +234,7 @@ def test_updates_navigation_keeps_theme_text_color_on_hover():
 
 
 
-def test_updates_nav_icon_tracks_active_pages_and_theme(monkeypatch):
+def test_updates_nav_icon_tracks_active_pages_theme_and_menu_state(monkeypatch):
     pytest.importorskip("qtawesome")
     from types import SimpleNamespace
     import ui
@@ -248,11 +248,20 @@ def test_updates_nav_icon_tracks_active_pages_and_theme(monkeypatch):
 
     class _Button:
         icon = None
+        checked = False
 
         def setIcon(self, icon):
             self.icon = icon
 
-    fake = SimpleNamespace(stack=_Stack(4), updates_nav_button=_Button())
+        def setChecked(self, checked):
+            self.checked = checked
+
+    fake = SimpleNamespace(
+        stack=_Stack(4),
+        updates_nav_button=_Button(),
+        _updates_menu_open=False,
+    )
+    monkeypatch.setattr(ui, "CONFIG", {"mode": "light"})
     monkeypatch.setattr(ui.qta, "icon", lambda name, color: (name, color))
 
     ui.Window._sync_updates_nav_icon(fake, "light")
@@ -266,8 +275,39 @@ def test_updates_nav_icon_tracks_active_pages_and_theme(monkeypatch):
     ui.Window._sync_updates_nav_icon(fake, "light")
     assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-down", "#202832")
 
+    ui.Window._on_updates_menu_about_to_show(fake)
+    assert fake._updates_menu_open is True
+    assert fake.updates_nav_button.checked is True
+    assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-up", "#202832")
+
+    fake.stack.page = 4
+    ui.Window._sync_updates_nav_icon(fake, "light")
+    assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-up", "#ffffff")
+
+    ui.Window._on_updates_menu_about_to_hide(fake)
+    assert fake._updates_menu_open is False
+    assert fake.updates_nav_button.checked is True
+    assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-down", "#ffffff")
+
+    fake.stack.page = 0
+    ui.Window._on_updates_menu_about_to_hide(fake)
+    assert fake.updates_nav_button.checked is False
     ui.Window._sync_updates_nav_icon(fake, "dark")
     assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-down", "#eff1f4")
+
+
+def test_updates_menu_initialization_avoids_undefined_mode_and_tracks_popup_state():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui.py").read_text(encoding="utf-8")
+    menu_builder = source[source.index("def _createMenuBar"):source.index("def _show_notifications")]
+
+    assert 'self._sync_updates_nav_icon()' in menu_builder
+    assert 'self._sync_updates_nav_icon(mode)' not in menu_builder
+    assert 'self.updates_menu.aboutToShow.connect(self._on_updates_menu_about_to_show)' in menu_builder
+    assert 'self.updates_menu.aboutToHide.connect(self._on_updates_menu_about_to_hide)' in menu_builder
+    assert 'def _on_updates_menu_about_to_show(self):' in source
+    assert 'def _on_updates_menu_about_to_hide(self):' in source
+    assert 'icon_name = "fa6s.cloud-arrow-up" if menu_open else "fa6s.cloud-arrow-down"' in source
 
 
 def test_manage_proxy_disable_dispatches_explicit_clear_to_the_current_platform(monkeypatch):
