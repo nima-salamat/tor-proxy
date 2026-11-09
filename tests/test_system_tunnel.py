@@ -111,7 +111,7 @@ def test_system_tunnel_config_applies_saved_host_policy_before_default_tor_route
         "action": "reject",
         "method": "drop",
     }
-    assert rules[4] == {"action": "sniff"}
+    assert rules[4] == {"network": "tcp", "action": "sniff"}
 
     blocked = rules[5:11]
     excluded = rules[11:13]
