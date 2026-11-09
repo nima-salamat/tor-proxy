@@ -1137,6 +1137,8 @@ def test_legacy_kill_switch_ui_and_tunnel_dependency_are_removed():
     assert "TunnelManagerWindow" in shell_source
     assert '("Tunnel"' not in shell_source
     assert "updates_nav_button" in shell_source
+    assert "self.page_nav_group.setExclusive(False)" in shell_source
+    assert "self.page_nav_group.setExclusive(True)" in shell_source
     assert "def _show_tunnel_page(self)" in shell_source
 
 def test_home_tunnel_controls_start_and_stop_installed_engine_without_showing_manage():
