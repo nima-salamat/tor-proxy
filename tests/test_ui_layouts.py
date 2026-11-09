@@ -1978,3 +1978,13 @@ def test_open_browser_action_button_colors_follow_the_active_theme():
     assert "color: #ffffff;" in dark_css
     assert "background: #287db5;" in dark_css
     assert "background: #236b9b;" in dark_css
+
+
+def test_disabled_home_action_text_uses_the_theme_muted_foreground():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+
+    assert 'self.btn_open_browser.setObjectName("secondaryAction")' in source
+    assert 'self.btn_open_browser.setEnabled(False)' in source
+    assert "QPushButton#secondaryAction:disabled {{ color: {muted}; }}" in source
+    assert 'muted = "#aab4c1" if dark else "#667386"' in source
