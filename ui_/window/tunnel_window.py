@@ -369,13 +369,26 @@ class TunnelManagerWindow(QWidget):
         else:
             self.installed_state.setText("Not installed · Download the selected engine to enable the tunnel.")
 
-        self.versions_list.setEnabled(not self._busy and not status.get("active"))
-        tor_ready = bool(self.proxy and self.proxy.running and self.proxy.connected)
+        proxy_busy = bool(
+            self.proxy
+            and (
+                getattr(self.proxy, "_system_tunnel_busy", False)
+                or getattr(self.proxy, "_stopping", False)
+                or getattr(self.proxy, "_connect_operation_busy", False)
+            )
+        )
+        self.versions_list.setEnabled(
+            not self._busy and not proxy_busy and not status.get("active")
+        )
+        tor_ready = bool(
+            self.proxy and self.proxy.running and self.proxy.connected and not proxy_busy
+        )
         self.btn_test_connection.setEnabled(
-            not self._busy and bool(status.get("active")) and tor_ready
+            not self._busy and not proxy_busy and bool(status.get("active")) and tor_ready
         )
         self.btn_install.setEnabled(
-            self._platform_supported and not self._busy and not status.get("active") and not selected_installed
+            self._platform_supported and not self._busy and not proxy_busy
+            and not status.get("active") and not selected_installed
         )
         self.btn_install.setText(
             "Update selected version" if installed_version and selected_version != installed_version
@@ -384,7 +397,7 @@ class TunnelManagerWindow(QWidget):
 
         if status.get("active") or not status.get("verified", True):
             self.btn_start_stop.setText("Stop / reconcile tunnel")
-            self.btn_start_stop.setEnabled(not self._busy)
+            self.btn_start_stop.setEnabled(not self._busy and not proxy_busy)
         elif not self._platform_supported:
             self.btn_start_stop.setText("Unsupported platform")
             self.btn_start_stop.setEnabled(False)
@@ -526,6 +539,14 @@ class TunnelManagerWindow(QWidget):
 
     def toggle_tunnel(self) -> None:
         if self._busy or self.manager is None or self.proxy is None:
+            return
+        if (
+            getattr(self.proxy, "_system_tunnel_busy", False)
+            or getattr(self.proxy, "_stopping", False)
+            or getattr(self.proxy, "_connect_operation_busy", False)
+        ):
+            self.status.setText("Wait for the current Tor or tunnel recovery operation to finish.")
+            self._refresh_state()
             return
         state = self.manager.status()
         if state.get("active") or not state.get("verified", True):
