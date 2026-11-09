@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
-    QMessageBox,
     QProgressBar,
     QPushButton,
     QSizePolicy,
@@ -22,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from config import CONFIG
+from ui_.window.dialogs import QMessageBox
 from torproxy.network import tor_socks_proxy_url
 from torproxy.system_tunnel import (
     SING_BOX_LATEST_VERSION,
