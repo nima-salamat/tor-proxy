@@ -60,7 +60,8 @@ def test_system_tunnel_config_uses_tcp_tor_socks_and_hijacks_dns(tmp_path, monke
         "method": "drop",
     }
     assert rules[4] == {"network": "udp", "action": "reject", "method": "default"}
-    assert config["route"]["final"] == "tor-socks"
+    assert rules[5] == {"network": "tcp", "action": "route", "outbound": "tor-socks"}
+    assert config["route"]["final"] == "block"
 
 
 
@@ -300,6 +301,10 @@ def test_windows_tun_config_is_ipv4_only_and_uses_gvisor_stack(tmp_path, monkeyp
         "action": "reject",
         "method": "drop",
     }
+    assert config["route"]["rules"][5] == {
+        "network": "tcp", "action": "route", "outbound": "tor-socks"
+    }
+    assert config["route"]["final"] == "block"
     system_config = manager.build_config(9150, tor_executables=[tor], tun_stack="system")
     assert system_config["inbounds"][0]["stack"] == "system"
     assert system_config["inbounds"][0]["address"] == ["172.19.0.1/30"]
