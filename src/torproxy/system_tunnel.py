@@ -331,7 +331,7 @@ class SystemTunnelManager:
         else:
             if not allow_unpinned or not isinstance(release_asset, dict):
                 raise SystemTunnelError(
-                    "This sing-box version is not pinned in TorProxy. Check the official GitHub release and explicitly accept its warning first."
+                    "That sing-box version has not been pinned in this TorProxy build. Check the official GitHub release and explicitly accept its warning first."
                 )
             selected_asset = _normalize_upstream_asset(version, release_asset)
         if self.is_running() and version != self.version:
