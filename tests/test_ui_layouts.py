@@ -26,6 +26,9 @@ def test_exit_button_icon_tracks_hover_foreground_and_theme(monkeypatch):
         _hover_icon_color = "#ffffff"
         _hovered = False
 
+        def _sync_icon(self):
+            ui.HoverIconButton._sync_icon(self)
+
         def setIcon(self, icon):
             self.icon = icon
 
@@ -409,6 +412,7 @@ def test_updates_nav_icon_and_text_follow_only_the_active_updates_page(monkeypat
         stack=_Stack(4),
         updates_nav_button=_Button(),
     )
+    fake._sync_updates_nav_icon = lambda mode=None: ui.Window._sync_updates_nav_icon(fake, mode)
     monkeypatch.setattr(ui, "CONFIG", {"mode": "light"})
     monkeypatch.setattr(ui.qta, "icon", lambda name, color: (name, color))
 
@@ -551,7 +555,10 @@ def test_updates_menu_initialization_avoids_undefined_mode_and_tracks_popup_stat
     assert "_updates_menu_open" not in source
     assert "QPushButton#topNavButton, QToolButton#updatesNavButton {{" in source
     assert "QToolButton#updatesNavButton::menu-button" not in source
-    assert "QToolButton#updatesNavButton::menu-indicator" not in source
+    # Qt's native arrow is explicitly disabled because UpdatesMenuButton paints
+    # its own state-aware chevron in paintEvent().
+    assert "QToolButton#updatesNavButton::menu-indicator {{" in source
+    assert "image: none;" in source
 
 
 def test_manage_proxy_disable_dispatches_explicit_clear_to_the_current_platform(monkeypatch):
@@ -710,7 +717,7 @@ def test_theme_switch_is_animated_and_exit_confirmation_is_persistent():
     assert 'self.theme_mode_buttons = {}' in settings_source
     assert '("system", "System"), ("light", "Light"), ("dark", "Dark")' in settings_source
     assert 'button.clicked.connect(' in settings_source
-    assert 'self._set_theme_preference(preference)' in settings_source
+    assert 'self._parent._set_theme_preference(preference)' in settings_source
     assert '"theme_preference": "system"' in config_source
     assert 'CONFIG.update_many({"mode": mode, "theme_preference": preference})' in ui_source
     assert 'self._system_theme_hints.colorSchemeChanged.connect(' in ui_source
@@ -924,21 +931,22 @@ def test_theme_switch_track_is_a_full_capsule_and_prewarms_the_alternate_theme()
     assert "QTimer.singleShot(0, self._prewarm_theme_stylesheets)" not in ui_source
 
 
-def test_theme_reveal_keeps_the_settings_switch_live_during_the_transition():
+def test_theme_reveal_uses_widget_snapshots_and_supports_live_widgets():
     repository = Path(__file__).resolve().parents[1]
-    switch_source = (repository / "ui_/btn/theme_switch.py").read_text(encoding="utf-8")
     theme_source = (repository / "ui.py").read_text(encoding="utf-8")
     transition_source = (
         repository / "ui_/window/theme_transition.py"
     ).read_text(encoding="utf-8")
 
-    assert "self._animation.currentTime() >= self._animation.duration() / 2" not in switch_source
-    assert "self._emit_mode_after_settle" in switch_source
-    assert "self.modeChanged.emit(mode)" in switch_source
-    assert "live_widgets=live_widgets" in theme_source
+    # The current three-choice Settings selector commits directly; the main
+    # window animates a circular reveal between snapshots of the real widget tree.
+    assert "old_snapshot = self.grab()" in theme_source
+    assert "new_snapshot = self.grab()" in theme_source
+    assert "CircularThemeReveal(" in theme_source
+    assert "self._old_snapshot = old_snapshot" in transition_source
+    assert "self._new_snapshot = new_snapshot" in transition_source
     assert "widget.render(" in transition_source
-    assert "self._live_widgets" in transition_source
-    assert "setting_switch.is_interacting" in theme_source
+    assert "self._live_widgets = tuple(widget for widget in live_widgets if widget is not None)" in transition_source
 
 
 def test_theme_switch_uses_centered_dpi_aware_icon_painting():
@@ -1545,7 +1553,7 @@ def test_tunnel_manager_is_a_versioned_updates_page_with_explicit_network_routes
     assert "bundles_update_action" in ui_source
     assert "tunnel_update_action" in ui_source
     assert "def _show_tunnel_page(self)" in ui_source
-    assert "AVAILABLE VERSIONS" in tunnel_source
+    assert 'QLabel("Available releases")' in tunnel_source
     assert "check_latest_release" in tunnel_source
     assert "upstream-unpinned" in tunnel_source
     assert 'self.versions_list.insertItem(0, item)' in tunnel_source
@@ -1940,8 +1948,8 @@ def test_shortcut_row_icons_remain_transparent_over_the_hover_surface():
         "{{ background: transparent; border: none; }}"
     ) in source
     assert "QFrame#shortcutsRow:hover {{ background: {hover}; }}" in source
-    # The icon must reveal the row's hover surface, not paint its own light square.
-    assert "QLabel#shortcutsRowIcon {{ background:" not in source
+    # A single grouped transparent rule covers both normal and hovered states.
+    assert source.count("QLabel#shortcutsRowIcon") == 2
 
 
 def test_tray_menu_uses_compact_vertical_spacing():
@@ -1973,6 +1981,7 @@ def test_open_browser_action_button_colors_follow_the_active_theme():
         "border": "#d7dee7",
         "hover": "rgba(24, 118, 191, 0.09)",
         "muted": "#657386",
+        "surface": "#f6f8fb",
     }
     light_css = OpenBrowserDialog._extra_styles(
         SimpleNamespace(_dark=False, _accent="#287db5", _colors=colors)
