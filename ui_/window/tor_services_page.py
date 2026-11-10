@@ -74,11 +74,12 @@ class TorServiceEditorDialog(QDialog):
         self.inp_display_name.setPlaceholderText("A readable name")
         form.addRow("Display name", self.inp_display_name)
 
+        suggested_socks, suggested_control = self._suggest_listener_ports()
         self.inp_socks_port = self._port_spin(
-            self._source_profile.get("socks_port", 19155), minimum=1
+            self._source_profile.get("socks_port", suggested_socks), minimum=1
         )
         self.inp_control_port = self._port_spin(
-            self._source_profile.get("control_port", 19156), minimum=1
+            self._source_profile.get("control_port", suggested_control), minimum=1
         )
         self.inp_dns_port = self._port_spin(
             self._source_profile.get("dns_port") or 0, minimum=0
@@ -148,6 +149,33 @@ class TorServiceEditorDialog(QDialog):
         self.chk_use_primary_bridges.toggled.connect(self._sync_bridge_controls)
         self.chk_bridges_enabled.toggled.connect(self._sync_bridge_controls)
         self._sync_bridge_controls()
+
+    def _suggest_listener_ports(self) -> tuple[int, int]:
+        """Suggest a free adjacent SOCKS/ControlPort pair for a new profile."""
+        used = set()
+        for item in CONFIG["tor_services"] or []:
+            if not isinstance(item, dict):
+                continue
+            for key in ("socks_port", "control_port", "dns_port"):
+                value = item.get(key)
+                if isinstance(value, int) and not isinstance(value, bool) and value:
+                    used.add(value)
+        proxy = getattr(self.parent(), "_proxy", None)
+        if proxy is not None:
+            used.update(
+                int(value) for value in (
+                    getattr(proxy, "tor_socks_port", None),
+                    getattr(proxy, "tor_control_port", None),
+                    getattr(proxy, "tor_dns_port", None),
+                    getattr(proxy, "proxy_port", None),
+                ) if value
+            )
+        candidate = 19155
+        while candidate < 65534:
+            if candidate not in used and candidate + 1 not in used:
+                return candidate, candidate + 1
+            candidate += 2
+        return 49155, 49156
 
     @staticmethod
     def _port_spin(value, *, minimum: int) -> QSpinBox:
