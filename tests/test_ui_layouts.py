@@ -1526,7 +1526,7 @@ def test_home_tunnel_controls_start_and_stop_installed_engine_without_showing_ma
     home_source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
     tunnel_source = (repository / "ui_/window/tunnel_window.py").read_text(encoding="utf-8")
 
-    assert 'self.btn_system_tunnel_action = QPushButton("Start"' in home_source
+    assert 'self.btn_system_tunnel_action = SystemTunnelActionButton("Start"' in home_source
     assert 'self.btn_system_tunnel_action.clicked.connect(self.toggle_system_tunnel)' in home_source
     assert 'self.btn_system_tunnel_manage.clicked.connect(self.open_tunnel_manager)' in home_source
     assert 'manage_button.setVisible(show_manage)' in home_source
@@ -2277,4 +2277,16 @@ def test_connection_preflight_treats_declined_tunnel_recovery_as_cancellation():
     assert 'level="info"' in callback
     assert 'level="error"' not in callback
     assert "CONNECTION CANCELLED" in callback
+
+def test_settings_emergency_tunnel_cleanup_handles_declined_uac_as_cancellation():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
+
+    assert "worker.signals.cancelled.connect(self._on_tunnel_recovery_cancelled)" in source
+    assert "def _on_tunnel_recovery_cancelled(self, reason: str):" in source
+    callback = source[source.index("def _on_tunnel_recovery_cancelled"):source.index("def _on_tunnel_recovery_failed")]
+    assert "self._finish_tunnel_recovery()" in callback
+    assert "self._refresh_tunnel_views_after_recovery()" in callback
+    assert 'level="info"' in callback
+    assert 'level="error"' not in callback
 
