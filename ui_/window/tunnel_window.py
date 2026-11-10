@@ -620,6 +620,7 @@ class TunnelManagerWindow(QWidget):
         self._refresh_state()
         worker = Worker(method, *args, **kwargs)
         worker.signals.finished.connect(self._on_operation_finished)
+        worker.signals.cancelled.connect(self._on_operation_cancelled)
         worker.signals.error.connect(self._on_operation_failed)
         self._worker = worker
         self._pool.start(worker)
@@ -645,6 +646,25 @@ class TunnelManagerWindow(QWidget):
         self.status.setText(message)
         if self.proxy is not None:
             self.proxy.logs_widget.update_log(f"System tunnel {operation}: {message}", level="success")
+        self._populate_versions()
+
+    def _on_operation_cancelled(self, reason: str) -> None:
+        """Restore the live tunnel state without presenting a declined UAC prompt as an error."""
+        operation = self._operation
+        self._finish_operation()
+        messages = {
+            "start": "Start cancelled · administrator approval was not granted; the tunnel was not started.",
+            "stop": "Stop cancelled · administrator approval was not granted; the tunnel state was left unchanged.",
+            "test": "Traffic test cancelled.",
+            "install": "Installation cancelled.",
+        }
+        message = messages.get(operation, f"{operation.title()} cancelled.")
+        self.status.setText(message)
+        if self.proxy is not None:
+            self.proxy.logs_widget.update_log(
+                f"System tunnel {operation} cancelled: {reason}",
+                level="info",
+            )
         self._populate_versions()
 
     def _on_operation_failed(self, error: str) -> None:
