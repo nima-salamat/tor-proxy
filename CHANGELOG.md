@@ -4,6 +4,8 @@ All notable changes are recorded here. Dates and release numbers are added only 
 
 ## Unreleased
 
+- Reworked the primary connection to run 1–4 independent Tor processes behind a stable loopback SOCKS gateway (default two: one active and one hot standby). New SOCKS sessions fail over to a ready backend when the active process exits; established TCP sessions are not transparently migrated.
+- Added Settings → Tor Services → Primary connection redundancy, with a persisted instance-count control and live active/ready backend status. Clearly separated automatic primary failover from optional manually managed isolated profiles.
 - Prevented duplicate GUI ControlPort authentication from turning an already verified Tor READY state into a false disconnect; NEWNYM now uses TorManager's authenticated controller.
 - Treat Tor and local HTTP proxy shutdown as incomplete while a process or worker thread remains alive, retaining service ownership and retryable Disconnect state.
 - Increased the bounded concurrent bridge-health worker limit to eight and clarified completion-order progress reporting.
