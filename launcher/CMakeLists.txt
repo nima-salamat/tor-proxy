@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(TorProxyLauncher VERSION 1.1.0 LANGUAGES CXX)
+project(TorProxyLauncher VERSION 1.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -34,7 +34,7 @@ else()
     # Linux keeps the Qt splash UI, isolated from the PySide6 runtime used by
     # the actual application.
     set(CMAKE_INSTALL_BINDIR "launcher-runtime/bin" CACHE STRING "Qt launcher runtime directory" FORCE)
-    set(CMAKE_INSTALL_LIBDIR "lib" CACHE STRING "Qt launcher library directory" FORCE)
+    set(CMAKE_INSTALL_LIBDIR "lib" CACHE STRING "Qt launcher runtime library directory" FORCE)
 
     find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets Network)
     qt_standard_project_setup()

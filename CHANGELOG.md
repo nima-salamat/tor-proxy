@@ -2,12 +2,17 @@
 
 All notable changes are recorded here. Dates and release numbers are added only when a release is actually published.
 
-## Recent improvements
+## Unreleased
+
+## v1.2.0 — 2026-11-10
+- Added native Windows window-management support for top-edge snapping, Snap Layouts, and resizing from all four edges and corners while preserving the custom title bar.
+- Made automatic listener-port values read-only until the corresponding Fixed option is enabled; added regression coverage for the state transition.
+- Updated the native launcher splash to follow the selected application/system theme.
 
 - Matched the sing-box manager page to the Bundle updater visual language and added live tunnel status refresh while the page is open.
 - Added pre-connect reconciliation of recorded sing-box state and an Advanced emergency cleanup action. Cleanup remains identity-checked and refuses to delete untracked TUN adapters or terminate unrelated processes.
 
-## Unreleased — UI, updater, and security redesign
+### UI, updater, and security redesign
 - Browser discovery now starts after the shared popup is shown and runs in a Qt background worker; the dialog immediately renders its last SQLite-cached snapshot and refreshes it atomically when the scan finishes.
 - Added stale-install handling for cached browser cards: an executable that was deleted or moved is removed from the database/UI immediately and produces a clear launch error, even while discovery is still running.
 - Reworked the Open Browser chooser to use the shared frameless popup shell and existing dialog theme; browser cards now display installed Windows executable/shortcut icons or Linux desktop-theme icons instead of a generic globe.
@@ -44,7 +49,7 @@ All notable changes are recorded here. Dates and release numbers are added only 
 - Restricted managed-bundle auto-selection to bundles that pass the existing verification-marker, archive-digest, platform, and executable checks.
 - Corrected duplicate Qt layout ownership patterns and added regression coverage for release parsing, bundle eligibility, download progress, executable selection, and layout construction.
 
-## Unreleased — security and architecture redesign
+### Security and architecture redesign
 
 - Added a `src/torproxy` core for validated configuration, host rules, platform paths, IP checks, Tor process management, and configurable bundle signature verification.
 - Restricted the local HTTP proxy to loopback and unified host policy across HTTP and CONNECT.
