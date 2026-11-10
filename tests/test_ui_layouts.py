@@ -2495,4 +2495,4 @@ def test_settings_exposes_isolated_tor_profiles_and_parallel_bridge_workers():
     assert 'def stop_all(self)' in services_source
     assert 'def _build_tor_service_settings(self, profile: dict) -> TorSettings:' in proxy_source
     assert 'self.tor_service_pool.stop_all()' in proxy_source
-    assert 'CONFIG["bridge_probe_workers"]' in tor_source
+    assert '"bridge_probe_workers"' in tor_source and "DEFAULT_MAX_WORKERS" in tor_source
