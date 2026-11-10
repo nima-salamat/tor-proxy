@@ -138,7 +138,7 @@ def test_stop_all_isolates_failures_per_service(tmp_path):
 
     results = pool.stop_all()
 
-    assert results["first"].startswith("RuntimeError:")
+    assert results["first"].startswith("TorServicePoolError: Tor service 'first' did not stop cleanly: synthetic stop failure")
     assert results["second"] is None
 
 
