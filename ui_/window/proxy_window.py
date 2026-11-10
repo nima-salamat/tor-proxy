@@ -11,10 +11,6 @@ from PySide6.QtWidgets import (
 
 
 from PySide6.QtCore import QEvent, Qt, QTimer, QThreadPool, QPropertyAnimation, QEasingCurve
-from stem import Signal as TorSignal
-from stem.control import Controller
-from stem import SocketClosed, OperationFailed
-from stem.connection import AuthenticationFailure
 
 from torproxy.ports import PortAllocationError, resolve_listener_ports
 from set_proxy import has_proxy_snapshot, manage_proxy
