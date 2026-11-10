@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   prepare-release:
-    if: github.event.head_commit.message == 'Prepare TorProxy v1.1.0 release'
+    if: github.event.head_commit.message == 'Finalize TorProxy v1.1.0 release'
     runs-on: ubuntu-latest
     steps:
       - name: Check out release commit
@@ -38,14 +38,10 @@ jobs:
       - name: Create v1.1.0 tag
         shell: bash
         run: |
-          if git ls-remote --exit-code --tags origin refs/tags/v1.1.0 >/dev/null 2>&1; then
-            echo "Tag v1.1.0 already exists; keeping the existing tag."
-          else
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git tag -a v1.1.0 "$GITHUB_SHA" -m "TorProxy v1.1.0"
-            git push origin refs/tags/v1.1.0
-          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f -a v1.1.0 "$GITHUB_SHA" -m "TorProxy v1.1.0"
+          git push --force origin refs/tags/v1.1.0
 
       - name: Start the tagged release build and publish workflow
         env:
