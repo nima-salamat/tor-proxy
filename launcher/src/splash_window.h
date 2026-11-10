@@ -18,6 +18,8 @@ public:
     explicit SplashWindow(const QString &iconPath, QWidget *parent = nullptr);
 
     bool logoLoaded() const noexcept;
+    void setThemeMode(const QString &mode);
+    QString themeMode() const;
     void centerOnPrimaryScreen();
     void beginLoading();
     void setStatus(const QString &status);
@@ -48,6 +50,7 @@ private:
     QString m_status = QStringLiteral("Preparing the desktop experience");
     QString m_errorMessage;
     QString m_logPath;
+    QString m_themeMode = QStringLiteral("dark");
     int m_spinnerAngle = 0;
     int m_progressOffset = 0;
     bool m_errorState = false;
