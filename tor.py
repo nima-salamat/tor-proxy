@@ -13,10 +13,10 @@ from PySide6.QtCore import QObject, Signal
 
 from config import BUNDLE_DIR, CONFIG, IS_WINDOWS
 from proxy import ProxyHandler, ThreadedHTTPServer, worker_data_usage_tracker
-from torproxy.paths import user_directories
-from torproxy.tor_manager import TorManager, TorManagerError, TorSettings, TorState
-from torproxy.socks_gateway import SocksGateway
 from torproxy.bridge_health import DEFAULT_MAX_WORKERS
+from torproxy.paths import user_directories
+from torproxy.socks_gateway import SocksGateway
+from torproxy.tor_manager import TorManager, TorManagerError, TorSettings, TorState
 from utils import resource_path
 
 logger = logging.getLogger(__name__)
@@ -629,9 +629,14 @@ class TorRunner(QObject):
 
     @staticmethod
     def _manager_is_ready(manager: TorManager) -> bool:
-        state = getattr(manager.state, "value", manager.state)
-        process = manager.process
-        return str(state).lower() == "ready" and process is not None and process.poll() is None
+        state = getattr(manager, "state", None)
+        state = getattr(state, "value", state)
+        process = getattr(manager, "process", None)
+        try:
+            process_alive = process is not None and process.poll() is None
+        except Exception:
+            process_alive = False
+        return str(state).lower() == "ready" and process_alive
 
     def _ready_instances_locked(self) -> list[tuple[str, TorManager]]:
         return [
@@ -873,7 +878,7 @@ class TorRunner(QObject):
         supervisor_alive = bool(thread and thread.is_alive())
         if alive_instances or worker_alive or supervisor_alive or stop_errors:
             detail = (
-                "Tor failover pool did not stop completely. "
+                "Tor failover pool did not stop completely; a supervisor/process is still active. "
                 f"Live instance(s): {', '.join(alive_instances) or 'none'}; "
                 f"startup worker(s): {', '.join(worker_alive) or 'none'}; "
                 f"supervisor alive: {supervisor_alive}."
