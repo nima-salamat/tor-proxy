@@ -11,8 +11,11 @@ from PySide6.QtWidgets import (
 
 
 from PySide6.QtCore import QEvent, Qt, QTimer, QThreadPool, QPropertyAnimation, QEasingCurve
+from pathlib import Path
 
 from torproxy.ports import PortAllocationError, resolve_listener_ports
+from torproxy.service_pool import TorServicePool, TorServicePoolError
+from torproxy.tor_manager import TorManagerError, TorSettings
 from set_proxy import has_proxy_snapshot, manage_proxy
 from tor import TorRunner, Runner
 from proxy import load_blocked, load_exclude
@@ -126,6 +129,11 @@ class ProxyWindow(QWidget):
         self.tor.bridges = CONFIG["bridges"]
         self.tor.app_window = self
         self.proxy = Runner(self.proxy_port, self.tor_socks_port,self)
+        # The pool belongs to the long-lived Home controller, not the Settings
+        # widget. Closing Settings must never detach or forget isolated Tor processes.
+        self.tor_service_pool: TorServicePool | None = None
+        self.tor_service_profile_errors: dict[str, str] = {}
+        self._tor_service_pool_lock = threading.RLock()
         # Animated left-side Event Log drawer and a clean, spacious Home canvas.
         self.main_layout = QHBoxLayout(self)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
@@ -302,6 +310,80 @@ class ProxyWindow(QWidget):
         self.timer_data_usage = QTimer()
         self.timer_data_usage.setInterval(1000)
         self.timer_data_usage.timeout.connect(self.change_data_usage)
+
+    def _tor_service_reserved_ports(self) -> tuple[int, ...]:
+        """Return every primary application listener a profile must not reuse."""
+        values = (self.tor_socks_port, self.tor_control_port, self.tor_dns_port, self.proxy_port)
+        return tuple(sorted({int(value) for value in values if value}))
+
+    def _build_tor_service_settings(self, profile: dict) -> TorSettings:
+        """Build an isolated manager configuration from a persisted profile."""
+        if not self.tor.path_set or not self.tor.tor_path:
+            self.tor.update_path(CONFIG["tor_path"])
+        if not self.tor.path_set or not self.tor.tor_path:
+            raise TorManagerError(
+                "A compatible Tor Expert Bundle must be installed before isolated services can start."
+            )
+
+        use_primary_bridges = bool(profile.get("use_primary_bridges", False))
+        bridges_enabled = bool(self.tor.bridge) if use_primary_bridges else bool(profile.get("bridge_enabled", False))
+        bridges = str(self.tor.bridges or "") if use_primary_bridges else str(profile.get("bridges") or "")
+        data_directory_value = profile.get("data_directory")
+        dns_port_value = profile.get("dns_port")
+        return TorSettings(
+            executable=Path(self.tor.tor_path),
+            socks_port=int(profile["socks_port"]),
+            control_port=int(profile["control_port"]),
+            dns_port=int(dns_port_value) if dns_port_value not in (None, 0, "") else None,
+            data_directory=Path(data_directory_value).expanduser() if data_directory_value else None,
+            geoip_path=Path(self.tor.geoip_path) if self.tor.geoip_path else None,
+            geoip6_path=Path(self.tor.geoip6_path) if self.tor.geoip6_path else None,
+            bridges_enabled=bridges_enabled,
+            bridges=bridges,
+            max_circuit_dirtiness_seconds=max(10, min(86400, int(self.tor.MaxCircuitDirtiness))),
+            new_circuit_period_seconds=max(10, min(86400, int(self.tor.NewCircuitPeriod))),
+            webtunnel_sni_imitation=str(CONFIG["webtunnel_sni_imitation"] or ""),
+        )
+
+    def _register_tor_service_profile(self, profile: dict, *, pool=None):
+        """Register one persisted profile in the application-owned service pool."""
+        service_pool = pool or self._ensure_tor_service_pool()
+        service_id = str(profile["id"])
+        manager = service_pool.register(service_id, self._build_tor_service_settings(profile))
+        self.tor_service_profile_errors.pop(service_id, None)
+        return manager
+
+    def _ensure_tor_service_pool(self) -> TorServicePool:
+        """Create the pool once and restore saved profiles without failing app startup."""
+        with self._tor_service_pool_lock:
+            configured_workers = max(1, min(8, int(CONFIG["tor_service_workers"] or 4)))
+            if self.tor_service_pool is not None:
+                self.tor_service_pool.set_max_workers(configured_workers)
+                return self.tor_service_pool
+
+            if not self.tor.path_set or not self.tor.tor_path:
+                self.tor.update_path(CONFIG["tor_path"])
+            if not self.tor.path_set or not self.tor.tor_path:
+                raise TorManagerError(
+                    "No compatible Tor executable is available. Install or select a Tor Expert Bundle first."
+                )
+
+            pool = TorServicePool(
+                reserved_ports=self._tor_service_reserved_ports(),
+                max_workers=configured_workers,
+            )
+            self.tor_service_pool = pool
+            self.tor_service_profile_errors = {}
+            for profile in CONFIG["tor_services"] or []:
+                try:
+                    self._register_tor_service_profile(profile, pool=pool)
+                except Exception as exc:
+                    service_id = str(profile.get("id", "unknown"))
+                    self.tor_service_profile_errors[service_id] = f"{type(exc).__name__}: {exc}"
+                    logger.warning(
+                        "Could not restore isolated Tor service '%s': %s", service_id, exc
+                    )
+            return pool
 
     def _sync_bridge_editor(self, bridge_text: str):
         """Reflect automatically pruned bridge records in the editor and its cards."""
@@ -1067,6 +1149,27 @@ class ProxyWindow(QWidget):
             except Exception as exc:
                 logger.exception("Error stopping Tor.")
                 stop_errors.append(f"Tor shutdown failed: {exc}")
+
+        # Additional Tor profiles are independent while the UI remains open.
+        # An explicit application exit, however, owns and must stop every child.
+        if getattr(self._parent, "_closing", False) and self.tor_service_pool is not None:
+            service_ids = self.tor_service_pool.service_ids
+            if service_ids:
+                try:
+                    service_results = self.tor_service_pool.stop_all()
+                    service_failures = {
+                        service_id: error for service_id, error in service_results.items() if error
+                    }
+                    if service_failures:
+                        stop_errors.append(
+                            "Isolated Tor service shutdown failed: "
+                            + "; ".join(f"{key}: {value}" for key, value in service_failures.items())
+                        )
+                    else:
+                        messages.append(f"Stopped {len(service_ids)} isolated Tor service(s).")
+                except Exception as exc:
+                    logger.exception("Error stopping isolated Tor services during application exit.")
+                    stop_errors.append(f"Isolated Tor service shutdown failed: {exc}")
 
         if stop_errors:
             raise RuntimeError(
