@@ -2174,3 +2174,93 @@ def test_system_tunnel_recovery_warning_uses_the_module_logger():
     assert "logger.warning(" in source
     assert "LOGGER.warning(" not in source
 
+
+def test_worker_routes_expected_system_tunnel_cancellation_without_error_logging(qt_app, caplog):
+    from torproxy.system_tunnel import SystemTunnelCancelled
+    from ui_.worker.worker import Worker
+
+    def _cancel():
+        raise SystemTunnelCancelled("Administrator approval was cancelled.")
+
+    worker = Worker(_cancel)
+    cancelled = []
+    failures = []
+    worker.signals.cancelled.connect(cancelled.append)
+    worker.signals.error.connect(failures.append)
+
+    worker.run()
+
+    assert cancelled == ["SystemTunnelCancelled: Administrator approval was cancelled."]
+    assert failures == []
+    assert "Background task cancelled" in caplog.text
+    assert "Unexpected background task failure" not in caplog.text
+    assert not [record for record in caplog.records if record.levelno >= 30]
+
+
+def test_tunnel_page_handles_cancelled_uac_without_warning_or_error_log():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/tunnel_window.py").read_text(encoding="utf-8")
+
+    assert "worker.signals.cancelled.connect(self._on_operation_cancelled)" in source
+    assert "def _on_operation_cancelled(self, reason: str) -> None:" in source
+    callback = source[source.index("def _on_operation_cancelled"):source.index("def _on_operation_failed")]
+    assert 'level="info"' in callback
+    assert "QMessageBox.warning" not in callback
+    assert '"stop": "Stop cancelled' in callback
+    assert "self._finish_operation()" in callback
+
+
+def test_home_disconnect_preserves_uac_cancellation_and_restores_connected_state():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+
+    assert "worker.signals.cancelled.connect(self._on_services_stop_cancelled)" in source
+    assert "def _on_services_stop_cancelled(self, reason: str) -> None:" in source
+    assert "except SystemTunnelCancelled:" in source
+    callback = source[source.index("def _on_services_stop_cancelled"):source.index("def _on_services_stop_failed")]
+    assert "self._stopping = False" in callback
+    assert "self.connect_btn.setEnabled(True)" in callback
+    assert 'level="info"' in callback
+    assert 'level="error"' not in callback
+    assert "QMessageBox.warning" not in callback
+
+
+def test_home_system_tunnel_action_icon_tracks_enabled_hover_and_theme_colors(qt_app, monkeypatch):
+    import ui_.window.proxy_window as home
+
+    calls = []
+    monkeypatch.setattr(home.qta, "icon", lambda name, color: calls.append((name, color)) or (name, color))
+    button = home.SystemTunnelActionButton()
+    try:
+        button.set_icon_name("fa6s.play")
+        button.set_theme_colors(text="#253041", muted="#667386")
+        assert button._icon_color == "#ffffff"
+
+        button._set_hovered(True)
+        assert button._icon_color == "#253041"
+
+        button.setEnabled(False)
+        assert button._icon_color == "#667386"
+
+        button.setEnabled(True)
+        assert button._icon_color == "#253041"
+
+        button._set_hovered(False)
+        assert button._icon_color == "#ffffff"
+    finally:
+        button.deleteLater()
+        qt_app.processEvents()
+
+
+def test_home_tunnel_action_uses_state_aware_icon_colors():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+
+    assert "class SystemTunnelActionButton(QPushButton):" in source
+    assert "def set_theme_colors(self, *, text: str, muted: str) -> None:" in source
+    assert "def enterEvent(self, event):" in source
+    assert "def leaveEvent(self, event):" in source
+    assert "self.btn_system_tunnel_action.set_theme_colors(text=text, muted=muted)" in source
+    assert "action_button.set_icon_name(action_icon)" in source
+    assert 'action_button.setIcon(qta.icon(action_icon, color="#ffffff"))' not in source
+
