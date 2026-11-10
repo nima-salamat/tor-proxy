@@ -261,6 +261,11 @@ class TorServicePool:
                     entry.manager.stop()
                 except Exception as exc:
                     error = exc
+                else:
+                    # A failed first stop can be a race with a just-starting
+                    # operation. The retry above is authoritative once the
+                    # start lock is held and no new start can enter.
+                    error = None
 
             if error is not None:
                 raise TorServicePoolError(
