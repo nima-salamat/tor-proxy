@@ -240,3 +240,31 @@ def test_tor_runner_stop_does_not_claim_stopped_while_supervisor_is_alive(monkey
 
     assert runner.state == "FAILED"
     assert runner.thread is not None
+
+
+def test_http_proxy_keeps_service_reference_when_server_thread_does_not_stop():
+    runner = tor.Runner(19480, 19481, app_window=None)
+
+    class FakeServer:
+        def shutdown(self):
+            pass
+
+        def server_close(self):
+            pass
+
+    class LiveThread:
+        def join(self, timeout=None):
+            pass
+
+        def is_alive(self):
+            return True
+
+    server = FakeServer()
+    runner.server = server
+    runner.thread = LiveThread()
+
+    with pytest.raises(RuntimeError, match="HTTP listener is still active"):
+        runner.stop()
+
+    assert runner.server is server
+    assert runner.thread is not None
