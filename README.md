@@ -8,7 +8,8 @@ The project is being modernized from a flat desktop utility into a testable Pyth
 
 ## Features
 
-- Start/stop supervision for an application-owned Tor process, with bounded startup and shutdown.
+- Supervise a configurable group of 1–4 isolated Tor processes behind one stable loopback SOCKS gateway; keep hot standbys ready and fail over new sessions when the active process exits.
+- Start/stop supervision for Tor processes, with bounded startup, shutdown and standby-recovery attempts.
 - Loopback-only SOCKS, ControlPort, DNSPort (when configured), and HTTP proxy listeners.
 - Stem-based Tor control with cookie authentication, bootstrap status, process-identity checks, and rate-limited `NEWNYM` requests.
 - HTTP forwarding and HTTPS `CONNECT` tunnels through Tor's SOCKS endpoint, with remote DNS for Tor-routed destinations.
@@ -37,7 +38,7 @@ flowchart TD
     UI --> Config[Per-user configuration and state]
 ```
 
-The new, independently testable code lives in `src/torproxy/`. Existing UI modules continue to use a small compatibility layer while migration progresses. See [Architecture](docs/ARCHITECTURE.md) for lifecycle and thread boundaries.
+The new, independently testable code lives in `src/torproxy/`. The configured SOCKS port is a stable failover gateway that relays each new SOCKS session to the preferred ready Tor backend. **Settings → Tor Services → Primary connection redundancy** controls 1–4 instances (default 2). Additional manually configured isolated profiles remain optional and are not part of the primary failover group. Existing TCP sessions are not migrated if their selected Tor process exits. Existing UI modules continue to use a small compatibility layer while migration progresses. See [Architecture](docs/ARCHITECTURE.md) for lifecycle and thread boundaries.
 
 ## Requirements and support status
 
