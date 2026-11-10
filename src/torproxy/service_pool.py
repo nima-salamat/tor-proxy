@@ -52,12 +52,14 @@ class TorServicePool:
         *,
         manager_factory: ManagerFactory | None = None,
         reserved_ports: Iterable[int] = (),
+        reserved_paths: Iterable[str | Path] = (),
         max_workers: int = DEFAULT_SERVICE_WORKERS,
         directories=None,
     ) -> None:
         self._manager_factory = manager_factory or TorManager
         self._directories = directories or user_directories()
         self._reserved_ports = {self._validate_port(port) for port in reserved_ports}
+        self._reserved_paths = tuple(self._canonical_path(Path(path)) for path in reserved_paths)
         self._max_workers = max(1, min(int(max_workers), MAX_SERVICE_WORKERS))
         self._services: dict[str, _ServiceEntry] = {}
         self._lock = threading.RLock()
@@ -122,6 +124,14 @@ class TorServicePool:
             raise TorServicePoolError(
                 f"Tor service '{service_id}' must keep its log file outside its DataDirectory."
             )
+
+        for reserved_path in self._reserved_paths:
+            if self._paths_overlap(settings.data_directory, reserved_path) or self._paths_overlap(
+                settings.log_path, reserved_path
+            ):
+                raise TorServicePoolError(
+                    f"Tor service '{service_id}' overlaps a reserved primary Tor state or log path."
+                )
 
         for existing_id, existing in self._services.items():
             existing_ports = {existing.settings.socks_port, existing.settings.control_port}
