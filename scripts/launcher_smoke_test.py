@@ -68,6 +68,7 @@ def main() -> int:
         cases = (
             ("dark preference", {"theme_preference": "dark", "mode": "light"}, "dark"),
             ("light preference", {"theme_preference": "light", "mode": "dark"}, "light"),
+            ("system preference", {"theme_preference": "system", "mode": "dark"}, "system"),
             ("legacy mode fallback", {"mode": "light"}, "light"),
         )
         with tempfile.TemporaryDirectory(prefix="torproxy-launcher-theme-") as temporary:
@@ -97,6 +98,7 @@ def main() -> int:
     cases = (
         ("dark preference", {"theme_preference": "dark", "mode": "light"}, "dark"),
         ("light preference", {"theme_preference": "light", "mode": "dark"}, "light"),
+        ("system preference", {"theme_preference": "system", "mode": "dark"}, "system"),
         ("legacy mode fallback", {"mode": "light"}, "light"),
     )
     with tempfile.TemporaryDirectory(prefix="torproxy-launcher-theme-") as temporary:
