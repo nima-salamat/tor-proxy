@@ -813,8 +813,28 @@ class ProxyWindow(QWidget):
 
         worker = Worker(self._check_ports_worker)
         worker.signals.finished.connect(self._on_ports_checked)
+        worker.signals.cancelled.connect(self._on_port_check_cancelled)
         worker.signals.error.connect(self._on_port_check_error)
         self.thread_pool.start(worker)
+    def _on_port_check_cancelled(self, reason: str) -> None:
+        """Return Home to its idle state when stale-tunnel recovery is declined."""
+        with self._operation_lock:
+            self._connect_operation_busy = False
+        self.failed = False
+        self.running = False
+        self.connected = False
+        self.connect_btn.set_connected(False)
+        self.connect_btn.setEnabled(True)
+        self.btn_status.setText("CONNECTION CANCELLED")
+        self.set_btn_status_style("disconnected")
+        self.logs_widget.update_log(
+            "Connection cancelled; the previous system tunnel was not changed. "
+            + str(reason or ""),
+            level="info",
+        )
+        self._update_proxy_buttons()
+        self._update_tunnel_hint()
+
     def _on_port_check_error(self, error):
         if self._stopping or bool(getattr(self._parent, "_closing", False)):
             with self._operation_lock:
@@ -952,6 +972,8 @@ class ProxyWindow(QWidget):
             recovery = self.system_tunnel_manager.cleanup_previous_session()
             if recovery and "No previous TorProxy tunnel state needs cleanup" not in recovery:
                 messages.append(recovery)
+        except SystemTunnelCancelled:
+            raise
         except Exception as exc:
             return json.dumps([
                 False,
