@@ -159,3 +159,26 @@ def test_service_ids_reject_path_traversal_and_unsafe_characters(tmp_path):
 
     with pytest.raises(TorServicePoolError, match="Service IDs"):
         pool.register("../escape", _settings(tmp_path))
+
+
+def test_a_service_log_file_must_be_outside_its_own_data_directory(tmp_path):
+    pool = _pool(tmp_path)
+    settings = TorSettings(
+        executable=tmp_path / "tor.exe",
+        socks_port=24050,
+        control_port=24051,
+        data_directory=tmp_path / "state",
+        log_path=tmp_path / "state" / "tor.log",
+    )
+
+    with pytest.raises(TorServicePoolError, match="log file outside its DataDirectory"):
+        pool.register("one", settings)
+
+
+def test_service_cannot_be_unregistered_while_its_data_lock_is_held(tmp_path):
+    pool = _pool(tmp_path)
+    manager = pool.register("locked", _settings(tmp_path))
+    manager._data_directory_lock_handle = object()
+
+    with pytest.raises(TorServicePoolError, match="still active"):
+        pool.unregister("locked")
