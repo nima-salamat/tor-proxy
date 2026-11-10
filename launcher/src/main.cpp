@@ -421,7 +421,9 @@ int main(int argc, char *argv[]) {
         splash.show();
         application.processEvents();
         const bool themeMatches = expectedTheme.isEmpty() ||
-            splash.themeMode() == expectedTheme;
+            (expectedTheme == QStringLiteral("system")
+                ? splash.themeMode() == systemThemeMode(&application)
+                : splash.themeMode() == expectedTheme);
         const bool ready = splash.isVisible() && splash.logoLoaded() && themeMatches;
         splash.close();
         return ready ? 0 : 2;
