@@ -24,7 +24,8 @@ Writes use a unique temporary file, restrictive permissions where supported, and
 | `tor_port` | Stable loopback SOCKS gateway port used by HTTP proxy, updater, and system tunnel | automatically chosen when unset/disabled |
 | `control_port` | Optional ControlPort override | automatically chosen when unset/disabled |
 | `dns_port` | Optional DNS listener override | automatically chosen when unset/disabled |
-| `proxy_port` | Optional local HTTP proxy override | automatically chosen when unset/disabled |\n| `primary_tor_instances` | Total number of Tor processes in the primary active/standby failover group | `2` (range `1..4`) |
+| `proxy_port` | Optional local HTTP proxy override | automatically chosen when unset/disabled |
+| `primary_tor_instances` | Total number of Tor processes in the primary active/standby failover group | `2` (range `1..4`) |
 | `*_checked` | Whether a manual port override is enabled | `false` |
 | `tor_path` | Explicit local Tor executable or bundle directory | unset; discover managed bundles |
 | `MaxCircuitDirtiness` | Tor circuit dirtiness in seconds | `600` |
@@ -65,7 +66,9 @@ Rules accept hostnames/IP literals, not URLs, user-info, paths, or `host:port` a
 
 Bridge mode accepts complete records for obfs4, Snowflake, WebTunnel, or meek_lite with an IPv4:port or bracketed IPv6:port authority. The shared parser normalizes spacing, removes an optional `Bridge` prefix, splits recognizable adjacent records into separate lines, and deduplicates exact repeated records. Manual paste, QR import, the individual bridge-card list, and Tor configuration validation use the same rules. Unrecognized or incomplete text is reported without overwriting the last valid saved bridge list. Transport executable lookup is relative to the selected bundle; missing executables remain startup errors.
 
-The `primary_tor_instances` setting starts 1–4 independent Tor processes for the main connection. The default of 2 keeps one active Tor process and one hot standby. The stable SOCKS gateway routes new sessions to the active process and fails over to a ready standby if that process exits. Existing TCP sessions pinned to a failed process can still disconnect. Additional processes have independent DataDirectories, ControlPort cookies and circuits. More instances increase memory, CPU, sockets and relay connections.\n\nThe optional `auto_prune_bridges` preference performs individual, isolated bridge checks before startup, with up to eight checks in parallel. Confirmed failures are saved as removed only if another bridge is confirmed working; inconclusive checks and a list with no confirmed success are preserved. This is off by default and can add startup delay.
+The `primary_tor_instances` setting starts 1–4 independent Tor processes for the main connection. The default of 2 keeps one active Tor process and one hot standby. The stable SOCKS gateway routes new sessions to the active process and fails over to a ready standby if that process exits. Existing TCP sessions pinned to a failed process can still disconnect. Additional processes have independent DataDirectories, ControlPort cookies and circuits. More instances increase memory, CPU, sockets and relay connections.
+
+The optional `auto_prune_bridges` preference performs individual, isolated bridge checks before startup, with up to eight checks in parallel. Confirmed failures are saved as removed only if another bridge is confirmed working; inconclusive checks and a list with no confirmed success are preserved. This is off by default and can add startup delay.
 
 ## System proxy settings
 
