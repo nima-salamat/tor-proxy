@@ -61,6 +61,8 @@ DEFAULT_DATA: dict[str, Any] = {
     "confirm_exit": True,
     "global_shortcut": "Ctrl+Alt+P",
     "bridge_probe_workers": 8,
+    # Total Tor processes serving the primary connection (active + hot standbys).
+    "primary_tor_instances": 2,
     "tor_service_workers": 4,
     "tor_services": [],
 }
@@ -153,6 +155,10 @@ class Config:
         new_circuit_period = data.get("NewCircuitPeriod", 60)
         if type(new_circuit_period) is not int or not 10 <= new_circuit_period <= 86400:
             raise ConfigError("NewCircuitPeriod must be an integer between 10 and 86400 seconds.")
+
+        instances = data.get("primary_tor_instances", 2)
+        if type(instances) is not int or not 1 <= instances <= 4:
+            raise ConfigError("primary_tor_instances must be an integer between 1 and 4.")
 
         for worker_key in ("bridge_probe_workers", "tor_service_workers"):
             workers = data.get(worker_key, 8 if worker_key == "bridge_probe_workers" else 4)
