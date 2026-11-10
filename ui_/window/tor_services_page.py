@@ -286,6 +286,35 @@ class TorServicesPage(QWidget):
         description.setWordWrap(True)
         layout.addWidget(description)
 
+        layout.addWidget(self._section_title("Primary connection redundancy"))
+        primary_pool_card = QFrame(self)
+        primary_pool_card.setObjectName("settingsRowCard")
+        primary_pool_layout = QHBoxLayout(primary_pool_card)
+        primary_pool_layout.setContentsMargins(14, 10, 14, 10)
+        primary_pool_layout.setSpacing(12)
+        primary_pool_copy = QVBoxLayout()
+        primary_pool_copy.setSpacing(3)
+        primary_pool_title = QLabel("Main Tor instances")
+        primary_pool_title.setObjectName("settingsFieldLabel")
+        primary_pool_description = QLabel(
+            "Number of isolated Tor processes behind the stable SOCKS endpoint used by the main HTTP proxy "
+            "and System Tunnel. New connections fail over to a healthy instance; existing TCP connections "
+            "cannot be moved and may need to reconnect. Applies on the next connection."
+        )
+        primary_pool_description.setObjectName("settingsDescription")
+        primary_pool_description.setWordWrap(True)
+        primary_pool_copy.addWidget(primary_pool_title)
+        primary_pool_copy.addWidget(primary_pool_description)
+        primary_pool_layout.addLayout(primary_pool_copy, 1)
+        self.spin_primary_instances = QSpinBox(self)
+        self.spin_primary_instances.setRange(1, 4)
+        self.spin_primary_instances.setSuffix(" instances")
+        self.spin_primary_instances.setValue(int(CONFIG["primary_tor_instances"] or 2))
+        self.spin_primary_instances.setToolTip("Number of Tor workers backing the primary connection. Allowed range: 1–4.")
+        self.spin_primary_instances.valueChanged.connect(self._save_primary_tor_instances)
+        primary_pool_layout.addWidget(self.spin_primary_instances)
+        layout.addWidget(primary_pool_card)
+
         layout.addWidget(self._section_title("Parallel bridge checks"))
         bridge_card = QFrame(self)
         bridge_card.setObjectName("settingsRowCard")
@@ -394,6 +423,14 @@ class TorServicesPage(QWidget):
         if pool is not None or not create:
             return pool
         return self._proxy._ensure_tor_service_pool()
+
+    def _save_primary_tor_instances(self, value: int) -> None:
+        previous = int(CONFIG["primary_tor_instances"] or 2)
+        try:
+            CONFIG["primary_tor_instances"] = int(value)
+        except (ValueError, OSError, KeyError) as exc:
+            self._restore_spin(self.spin_primary_instances, previous)
+            QMessageBox.warning(self, "Primary Tor pool", str(exc))
 
     def _save_bridge_workers(self, value: int) -> None:
         previous = int(CONFIG["bridge_probe_workers"] or 8)

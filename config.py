@@ -61,6 +61,7 @@ DEFAULT_DATA: dict[str, Any] = {
     "confirm_exit": True,
     "global_shortcut": "Ctrl+Alt+P",
     "bridge_probe_workers": 8,
+    "primary_tor_instances": 2,
     "tor_service_workers": 4,
     "tor_services": [],
 }
@@ -158,6 +159,10 @@ class Config:
             workers = data.get(worker_key, 8 if worker_key == "bridge_probe_workers" else 4)
             if type(workers) is not int or not 1 <= workers <= 8:
                 raise ConfigError(f"{worker_key} must be an integer between 1 and 8.")
+
+        primary_instances = data.get("primary_tor_instances", 2)
+        if type(primary_instances) is not int or not 1 <= primary_instances <= 4:
+            raise ConfigError("primary_tor_instances must be an integer between 1 and 4.")
 
         services = data.get("tor_services", [])
         if not isinstance(services, list) or len(services) > 32:

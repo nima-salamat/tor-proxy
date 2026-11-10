@@ -1,4 +1,17 @@
-# Multiple isolated Tor services
+# Primary Tor connection failover
+
+The primary Home connection now runs as a pool of isolated Tor workers behind one stable loopback SOCKS5 gateway. The configured Tor SOCKS port remains the gateway endpoint, so the main HTTP proxy, operating-system proxy setting and sing-box System Tunnel continue to use the same address. Each Tor worker has its own SOCKS/Control/DNS listeners, DataDirectory, control cookie and log file. A worker that had reached READY and later exits unexpectedly is retried up to three times with an increasing delay; initial failures are not blindly retried unless another worker is already healthy, avoiding endless loops for a shared bundle or transport problem.
+
+The gateway chooses among workers that have completed Tor bootstrap and whose processes are still alive. Each new SOCKS5 TCP CONNECT is attempted against a healthy worker; if a local worker cannot complete its SOCKS handshake or connection setup, the gateway tries another ready worker before replying to the client. When a worker exits, it is excluded from new connections while the remaining ready workers keep serving traffic.
+
+Failover is per new TCP connection, not live migration. An already-established TCP/HTTPS stream remains tied to the Tor worker that accepted it and can fail if that worker exits; the application must reconnect. Tor workers also have separate Tor state, circuits and guards, so a failover can use a different circuit/exit. A shared bridge transport or bundle failure can still affect every worker.
+
+Configure **Settings → Tor Services → Primary connection redundancy → Main Tor instances** to choose 1–4 primary Tor workers (default: 2). The setting applies on the next connection. More workers consume additional memory, CPU, sockets and network capacity. Setting it to 1 disables redundancy.
+
+## Independent Tor profiles
+
+The optional profiles described below are separate from the primary connection pool. They are manually configured endpoints for applications or identities and do not participate in main-connection failover.
+
 
 TorProxy's core now exposes `TorServicePool` from `torproxy.service_pool`. It manages multiple independent Tor processes; it does not share a Tor data directory or ControlPort between profiles.
 

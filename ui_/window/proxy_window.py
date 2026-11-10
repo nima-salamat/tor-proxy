@@ -296,6 +296,7 @@ class ProxyWindow(QWidget):
         self.thread_pool = QThreadPool(self)
         self.tor.log_message.connect(self.logs_widget.update_log)
         self.tor.service_failed.connect(self._on_tor_failed)
+        self.tor.bridge_usage_changed.connect(self._on_tor_pool_health_changed)
         self.tor.bridges_updated.connect(self._sync_bridge_editor)
         self.logs_widget.apply_theme(CONFIG["mode"])
         self._apply_home_theme()
@@ -312,14 +313,28 @@ class ProxyWindow(QWidget):
         self.timer_data_usage.timeout.connect(self.change_data_usage)
 
     def _tor_service_reserved_ports(self) -> tuple[int, ...]:
-        """Return every primary application listener a profile must not reuse."""
-        values = (self.tor_socks_port, self.tor_control_port, self.tor_dns_port, self.proxy_port)
+        """Return configured and dynamically allocated primary Tor listener ports."""
+        values = {self.tor_socks_port, self.tor_control_port, self.tor_dns_port, self.proxy_port}
+        for manager in getattr(self.tor, "_backend_managers", ()):
+            settings = getattr(manager, "settings", None)
+            if settings is None:
+                continue
+            values.update((
+                getattr(settings, "socks_port", None),
+                getattr(settings, "control_port", None),
+                getattr(settings, "dns_port", None),
+            ))
         return tuple(sorted({int(value) for value in values if value}))
 
     def _tor_service_reserved_paths(self) -> tuple[Path, ...]:
-        """Keep secondary profiles away from the primary Tor DataDirectory and log."""
+        """Keep independent profiles away from every primary Tor worker's state and logs."""
         directories = user_directories()
-        return (directories.data / "tor", directories.logs / "tor.log")
+        return (
+            directories.data / "tor",
+            directories.data / "tor-workers",
+            directories.logs / "tor.log",
+            directories.logs / "tor-workers",
+        )
 
     def _build_tor_service_settings(self, profile: dict) -> TorSettings:
         """Build an isolated manager configuration from a persisted profile."""
@@ -738,6 +753,41 @@ class ProxyWindow(QWidget):
             self.timer_data_usage.start()
 
         self.lbl_percent.setText(str(v))
+    def _on_tor_pool_health_changed(self, health):
+        """Reflect the number of verified primary Tor backends on the Home page."""
+        if not isinstance(health, dict) or not self.running or self._stopping:
+            return
+        try:
+            ready = max(0, int(health.get("ready_instances", 0)))
+            total = max(0, int(health.get("total_instances", 0)))
+        except (TypeError, ValueError):
+            return
+
+        if ready:
+            self.connected = True
+            self.failed = False
+            self.connect_btn.set_connected(True)
+            if total > 0 and ready < total:
+                self.btn_status.setText(f"CONNECTED · {ready}/{total} TOR INSTANCES READY")
+            else:
+                self.btn_status.setText("CONNECTED TO TOR")
+            self.set_btn_status_style("connected")
+        elif self.connected:
+            # A complete backend outage may be temporary while the supervisor
+            # restarts an instance. Keep the gateway alive and show reconnecting
+            # instead of tearing the whole pool down immediately.
+            self.connected = False
+            self.connect_btn.set_connected(False)
+            self.btn_status.setText("TOR INSTANCES RECONNECTING…")
+            self.set_btn_status_style("connecting")
+
+        self._update_proxy_buttons()
+        self._update_tunnel_hint()
+        tunnel_page = getattr(self._parent, "tunnel_window", None)
+        refresh_tunnel_page = getattr(tunnel_page, "_refresh_state", None)
+        if callable(refresh_tunnel_page):
+            refresh_tunnel_page()
+
     def _on_tor_failed(self, message):
         self.failed = True
         self.logs_widget.update_log(f"Tor supervisor reported a failure: {message}")

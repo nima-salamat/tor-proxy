@@ -4,6 +4,8 @@ All notable changes are recorded here. Dates and release numbers are added only 
 
 ## Unreleased
 
+- Replaced the single-backend primary Tor SOCKS path with a stable loopback SOCKS5 failover gateway backed by 1–4 isolated Tor workers; the HTTP proxy and sing-box System Tunnel continue to use the configured endpoint, and new connections retry healthy workers when one backend fails. Unexpectedly exited workers receive up to three supervised restart attempts with backoff.
+- Added Settings → Tor Services → Primary connection redundancy to configure how many Tor workers back the main connection (default 2). Documented that failover affects new connections only; existing TCP streams cannot migrate and each worker has separate Tor state/circuits.
 - Prevented duplicate GUI ControlPort authentication from turning an already verified Tor READY state into a false disconnect; NEWNYM now uses TorManager's authenticated controller.
 - Treat Tor and local HTTP proxy shutdown as incomplete while a process or worker thread remains alive, retaining service ownership and retryable Disconnect state.
 - Increased the bounded concurrent bridge-health worker limit to eight and clarified completion-order progress reporting.

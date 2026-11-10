@@ -222,6 +222,14 @@ def test_tor_worker_settings_are_bounded_to_eight():
                 AppConfig._validate(data)
 
 
+def test_primary_tor_instance_count_is_bounded_to_four():
+    for invalid in (0, 5, True, "2"):
+        data = dict(DEFAULT_DATA)
+        data["primary_tor_instances"] = invalid
+        with pytest.raises(AppConfigError, match="primary_tor_instances"):
+            AppConfig._validate(data)
+
+
 def test_tor_service_profiles_reject_duplicate_ids_and_listener_ports():
     profile = {
         "id": "personal",
