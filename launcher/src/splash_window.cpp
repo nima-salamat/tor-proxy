@@ -19,15 +19,19 @@ namespace {
 constexpr int kWindowWidth = 560;
 constexpr int kWindowHeight = 360;
 
-QString actionButtonStyle(const QString &background, const QString &hover) {
+QString actionButtonStyle(const QString &background, const QString &hover,
+                          const QString &foreground = QStringLiteral("#EAF4F7"),
+                          const QString &pressed = QStringLiteral("#173A43"),
+                          const QString &border = QStringLiteral("rgba(133,176,190,48)"),
+                          const QString &hoverBorder = QStringLiteral("rgba(80,211,192,145)")) {
     return QStringLiteral(
         "QPushButton {"
-        " color: #EAF4F7; background: %1; border: 1px solid rgba(133,176,190,48);"
+        " color: %3; background: %1; border: 1px solid %4;"
         " border-radius: 10px; padding: 8px 14px; font-size: 12px; font-weight: 600;"
         " }"
-        "QPushButton:hover { background: %2; border-color: rgba(80,211,192,145); }"
-        "QPushButton:pressed { background: #173A43; }"
-    ).arg(background, hover);
+        "QPushButton:hover { background: %2; border-color: %5; }"
+        "QPushButton:pressed { background: %6; }"
+    ).arg(background).arg(hover).arg(foreground).arg(border).arg(hoverBorder).arg(pressed);
 }
 } // namespace
 
@@ -76,6 +80,7 @@ SplashWindow::SplashWindow(const QString &iconPath, QWidget *parent)
     m_retryButton->hide();
     m_openLogsButton->hide();
     m_errorCloseButton->hide();
+    setThemeMode(QStringLiteral("dark"));
     updateActionGeometry();
 
     m_animationTimer = new QTimer(this);
@@ -90,6 +95,53 @@ SplashWindow::SplashWindow(const QString &iconPath, QWidget *parent)
 
 bool SplashWindow::logoLoaded() const noexcept {
     return !m_logo.isNull();
+}
+
+void SplashWindow::setThemeMode(const QString &mode) {
+    m_themeMode = mode == QStringLiteral("light")
+        ? QStringLiteral("light")
+        : QStringLiteral("dark");
+    const bool dark = m_themeMode == QStringLiteral("dark");
+
+    m_closeButton->setStyleSheet(dark
+        ? QStringLiteral(
+            "QToolButton { color: #8EA7B2; background: transparent; border: 0;"
+            " border-radius: 9px; font-size: 21px; font-weight: 400; }"
+            "QToolButton:hover { color: #F4FAFC; background: rgba(255,255,255,22); }"
+          )
+        : QStringLiteral(
+            "QToolButton { color: #526D79; background: transparent; border: 0;"
+            " border-radius: 9px; font-size: 21px; font-weight: 400; }"
+            "QToolButton:hover { color: #1D3742; background: rgba(37,79,94,18); }"
+          ));
+
+    if (dark) {
+        m_retryButton->setStyleSheet(actionButtonStyle(
+            QStringLiteral("#176D69"), QStringLiteral("#1B817A")));
+        m_openLogsButton->setStyleSheet(actionButtonStyle(
+            QStringLiteral("#1D2B37"), QStringLiteral("#263A49")));
+        m_errorCloseButton->setStyleSheet(actionButtonStyle(
+            QStringLiteral("#1D2B37"), QStringLiteral("#263A49")));
+    } else {
+        const QString border = QStringLiteral("rgba(91,126,140,110)");
+        const QString hoverBorder = QStringLiteral("rgba(28,144,132,150)");
+        m_retryButton->setStyleSheet(actionButtonStyle(
+            QStringLiteral("#188C80"), QStringLiteral("#1F9C90"),
+            QStringLiteral("#FFFFFF"), QStringLiteral("#126B63"), border, hoverBorder));
+        const QString secondary = QStringLiteral("#E9F1F4");
+        const QString secondaryHover = QStringLiteral("#DDE9ED");
+        const QString foreground = QStringLiteral("#233B46");
+        const QString pressed = QStringLiteral("#CFDEE4");
+        m_openLogsButton->setStyleSheet(actionButtonStyle(
+            secondary, secondaryHover, foreground, pressed, border, hoverBorder));
+        m_errorCloseButton->setStyleSheet(actionButtonStyle(
+            secondary, secondaryHover, foreground, pressed, border, hoverBorder));
+    }
+    update();
+}
+
+QString SplashWindow::themeMode() const {
+    return m_themeMode;
 }
 
 void SplashWindow::centerOnPrimaryScreen() {
@@ -164,24 +216,25 @@ void SplashWindow::paintEvent(QPaintEvent *event) {
     QPainterPath panelPath;
     panelPath.addRoundedRect(panel, 23.0, 23.0);
 
+    const bool dark = m_themeMode == QStringLiteral("dark");
     QLinearGradient background(panel.topLeft(), panel.bottomRight());
-    background.setColorAt(0.0, QColor("#172431"));
-    background.setColorAt(0.52, QColor("#101B26"));
-    background.setColorAt(1.0, QColor("#0C151E"));
+    background.setColorAt(0.0, dark ? QColor("#172431") : QColor("#F8FBFC"));
+    background.setColorAt(0.52, dark ? QColor("#101B26") : QColor("#EDF3F6"));
+    background.setColorAt(1.0, dark ? QColor("#0C151E") : QColor("#E3EDF1"));
     painter.fillPath(panelPath, background);
 
     QRadialGradient tealGlow(QPointF(width() * 0.50, 113.0), 205.0);
-    tealGlow.setColorAt(0.0, QColor(20, 155, 144, 38));
+    tealGlow.setColorAt(0.0, dark ? QColor(20, 155, 144, 38) : QColor(20, 155, 144, 24));
     tealGlow.setColorAt(1.0, QColor(20, 155, 144, 0));
     painter.fillPath(panelPath, tealGlow);
 
-    painter.setPen(QPen(QColor(140, 181, 195, 48), 1.0));
+    painter.setPen(QPen(dark ? QColor(140, 181, 195, 48) : QColor(83, 110, 124, 95), 1.0));
     painter.drawPath(panelPath);
 
     QFont eyebrow(QStringLiteral("Arial"), 8, QFont::DemiBold);
     eyebrow.setLetterSpacing(QFont::AbsoluteSpacing, 2.0);
     painter.setFont(eyebrow);
-    painter.setPen(QColor("#90A8B4"));
+    painter.setPen(dark ? QColor("#90A8B4") : QColor("#536F7B"));
     painter.drawText(QRectF(34, 25, 250, 18), Qt::AlignLeft | Qt::AlignVCenter,
                      QStringLiteral("TORPROXY  /  DESKTOP"));
 
@@ -190,13 +243,13 @@ void SplashWindow::paintEvent(QPaintEvent *event) {
 #endif
     QFont versionFont(QStringLiteral("Arial"), 8, QFont::Medium);
     painter.setFont(versionFont);
-    painter.setPen(QColor("#637C89"));
+    painter.setPen(dark ? QColor("#637C89") : QColor("#768C96"));
     painter.drawText(QRectF(width() - 108, 25, 62, 18), Qt::AlignRight | Qt::AlignVCenter,
                      QStringLiteral("v") + QStringLiteral(TORPROXY_VERSION));
 
     const QRectF logoRect(width() / 2.0 - 39.0, 55.0, 78.0, 78.0);
     painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor(47, 194, 175, 24));
+    painter.setBrush(dark ? QColor(47, 194, 175, 24) : QColor(35, 145, 133, 24));
     painter.drawEllipse(logoRect.adjusted(-12, -12, 12, 12));
     if (!m_logo.isNull()) {
         painter.drawPixmap(logoRect.toRect(), m_logo);
@@ -207,7 +260,7 @@ void SplashWindow::paintEvent(QPaintEvent *event) {
 
     QFont titleFont(QStringLiteral("Arial"), 22, QFont::DemiBold);
     painter.setFont(titleFont);
-    painter.setPen(QColor("#F0F6F8"));
+    painter.setPen(dark ? QColor("#F0F6F8") : QColor("#1F3440"));
     const QString title = m_errorState
         ? QStringLiteral("Couldn't start TorProxy")
         : QStringLiteral("TorProxy");
@@ -215,7 +268,7 @@ void SplashWindow::paintEvent(QPaintEvent *event) {
 
     QFont subtitleFont(QStringLiteral("Arial"), 9, QFont::Normal);
     painter.setFont(subtitleFont);
-    painter.setPen(QColor("#91A8B4"));
+    painter.setPen(dark ? QColor("#91A8B4") : QColor("#5C7480"));
     painter.drawText(QRectF(42, 181, width() - 84, 24), Qt::AlignHCenter | Qt::AlignVCenter,
                      m_errorState
                          ? QStringLiteral("The desktop process stopped before it became ready.")
@@ -223,14 +276,14 @@ void SplashWindow::paintEvent(QPaintEvent *event) {
 
     if (!m_errorState) {
         const QRectF spinnerRect(width() / 2.0 - 11.0, 213.0, 22.0, 22.0);
-        painter.setPen(QPen(QColor(134, 169, 181, 45), 2.5, Qt::SolidLine, Qt::RoundCap));
+        painter.setPen(QPen(dark ? QColor(134, 169, 181, 45) : QColor(92, 120, 133, 60), 2.5, Qt::SolidLine, Qt::RoundCap));
         painter.drawEllipse(spinnerRect);
-        painter.setPen(QPen(QColor("#41D5BE"), 2.8, Qt::SolidLine, Qt::RoundCap));
+        painter.setPen(QPen(dark ? QColor("#41D5BE") : QColor("#148F85"), 2.8, Qt::SolidLine, Qt::RoundCap));
         painter.drawArc(spinnerRect, m_spinnerAngle * 16, 245 * 16);
 
         QFont statusFont(QStringLiteral("Arial"), 9, QFont::Medium);
         painter.setFont(statusFont);
-        painter.setPen(QColor("#C4D4DA"));
+        painter.setPen(dark ? QColor("#C4D4DA") : QColor("#425B67"));
         const QString visibleStatus = QFontMetrics(statusFont).elidedText(
             m_status, Qt::ElideRight, width() - 96
         );
@@ -240,7 +293,7 @@ void SplashWindow::paintEvent(QPaintEvent *event) {
         const QRectF track(40, 286, width() - 80, 3);
         QPainterPath trackPath;
         trackPath.addRoundedRect(track, 1.5, 1.5);
-        painter.fillPath(trackPath, QColor(125, 158, 169, 42));
+        painter.fillPath(trackPath, dark ? QColor(125, 158, 169, 42) : QColor(92, 121, 134, 48));
 
         const qreal segmentWidth = 92.0;
         const qreal trackWidth = track.width();
@@ -249,11 +302,11 @@ void SplashWindow::paintEvent(QPaintEvent *event) {
         const QRectF segment(x, track.top(), segmentWidth, track.height());
         QPainterPath segmentPath;
         segmentPath.addRoundedRect(segment.intersected(track), 1.5, 1.5);
-        painter.fillPath(segmentPath, QColor("#36BFAE"));
+        painter.fillPath(segmentPath, dark ? QColor("#36BFAE") : QColor("#1F9B8D"));
 
         QFont footerFont(QStringLiteral("Arial"), 8);
         painter.setFont(footerFont);
-        painter.setPen(QColor("#627B88"));
+        painter.setPen(dark ? QColor("#627B88") : QColor("#718994"));
         painter.drawText(QRectF(40, 301, width() - 80, 20),
                          Qt::AlignHCenter | Qt::AlignVCenter,
                          QStringLiteral("Loading desktop components"));
@@ -267,13 +320,13 @@ void SplashWindow::paintEvent(QPaintEvent *event) {
 
         QFont detailFont(QStringLiteral("Arial"), 8);
         painter.setFont(detailFont);
-        painter.setPen(QColor("#9EB2BB"));
+        painter.setPen(dark ? QColor("#9EB2BB") : QColor("#576F7A"));
         const QRectF detailRect(38, 243, width() - 76, 40);
         painter.drawText(detailRect, Qt::AlignHCenter | Qt::AlignVCenter | Qt::TextWordWrap,
                          m_errorMessage);
     }
 
-    painter.setPen(QPen(QColor(130, 166, 180, 22), 1.0));
+    painter.setPen(QPen(dark ? QColor(130, 166, 180, 22) : QColor(90, 120, 132, 45), 1.0));
     painter.drawLine(QPointF(30, height() - 22), QPointF(width() - 30, height() - 22));
 }
 
