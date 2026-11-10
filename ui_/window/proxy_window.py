@@ -313,8 +313,24 @@ class ProxyWindow(QWidget):
 
     def _tor_service_reserved_ports(self) -> tuple[int, ...]:
         """Return every primary application listener a profile must not reuse."""
-        values = (self.tor_socks_port, self.tor_control_port, self.tor_dns_port, self.proxy_port)
-        return tuple(sorted({int(value) for value in values if value}))
+        values = (
+            self.tor_socks_port,
+            self.tor_control_port,
+            self.tor_dns_port,
+            self.proxy_port,
+            *getattr(self.tor, "backend_listener_ports", ()),
+        )
+        profile_ports = []
+        for profile in CONFIG["tor_services"] or []:
+            if isinstance(profile, dict):
+                profile_ports.extend(
+                    profile.get(key)
+                    for key in ("socks_port", "control_port", "dns_port")
+                )
+        return tuple(sorted({
+            int(value) for value in (*values, *profile_ports)
+            if type(value) is int and 1 <= value <= 65535
+        }))
 
     def _tor_service_reserved_paths(self) -> tuple[Path, ...]:
         """Keep secondary profiles away from the primary Tor DataDirectory and log."""
