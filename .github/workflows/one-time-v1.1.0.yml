@@ -1,0 +1,55 @@
+name: One-time v1.1.0 release preparation
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  prepare-release:
+    if: github.event.head_commit.message == 'Prepare TorProxy v1.1.0 release'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out release commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Remove 2.x.x GitHub Release entries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          release_ids="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq '.[] | select(.tag_name | test("^v?2\\.[0-9]+\\.[0-9]+([-+].*)?$")) | .id')"
+          if [[ -z "$release_ids" ]]; then
+            echo "No 2.x.x releases found."
+          else
+            while IFS= read -r release_id; do
+              [[ -z "$release_id" ]] && continue
+              gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/${release_id}"
+              echo "Deleted GitHub Release ID ${release_id}"
+            done <<< "$release_ids"
+          fi
+
+      - name: Create v1.1.0 tag
+        shell: bash
+        run: |
+          if git ls-remote --exit-code --tags origin refs/tags/v1.1.0 >/dev/null 2>&1; then
+            echo "Tag v1.1.0 already exists; keeping the existing tag."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a v1.1.0 "$GITHUB_SHA" -m "TorProxy v1.1.0"
+            git push origin refs/tags/v1.1.0
+          fi
+
+      - name: Start the tagged release build and publish workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/workflows/release.yml/dispatches" -f ref=v1.1.0
+          echo "Dispatched the release workflow for v1.1.0."
