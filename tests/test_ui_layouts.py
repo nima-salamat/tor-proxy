@@ -2182,6 +2182,9 @@ def test_worker_routes_expected_system_tunnel_cancellation_without_error_logging
     def _cancel():
         raise SystemTunnelCancelled("Administrator approval was cancelled.")
 
+    import logging
+
+    caplog.set_level(logging.INFO, logger="ui_.worker.worker")
     worker = Worker(_cancel)
     cancelled = []
     failures = []
