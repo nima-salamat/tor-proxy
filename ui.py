@@ -436,7 +436,7 @@ class Window(QMainWindow):
                 )
                 screen_to_client.restype = wintypes.BOOL
                 if not screen_to_client(
-                    wintypes.HWND(native_message.hwnd), ctypes.byref(screen_point)
+                    wintypes.HWND(native_message.hWnd), ctypes.byref(screen_point)
                 ):
                     return super().nativeEvent(event_type, message)
 
