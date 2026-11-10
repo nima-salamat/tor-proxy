@@ -24,7 +24,8 @@ def test_release_workflow_publishes_tagged_versions_after_both_builds():
     workflow = (repository / ".github/workflows/release.yml").read_text(encoding="utf-8")
 
     assert "if: startsWith(github.ref, 'refs/tags/v')" in workflow
-    assert "tag_name: ${{ github.ref_name }}" in workflow
+    assert "github.event.head_commit.message == 'Publish TorProxy v1.1.0 to GitHub Releases'" in workflow
+    assert "tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'v1.1.0' }}" in workflow
     assert "needs: build" in workflow
     assert "TorProxy-windows-x64.zip" in workflow
     assert "TorProxy-linux-x64.tar.gz" in workflow
