@@ -2141,6 +2141,9 @@ def test_statistics_transfer_volume_chart_displays_theme_aware_hover_tooltips():
     assert "QToolTip.showText(" in source
     assert "QToolTip.hideText()" in source
     assert "QToolTip {{ color: {text}; background: {surface};" in source
+    assert "QToolTip.setPalette(tooltip_palette)" in source
+    assert "QPalette.ColorRole.ToolTipBase" in source
+    assert "QPalette.ColorRole.ToolTipText" in source
     assert '"timestamp": _safe_non_negative_int(bucket.get("timestamp", 0))' in source
 
 
