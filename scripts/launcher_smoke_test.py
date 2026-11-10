@@ -91,14 +91,33 @@ def main() -> int:
                     return 1
         return 0
 
-    if not run_case(
-        executable,
-        environment,
-        args.timeout,
-        ["--self-test"],
-        "splash UI creation",
-    ):
-        return 1
+    # Linux uses the Qt splash implementation, which reads the XDG config
+    # directory. Keep the same preference/legacy cases as the native Windows
+    # launcher so both front ends are checked against the application setting.
+    cases = (
+        ("dark preference", {"theme_preference": "dark", "mode": "light"}, "dark"),
+        ("light preference", {"theme_preference": "light", "mode": "dark"}, "light"),
+        ("legacy mode fallback", {"mode": "light"}, "light"),
+    )
+    with tempfile.TemporaryDirectory(prefix="torproxy-launcher-theme-") as temporary:
+        for name, configuration, expected_theme in cases:
+            config_root = Path(temporary) / name.replace(" ", "-")
+            config_directory = config_root / "torproxy"
+            config_directory.mkdir(parents=True, exist_ok=True)
+            (config_directory / "config.json").write_text(
+                json.dumps(configuration),
+                encoding="utf-8",
+            )
+            case_environment = environment.copy()
+            case_environment["XDG_CONFIG_HOME"] = str(config_root)
+            if not run_case(
+                executable,
+                case_environment,
+                args.timeout,
+                ["--self-test", f"--expect-theme={expected_theme}"],
+                name,
+            ):
+                return 1
     return 0
 
 
