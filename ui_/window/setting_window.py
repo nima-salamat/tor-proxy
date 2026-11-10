@@ -40,6 +40,7 @@ from ui_.window.dialogs import QMessageBox
 from ui_.worker.worker import Worker
 from ui_.window.qrcode_widget import QrCodeFloatingWindow
 from ui_.window.theme import resolve_system_theme
+from ui_.window.tor_services_page import TorServicesPage
 from ui_.emojis import WRONG, CORRECT
 
 class _BridgeTextEdit(QTextEdit):
@@ -77,10 +78,11 @@ class SettingWindow(QWidget):
             "fa6s.sliders",
             "fa6s.link",
             "fa6s.network-wired",
+            "fa6s.server",
             "fa6s.shield-halved",
         )
         for index, (title, icon_name) in enumerate(zip(
-            ("General", "Bridges", "Ports", "Advanced"), self.settings_nav_icon_names
+            ("General", "Bridges", "Ports", "Tor Services", "Advanced"), self.settings_nav_icon_names
         )):
             button = QPushButton(title, self)
             button.setObjectName("settingsNavButton")
@@ -101,6 +103,7 @@ class SettingWindow(QWidget):
         self.first_page, self.first_page_layout = self._create_scroll_page()
         self.bridges_page, self.bridges_page_layout = self._create_scroll_page()
         self.second_page, self.second_page_layout = self._create_scroll_page()
+        self.services_page, self.services_page_layout = self._create_scroll_page()
         self.advanced_page, self.advanced_page_layout = self._create_scroll_page()
         self.settings_nav_buttons[0].setChecked(True)
         initial_bridges = parse_bridge_text(str(CONFIG["bridges"] or ""))
@@ -129,6 +132,7 @@ class SettingWindow(QWidget):
         self.initialize_first_page()
         self.initialize_bridges_page()
         self.initialize_second_page()
+        self.initialize_tor_services_page()
         self.initialize_advanced_page()
         self.apply_theme(CONFIG["mode"])
         self.set_bridges()
@@ -156,6 +160,8 @@ class SettingWindow(QWidget):
         for page_index, button in enumerate(self.settings_nav_buttons):
             button.setChecked(page_index == index)
         self._sync_settings_nav_icons()
+        if index == 3 and hasattr(self, "tor_services_panel"):
+            self.tor_services_panel.refresh_services()
 
     def _sync_settings_nav_icons(self, mode=None):
         """Keep every Settings navigation icon in sync with its label state."""
@@ -190,6 +196,11 @@ class SettingWindow(QWidget):
             QLabel#bridgeEmptyState {{ color: {muted}; background: {panel}; border: 1px dashed {border}; border-radius: 8px; padding: 13px; font-size: 10px; }}
             QFrame#bridgeCard {{ background: {panel}; border: 1px solid {border}; border-radius: 9px; }}
             QFrame#bridgeCard:hover {{ border-color: {accent}; }}
+            QFrame#torServiceCard {{ background: {panel}; border: 1px solid {border}; border-radius: 9px; }}
+            QFrame#torServiceCard:hover {{ border-color: {accent}; }}
+            QLabel#torServiceStatus {{ color: {muted}; background: {field}; border: 1px solid {border}; border-radius: 6px; padding: 3px 7px; font-size: 8px; font-weight: 800; }}
+            QLabel#torServiceStatus[serviceState="ready"] {{ color: #31b981; border-color: rgba(49, 185, 129, 0.35); }}
+            QLabel#torServiceStatus[serviceState="failed"] {{ color: #e36b75; border-color: rgba(227, 107, 117, 0.35); }}
             QLabel#bridgeTransportBadge {{ color: {accent}; background: {hover}; border: 1px solid {border}; border-radius: 5px; padding: 3px 7px; font-size: 8px; font-weight: 800; }}
             QLabel#bridgeEndpoint {{ color: {text}; background: transparent; font-family: Consolas, monospace; font-size: 10pt; font-weight: 700; }}
             QLabel#bridgeRecordOptions {{ color: {muted}; background: transparent; font-family: Consolas, monospace; font-size: 8pt; }}
@@ -797,6 +808,12 @@ class SettingWindow(QWidget):
             status = self._listener_port_status_labels.get(port)
             if status is not None:
                 status.setText("AUTO")
+
+    def initialize_tor_services_page(self):
+        """Attach the persistent multi-instance Tor manager to Settings."""
+        self.tor_services_panel = TorServicesPage(self, app_window=self._parent)
+        self.services_page_layout.addWidget(self.tor_services_panel)
+        self.services_page_layout.addStretch(1)
 
     def initialize_advanced_page(self):
         self.advanced_page_layout.addWidget(self._section_title("Optional publisher signature verification"))
