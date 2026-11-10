@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QString>
 #include <QPixmap>
 #include <QPushButton>
 #include <QToolButton>
