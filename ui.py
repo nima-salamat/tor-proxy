@@ -1,5 +1,6 @@
 from contextlib import contextmanager
 import ctypes
+from ctypes import wintypes
 
 from PySide6.QtWidgets import (
     QApplication,
@@ -31,7 +32,7 @@ from PySide6.QtGui import (
 import qdarkstyle
 from qdarkstyle.dark.palette import DarkPalette
 from qdarkstyle.light.palette import LightPalette
-from PySide6.QtCore import QEvent, QTimer, Qt, Signal, QSize, QPoint
+from PySide6.QtCore import QEvent, QTimer, Qt, Signal, QSize, QPoint, QRect
 import qtawesome as qta
 from ui_.window.theme_transition import CircularThemeReveal
 from ui_.window.theme import resolve_system_theme
@@ -53,6 +54,24 @@ from ui_.window.statistics_window import StatisticsWindow
 logger = logging.getLogger(__name__)
 
 _THEME_STYLESHEET_CACHE = {}
+
+
+# Native hit-test values used by custom Windows title bars.
+_HTCLIENT = 1
+_HTCAPTION = 2
+_HTMAXBUTTON = 9
+_WM_NCHITTEST = 0x0084
+
+
+def _native_titlebar_hit_test(point, titlebar_rect, maximize_rect, other_button_rects):
+    """Map custom title-bar areas to the native Windows hit-test contract."""
+    if maximize_rect.contains(point):
+        return _HTMAXBUTTON
+    if any(rect.contains(point) for rect in other_button_rects):
+        return _HTCLIENT
+    if titlebar_rect.contains(point):
+        return _HTCAPTION
+    return None
 
 
 def _theme_stylesheet(mode):
@@ -177,6 +196,7 @@ class Window(QMainWindow):
         self.stack.setFrameShape(QFrame.Shape.NoFrame)
         self.stack.setLineWidth(0)
         self._constraining_move = False
+        self._native_snap_hwnd = 0
         self.proxyWidget = ProxyWindow(self)
         self.stack.addWidget(self.proxyWidget)
         self.settingWidget = SettingWindow(self)
@@ -320,6 +340,129 @@ class Window(QMainWindow):
             lambda: self.toggle_visibility_signal.emit(),
         )
         self.hotkey_manager.start()
+        # Create the HWND while hidden and advertise the native sizing/maximize
+        # capabilities before the first frame is shown to Windows.
+        self._enable_native_snap_support()
+
+    def _enable_native_snap_support(self):
+        """Expose a custom-framed window as resizable/maximizable to Windows."""
+        if not IS_WINDOWS:
+            return
+
+        try:
+            hwnd = int(self.winId())
+            if not hwnd or hwnd == self._native_snap_hwnd:
+                return
+
+            user32 = ctypes.WinDLL("user32", use_last_error=True)
+            get_window_long = getattr(
+                user32, "GetWindowLongPtrW", user32.GetWindowLongW
+            )
+            set_window_long = getattr(
+                user32, "SetWindowLongPtrW", user32.SetWindowLongW
+            )
+            get_window_long.argtypes = (wintypes.HWND, ctypes.c_int)
+            get_window_long.restype = ctypes.c_ssize_t
+            set_window_long.argtypes = (
+                wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t
+            )
+            set_window_long.restype = ctypes.c_ssize_t
+
+            # Keep the Qt-drawn title bar, but restore the native style bits
+            # Windows uses for Snap, Win+Arrow and maximize/restore handling.
+            # WS_CAPTION remains absent because this is still a custom frame.
+            style_index = -16  # GWL_STYLE
+            ws_thickframe = 0x00040000
+            ws_minimizebox = 0x00020000
+            ws_maximizebox = 0x00010000
+            ws_sysmenu = 0x00080000
+            required_styles = (
+                ws_thickframe | ws_minimizebox | ws_maximizebox | ws_sysmenu
+            )
+            style = get_window_long(wintypes.HWND(hwnd), style_index)
+            if (style & required_styles) != required_styles:
+                ctypes.set_last_error(0)
+                previous = set_window_long(
+                    wintypes.HWND(hwnd),
+                    style_index,
+                    ctypes.c_ssize_t(style | required_styles),
+                )
+                error = ctypes.get_last_error()
+                if previous == 0 and error:
+                    raise OSError(error, "SetWindowLongPtrW failed")
+
+                # Tell the non-client manager to recalculate the frame using
+                # the updated resize/maximize styles without moving the window.
+                set_window_pos = user32.SetWindowPos
+                set_window_pos.argtypes = (
+                    wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                    ctypes.c_int, ctypes.c_int, wintypes.UINT
+                )
+                set_window_pos.restype = wintypes.BOOL
+                flags = 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020
+                if not set_window_pos(
+                    wintypes.HWND(hwnd), None, 0, 0, 0, 0, flags
+                ):
+                    raise ctypes.WinError(ctypes.get_last_error())
+
+            self._native_snap_hwnd = hwnd
+        except (AttributeError, OSError, TypeError, ValueError):
+            logger.debug(
+                "Could not enable native Windows snap/maximize styles.",
+                exc_info=True,
+            )
+
+    def nativeEvent(self, event_type, message):
+        """Give Windows native drag and maximize hit-testing for the custom title bar."""
+        if not IS_WINDOWS or event_type != b"windows_generic_MSG":
+            return super().nativeEvent(event_type, message)
+
+        try:
+            native_message = wintypes.MSG.from_address(int(message))
+            if native_message.message == _WM_NCHITTEST and hasattr(self, "title_bar"):
+                screen_point = wintypes.POINT(
+                    ctypes.c_short(native_message.lParam & 0xFFFF).value,
+                    ctypes.c_short((native_message.lParam >> 16) & 0xFFFF).value,
+                )
+                user32 = ctypes.WinDLL("user32", use_last_error=True)
+                screen_to_client = user32.ScreenToClient
+                screen_to_client.argtypes = (
+                    wintypes.HWND, ctypes.POINTER(wintypes.POINT)
+                )
+                screen_to_client.restype = wintypes.BOOL
+                if not screen_to_client(
+                    wintypes.HWND(native_message.hwnd), ctypes.byref(screen_point)
+                ):
+                    return super().nativeEvent(event_type, message)
+
+                ratio = max(1.0, float(self.devicePixelRatioF()))
+                point = QPoint(
+                    round(screen_point.x / ratio),
+                    round(screen_point.y / ratio),
+                )
+                titlebar = self.title_bar
+                titlebar_rect = QRect(
+                    titlebar.mapTo(self, QPoint(0, 0)), titlebar.size()
+                )
+                maximize = titlebar.btn_max
+                maximize_rect = QRect(
+                    maximize.mapTo(self, QPoint(0, 0)), maximize.size()
+                )
+                other_button_rects = []
+                for button in (titlebar.btn_min, titlebar.btn_close):
+                    other_button_rects.append(
+                        QRect(button.mapTo(self, QPoint(0, 0)), button.size())
+                    )
+
+                hit_test = _native_titlebar_hit_test(
+                    point, titlebar_rect, maximize_rect, other_button_rects
+                )
+                if hit_test is not None:
+                    return True, hit_test
+        except (AttributeError, OSError, TypeError, ValueError):
+            logger.debug("Native title-bar hit testing failed.", exc_info=True)
+
+        return super().nativeEvent(event_type, message)
 
     def _refresh_layout_after_restore(self):
         if self.isMinimized() or not hasattr(self, "stack"):
@@ -341,14 +484,20 @@ class Window(QMainWindow):
 
     def showEvent(self, event):
         super().showEvent(event)
-        # Apply after Qt has created the native HWND. DWM draws the subtle
-        # rounded frame itself, without changing our client area or hit testing.
+        # Recheck in case Qt recreated the native HWND after a window-flag change.
+        self._enable_native_snap_support()
+        # DWM draws the subtle rounded frame itself, without changing our client area.
         QTimer.singleShot(0, self._apply_native_window_corners)
         QTimer.singleShot(0, self._refresh_layout_after_restore)
 
     def changeEvent(self, event):
         super().changeEvent(event)
         if event.type() == QEvent.Type.WindowStateChange:
+            # Keep the custom maximize/restore glyph in sync when Windows
+            # maximizes the window through Snap, Win+Arrow or the taskbar.
+            titlebar = getattr(self, "title_bar", None)
+            if titlebar is not None:
+                titlebar._sync_maximize_button()
             # DWM suppresses rounding while maximized; re-apply the small
             # restored-window preference after every maximize/restore transition.
             QTimer.singleShot(0, self._apply_native_window_corners)
