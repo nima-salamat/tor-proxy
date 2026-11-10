@@ -320,8 +320,13 @@ class TorServicesPage(QWidget):
         self.lbl_primary_pool_health.setWordWrap(True)
         layout.addWidget(self.lbl_primary_pool_health)
         if self._primary_tor is not None:
-            self._primary_tor.bridge_usage_changed.connect(self._update_primary_pool_health)
-            self._update_primary_pool_health(self._primary_tor.pool_health_snapshot)
+            health_signal = getattr(self._primary_tor, "bridge_usage_changed", None)
+            connect_health = getattr(health_signal, "connect", None)
+            if callable(connect_health):
+                connect_health(self._update_primary_pool_health)
+            snapshot = getattr(self._primary_tor, "pool_health_snapshot", None)
+            if isinstance(snapshot, dict):
+                self._update_primary_pool_health(snapshot)
 
         layout.addWidget(self._section_title("Parallel bridge checks"))
         bridge_card = QFrame(self)
@@ -744,7 +749,9 @@ class TorServicesPage(QWidget):
 
     def refresh_services(self) -> None:
         if self._primary_tor is not None:
-            self._update_primary_pool_health(self._primary_tor.pool_health_snapshot)
+            snapshot = getattr(self._primary_tor, "pool_health_snapshot", None)
+            if isinstance(snapshot, dict):
+                self._update_primary_pool_health(snapshot)
         if self._service_cards_layout is None:
             return
         while self._service_cards_layout.count():

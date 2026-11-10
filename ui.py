@@ -164,7 +164,7 @@ class UpdatesMenuButton(QToolButton):
 
         # Reserve a dedicated lower-right slot. Keep the glyph inset from the
         # rounded border and away from the label/icon content area.
-        center_x = self.rect().right() - 9
+        center_x = self.rect().right() - 10
         center_y = self.rect().bottom() - 8
         path = QPainterPath()
         if self._menu_indicator_open:
