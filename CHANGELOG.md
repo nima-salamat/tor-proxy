@@ -4,6 +4,12 @@ All notable changes are recorded here. Dates and release numbers are added only 
 
 ## Unreleased
 
+- Prevented duplicate GUI ControlPort authentication from turning an already verified Tor READY state into a false disconnect; NEWNYM now uses TorManager's authenticated controller.
+- Treat Tor and local HTTP proxy shutdown as incomplete while a process or worker thread remains alive, retaining service ownership and retryable Disconnect state.
+- Increased the bounded concurrent bridge-health worker limit to eight and clarified completion-order progress reporting.
+- Added the TorServicePool core API for multiple isolated Tor processes with unique data directories, log files and listener ports.
+- Improved Windows elevated tunnel-helper diagnostics for STATUS_CONTROL_C_EXIT and made ShellExecuteEx activation synchronous from background workers.
+
 ## v1.2.0 — 2026-11-10
 - Added native Windows window-management support for top-edge snapping, Snap Layouts, and resizing from all four edges and corners while preserving the custom title bar.
 - Made automatic listener-port values read-only until the corresponding Fixed option is enabled; added regression coverage for the state transition.
