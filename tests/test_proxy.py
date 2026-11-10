@@ -276,6 +276,7 @@ def test_http_connect_tunnels_raw_tcp_and_preserves_early_payload(monkeypatch):
                 break
             response.extend(chunk)
         header, separator, body = bytes(response).partition(b"\r\n\r\n")
+        body = bytearray(body)
         assert separator
         assert b"200 Connection Established" in header
         while len(body) < len(payload):

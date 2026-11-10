@@ -1565,7 +1565,7 @@ class Runner:
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=5)
         if thread is not None and thread.is_alive():
-            raise RuntimeError("Local HTTP proxy shutdown is incomplete; its listener thread is still active.")
+            raise RuntimeError("HTTP listener is still active; shutdown is incomplete.")
         self.server = None
         self.thread = None
         logger.info("Loopback HTTP proxy stopped.")
