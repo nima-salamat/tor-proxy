@@ -904,6 +904,7 @@ class SettingWindow(QWidget):
         self.lbl_tunnel_recovery_status.setText("Inspecting saved process identity and TUN state…")
         worker = Worker(manager.cleanup_previous_session)
         worker.signals.finished.connect(self._on_tunnel_recovery_finished)
+        worker.signals.cancelled.connect(self._on_tunnel_recovery_cancelled)
         worker.signals.error.connect(self._on_tunnel_recovery_failed)
         self._tunnel_recovery_worker = worker
         self._tunnel_recovery_pool.start(worker)
@@ -935,6 +936,20 @@ class SettingWindow(QWidget):
         logs_widget = getattr(proxy_widget, "logs_widget", None)
         if logs_widget is not None:
             logs_widget.update_log("Emergency sing-box recovery: " + message)
+        self._refresh_tunnel_views_after_recovery()
+
+    def _on_tunnel_recovery_cancelled(self, reason: str):
+        """Restore Settings after the administrator prompt is declined."""
+        self._finish_tunnel_recovery()
+        message = "Recovery cancelled; no system-tunnel changes were made."
+        self.lbl_tunnel_recovery_status.setText(message)
+        proxy_widget = getattr(self._parent, "proxyWidget", None)
+        logs_widget = getattr(proxy_widget, "logs_widget", None)
+        if logs_widget is not None:
+            logs_widget.update_log(
+                message + " " + str(reason or ""),
+                level="info",
+            )
         self._refresh_tunnel_views_after_recovery()
 
     def _on_tunnel_recovery_failed(self, error):
