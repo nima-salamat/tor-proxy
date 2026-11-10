@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 import time
+from datetime import datetime
 from collections import deque
 from dataclasses import dataclass
 
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QSizePolicy,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -80,7 +82,10 @@ class TrafficChart(QWidget):
         self._history_upload_values: list[float] | None = None
         self._history_download_values: list[float] | None = None
         self._history_period_seconds = 3600
+        self._history_buckets: list[dict[str, int]] = []
+        self._hovered_volume_index: int | None = None
         self._dark = True
+        self.setMouseTracking(True)
         self.setMinimumHeight(205)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
@@ -123,11 +128,116 @@ class TrafficChart(QWidget):
         return buckets
 
     def set_history(self, buckets: list[dict[str, int]], period_seconds: int) -> None:
-        self._history_values = [float(bucket.get("total_bytes", 0)) for bucket in buckets]
-        self._history_upload_values = [float(bucket.get("upload_bytes", 0)) for bucket in buckets]
-        self._history_download_values = [float(bucket.get("download_bytes", 0)) for bucket in buckets]
+        self._history_buckets = [
+            {
+                "timestamp": _safe_non_negative_int(bucket.get("timestamp", 0)),
+                "total_bytes": _safe_non_negative_int(bucket.get("total_bytes", 0)),
+                "upload_bytes": _safe_non_negative_int(bucket.get("upload_bytes", 0)),
+                "download_bytes": _safe_non_negative_int(bucket.get("download_bytes", 0)),
+            }
+            for bucket in buckets
+        ]
+        self._history_values = [float(bucket["total_bytes"]) for bucket in self._history_buckets]
+        self._history_upload_values = [float(bucket["upload_bytes"]) for bucket in self._history_buckets]
+        self._history_download_values = [float(bucket["download_bytes"]) for bucket in self._history_buckets]
         self._history_period_seconds = max(60, int(period_seconds))
+        self._hovered_volume_index = None
         self.update()
+
+    def _volume_bar_rect(self, index: int) -> QRectF:
+        """Return the painted area for one transfer-volume bucket."""
+        values = self._history_values or []
+        if self.chart_kind != "volume" or not values or not 0 <= index < len(values):
+            return QRectF()
+
+        plot = QRectF(56, 10, max(1, self.width() - 70), max(1, self.height() - 49))
+        if plot.width() < 80 or plot.height() < 60:
+            return QRectF()
+
+        max_value = _nice_axis_max(max(values, default=0.0))
+        slot = plot.width() / len(values)
+        bar_width = max(1.0, slot * 0.62)
+        upload = self._history_upload_values[index] if self._history_upload_values else 0.0
+        download = self._history_download_values[index] if self._history_download_values else 0.0
+        total_height = plot.height() * ((upload + download) / max_value)
+        if total_height <= 0:
+            return QRectF()
+        x = plot.left() + slot * index + (slot - bar_width) / 2
+        return QRectF(x, plot.bottom() - total_height, bar_width, total_height)
+
+    def _volume_bucket_index_at(self, x: float, y: float) -> int | None:
+        """Find the visible transfer-volume bar under the pointer."""
+        values = self._history_values or []
+        if self.chart_kind != "volume" or not values:
+            return None
+        plot = QRectF(56, 10, max(1, self.width() - 70), max(1, self.height() - 49))
+        if not plot.contains(QPointF(x, y)):
+            return None
+        slot = plot.width() / len(values)
+        index = int((x - plot.left()) / slot)
+        if not 0 <= index < len(values):
+            return None
+        return index if self._volume_bar_rect(index).contains(QPointF(x, y)) else None
+
+    def _volume_tooltip(self, index: int) -> str:
+        """Format the time bucket and directional volume for a hover popup."""
+        if not 0 <= index < len(self._history_buckets):
+            return ""
+        bucket = self._history_buckets[index]
+        timestamp = bucket["timestamp"]
+        if timestamp <= 0:
+            time_label = "Time unavailable"
+        else:
+            start = datetime.fromtimestamp(timestamp)
+            if index + 1 < len(self._history_buckets):
+                end_timestamp = self._history_buckets[index + 1]["timestamp"]
+            elif index > 0:
+                end_timestamp = timestamp + max(
+                    60, timestamp - self._history_buckets[index - 1]["timestamp"]
+                )
+            else:
+                end_timestamp = timestamp + self._history_period_seconds
+            end = datetime.fromtimestamp(max(timestamp, end_timestamp))
+            if start.date() == end.date():
+                time_label = f"{start:%d %b %Y, %H:%M} – {end:%H:%M}"
+            else:
+                time_label = f"{start:%d %b %Y, %H:%M} – {end:%d %b %Y, %H:%M}"
+
+        _background, _grid, _text, upload_color, download_color = self._colors()
+        return (
+            f"<b>{time_label}</b><br>"
+            f"<b>Total: {format_bytes(bucket['total_bytes'])}</b><br>"
+            f"<span style='color:{upload_color.name()};'>↑ Uploaded: "
+            f"{format_bytes(bucket['upload_bytes'])}</span><br>"
+            f"<span style='color:{download_color.name()};'>↓ Downloaded: "
+            f"{format_bytes(bucket['download_bytes'])}</span>"
+        )
+
+    def mouseMoveEvent(self, event) -> None:
+        if self.chart_kind == "volume":
+            position = event.position()
+            index = self._volume_bucket_index_at(position.x(), position.y())
+            if index is None:
+                if self._hovered_volume_index is not None:
+                    QToolTip.hideText()
+                self._hovered_volume_index = None
+                self.unsetCursor()
+            else:
+                self.setCursor(Qt.CursorShape.PointingHandCursor)
+                if index != self._hovered_volume_index:
+                    QToolTip.showText(
+                        event.globalPosition().toPoint(),
+                        self._volume_tooltip(index),
+                        self,
+                    )
+                self._hovered_volume_index = index
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        QToolTip.hideText()
+        self._hovered_volume_index = None
+        self.unsetCursor()
+        super().leaveEvent(event)
 
     def paintEvent(self, event) -> None:
         del event
@@ -537,6 +647,7 @@ class StatisticsWindow(QWidget):
         muted = "#aab4c1" if dark else "#68778a"
         accent = "#52a8f5" if dark else "#167ac6"
         ok = "#55d49a" if dark else "#188b68"
+        self.back_button.setIcon(qta.icon("fa6s.arrow-left", color=text))
         self.setStyleSheet(f"""
             QWidget#statisticsPage {{ background: transparent; }}
             QWidget#statisticsPage QLabel {{ color: {text}; background: transparent; border: none; }}
@@ -548,6 +659,7 @@ class StatisticsWindow(QWidget):
             QFrame#statisticsMetricCard, QFrame#statisticsChartPanel {{ background: {surface}; border: 1px solid {border}; border-radius: 12px; }}
             QPushButton#statisticsBackButton {{ color: {text}; background: transparent; border: 1px solid {border}; border-radius: 8px; padding: 8px 11px; font-weight: 650; }}
             QPushButton#statisticsBackButton:hover {{ border-color: {accent}; background: rgba(71, 163, 242, 0.10); }}
+            QToolTip {{ color: {text}; background: {surface}; border: 1px solid {border}; border-radius: 7px; padding: 7px 9px; }}
             QLabel#statisticsConnectionState {{ color: {muted}; font-size: 10px; font-weight: 750; padding: 5px 8px; border-radius: 6px; }}
             QLabel#statisticsConnectionState[connectionState="connected"] {{ color: {ok}; }}
             QLabel#statisticsConnectionState[connectionState="connecting"] {{ color: {accent}; }}
