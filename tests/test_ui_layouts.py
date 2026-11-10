@@ -2405,8 +2405,9 @@ def test_main_window_advertises_native_windows_snap_and_maximize_support():
     assert "ws_minimizebox = 0x00020000" in source
     assert "ws_sysmenu = 0x00080000" in source
     assert "def nativeEvent(self, event_type, message):" in source
+    assert "native_message.message == _WM_NCCALCSIZE" in source
     assert "native_message.message == _WM_NCHITTEST" in source
     assert "return True, hit_test" in source
-    assert "self.title_bar._sync_maximize_button()" in source
+    assert "titlebar._sync_maximize_button()" in source
     assert "handle.startSystemMove()" in titlebar_source
     assert "self.parent_.showMaximized()" in titlebar_source
