@@ -60,6 +60,7 @@ _THEME_STYLESHEET_CACHE = {}
 _HTCLIENT = 1
 _HTCAPTION = 2
 _HTMAXBUTTON = 9
+_WM_NCCALCSIZE = 0x0083
 _WM_NCHITTEST = 0x0084
 
 
@@ -419,6 +420,10 @@ class Window(QMainWindow):
 
         try:
             native_message = wintypes.MSG.from_address(int(message))
+            if native_message.message == _WM_NCCALCSIZE:
+                # Keep the custom Qt frame edge-to-edge while the native
+                # thick-frame style supplies resize and Snap behavior.
+                return True, 0
             if native_message.message == _WM_NCHITTEST and hasattr(self, "title_bar"):
                 screen_point = wintypes.POINT(
                     ctypes.c_short(native_message.lParam & 0xFFFF).value,
