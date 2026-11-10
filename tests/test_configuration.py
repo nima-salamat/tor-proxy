@@ -245,6 +245,23 @@ def test_tor_service_profiles_reject_duplicate_ids_and_listener_ports():
         AppConfig._validate(data)
 
 
+def test_tor_service_dns_port_rejects_boolean_values():
+    data = dict(DEFAULT_DATA)
+    data["tor_services"] = [{
+        "id": "work",
+        "display_name": "Work",
+        "socks_port": 19155,
+        "control_port": 19156,
+        "dns_port": False,
+        "use_primary_bridges": True,
+        "bridge_enabled": False,
+        "bridges": "",
+        "data_directory": None,
+    }]
+    with pytest.raises(AppConfigError, match="dns_port"):
+        AppConfig._validate(data)
+
+
 def test_tor_service_profiles_cannot_reuse_primary_listener_ports():
     data = dict(DEFAULT_DATA)
     data["proxy_port"] = 18888
