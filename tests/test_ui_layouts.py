@@ -2089,3 +2089,67 @@ def test_live_tor_log_viewport_uses_a_theme_appropriate_background():
     assert 'QTextEdit#torLogText {{' in source
     assert 'color: {self._colors["text"]}; background: {log_background};' in source
     assert 'background: #111820;' not in source
+
+
+
+def test_transfer_volume_chart_maps_hovered_bars_to_directional_tooltip(qt_app):
+    from ui_.window.statistics_window import TrafficChart
+
+    chart = TrafficChart("volume")
+    chart.resize(640, 260)
+    chart.set_history(
+        [
+            {
+                "timestamp": 1794272400,
+                "total_bytes": 3072,
+                "upload_bytes": 1024,
+                "download_bytes": 2048,
+            },
+            {
+                "timestamp": 1794276000,
+                "total_bytes": 6144,
+                "upload_bytes": 4096,
+                "download_bytes": 2048,
+            },
+        ],
+        7200,
+    )
+    try:
+        first_bar = chart._volume_bar_rect(0)
+        assert not first_bar.isEmpty()
+        point = first_bar.center()
+        assert chart._volume_bucket_index_at(point.x(), point.y()) == 0
+
+        tooltip = chart._volume_tooltip(0)
+        assert "Total: 3.00 KiB" in tooltip
+        assert "Uploaded: 1.00 KiB" in tooltip
+        assert "Downloaded: 2.00 KiB" in tooltip
+        assert "–" in tooltip
+    finally:
+        chart.close()
+        chart.deleteLater()
+        qt_app.processEvents()
+
+
+def test_statistics_transfer_volume_chart_displays_theme_aware_hover_tooltips():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/statistics_window.py").read_text(encoding="utf-8")
+
+    assert "self.setMouseTracking(True)" in source
+    assert "def _volume_bucket_index_at(self, x: float, y: float) -> int | None:" in source
+    assert "def _volume_tooltip(self, index: int) -> str:" in source
+    assert "QToolTip.showText(" in source
+    assert "QToolTip.hideText()" in source
+    assert "QToolTip {{ color: {text}; background: {surface};" in source
+    assert '"timestamp": _safe_non_negative_int(bucket.get("timestamp", 0))' in source
+
+
+def test_statistics_back_button_icon_tracks_the_active_theme_foreground():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/statistics_window.py").read_text(encoding="utf-8")
+    styles_start = source.index("def _apply_theme_styles")
+    styles_end = source.index("__all__")
+    styles = source[styles_start:styles_end]
+
+    assert 'self.back_button.setIcon(qta.icon("fa6s.arrow-left", color=text))' in styles
+    assert "QPushButton#statisticsBackButton {{ color: {text};" in styles
