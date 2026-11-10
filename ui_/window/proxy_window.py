@@ -86,7 +86,7 @@ class SystemTunnelActionButton(QPushButton):
         super().leaveEvent(event)
 
     def changeEvent(self, event):
-        if event.type() == QEvent.Type.EnabledChange:
+        if event.type() == QEvent.Type.EnabledChange and hasattr(self, "_icon_name"):
             self._sync_icon()
         super().changeEvent(event)
 
