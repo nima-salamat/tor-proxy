@@ -2392,6 +2392,40 @@ def test_native_titlebar_hit_testing_exposes_windows_snap_regions(qt_app):
     ) is None
 
 
+def test_native_resize_hit_testing_covers_all_window_edges_and_corners(qt_app):
+    from PySide6.QtCore import QPoint, QRect
+
+    from ui import (
+        _HTBOTTOM,
+        _HTBOTTOMLEFT,
+        _HTBOTTOMRIGHT,
+        _HTLEFT,
+        _HTRIGHT,
+        _HTTOP,
+        _HTTOPLEFT,
+        _HTTOPRIGHT,
+        _native_resize_hit_test,
+    )
+
+    bounds = QRect(0, 0, 500, 300)
+    cases = (
+        (QPoint(2, 150), _HTLEFT),
+        (QPoint(497, 150), _HTRIGHT),
+        (QPoint(250, 2), _HTTOP),
+        (QPoint(250, 297), _HTBOTTOM),
+        (QPoint(2, 2), _HTTOPLEFT),
+        (QPoint(497, 2), _HTTOPRIGHT),
+        (QPoint(2, 297), _HTBOTTOMLEFT),
+        (QPoint(497, 297), _HTBOTTOMRIGHT),
+    )
+
+    for point, expected in cases:
+        assert _native_resize_hit_test(point, bounds) == expected
+
+    assert _native_resize_hit_test(QPoint(250, 150), bounds) is None
+    assert _native_resize_hit_test(QPoint(510, 150), bounds) is None
+
+
 def test_main_window_advertises_native_windows_snap_and_maximize_support():
     repository = Path(__file__).resolve().parents[1]
     source = (repository / "ui.py").read_text(encoding="utf-8")
@@ -2404,6 +2438,10 @@ def test_main_window_advertises_native_windows_snap_and_maximize_support():
     assert "ws_maximizebox = 0x00010000" in source
     assert "ws_minimizebox = 0x00020000" in source
     assert "ws_sysmenu = 0x00080000" in source
+    assert "def _native_resize_hit_test(point, window_rect, border=8):" in source
+    assert "resize_hit = _native_resize_hit_test(" in source
+    assert "if not self.isMaximized() and not self.isFullScreen():" in source
+    assert "_HTBOTTOMRIGHT = 17" in source
     assert "def nativeEvent(self, event_type, message):" in source
     assert "native_message.message == _WM_NCCALCSIZE" in source
     assert "native_message.message == _WM_NCHITTEST" in source
