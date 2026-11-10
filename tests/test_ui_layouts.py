@@ -2334,3 +2334,27 @@ def test_updates_and_notifications_dropdowns_use_dedicated_modern_theme_styles()
     # Notification dismissal and the existing update shortcut remain connected.
     assert 'self.notification_clear_button.clicked.connect(self._clear_notifications)' in source
     assert 'self.bundles_update_action.setShortcut("Ctrl+U")' in source
+
+
+
+def test_dropdown_header_copy_has_no_individual_background_or_border():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui.py").read_text(encoding="utf-8")
+    start = source.index("/* Header copy should sit directly on the menu surface")
+    end = source.index('QLabel#notificationCountBadge', start)
+    header_styles = source[start:end]
+
+    for selector in (
+        "QLabel#updatesMenuEyebrow",
+        "QLabel#updatesMenuSubtitle",
+        "QLabel#notificationsMenuTitle",
+        "QLabel#notificationsMenuSubtitle",
+        "QLabel#notificationDescription",
+    ):
+        assert selector in header_styles
+    assert "background: transparent;" in header_styles
+    assert "border: none;" in header_styles
+    assert "background: transparent;" in source[
+        source.index("QWidget#updatesMenuHeader"):
+        source.index("QLabel#updatesMenuEyebrow")
+    ]

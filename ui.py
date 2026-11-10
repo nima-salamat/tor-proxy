@@ -1003,7 +1003,17 @@ class Window(QMainWindow):
                 margin: 5px 12px;
             }}
             QWidget#updatesMenuHeader, QWidget#notificationsMenuHeader,
-            QWidget#notificationDescriptionContainer {{ background: transparent; }}
+            QWidget#notificationDescriptionContainer {{
+                background: transparent;
+                border: none;
+            }}
+            /* Header copy should sit directly on the menu surface, never on its own tile. */
+            QLabel#updatesMenuEyebrow, QLabel#updatesMenuSubtitle,
+            QLabel#notificationsMenuTitle, QLabel#notificationsMenuSubtitle,
+            QLabel#notificationDescription {{
+                background: transparent;
+                border: none;
+            }}
             QLabel#updatesMenuEyebrow {{
                 color: {"#94a2b5" if dark else "#7b8798"};
                 font-size: 8pt;
