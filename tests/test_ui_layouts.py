@@ -2449,3 +2449,31 @@ def test_main_window_advertises_native_windows_snap_and_maximize_support():
     assert "titlebar._sync_maximize_button()" in source
     assert "handle.startSystemMove()" in titlebar_source
     assert "self.parent_.showMaximized()" in titlebar_source
+
+
+def test_listener_port_inputs_are_editable_only_when_fixed_is_checked():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/setting_window.py").read_text(
+        encoding="utf-8"
+    )
+
+    initialize = source[
+        source.index("def initialize_second_page"):
+        source.index("def sync_listener_ports")
+    ]
+    handler = source[
+        source.index("def check_port_changed"):
+        source.index("# ---------- other helpers ----------")
+    ]
+
+    # On startup, automatic ports are display-only; Fixed ports can be edited.
+    assert "inp_port.setEnabled(enabled_initial)" in initialize
+    assert "inp_port.setEnabled(True)" not in initialize
+
+    # Toggling Fixed must persist the preference before changing editability.
+    save_preference = handler.index('CONFIG[port + "_checked"] = enabled')
+    set_editability = handler.index("inp_port.setEnabled(enabled)")
+    assert save_preference < set_editability
+    assert 'previous_fixed = bool(CONFIG[port + "_checked"])' in handler
+    assert "checkbox.setChecked(previous_fixed)" in handler
+
