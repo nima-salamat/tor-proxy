@@ -22,6 +22,43 @@ def test_proxy_server_only_binds_loopback():
 
 
 @pytest.mark.parametrize("address", ["0.0.0.0", "192.0.2.1", "::"])
+
+def test_http_proxy_caps_concurrent_client_handlers(monkeypatch):
+    monkeypatch.setattr(proxy_module, "REQUEST_READ_TIMEOUT_SECONDS", 5.0)
+    server = proxy_module.ThreadedHTTPServer(
+        ("127.0.0.1", 0),
+        proxy_module.ProxyHandler,
+        9050,
+        max_clients=1,
+    )
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    first = second = None
+    try:
+        first = socket.create_connection(("127.0.0.1", server.server_address[1]), timeout=2)
+        deadline = time.monotonic() + 2
+        while server.client_metrics["active_clients"] != 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert server.client_metrics["active_clients"] == 1
+
+        second = socket.create_connection(("127.0.0.1", server.server_address[1]), timeout=2)
+        second.settimeout(2)
+        assert second.recv(1) == b""
+        assert server.client_metrics["rejected_clients"] == 1
+    finally:
+        if first is not None:
+            first.close()
+        if second is not None:
+            second.close()
+        server.shutdown()
+        server.server_close()
+        server_thread.join(timeout=3)
+        deadline = time.monotonic() + 2
+        while server.client_metrics["active_clients"] and time.monotonic() < deadline:
+            time.sleep(0.01)
+    assert server.client_metrics["active_clients"] == 0
+
+
 def test_proxy_server_rejects_non_loopback_listeners(address):
     with pytest.raises(ValueError, match="only bind to loopback"):
         proxy_module.ThreadedHTTPServer((address, 0), proxy_module.ProxyHandler, 9050)
