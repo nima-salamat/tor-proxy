@@ -21,10 +21,10 @@ Writes use a unique temporary file, restrictive permissions where supported, and
 | `bridge` | Enable bridge mode | `false` |
 | `auto_prune_bridges` | Independently test bridges before connecting and remove confirmed failures only when another bridge works | `false` |
 | `bridges` | User-provided bridge records | empty |
-| `tor_port` | Optional SOCKS listener override | automatically chosen when unset/disabled |
+| `tor_port` | Stable loopback SOCKS gateway port used by HTTP proxy, updater, and system tunnel | automatically chosen when unset/disabled |
 | `control_port` | Optional ControlPort override | automatically chosen when unset/disabled |
 | `dns_port` | Optional DNS listener override | automatically chosen when unset/disabled |
-| `proxy_port` | Optional local HTTP proxy override | automatically chosen when unset/disabled |
+| `proxy_port` | Optional local HTTP proxy override | automatically chosen when unset/disabled |\n| `primary_tor_instances` | Total number of Tor processes in the primary active/standby failover group | `2` (range `1..4`) |
 | `*_checked` | Whether a manual port override is enabled | `false` |
 | `tor_path` | Explicit local Tor executable or bundle directory | unset; discover managed bundles |
 | `MaxCircuitDirtiness` | Tor circuit dirtiness in seconds | `600` |
@@ -38,7 +38,7 @@ Unknown keys are ignored by the compatibility facade during loading. The newer t
 
 ## Listener defaults and safety
 
-Tor's SOCKS, ControlPort, DNSPort, and TorProxy's HTTP proxy are configured for `127.0.0.1`. Listener ports must be valid and distinct. Do not configure a non-loopback proxy interface.
+TorProxy exposes one stable SOCKS gateway, a local HTTP proxy, and loopback-only Tor ControlPort/DNSPort listeners. The primary Tor processes use their own private SOCKS/Control ports and DataDirectories behind the stable gateway. Listener ports must be valid and distinct. Do not configure a non-loopback proxy interface.
 
 Automatic listener ports are initialized once and stored in the existing `proxy_port`, `tor_port`, `control_port` and `dns_port` fields. They are reused across application launches while available. If another process occupies an automatic port, TorProxy allocates and atomically saves a replacement before connection. When the corresponding `*_checked` flag is enabled, the port is user-pinned: TorProxy reports a conflict rather than silently changing the requested value. The DNSPort is probed against both TCP and UDP binds. These stored values do not reserve sockets while TorProxy is stopped; the connection preflight probes them again immediately before starting the listeners.
 
@@ -65,7 +65,7 @@ Rules accept hostnames/IP literals, not URLs, user-info, paths, or `host:port` a
 
 Bridge mode accepts complete records for obfs4, Snowflake, WebTunnel, or meek_lite with an IPv4:port or bracketed IPv6:port authority. The shared parser normalizes spacing, removes an optional `Bridge` prefix, splits recognizable adjacent records into separate lines, and deduplicates exact repeated records. Manual paste, QR import, the individual bridge-card list, and Tor configuration validation use the same rules. Unrecognized or incomplete text is reported without overwriting the last valid saved bridge list. Transport executable lookup is relative to the selected bundle; missing executables remain startup errors.
 
-The optional `auto_prune_bridges` preference performs individual, isolated bridge checks before startup, with up to four checks in parallel. Confirmed failures are saved as removed only if another bridge is confirmed working; inconclusive checks and a list with no confirmed success are preserved. This is off by default and can add startup delay.
+The `primary_tor_instances` setting starts 1–4 independent Tor processes for the main connection. The default of 2 keeps one active Tor process and one hot standby. The stable SOCKS gateway routes new sessions to the active process and fails over to a ready standby if that process exits. Existing TCP sessions pinned to a failed process can still disconnect. Additional processes have independent DataDirectories, ControlPort cookies and circuits. More instances increase memory, CPU, sockets and relay connections.\n\nThe optional `auto_prune_bridges` preference performs individual, isolated bridge checks before startup, with up to eight checks in parallel. Confirmed failures are saved as removed only if another bridge is confirmed working; inconclusive checks and a list with no confirmed success are preserved. This is off by default and can add startup delay.
 
 ## System proxy settings
 
