@@ -9,11 +9,13 @@ from __future__ import annotations
 import os
 import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from .health import TorProbeResult, probe_tor_socks
 from .paths import user_directories
 from .tor_manager import TorManager, TorManagerError, TorSettings, TorState
 
@@ -34,6 +36,12 @@ class _ServiceEntry:
     start_lock: threading.Lock
     active_calls: int = 0
     stopping: bool = False
+    network_healthy: bool = False
+    network_health: str = "unchecked"
+    health_latency_ms: float | None = None
+    consecutive_health_failures: int = 0
+    last_health_check: float | None = None
+    last_health_error: str = "A real Tor egress check has not run yet."
 
 
 ManagerFactory = Callable[[TorSettings], TorManager]
@@ -55,6 +63,8 @@ class TorServicePool:
         reserved_paths: Iterable[str | Path] = (),
         max_workers: int = DEFAULT_SERVICE_WORKERS,
         directories=None,
+        health_probe: Callable[..., TorProbeResult] | None = None,
+        health_interval: float = 20.0,
     ) -> None:
         self._manager_factory = manager_factory or TorManager
         self._directories = directories or user_directories()
@@ -63,6 +73,10 @@ class TorServicePool:
         self._max_workers = max(1, min(int(max_workers), MAX_SERVICE_WORKERS))
         self._services: dict[str, _ServiceEntry] = {}
         self._lock = threading.RLock()
+        self._health_probe = health_probe or probe_tor_socks
+        self._health_interval = max(0.0, min(3600.0, float(health_interval)))
+        self._health_stop = threading.Event()
+        self._health_thread: threading.Thread | None = None
 
     @staticmethod
     def _validate_port(port: int) -> int:
@@ -238,10 +252,116 @@ class TorServicePool:
                     "dns_port": entry.settings.dns_port,
                     "data_directory": str(entry.settings.data_directory),
                     "pid": getattr(getattr(entry.manager, "process", None), "pid", None),
+                    "network_healthy": bool(entry.network_healthy),
+                    "network_health": entry.network_health,
+                    "latency_ms": entry.health_latency_ms,
+                    "consecutive_health_failures": entry.consecutive_health_failures,
+                    "last_health_check": entry.last_health_check,
+                    "last_health_error": entry.last_health_error,
                 }
                 for entry in entries
             }
         return result[service_id] if service_id is not None else result
+
+    def _run_health_probe(self, port: int) -> TorProbeResult:
+        try:
+            return self._health_probe(int(port), timeout=8.0)
+        except Exception as exc:
+            return TorProbeResult(
+                False,
+                detail=f"Tor connectivity probe failed ({type(exc).__name__}).",
+            )
+
+    def _apply_health_result(
+        self,
+        service_id: str,
+        entry: _ServiceEntry,
+        result: TorProbeResult,
+    ) -> None:
+        with self._lock:
+            if self._services.get(service_id) is not entry or entry.stopping:
+                return
+            manager_state = self._state_value(entry.manager)
+            if manager_state != "ready":
+                entry.network_healthy = False
+                entry.network_health = "stopped" if manager_state == "stopped" else "not_ready"
+                entry.health_latency_ms = None
+                entry.consecutive_health_failures = 0
+                entry.last_health_error = "The Tor process is not in READY state."
+            elif result.healthy:
+                sample = max(0.0, float(result.latency_ms or 0.0))
+                previous = entry.health_latency_ms
+                entry.health_latency_ms = sample if previous is None else previous * 0.65 + sample * 0.35
+                entry.network_healthy = True
+                entry.network_health = "healthy"
+                entry.consecutive_health_failures = 0
+                entry.last_health_error = ""
+            else:
+                failures = entry.consecutive_health_failures + 1
+                entry.consecutive_health_failures = failures
+                entry.network_healthy = entry.network_healthy and failures < 2
+                entry.network_health = "degraded" if entry.network_healthy else "unhealthy"
+                entry.last_health_error = result.detail or "Tor egress check failed."
+            entry.last_health_check = time.time()
+
+    def _probe_running_services(self) -> None:
+        with self._lock:
+            candidates = [
+                (service_id, entry, entry.settings.socks_port)
+                for service_id, entry in self._services.items()
+                if not entry.stopping and self._state_value(entry.manager) == "ready"
+            ]
+        if not candidates:
+            return
+        with ThreadPoolExecutor(
+            max_workers=max(1, min(self.max_workers, len(candidates))),
+            thread_name_prefix="torproxy-service-health",
+        ) as executor:
+            futures = {
+                executor.submit(self._run_health_probe, port): (service_id, entry)
+                for service_id, entry, port in candidates
+            }
+            for future, (service_id, entry) in futures.items():
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    result = TorProbeResult(
+                        False,
+                        detail=f"Tor connectivity probe failed ({type(exc).__name__}).",
+                    )
+                self._apply_health_result(service_id, entry, result)
+
+    def _health_monitor_loop(self) -> None:
+        while not self._health_stop.wait(self._health_interval):
+            try:
+                self._probe_running_services()
+            except Exception:
+                # Monitoring must never terminate service ownership or Stop.
+                continue
+
+    def _ensure_health_monitor(self) -> None:
+        if self._health_interval <= 0:
+            return
+        with self._lock:
+            if self._health_thread is not None and self._health_thread.is_alive():
+                return
+            self._health_stop.clear()
+            self._health_thread = threading.Thread(
+                target=self._health_monitor_loop,
+                name="torproxy-isolated-service-health",
+                daemon=True,
+            )
+            self._health_thread.start()
+
+    def close(self, *, timeout: float = 10.0) -> None:
+        """Stop the health monitor; callers must stop Tor services separately."""
+        self._health_stop.set()
+        thread = self._health_thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=max(0.1, float(timeout)))
+        if thread is not None and thread.is_alive():
+            raise TorServicePoolError("The isolated Tor service health monitor is still active.")
+        self._health_thread = None
 
     def start_service(self, service_id: str) -> None:
         with self._lock:
@@ -255,8 +375,24 @@ class TorServicePool:
             if not acquired:
                 entry.active_calls -= 1
                 raise TorServicePoolError(f"Tor service '{service_id}' already has a start operation in progress.")
+            entry.network_health = "checking"
+            entry.network_healthy = False
+            entry.health_latency_ms = None
+            entry.consecutive_health_failures = 0
+            entry.last_health_error = "Waiting for a real Tor egress check."
+
         try:
             entry.manager.start()
+            result = self._run_health_probe(entry.settings.socks_port)
+            self._apply_health_result(service_id, entry, result)
+            self._ensure_health_monitor()
+        except Exception as exc:
+            with self._lock:
+                if self._services.get(service_id) is entry:
+                    entry.network_healthy = False
+                    entry.network_health = "not_ready"
+                    entry.last_health_error = f"{type(exc).__name__}: {exc}"
+            raise
         finally:
             entry.start_lock.release()
             with self._lock:
@@ -301,6 +437,13 @@ class TorServicePool:
                 ) from error
         finally:
             with self._lock:
+                entry.network_healthy = False
+                entry.health_latency_ms = None
+                entry.consecutive_health_failures = 0
+                entry.network_health = (
+                    "stopped" if self._state_value(entry.manager) == "stopped" else "not_ready"
+                )
+                entry.last_health_error = ""
                 entry.stopping = False
                 entry.active_calls -= 1
 

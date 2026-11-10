@@ -547,3 +547,63 @@ def test_http_proxy_runner_respects_disabled_preference_and_can_start_live(monke
     assert runner.is_running is False
     assert runner.server is None
     runner.stop()
+
+
+
+def test_primary_pool_health_snapshot_exposes_gateway_active_load_and_capacity(monkeypatch, tmp_path):
+    runner, _config = _runner(monkeypatch, tmp_path, "")
+    backend = _ready_fake_backend(19466)
+    runner._backend_managers = [backend]
+    runner._backend_statuses = {0: "READY"}
+    runner._backend_health = {
+        0: {"healthy": True, "latency_ms": 72.0, "consecutive_failures": 0}
+    }
+    runner._gateway = SimpleNamespace(
+        backend_metrics={
+            ("127.0.0.1", 19466): {
+                "active": 3,
+                "failures": 2,
+                "cooldown_until": 0.0,
+            }
+        },
+        session_metrics={
+            "active_sessions": 3,
+            "max_sessions": 256,
+            "rejected_sessions": 1,
+        },
+    )
+
+    snapshot = runner.pool_health_snapshot
+
+    assert snapshot["instances"][0]["active_connections"] == 3
+    assert snapshot["instances"][0]["gateway_failures"] == 2
+    assert snapshot["gateway"] == {
+        "active_sessions": 3,
+        "max_sessions": 256,
+        "rejected_sessions": 1,
+    }
+
+
+def test_bridge_fingerprint_control_port_queries_are_throttled(monkeypatch, tmp_path):
+    runner, _config = _runner(monkeypatch, tmp_path, BRIDGES[0])
+    runner.bridge = True
+    calls = []
+
+    backend = _ready_fake_backend(19467)
+    backend.get_active_bridge_fingerprints = lambda: calls.append("query") or ()
+    runner._backend_managers = [backend]
+    runner._backend_statuses = {0: "READY"}
+    runner._backend_health = {
+        0: {"healthy": True, "latency_ms": 70.0, "consecutive_failures": 0}
+    }
+    runner._bridge_fingerprints_initialized = True
+    runner._last_bridge_fingerprint_refresh = tor.time.monotonic()
+    runner._cached_active_bridge_fingerprints = set()
+
+    runner._publish_bridge_usage()
+    assert calls == []
+
+    runner._last_bridge_fingerprint_refresh -= 10.0
+    runner._publish_bridge_usage()
+    runner._publish_bridge_usage()
+    assert calls == ["query"]

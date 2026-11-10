@@ -2507,3 +2507,15 @@ def test_settings_expose_default_enabled_http_proxy_and_connectivity_diagnostic(
     assert 'self.chk_http_proxy_enabled = QCheckBox("Enable local HTTP proxy", self)' in settings
     assert 'self.btn_test_http_connect = QPushButton("Test HTTP CONNECT", self)' in settings
     assert "def test_http_connect(self)" in settings
+
+
+
+def test_tor_service_settings_display_real_network_health_and_gateway_load():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/tor_services_page.py").read_text(encoding="utf-8")
+    assert "def _service_health_text(status: dict)" in source
+    assert '"Tor egress verified"' in source
+    assert '"NO TOR EGRESS"' in source
+    assert "def _refresh_live_service_health(self)" in source
+    assert "active_connections" in source
+    assert "max_sessions" in source

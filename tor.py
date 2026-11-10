@@ -1566,6 +1566,27 @@ class Runner:
             thread.join(timeout=5)
         if thread is not None and thread.is_alive():
             raise RuntimeError("HTTP listener is still active; shutdown is incomplete.")
+
+        def active_http_clients() -> int:
+            metrics = getattr(server, "client_metrics", None)
+            if callable(metrics):
+                metrics = metrics()
+            if isinstance(metrics, dict):
+                try:
+                    return max(0, int(metrics.get("active_clients", 0) or 0))
+                except (TypeError, ValueError):
+                    return 0
+            return 0
+
+        deadline = time.monotonic() + 5.0
+        active_clients = active_http_clients()
+        while active_clients and time.monotonic() < deadline:
+            time.sleep(0.05)
+            active_clients = active_http_clients()
+        if active_clients:
+            raise RuntimeError(
+                f"Local HTTP proxy shutdown is incomplete; {active_clients} client handler(s) are still active."
+            )
         self.server = None
         self.thread = None
         logger.info("Loopback HTTP proxy stopped.")

@@ -31,6 +31,7 @@ class SocksFailoverGateway:
         connect_timeout: float = 8.0,
         handshake_timeout: float = 12.0,
         idle_timeout: float = 120.0,
+        max_sessions: int = 256,
     ) -> None:
         if host not in {"127.0.0.1", "::1", "localhost"}:
             raise ValueError("The Tor SOCKS gateway must bind to loopback.")
@@ -42,6 +43,12 @@ class SocksFailoverGateway:
         self._connect_timeout = max(0.5, float(connect_timeout))
         self._handshake_timeout = max(1.0, float(handshake_timeout))
         self._idle_timeout = max(5.0, float(idle_timeout))
+        if type(max_sessions) is not int or not 1 <= max_sessions <= 4096:
+            raise ValueError("The SOCKS gateway session limit must be between 1 and 4096.")
+        self._max_sessions = max_sessions
+        self._session_slots = threading.BoundedSemaphore(max_sessions)
+        self._session_threads: set[threading.Thread] = set()
+        self._rejected_sessions = 0
         self._listener: socket.socket | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
@@ -62,12 +69,13 @@ class SocksFailoverGateway:
             listener = socket.socket(family, socket.SOCK_STREAM)
             try:
                 listener.bind((self.host, self.port))
-                listener.listen(128)
+                listener.listen(min(256, self._max_sessions))
                 listener.settimeout(0.5)
             except OSError:
                 listener.close()
                 raise
             self._stop.clear()
+            self._rejected_sessions = 0
             self._listener = listener
             self._thread = threading.Thread(
                 target=self._accept_loop,
@@ -103,12 +111,52 @@ class SocksFailoverGateway:
             if not self._track(client, True):
                 client.close()
                 return
-            threading.Thread(
-                target=self._handle_client,
+            if not self._session_slots.acquire(blocking=False):
+                with self._lock:
+                    self._rejected_sessions += 1
+                self._track(client, False)
+                client.close()
+                continue
+
+            worker = threading.Thread(
+                target=self._run_client_session,
                 args=(client,),
                 name="torproxy-socks-session",
                 daemon=True,
-            ).start()
+            )
+            with self._lock:
+                self._session_threads.add(worker)
+            try:
+                worker.start()
+            except RuntimeError:
+                with self._lock:
+                    self._session_threads.discard(worker)
+                    self._rejected_sessions += 1
+                self._session_slots.release()
+                self._track(client, False)
+                client.close()
+                LOGGER.exception("Could not start a SOCKS client session thread.")
+
+    def _run_client_session(self, client: socket.socket) -> None:
+        """Run one client session and always return its bounded worker slot."""
+        current = threading.current_thread()
+        try:
+            self._handle_client(client)
+        finally:
+            self._track(client, False)
+            with self._lock:
+                self._session_threads.discard(current)
+            self._session_slots.release()
+
+    @property
+    def session_metrics(self) -> dict[str, int]:
+        """Return bounded gateway session capacity and overload counters."""
+        with self._lock:
+            return {
+                "active_sessions": len(self._session_threads),
+                "max_sessions": self._max_sessions,
+                "rejected_sessions": self._rejected_sessions,
+            }
 
     @staticmethod
     def _recv_exact(sock: socket.socket, size: int) -> bytes:
@@ -125,6 +173,8 @@ class SocksFailoverGateway:
         header = cls._recv_exact(client, 4)
         if header[0] != 5:
             raise ValueError("Only SOCKS5 clients are supported.")
+        if header[2] != 0:
+            raise ValueError("SOCKS5 request reserved byte must be zero.")
         if header[1] != 1:
             raise ValueError("The Tor SOCKS gateway supports TCP CONNECT only.")
         atyp = header[3]
@@ -144,6 +194,8 @@ class SocksFailoverGateway:
     @classmethod
     def _read_reply(cls, upstream: socket.socket) -> bytes:
         header = cls._recv_exact(upstream, 4)
+        if header[0] != 5 or header[2] != 0:
+            raise OSError("Tor returned an invalid SOCKS reply header.")
         atyp = header[3]
         if atyp == 1:
             tail = cls._recv_exact(upstream, 6)
@@ -185,6 +237,12 @@ class SocksFailoverGateway:
 
         now = time.monotonic()
         with self._lock:
+            # Ports are dynamically allocated when Tor workers restart. Retain
+            # statistics for old endpoints only while an existing stream still
+            # holds a reservation; otherwise stale entries would grow forever.
+            for endpoint in tuple(self._backend_stats):
+                if endpoint not in candidates and int(self._backend_stats[endpoint]["active"]) == 0:
+                    del self._backend_stats[endpoint]
             for endpoint in candidates:
                 self._backend_stats.setdefault(endpoint, {
                     "active": 0,
@@ -394,7 +452,7 @@ class SocksFailoverGateway:
                         self._release_backend(endpoint)
 
             try:
-                client.sendall(last_reply or self._failure_reply(4))
+                client.sendall(last_reply or self._failure_reply(1))
             except OSError:
                 pass
         except (OSError, TimeoutError, ValueError):
@@ -433,12 +491,26 @@ class SocksFailoverGateway:
                 client.close()
             except OSError:
                 pass
+        deadline = time.monotonic() + max(0.1, float(timeout))
         thread = self._thread
         if thread is not None and thread is not threading.current_thread():
-            thread.join(timeout=max(0.1, float(timeout)))
+            thread.join(timeout=max(0.0, deadline - time.monotonic()))
         if thread is not None and thread.is_alive():
             raise SocksGatewayError("The primary Tor SOCKS failover listener is still active.")
+
+        with self._lock:
+            session_threads = tuple(self._session_threads)
+        for worker in session_threads:
+            if worker is not threading.current_thread():
+                worker.join(timeout=max(0.0, deadline - time.monotonic()))
+        with self._lock:
+            active_sessions = sum(1 for worker in self._session_threads if worker.is_alive())
+        if active_sessions:
+            raise SocksGatewayError(
+                f"The primary Tor SOCKS gateway still has {active_sessions} active session(s)."
+            )
         with self._lock:
             self._thread = None
+            self._session_threads.clear()
             self._clients.clear()
         LOGGER.info("Primary Tor SOCKS failover gateway stopped.")

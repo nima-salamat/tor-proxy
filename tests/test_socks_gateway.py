@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import socket
 import threading
+import time
 
 from torproxy.socks_gateway import SocksFailoverGateway
 
@@ -165,3 +166,51 @@ def test_gateway_tracks_backend_reservations_for_active_load_balancing():
     assert gateway.backend_metrics[endpoint]["active"] == 1
     gateway._release_backend(endpoint)
     assert gateway.backend_metrics[endpoint]["active"] == 0
+
+
+
+def test_gateway_rejects_sessions_over_configured_capacity_and_releases_slots():
+    gateway_port = _free_port()
+    gateway = SocksFailoverGateway(
+        gateway_port,
+        lambda: [],
+        max_sessions=1,
+        handshake_timeout=5,
+    )
+    gateway.start()
+    first = None
+    second = None
+    try:
+        first = socket.create_connection(("127.0.0.1", gateway_port), timeout=2)
+        first.settimeout(2)
+        deadline = time.monotonic() + 2
+        while gateway.session_metrics["active_sessions"] != 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert gateway.session_metrics["active_sessions"] == 1
+
+        second = socket.create_connection(("127.0.0.1", gateway_port), timeout=2)
+        second.settimeout(2)
+        assert second.recv(1) == b""
+
+        metrics = gateway.session_metrics
+        assert metrics["max_sessions"] == 1
+        assert metrics["rejected_sessions"] == 1
+        assert metrics["active_sessions"] == 1
+    finally:
+        if first is not None:
+            first.close()
+        if second is not None:
+            second.close()
+        gateway.stop()
+
+    assert gateway.session_metrics["active_sessions"] == 0
+
+
+def test_gateway_rejects_invalid_session_limits():
+    gateway_port = _free_port()
+    try:
+        SocksFailoverGateway(gateway_port, lambda: [], max_sessions=0)
+    except ValueError as exc:
+        assert "between 1 and 4096" in str(exc)
+    else:
+        raise AssertionError("A zero-sized gateway must not be accepted")

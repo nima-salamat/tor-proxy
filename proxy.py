@@ -715,7 +715,14 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
     allow_reuse_address = False
 
-    def __init__(self, addr, handler, tor_socks_port):
+    def __init__(self, addr, handler, tor_socks_port, max_clients=128):
+        if type(max_clients) is not int or not 1 <= max_clients <= 4096:
+            raise ValueError("The HTTP proxy client limit must be between 1 and 4096.")
+        self._max_clients = max_clients
+        self._client_slots = threading.BoundedSemaphore(max_clients)
+        self._client_lock = threading.RLock()
+        self._active_clients: set[socket.socket] = set()
+        self._rejected_clients = 0
         host = addr[0]
         try:
             is_loopback = ipaddress.ip_address(host).is_loopback
@@ -725,3 +732,52 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
             raise ValueError("The HTTP proxy can only bind to loopback; remote access is disabled.")
         self.tor_socks_port = int(tor_socks_port)
         super().__init__(addr, handler)
+
+    @property
+    def client_metrics(self) -> dict[str, int]:
+        with self._client_lock:
+            return {
+                "active_clients": len(self._active_clients),
+                "max_clients": self._max_clients,
+                "rejected_clients": self._rejected_clients,
+            }
+
+    def process_request(self, request, client_address):
+        if not self._client_slots.acquire(blocking=False):
+            with self._client_lock:
+                self._rejected_clients += 1
+            self.shutdown_request(request)
+            return
+        with self._client_lock:
+            self._active_clients.add(request)
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            with self._client_lock:
+                self._active_clients.discard(request)
+                self._rejected_clients += 1
+            self._client_slots.release()
+            self.shutdown_request(request)
+            logger.exception("Could not start an HTTP proxy client handler.")
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            with self._client_lock:
+                self._active_clients.discard(request)
+            self._client_slots.release()
+
+    def server_close(self):
+        with self._client_lock:
+            clients = tuple(self._active_clients)
+        for client in clients:
+            try:
+                client.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                client.close()
+            except OSError:
+                pass
+        super().server_close()

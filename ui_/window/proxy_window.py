@@ -1247,6 +1247,12 @@ class ProxyWindow(QWidget):
                         )
                     else:
                         messages.append(f"Stopped {len(service_ids)} isolated Tor service(s).")
+                        try:
+                            self.tor_service_pool.close()
+                        except Exception as monitor_error:
+                            stop_errors.append(
+                                f"Isolated Tor health monitor shutdown failed: {monitor_error}"
+                            )
                 except Exception as exc:
                     logger.exception("Error stopping isolated Tor services during application exit.")
                     stop_errors.append(f"Isolated Tor service shutdown failed: {exc}")

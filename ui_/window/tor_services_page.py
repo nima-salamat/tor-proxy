@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 
 import qtawesome as qta
-from PySide6.QtCore import Qt, QThreadPool
+from PySide6.QtCore import Qt, QThreadPool, QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -272,6 +272,12 @@ class TorServicesPage(QWidget):
         self._busy_services: set[str] = set()
         self._busy_all = False
         self._service_cards_layout: QVBoxLayout | None = None
+        self._service_state_labels: dict[str, QLabel] = {}
+        self._service_health_labels: dict[str, QLabel] = {}
+        self._health_refresh_timer = QTimer(self)
+        self._health_refresh_timer.setInterval(5000)
+        self._health_refresh_timer.timeout.connect(self._refresh_live_service_health)
+        self._health_refresh_timer.start()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -480,9 +486,34 @@ class TorServicesPage(QWidget):
             except (TypeError, ValueError):
                 bridge_count = 0
             bridge_suffix = f" · {bridge_count} bridge record(s)" if bridge_count else ""
-            labels.append(f"Instance {index}: {description}{bridge_suffix}")
+            try:
+                active_connections = max(0, int(item.get("active_connections", 0) or 0))
+                backend_failures = max(0, int(item.get("gateway_failures", 0) or 0))
+                cooldown = max(0.0, float(item.get("cooldown_remaining_seconds", 0.0) or 0.0))
+            except (TypeError, ValueError):
+                active_connections = backend_failures = 0
+                cooldown = 0.0
+            load_suffix = f" · {active_connections} active connection(s)"
+            if backend_failures:
+                load_suffix += f" · {backend_failures} recent gateway failure(s)"
+            if cooldown > 0:
+                load_suffix += f" · fallback cooldown {cooldown:.0f}s"
+            labels.append(f"Instance {index}: {description}{bridge_suffix}{load_suffix}")
 
         detail = "  |  ".join(labels) if labels else "Waiting for instance status."
+        gateway = health.get("gateway")
+        if isinstance(gateway, dict):
+            try:
+                active_sessions = max(0, int(gateway.get("active_sessions", 0) or 0))
+                max_sessions = max(0, int(gateway.get("max_sessions", 0) or 0))
+                rejected_sessions = max(0, int(gateway.get("rejected_sessions", 0) or 0))
+            except (TypeError, ValueError):
+                active_sessions = max_sessions = rejected_sessions = 0
+            if max_sessions:
+                detail += (
+                    f"\nSOCKS gateway: {active_sessions}/{max_sessions} active sessions; "
+                    f"{rejected_sessions} rejected by the capacity limit."
+                )
         distribution = health.get("bridge_distribution")
         distribution_note = ""
         if isinstance(distribution, dict):
@@ -796,6 +827,8 @@ class TorServicesPage(QWidget):
                 pool_error = str(exc)
 
         statuses = pool.status() if pool is not None else {}
+        self._service_state_labels.clear()
+        self._service_health_labels.clear()
         restore_errors = getattr(self._proxy, "tor_service_profile_errors", {}) if self._proxy else {}
         self.lbl_runtime_status.setText(
             pool_error or (
@@ -823,6 +856,72 @@ class TorServicesPage(QWidget):
             )
         self._update_global_actions()
 
+    @staticmethod
+    def _service_health_text(status: dict) -> str:
+        health = str(status.get("network_health") or "unchecked").lower()
+        latency = status.get("latency_ms")
+        try:
+            latency_text = f" · {float(latency):.0f} ms" if latency is not None else ""
+        except (TypeError, ValueError):
+            latency_text = ""
+        if health == "healthy":
+            return "Tor egress verified" + latency_text
+        if health == "degraded":
+            return "Tor egress degraded · one failed check; endpoint retained temporarily"
+        if health == "unhealthy":
+            detail = str(status.get("last_health_error") or "Tor egress could not be verified.")
+            return "Tor network unavailable · " + detail
+        if health == "checking":
+            return "Checking real Tor network connectivity…"
+        if health == "stopped":
+            return "Tor service is stopped."
+        if health == "not_ready":
+            return "Tor process is not ready for network checks."
+        return "Network health has not been verified yet."
+
+    def _refresh_live_service_health(self) -> None:
+        """Refresh health labels without rebuilding cards or disturbing scroll position."""
+        if not self.isVisible() or self._busy_all or self._busy_services:
+            return
+        if self._primary_tor is not None:
+            snapshot = getattr(self._primary_tor, "pool_health_snapshot", None)
+            if isinstance(snapshot, dict):
+                self._update_primary_pool_health(snapshot)
+        pool = self._pool()
+        if pool is None:
+            return
+        try:
+            statuses = pool.status()
+        except Exception:
+            return
+        for service_id, status in statuses.items():
+            health_label = self._service_health_labels.get(service_id)
+            if health_label is not None:
+                health_label.setText(self._service_health_text(status))
+            state_label = self._service_state_labels.get(service_id)
+            if state_label is None:
+                continue
+            manager_state = str(status.get("state") or "unknown").lower()
+            health_state = str(status.get("network_health") or "unchecked").lower()
+            if manager_state == "ready" and health_state == "healthy":
+                state_label.setText("TOR VERIFIED")
+                service_state = "ready"
+            elif manager_state == "ready" and health_state == "unhealthy":
+                state_label.setText("NO TOR EGRESS")
+                service_state = "failed"
+            elif manager_state == "ready" and health_state == "degraded":
+                state_label.setText("DEGRADED")
+                service_state = "ready"
+            elif manager_state == "ready":
+                state_label.setText("CHECKING NETWORK")
+                service_state = "ready"
+            else:
+                state_label.setText(manager_state.replace("_", " ").upper())
+                service_state = manager_state
+            state_label.setProperty("serviceState", service_state)
+            state_label.style().unpolish(state_label)
+            state_label.style().polish(state_label)
+
     def _create_service_card(self, profile: dict, state: str, status: dict, error: str):
         card = QFrame(self)
         card.setObjectName("torServiceCard")
@@ -836,8 +935,21 @@ class TorServicesPage(QWidget):
         header.addWidget(name, 1)
         state_label = QLabel(state.replace("_", " ").upper())
         state_label.setObjectName("torServiceStatus")
-        state_label.setProperty("serviceState", state)
+        health_state = str(status.get("network_health") or "unchecked").lower()
+        if state == "ready":
+            state_label.setText({
+                "healthy": "TOR VERIFIED",
+                "degraded": "DEGRADED",
+                "unhealthy": "NO TOR EGRESS",
+                "checking": "CHECKING NETWORK",
+            }.get(health_state, "READY · UNVERIFIED"))
+        state_label.setProperty(
+            "serviceState",
+            "failed" if state == "failed" or health_state == "unhealthy" else state,
+        )
         header.addWidget(state_label)
+        service_id = str(profile.get("id", ""))
+        self._service_state_labels[service_id] = state_label
         outer.addLayout(header)
 
         dns = profile.get("dns_port")
@@ -850,6 +962,11 @@ class TorServicesPage(QWidget):
         details = QLabel(detail)
         details.setObjectName("settingsDescription")
         outer.addWidget(details)
+        health_label = QLabel(self._service_health_text(status))
+        health_label.setObjectName("settingsDescription")
+        health_label.setWordWrap(True)
+        outer.addWidget(health_label)
+        self._service_health_labels[service_id] = health_label
 
         directory = status.get("data_directory") or profile.get("data_directory") or (
             f"Automatic · tor-services/{profile.get('id')}"

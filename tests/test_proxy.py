@@ -4,6 +4,7 @@ import select
 import socket
 import socketserver
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer as TargetServer
 
 import pytest

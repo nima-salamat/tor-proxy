@@ -1,12 +1,14 @@
-"""Per-instance Tor connectivity probes through each worker's own SOCKS listener."""
+"""Bounded, environment-independent Tor egress probes through SOCKS5."""
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass
 
 import requests
 
 TOR_CHECK_URL = "https://check.torproject.org/api/ip"
+MAX_TOR_CHECK_RESPONSE_BYTES = 16 * 1024
 
 
 @dataclass(frozen=True)
@@ -19,56 +21,69 @@ class TorProbeResult:
 
 
 def probe_tor_socks(socks_port: int, *, timeout: float = 8.0) -> TorProbeResult:
-    """Verify that a request through one Tor SOCKS port reaches the Tor Project.
+    """Verify an actual Tor egress request through one worker's SOCKS listener.
 
-    The request uses SOCKS5 remote DNS and TLS certificate verification. The
-    response IP is intentionally discarded and never logged or persisted.
+    Environment proxy variables are deliberately ignored: a NO_PROXY entry
+    must never make a health check silently bypass the worker being measured.
+    The response body is bounded, redirects are rejected, TLS verification is
+    left enabled, and the returned exit IP is discarded.
     """
     if type(socks_port) is not int or not 1 <= socks_port <= 65535:
         return TorProbeResult(False, detail="Invalid Tor SOCKS listener port.")
-    timeout = max(1.0, min(20.0, float(timeout)))
+    try:
+        timeout = max(1.0, min(20.0, float(timeout)))
+    except (TypeError, ValueError, OverflowError):
+        return TorProbeResult(False, detail="Invalid Tor connectivity probe timeout.")
+
     proxy = f"socks5h://127.0.0.1:{socks_port}"
     proxies = {"http": proxy, "https": proxy}
     started = time.monotonic()
-    response = None
     try:
-        response = requests.get(
-            TOR_CHECK_URL,
-            proxies=proxies,
-            timeout=(timeout / 2.0, timeout / 2.0),
-            allow_redirects=False,
-            headers={
-                "Accept": "application/json",
-                "Cache-Control": "no-cache",
-                "Pragma": "no-cache",
-                "User-Agent": "TorProxy-connectivity-check",
-            },
-        )
-        if response.status_code != 200:
-            return TorProbeResult(
-                False,
-                detail=f"Tor Check returned HTTP {int(response.status_code)}.",
-            )
-        payload = response.json()
-        if not isinstance(payload, dict) or payload.get("IsTor") is not True:
-            return TorProbeResult(
-                False,
-                detail="Tor Check did not confirm that the request used the Tor network.",
-            )
+        with requests.Session() as session:
+            session.trust_env = False
+            with session.get(
+                TOR_CHECK_URL,
+                proxies=proxies,
+                timeout=(timeout / 2.0, timeout / 2.0),
+                allow_redirects=False,
+                stream=True,
+                headers={
+                    "Accept": "application/json",
+                    "Cache-Control": "no-cache",
+                    "Pragma": "no-cache",
+                    "User-Agent": "TorProxy-connectivity-check",
+                },
+            ) as response:
+                if response.status_code != 200:
+                    return TorProbeResult(
+                        False,
+                        detail=f"Tor Check returned HTTP {int(response.status_code)}.",
+                    )
+                body = bytearray()
+                for chunk in response.iter_content(chunk_size=4096):
+                    if not chunk:
+                        continue
+                    if len(body) + len(chunk) > MAX_TOR_CHECK_RESPONSE_BYTES:
+                        return TorProbeResult(
+                            False,
+                            detail="Tor Check response exceeded the permitted size.",
+                        )
+                    body.extend(chunk)
+                payload = json.loads(body)
+                if not isinstance(payload, dict) or payload.get("IsTor") is not True:
+                    return TorProbeResult(
+                        False,
+                        detail="Tor Check did not confirm that the request used the Tor network.",
+                    )
         return TorProbeResult(
             True,
             latency_ms=max(0.0, (time.monotonic() - started) * 1000.0),
             detail="Tor Check confirmed this SOCKS connection is using Tor.",
         )
     except requests.RequestException as exc:
-        # Keep diagnostics useful without exposing response bodies, exit IPs or
-        # remote URLs in routine event logs.
         return TorProbeResult(
             False,
             detail=f"Tor connectivity probe failed ({type(exc).__name__}).",
         )
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, UnicodeError):
         return TorProbeResult(False, detail="Tor Check returned an invalid response.")
-    finally:
-        if response is not None:
-            response.close()

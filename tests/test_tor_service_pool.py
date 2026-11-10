@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from torproxy.health import TorProbeResult
 from torproxy.service_pool import TorServicePool, TorServicePoolError
 from torproxy.tor_manager import TorSettings
 
@@ -32,7 +33,16 @@ def _settings(tmp_path: Path, socks: int = 21050, control: int = 21051, dns: int
     )
 
 
-def _pool(tmp_path: Path, *, manager_factory=FakeManager, reserved_ports=(), reserved_paths=(), max_workers=4):
+def _pool(
+    tmp_path: Path,
+    *,
+    manager_factory=FakeManager,
+    reserved_ports=(),
+    reserved_paths=(),
+    max_workers=4,
+    health_probe=None,
+    health_interval=0,
+):
     directories = SimpleNamespace(data=tmp_path / "app-data", logs=tmp_path / "app-logs")
     return TorServicePool(
         manager_factory=manager_factory,
@@ -40,6 +50,10 @@ def _pool(tmp_path: Path, *, manager_factory=FakeManager, reserved_ports=(), res
         reserved_paths=reserved_paths,
         max_workers=max_workers,
         directories=directories,
+        health_probe=health_probe or (
+            lambda _port, timeout=8.0: TorProbeResult(True, latency_ms=42.0)
+        ),
+        health_interval=health_interval,
     )
 
 
@@ -217,3 +231,62 @@ def test_service_data_directories_cannot_overlap_primary_tor_paths(tmp_path):
 
     with pytest.raises(TorServicePoolError, match="reserved primary Tor state or log path"):
         pool.register("unsafe", settings)
+
+
+
+def test_independent_service_requires_real_tor_egress_health_and_recovers_after_two_failures(tmp_path):
+    outcomes = iter([
+        TorProbeResult(True, latency_ms=60.0),
+        TorProbeResult(False, detail="Tor Check unreachable"),
+        TorProbeResult(False, detail="Tor Check unreachable"),
+        TorProbeResult(True, latency_ms=45.0),
+    ])
+    pool = _pool(
+        tmp_path,
+        health_probe=lambda _port, timeout=8.0: next(outcomes),
+        health_interval=0,
+    )
+    pool.register("personal", _settings(tmp_path, 26050, 26051))
+
+    pool.start_service("personal")
+    status = pool.status("personal")
+    assert status["state"] == "ready"
+    assert status["network_healthy"] is True
+    assert status["network_health"] == "healthy"
+    assert status["latency_ms"] == 60.0
+
+    pool._probe_running_services()
+    status = pool.status("personal")
+    assert status["network_healthy"] is True
+    assert status["network_health"] == "degraded"
+    assert status["consecutive_health_failures"] == 1
+
+    pool._probe_running_services()
+    status = pool.status("personal")
+    assert status["network_healthy"] is False
+    assert status["network_health"] == "unhealthy"
+    assert status["consecutive_health_failures"] == 2
+    assert status["last_health_error"] == "Tor Check unreachable"
+
+    pool._probe_running_services()
+    status = pool.status("personal")
+    assert status["network_healthy"] is True
+    assert status["network_health"] == "healthy"
+    assert status["consecutive_health_failures"] == 0
+
+    pool.stop_service("personal")
+    assert pool.status("personal")["network_health"] == "stopped"
+    pool.close()
+
+
+def test_isolated_service_health_monitor_can_be_closed_without_stopping_service_pool(tmp_path):
+    pool = _pool(tmp_path, health_interval=3600)
+    pool.register("work", _settings(tmp_path, 26150, 26151))
+    pool.start_service("work")
+    thread = pool._health_thread
+
+    assert thread is not None and thread.is_alive()
+    pool.close()
+    assert not thread.is_alive()
+    assert pool.status("work")["state"] == "ready"
+    pool.stop_service("work")
