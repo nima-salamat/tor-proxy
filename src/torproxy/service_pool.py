@@ -6,6 +6,7 @@ screens and headless callers can manage services through the same safe API.
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import threading
@@ -21,6 +22,7 @@ from .tor_manager import TorManager, TorManagerError, TorSettings, TorState
 
 DEFAULT_SERVICE_WORKERS = 4
 MAX_SERVICE_WORKERS = 8
+LOGGER = logging.getLogger(__name__)
 _SERVICE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
 
@@ -336,8 +338,9 @@ class TorServicePool:
             try:
                 self._probe_running_services()
             except Exception:
-                # Monitoring must never terminate service ownership or Stop.
-                continue
+                # Monitoring must never terminate service ownership or Stop,
+                # but retain a diagnostic rather than silently hiding the bug.
+                LOGGER.exception("The isolated Tor health-monitor cycle failed.")
 
     def _ensure_health_monitor(self) -> None:
         if self._health_interval <= 0:

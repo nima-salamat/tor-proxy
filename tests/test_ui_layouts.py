@@ -2519,3 +2519,14 @@ def test_tor_service_settings_display_real_network_health_and_gateway_load():
     assert "def _refresh_live_service_health(self)" in source
     assert "active_connections" in source
     assert "max_sessions" in source
+
+
+
+def test_tor_service_status_refresh_keeps_start_stop_actions_in_sync():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/tor_services_page.py").read_text(encoding="utf-8")
+    assert "self._service_start_buttons: dict[str, QPushButton]" in source
+    assert "self._service_stop_buttons: dict[str, QPushButton]" in source
+    assert 'manager_state == "stopped" and not is_busy' in source
+    assert 'manager_state == "failed"' in source
+    assert "PROCESS EXITED · STOP TO RECONCILE" in source

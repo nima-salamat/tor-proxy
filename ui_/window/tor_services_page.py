@@ -274,6 +274,8 @@ class TorServicesPage(QWidget):
         self._service_cards_layout: QVBoxLayout | None = None
         self._service_state_labels: dict[str, QLabel] = {}
         self._service_health_labels: dict[str, QLabel] = {}
+        self._service_start_buttons: dict[str, QPushButton] = {}
+        self._service_stop_buttons: dict[str, QPushButton] = {}
         self._health_refresh_timer = QTimer(self)
         self._health_refresh_timer.setInterval(5000)
         self._health_refresh_timer.timeout.connect(self._refresh_live_service_health)
@@ -829,6 +831,8 @@ class TorServicesPage(QWidget):
         statuses = pool.status() if pool is not None else {}
         self._service_state_labels.clear()
         self._service_health_labels.clear()
+        self._service_start_buttons.clear()
+        self._service_stop_buttons.clear()
         restore_errors = getattr(self._proxy, "tor_service_profile_errors", {}) if self._proxy else {}
         self.lbl_runtime_status.setText(
             pool_error or (
@@ -903,6 +907,17 @@ class TorServicesPage(QWidget):
                 continue
             manager_state = str(status.get("state") or "unknown").lower()
             health_state = str(status.get("network_health") or "unchecked").lower()
+            is_busy = self._busy_all or service_id in self._busy_services
+            start_button = self._service_start_buttons.get(service_id)
+            stop_button = self._service_stop_buttons.get(service_id)
+            if start_button is not None:
+                start_button.setEnabled(bool(pool) and manager_state == "stopped" and not is_busy)
+            if stop_button is not None:
+                stop_button.setEnabled(
+                    bool(pool)
+                    and manager_state not in {"stopped", "bundle unavailable", "not registered"}
+                    and not is_busy
+                )
             if manager_state == "ready" and health_state == "healthy":
                 state_label.setText("TOR VERIFIED")
                 service_state = "ready"
@@ -915,6 +930,9 @@ class TorServicesPage(QWidget):
             elif manager_state == "ready":
                 state_label.setText("CHECKING NETWORK")
                 service_state = "ready"
+            elif manager_state == "failed":
+                state_label.setText("PROCESS EXITED · STOP TO RECONCILE")
+                service_state = "failed"
             else:
                 state_label.setText(manager_state.replace("_", " ").upper())
                 service_state = manager_state
@@ -1007,6 +1025,7 @@ class TorServicesPage(QWidget):
         start_button.setObjectName("settingsActionButton")
         start_button.setIcon(qta.icon("fa6s.play"))
         start_button.setEnabled(bool(pool) and can_start and not self._busy_all)
+        self._service_start_buttons[service_id] = start_button
         start_button.clicked.connect(lambda _checked=False, key=service_id: self._service_operation(key, "start"))
         actions.addWidget(start_button)
 
@@ -1014,6 +1033,7 @@ class TorServicesPage(QWidget):
         stop_button.setObjectName("settingsActionButton")
         stop_button.setIcon(qta.icon("fa6s.stop"))
         stop_button.setEnabled(bool(pool) and can_stop and not is_busy)
+        self._service_stop_buttons[service_id] = stop_button
         stop_button.clicked.connect(lambda _checked=False, key=service_id: self._service_operation(key, "stop"))
         actions.addWidget(stop_button)
 

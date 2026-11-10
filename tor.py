@@ -171,6 +171,9 @@ class TorRunner(QObject):
         self._stopping = threading.Event()
         self._last_report: tuple[str, int | None, str] | None = None
         self._last_bridge_usage_report: tuple[object, ...] | None = None
+        self._last_bridge_fingerprint_refresh = 0.0
+        self._cached_active_bridge_fingerprints: set[str] = set()
+        self._bridge_fingerprints_initialized = False
         self._backend_managers: list[TorManager] = []
         self._backend_threads: list[threading.Thread] = []
         self._backend_start_locks: list[threading.Lock] = []
@@ -534,6 +537,9 @@ class TorRunner(QObject):
         self._stopping.clear()
         self._last_report = None
         self._last_bridge_usage_report = None
+        self._last_bridge_fingerprint_refresh = 0.0
+        self._cached_active_bridge_fingerprints = set()
+        self._bridge_fingerprints_initialized = False
         self._last_pool_ready_count = -1
         self._bridge_distribution = None
         self._verified_bridge_records = ()
@@ -587,7 +593,14 @@ class TorRunner(QObject):
 
     @property
     def pool_health_snapshot(self) -> dict:
-        """Return safe per-instance health metadata for the Settings UI."""
+        """Return safe per-instance health and gateway capacity metadata."""
+        gateway = self._gateway
+        backend_metrics = gateway.backend_metrics if gateway is not None else {}
+        gateway_sessions = (
+            gateway.session_metrics
+            if gateway is not None else
+            {"active_sessions": 0, "max_sessions": 0, "rejected_sessions": 0}
+        )
         with self._backend_lock:
             managers = list(self._backend_managers)
             statuses = dict(self._backend_statuses)
@@ -615,6 +628,16 @@ class TorRunner(QObject):
                     and index < len(self._bridge_distribution.assignments)
                     else 0
                 )
+                settings = getattr(managers[index], "settings", None)
+                endpoint = (
+                    "127.0.0.1",
+                    int(settings.socks_port),
+                ) if settings is not None else None
+                backend = backend_metrics.get(endpoint, {}) if endpoint is not None else {}
+                cooldown_remaining = max(
+                    0.0,
+                    float(backend.get("cooldown_until", 0.0) or 0.0) - time.monotonic(),
+                )
                 instances.append({
                     "index": index + 1,
                     "state": worker_state,
@@ -622,6 +645,9 @@ class TorRunner(QObject):
                     "latency_ms": state.get("latency_ms"),
                     "consecutive_failures": failures,
                     "bridge_count": bridge_count,
+                    "active_connections": int(backend.get("active", 0) or 0),
+                    "gateway_failures": int(backend.get("failures", 0) or 0),
+                    "cooldown_remaining_seconds": cooldown_remaining,
                 })
             distribution = self._bridge_distribution
             bridge_summary = (
@@ -638,6 +664,7 @@ class TorRunner(QObject):
             "total_instances": len(instances),
             "instances": instances,
             "bridge_distribution": bridge_summary,
+            "gateway": gateway_sessions,
         }
 
     def _publish_bridge_usage(self, manager: TorManager | None = None):
@@ -645,13 +672,30 @@ class TorRunner(QObject):
         managers = self._healthy_managers()
         enabled = bool(self.bridge)
         ready = bool(managers)
-        active: set[str] = set()
-        if enabled:
+        now = time.monotonic()
+        with self._backend_lock:
+            refresh_fingerprints = (
+                enabled
+                and (
+                    not self._bridge_fingerprints_initialized
+                    or now - self._last_bridge_fingerprint_refresh >= 5.0
+                )
+            )
+            active = set(self._cached_active_bridge_fingerprints)
+        if refresh_fingerprints:
+            refreshed: set[str] = set()
             for current in managers:
                 try:
-                    active.update(current.get_active_bridge_fingerprints())
+                    refreshed.update(current.get_active_bridge_fingerprints())
                 except Exception:
                     logger.debug("Could not resolve active bridge fingerprints for a Tor worker.", exc_info=True)
+            with self._backend_lock:
+                self._cached_active_bridge_fingerprints = refreshed
+                self._last_bridge_fingerprint_refresh = now
+                self._bridge_fingerprints_initialized = True
+                active = set(refreshed)
+        elif not enabled:
+            active.clear()
         ready_count = len(managers)
         total_count = len(self._backend_managers) or (1 if self.manager is not None else 0)
         with self._backend_lock:
@@ -1147,7 +1191,20 @@ class TorRunner(QObject):
                 if now >= next_health_probe:
                     if self._process_ready_managers():
                         self._probe_ready_backends()
-                        next_health_probe = time.monotonic() + 20.0
+                        ready_indexes = {
+                            index for index, _manager in self._process_ready_managers()
+                        }
+                        with self._backend_lock:
+                            first_failure_pending = any(
+                                int(self._backend_health.get(index, {}).get("consecutive_failures", 0) or 0) == 1
+                                for index in ready_indexes
+                            )
+                            unhealthy_present = any(
+                                not bool(self._backend_health.get(index, {}).get("healthy", False))
+                                for index in ready_indexes
+                            )
+                        interval = 5.0 if first_failure_pending else 10.0 if unhealthy_present else 20.0
+                        next_health_probe = time.monotonic() + interval
                     else:
                         # Do not wait a full health interval while all Tor
                         # workers are still bootstrapping.

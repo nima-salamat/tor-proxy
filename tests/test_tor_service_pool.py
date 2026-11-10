@@ -234,6 +234,47 @@ def test_service_data_directories_cannot_overlap_primary_tor_paths(tmp_path):
 
 
 
+
+def test_exited_tor_process_is_reported_and_reconciled_before_health_recheck(tmp_path):
+    class Process:
+        exit_code = None
+
+        def poll(self):
+            return self.exit_code
+
+    class CrashableManager(FakeManager):
+        def __init__(self, settings):
+            super().__init__(settings)
+            self.process = Process()
+            self.stop_calls = 0
+
+        def start(self):
+            self.state = "ready"
+            self.process.exit_code = None
+
+        def stop(self):
+            self.stop_calls += 1
+            self.state = "stopped"
+            self.process = None
+
+    pool = _pool(tmp_path, manager_factory=CrashableManager, health_interval=0)
+    manager = pool.register("crashable", _settings(tmp_path, 26250, 26251))
+    pool.start_service("crashable")
+    assert pool.status("crashable")["network_healthy"] is True
+
+    manager.process.exit_code = 137
+    # State alone can still say READY, but status must not call a dead child ready.
+    assert pool.status("crashable")["state"] == "failed"
+
+    pool._probe_running_services()
+    status = pool.status("crashable")
+    assert status["state"] == "stopped"
+    assert status["network_healthy"] is False
+    assert status["network_health"] == "stopped"
+    assert "exit code 137" in status["last_health_error"]
+    assert manager.stop_calls == 1
+    pool.close()
+
 def test_independent_service_requires_real_tor_egress_health_and_recovers_after_two_failures(tmp_path):
     outcomes = iter([
         TorProbeResult(True, latency_ms=60.0),
