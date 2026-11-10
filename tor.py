@@ -324,7 +324,7 @@ class TorRunner(QObject):
             result = check_bridges(
                 manager.settings,
                 timeout_seconds=30.0,
-                max_workers=max(1, min(8, int(CONFIG["bridge_probe_workers"] or DEFAULT_MAX_WORKERS))),
+                max_workers=max(1, min(8, int(getattr(CONFIG, "bridge_probe_workers", DEFAULT_MAX_WORKERS) or DEFAULT_MAX_WORKERS))),
                 excluded_ports=(port for port in reserved_ports if port),
                 cancel_event=self._stopping,
                 on_result=report_progress,
