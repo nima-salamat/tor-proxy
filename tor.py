@@ -13,6 +13,7 @@ from config import BUNDLE_DIR, CONFIG, IS_WINDOWS
 from proxy import ProxyHandler, ThreadedHTTPServer, worker_data_usage_tracker
 from torproxy.paths import user_directories
 from torproxy.tor_manager import TorManager, TorManagerError, TorSettings
+from torproxy.bridge_health import DEFAULT_MAX_WORKERS
 from utils import resource_path
 
 logger = logging.getLogger(__name__)
@@ -315,7 +316,7 @@ class TorRunner(QObject):
                 label = "local transport setup issue; keeping it"
             else:
                 label = "not proven either way; keeping it"
-            self.log_message.emit(f"Bridge check {completed}/{total}: {label}.")
+            self.log_message.emit(f"Bridge probe finished {completed}/{total}: {label}.")
             if self.app_window is not None:
                 self.app_window.data.value = f"Bridge check {completed}/{total}"
 
@@ -323,7 +324,7 @@ class TorRunner(QObject):
             result = check_bridges(
                 manager.settings,
                 timeout_seconds=30.0,
-                max_workers=4,
+                max_workers=DEFAULT_MAX_WORKERS,
                 excluded_ports=(port for port in reserved_ports if port),
                 cancel_event=self._stopping,
                 on_result=report_progress,
@@ -559,19 +560,53 @@ class TorRunner(QObject):
             if self._stopping.is_set():
                 self.proc = None
 
+    def request_new_identity(self) -> float:
+        """Request NEWNYM through the already-authenticated manager controller."""
+        manager = self.manager
+        if manager is None or self.state != "READY":
+            raise TorManagerError("Tor is not ready; identity changes are unavailable.")
+        return manager.request_new_identity()
+
     def stop(self):
         self.state = "STOPPING"
         self._publish_bridge_usage(self.manager)
         self._stopping.set()
         manager = self.manager
+        stop_error = None
         if manager is not None:
-            manager.stop()
+            try:
+                manager.stop()
+            except Exception as exc:
+                stop_error = exc
+
         thread = self.thread
         if thread and thread.is_alive() and thread is not threading.current_thread():
             thread.join(timeout=10)
+
+        thread_alive = bool(thread and thread.is_alive())
+        process = getattr(manager, "process", None) if manager is not None else None
+        process_alive = bool(process is not None and process.poll() is None)
+        if thread_alive or process_alive:
+            detail = (
+                "Tor did not stop completely; its supervisor/process is still active. "
+                "The service remains registered and its data-directory lock must not be reused."
+            )
+            if stop_error is not None:
+                detail += " Stop error: " + str(stop_error)
+            self.state = "FAILED"
+            self.last_error = detail
+            raise TorManagerError(detail) from stop_error
+
+        if stop_error is not None:
+            detail = f"Tor shutdown reported an error: {stop_error}"
+            self.state = "FAILED"
+            self.last_error = detail
+            raise TorManagerError(detail) from stop_error
+
         self.proc = None
         self.thread = None
         self.state = "STOPPED"
+        self.last_error = None
         self._publish_bridge_usage(self.manager)
         logger.info("Managed Tor supervisor stopped.")
 
@@ -609,14 +644,32 @@ class Runner:
     def stop(self):
         if not self.server:
             return
+        server = self.server
+        thread = self.thread
+        tracker = self.data_usage_tracker
         if self.stop_data_usage_tracker_event:
             self.stop_data_usage_tracker_event.set()
-        self.server.shutdown()
-        self.server.server_close()
-        if self.thread and self.thread is not threading.current_thread():
-            self.thread.join(timeout=5)
-        if self.data_usage_tracker and self.data_usage_tracker is not threading.current_thread():
-            self.data_usage_tracker.join(timeout=5)
+        server.shutdown()
+        server.server_close()
+        if thread and thread is not threading.current_thread():
+            thread.join(timeout=5)
+        if tracker and tracker is not threading.current_thread():
+            tracker.join(timeout=5)
+
+        server_thread_alive = bool(thread and thread.is_alive())
+        tracker_alive = bool(tracker and tracker.is_alive())
+        if server_thread_alive or tracker_alive:
+            active = []
+            if server_thread_alive:
+                active.append("HTTP listener")
+            if tracker_alive:
+                active.append("traffic-accounting worker")
+            raise RuntimeError(
+                "Local proxy shutdown is incomplete; "
+                + " and ".join(active)
+                + " is still active. The service references were retained for safe recovery."
+            )
+
         logger.info("Loopback HTTP proxy stopped.")
         self.server = None
         self.thread = None

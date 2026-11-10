@@ -906,7 +906,16 @@ class TorManager:
         except Exception as exc:
             self.last_error = str(exc)
             was_stopped = self._stop_requested.is_set()
-            self._terminate_process()
+            try:
+                self._terminate_process()
+            except Exception as cleanup_exc:
+                # Never release the DataDirectory lock or forget a child process
+                # that survived forced termination. The cleanup failure is the
+                # actionable terminal state, with the startup error retained.
+                message = f"{exc} Tor cleanup also failed: {cleanup_exc}"
+                self.last_error = message
+                self._emit(on_status, TorState.FAILED, None, message)
+                raise TorManagerError(message) from cleanup_exc
             self._release_data_directory_lock()
             self._emit(on_status, TorState.STOPPED if was_stopped else TorState.FAILED, None, self.last_error)
             if isinstance(exc, TorManagerError):
@@ -952,13 +961,31 @@ class TorManager:
                 process.terminate()
                 process.wait(timeout=self.settings.shutdown_timeout_seconds)
             except subprocess.TimeoutExpired:
-                process.kill()
                 try:
+                    process.kill()
                     process.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    LOGGER.error("Tor did not exit after force termination.")
-            except OSError:
-                LOGGER.exception("Could not terminate the managed Tor process.")
+                except subprocess.TimeoutExpired as exc:
+                    message = (
+                        "Tor did not exit after graceful termination and forced kill. "
+                        "Its process ownership and DataDirectory lock are being retained."
+                    )
+                    self.last_error = message
+                    self.state = TorState.FAILED
+                    raise TorManagerError(message) from exc
+            except OSError as exc:
+                if process.poll() is None:
+                    message = f"Could not terminate the managed Tor process: {exc}"
+                    self.last_error = message
+                    self.state = TorState.FAILED
+                    raise TorManagerError(message) from exc
+            if process.poll() is None:
+                message = (
+                    "Tor still appears to be running after the shutdown request. "
+                    "Its process ownership and DataDirectory lock are being retained."
+                )
+                self.last_error = message
+                self.state = TorState.FAILED
+                raise TorManagerError(message)
         if self.settings.isolate_in_cgroup and self.settings.cgroup_callback is not None and self._scope_unit is not None:
             try:
                 self.settings.cgroup_callback(None, None)
@@ -981,6 +1008,11 @@ class TorManager:
     def stop(self) -> None:
         self._stop_requested.set()
         self._emit(None, TorState.STOPPING, None, "Stopping the managed Tor process.")
-        self._terminate_process()
+        try:
+            self._terminate_process()
+        except Exception as exc:
+            self.last_error = str(exc)
+            self._emit(None, TorState.FAILED, None, self.last_error)
+            raise
         self._release_data_directory_lock()
         self._emit(None, TorState.STOPPED, None, "Tor stopped.")

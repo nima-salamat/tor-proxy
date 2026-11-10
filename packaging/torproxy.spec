@@ -21,7 +21,7 @@ binaries = collect_dynamic_libs("pyzbar")
 hiddenimports = (
     collect_submodules("qtawesome")
     + collect_submodules("torproxy.browsers")
-    + ["torproxy.firewall.linux_helper"]
+    + ["torproxy.firewall.linux_helper", "torproxy.service_pool"]
 )
 
 # Keep this a focused desktop package. OpenCV's headless wheel already avoids

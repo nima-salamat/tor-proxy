@@ -1323,7 +1323,9 @@ class SystemTunnelManager:
 
         info = SHELLEXECUTEINFOW()
         info.cbSize = ctypes.sizeof(info)
-        info.fMask = 0x00000040  # SEE_MASK_NOCLOSEPROCESS
+        # Keep the process handle and force ShellExecuteEx's activation phase
+        # to complete on this QThreadPool worker, which has no Windows message loop.
+        info.fMask = 0x00000040 | 0x00000100  # SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC
         info.lpVerb = "runas"
         info.lpFile = executable
         info.lpParameters = params
@@ -1345,7 +1347,15 @@ class SystemTunnelManager:
                 raise SystemTunnelError("Could not read the elevated tunnel helper exit code.")
             result = _read_json(result_path)
             if result is None:
-                raise SystemTunnelError(f"The elevated tunnel helper returned no result (exit code {exit_code.value}).")
+                if exit_code.value == 0xC000013A:
+                    raise SystemTunnelError(
+                        "The elevated tunnel helper was interrupted by Windows "
+                        "(STATUS_CONTROL_C_EXIT / 0xC000013A) before it could write its result. "
+                        "The TUN operation may be partial; inspect/reconcile the recorded tunnel state before retrying."
+                    )
+                raise SystemTunnelError(
+                    f"The elevated tunnel helper returned no result (exit code {exit_code.value})."
+                )
             return result
         finally:
             if info.hProcess:

@@ -81,6 +81,11 @@ class PulseButton(QPushButton):
             self.setText("DISCONNECT")
             self.update()
 
+    def set_disconnect_available(self):
+        """Keep a retryable Disconnect action visible after a partial shutdown."""
+        self._set_state("disconnect", "DISCONNECT")
+        self.setToolTip("A TorProxy service is still active. Click to retry disconnecting it.")
+
     def set_disconnecting(self):
         self._set_state("stopping", "DISCONNECTING…")
         self.setToolTip("Stopping Tor and the local proxy.")

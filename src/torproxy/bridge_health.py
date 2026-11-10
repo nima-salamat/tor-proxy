@@ -15,7 +15,8 @@ from .tor_manager import TorManager, TorSettings
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_PROBE_TIMEOUT_SECONDS = 30.0
-DEFAULT_MAX_WORKERS = 4
+DEFAULT_MAX_WORKERS = 8
+MAX_BRIDGE_PROBE_WORKERS = 8
 @dataclass(frozen=True)
 class BridgeProbeOutcome:
     """A bridge result, optionally carrying a local setup/transport issue."""
@@ -311,7 +312,7 @@ def check_bridges(
     outcomes: dict[str, ProbeStatus] = {}
     issues: list[str] = []
     completed = 0
-    worker_count = max(1, min(int(max_workers), len(unique_records)))
+    worker_count = max(1, min(int(max_workers), MAX_BRIDGE_PROBE_WORKERS, len(unique_records)))
     with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="torproxy-bridge-check") as executor:
         futures = {executor.submit(run_probe, record): record for record in unique_records}
         for future in as_completed(futures):
