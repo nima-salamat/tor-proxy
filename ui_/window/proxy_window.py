@@ -1048,15 +1048,15 @@ class ProxyWindow(QWidget):
                 logger.exception("Error restoring system proxy during stop.")
                 messages.append(f"System proxy restoration failed: {exc}")
 
+        stop_errors: list[str] = []
         if self.proxy:
             try:
                 self.proxy.stop()
                 messages.append("Local HTTP proxy stopped.")
             except Exception as exc:
                 logger.exception("Error stopping the local HTTP proxy.")
-                messages.append(f"Error stopping the HTTP proxy: {exc}")
+                stop_errors.append(f"HTTP proxy shutdown failed: {exc}")
 
-        stop_errors: list[str] = []
         if self.tor:
             try:
                 self.tor.stop()
