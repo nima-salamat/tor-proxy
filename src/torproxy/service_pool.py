@@ -10,9 +10,9 @@ import os
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Callable, Iterable
 
 from .paths import user_directories
 from .tor_manager import TorManager, TorManagerError, TorSettings, TorState
