@@ -32,6 +32,8 @@ class _ServiceEntry:
     settings: TorSettings
     manager: TorManager
     start_lock: threading.Lock
+    active_calls: int = 0
+    stopping: bool = False
 
 
 ManagerFactory = Callable[[TorSettings], TorManager]
@@ -216,25 +218,58 @@ class TorServicePool:
     def start_service(self, service_id: str) -> None:
         with self._lock:
             entry = self._services.get(service_id)
-        if entry is None:
-            raise TorServicePoolError(f"Unknown Tor service '{service_id}'.")
-        with entry.start_lock:
+            if entry is None:
+                raise TorServicePoolError(f"Unknown Tor service '{service_id}'.")
+            if entry.stopping:
+                raise TorServicePoolError(f"Tor service '{service_id}' is stopping.")
+            entry.active_calls += 1
+            acquired = entry.start_lock.acquire(blocking=False)
+            if not acquired:
+                entry.active_calls -= 1
+                raise TorServicePoolError(f"Tor service '{service_id}' already has a start operation in progress.")
+        try:
             entry.manager.start()
+        finally:
+            entry.start_lock.release()
+            with self._lock:
+                entry.active_calls -= 1
 
     def stop_service(self, service_id: str) -> None:
         with self._lock:
             entry = self._services.get(service_id)
-        if entry is None:
-            raise TorServicePoolError(f"Unknown Tor service '{service_id}'.")
-        # Do not wait for start_lock before requesting stop: TorManager.stop()
-        # must be able to cancel an in-flight bootstrap operation.
+            if entry is None:
+                raise TorServicePoolError(f"Unknown Tor service '{service_id}'.")
+            if entry.stopping:
+                raise TorServicePoolError(f"Tor service '{service_id}' is already stopping.")
+            entry.stopping = True
+            entry.active_calls += 1
+
+        error = None
         try:
-            entry.manager.stop()
-        finally:
-            # Wait for a cancelled start() call to unwind before allowing any
-            # subsequent start/unregister operation for this same service.
+            # First request stop immediately. This is intentionally allowed to
+            # race with start(): TorManager.stop() signals its cancellation event.
+            try:
+                entry.manager.stop()
+            except Exception as exc:
+                error = exc
+
+            # Wait for any start() that began just before stopping was marked.
+            # Re-issue stop while holding start_lock so a late-starting operation
+            # cannot leave a child alive after stop_service() returns.
             with entry.start_lock:
-                pass
+                try:
+                    entry.manager.stop()
+                except Exception as exc:
+                    error = exc
+
+            if error is not None:
+                raise TorServicePoolError(
+                    f"Tor service '{service_id}' did not stop cleanly: {error}"
+                ) from error
+        finally:
+            with self._lock:
+                entry.stopping = False
+                entry.active_calls -= 1
 
     def _run_many(self, service_ids: Iterable[str], operation: str) -> dict[str, str | None]:
         selected = tuple(dict.fromkeys(service_ids))
@@ -277,12 +312,18 @@ class TorServicePool:
             entry = self._services.get(service_id)
             if entry is None:
                 raise TorServicePoolError(f"Unknown Tor service '{service_id}'.")
+            if entry.active_calls or entry.stopping:
+                raise TorServicePoolError(f"Tor service '{service_id}' has an operation in progress.")
             if not entry.start_lock.acquire(blocking=False):
                 raise TorServicePoolError(f"Tor service '{service_id}' has a start operation in progress.")
             try:
-                if self._process_is_alive(entry.manager) or self._state_value(entry.manager) in {
-                    "starting", "bootstrapping", "ready", "stopping"
-                }:
+                if (
+                    self._process_is_alive(entry.manager)
+                    or getattr(entry.manager, "_data_directory_lock_handle", None) is not None
+                    or self._state_value(entry.manager) in {
+                        "starting", "bootstrapping", "ready", "stopping"
+                    }
+                ):
                     raise TorServicePoolError(
                         f"Tor service '{service_id}' is still active; stop it before unregistering."
                     )
