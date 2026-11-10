@@ -449,7 +449,12 @@ class ProxyWindow(QWidget):
 
     def open_browser_dialog(self):
         """Open the browser chooser only after Tor and the local HTTP listener are ready."""
-        if not self.running or not self.connected or getattr(self.proxy, "server", None) is None:
+        if (
+            not self.running
+            or not self.connected
+            or not bool(CONFIG["http_proxy_enabled"])
+            or not bool(getattr(self.proxy, "is_running", False))
+        ):
             self.logs_widget.update_log(
                 "Open Browser is unavailable until Tor bootstrap and the local HTTP proxy are ready."
             )
@@ -467,6 +472,9 @@ class ProxyWindow(QWidget):
         if not self.running or not self.connected:
             self.tor_ip_label.setText("Exit IP: unavailable — Tor proxy is not ready")
             logger.info("Exit-IP check ignored because Tor is not in the verified connected state.")
+            return
+        if not bool(CONFIG["http_proxy_enabled"]) or not bool(getattr(self.proxy, "is_running", False)):
+            self.tor_ip_label.setText("Exit IP: unavailable — local HTTP proxy is disabled")
             return
 
         try:
@@ -1337,14 +1345,25 @@ class ProxyWindow(QWidget):
     def _update_proxy_buttons(self):
         browser_button = getattr(self, "btn_open_browser", None)
         if browser_button is not None:
+            http_ready = bool(
+                CONFIG["http_proxy_enabled"] and getattr(self.proxy, "is_running", False)
+            )
             ready = bool(
-                self.running and self.connected and not self._connect_operation_busy and not self._stopping
+                self.running
+                and self.connected
+                and http_ready
+                and not self._connect_operation_busy
+                and not self._stopping
             )
             browser_button.setEnabled(ready)
             browser_button.setToolTip(
                 "Open an installed browser through the local TorProxy HTTP proxy."
                 if ready else
-                "Connect to Tor and wait for the verified bootstrap to finish first."
+                (
+                    "Enable the local HTTP proxy in Settings → Ports."
+                    if not http_ready else
+                    "Connect to Tor and wait for the verified bootstrap to finish first."
+                )
             )
         self._update_proxy_mode_status()
         self._update_tunnel_hint()
