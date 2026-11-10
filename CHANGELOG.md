@@ -4,6 +4,7 @@ All notable changes are recorded here. Dates and release numbers are added only 
 
 ## Unreleased
 
+- Added an enabled-by-default local HTTP proxy preference in Settings → Ports, live listener toggling, and an end-to-end HTTPS/HTTP CONNECT diagnostic. Hardened CONNECT relay handling against buffered read-ahead so initial TCP tunnel bytes are not lost.
 - Added deterministic primary bridge distribution after optional concurrent preflight: records sharing an explicit bridge fingerprint stay together, verified bridge groups are seeded into every worker when available, and remaining groups are balanced without overlap where possible. Small pools or fewer verified groups than workers trigger deliberate, visible sharing. Settings reports each instance's assigned bridge count and sharing status.
 - Clarified and surfaced that automatic bridge preflight already runs concurrently through a bounded 1–8 worker thread pool, with each unique bridge record tested in an isolated temporary Tor process; confirmed failures alone may be pruned and inconclusive records remain.
 - Added per-instance end-to-end Tor health probes through each worker's own SOCKS5 listener using the Tor Project Check API; only workers confirmed with `IsTor: true` are eligible for traffic, and two consecutive probe failures withdraw a worker until it recovers. Settings → Tor Services now displays each primary instance's verified state and probe latency.

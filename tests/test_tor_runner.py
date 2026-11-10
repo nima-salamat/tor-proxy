@@ -510,3 +510,40 @@ def test_primary_pool_health_snapshot_identifies_each_instance(monkeypatch, tmp_
     assert snapshot["instances"][0]["state"] == "healthy"
     assert snapshot["instances"][0]["latency_ms"] == 83.0
     assert snapshot["instances"][1]["state"] == "failed"
+
+
+
+def test_http_proxy_runner_respects_disabled_preference_and_can_start_live(monkeypatch):
+    import threading
+    import tor
+
+    class FakeServer:
+        def __init__(self, *_args):
+            self.stopped = threading.Event()
+
+        def serve_forever(self):
+            self.stopped.wait()
+
+        def shutdown(self):
+            self.stopped.set()
+
+        def server_close(self):
+            pass
+
+    monkeypatch.setattr(tor, "CONFIG", {"http_proxy_enabled": False})
+    monkeypatch.setattr(tor, "ThreadedHTTPServer", FakeServer)
+    monkeypatch.setattr(tor, "worker_data_usage_tracker", lambda stop_event: stop_event.wait(0.25))
+    runner = tor.Runner(18888, 19050, None)
+    runner.start()
+
+    assert runner.server is None
+    assert runner.is_running is False
+
+    result = runner.set_http_enabled(True)
+    assert "listening" in result
+    assert runner.is_running is True
+
+    runner.set_http_enabled(False)
+    assert runner.is_running is False
+    assert runner.server is None
+    runner.stop()

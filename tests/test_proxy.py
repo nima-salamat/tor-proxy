@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import select
 import socket
+import socketserver
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer as TargetServer
 
@@ -230,6 +231,69 @@ class FakeSocksServer:
         self.stopping.set()
         self.listener.close()
         self.thread.join(timeout=2)
+
+
+class _EchoHandler(socketserver.BaseRequestHandler):
+    def handle(self):
+        while True:
+            data = self.request.recv(65536)
+            if not data:
+                return
+            self.request.sendall(data)
+
+
+def test_http_connect_tunnels_raw_tcp_and_preserves_early_payload(monkeypatch):
+    monkeypatch.setattr(proxy_module, "_blocked_rules", HostRules())
+    monkeypatch.setattr(proxy_module, "_excluded_rules", HostRules())
+    target = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _EchoHandler)
+    target.daemon_threads = True
+    target_thread = threading.Thread(target=target.serve_forever, daemon=True)
+    target_thread.start()
+    socks_server = FakeSocksServer()
+    proxy_server = proxy_module.ThreadedHTTPServer(
+        ("127.0.0.1", 0), proxy_module.ProxyHandler, socks_server.port
+    )
+    proxy_thread = threading.Thread(target=proxy_server.serve_forever, daemon=True)
+    proxy_thread.start()
+    client = None
+    try:
+        client = socket.create_connection(("127.0.0.1", proxy_server.server_address[1]), timeout=5)
+        client.settimeout(5)
+        target_port = target.server_address[1]
+        payload = b"\x16\x03\x01early-tunnel-data\x00\xff"
+        request = (
+            f"CONNECT 127.0.0.1:{target_port} HTTP/1.1\r\n"
+            f"Host: 127.0.0.1:{target_port}\r\n"
+            "Proxy-Connection: Keep-Alive\r\n\r\n"
+        ).encode("ascii")
+        # Send tunnel bytes with CONNECT headers to catch buffered reader read-ahead.
+        client.sendall(request + payload)
+
+        response = bytearray()
+        while b"\r\n\r\n" not in response:
+            chunk = client.recv(4096)
+            if not chunk:
+                break
+            response.extend(chunk)
+        header, separator, body = bytes(response).partition(b"\r\n\r\n")
+        assert separator
+        assert b"200 Connection Established" in header
+        while len(body) < len(payload):
+            chunk = client.recv(len(payload) - len(body))
+            if not chunk:
+                break
+            body.extend(chunk)
+        assert bytes(body) == payload
+    finally:
+        if client is not None:
+            client.close()
+        proxy_server.shutdown()
+        proxy_server.server_close()
+        proxy_thread.join(timeout=2)
+        socks_server.close()
+        target.shutdown()
+        target.server_close()
+        target_thread.join(timeout=2)
 
 
 class _ResponseHandler(BaseHTTPRequestHandler):

@@ -64,6 +64,12 @@ class SettingWindow(QWidget):
         self._tunnel_recovery_pool = QThreadPool(self)
         self._tunnel_recovery_worker = None
         self._tunnel_recovery_busy = False
+        self._http_proxy_toggle_pending = False
+        self._http_proxy_toggle_previous = bool(CONFIG["http_proxy_enabled"])
+        self._http_proxy_test_busy = False
+        self._http_proxy_test_worker = None
+        self._http_proxy_test_pool = QThreadPool(self)
+        self._http_proxy_test_pool.setMaxThreadCount(1)
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(10, 8, 10, 8)
         main_layout.setSpacing(8)
@@ -157,6 +163,8 @@ class SettingWindow(QWidget):
         if not 0 <= index < self.page_setting.count():
             return
         self.page_setting.setCurrentIndex(index)
+        if index == 2 and hasattr(self, "chk_http_proxy_enabled"):
+            self._refresh_http_proxy_status()
         for page_index, button in enumerate(self.settings_nav_buttons):
             button.setChecked(page_index == index)
         self._sync_settings_nav_icons()
@@ -727,6 +735,41 @@ class SettingWindow(QWidget):
                 self._bridge_normalizing = False
 
     def initialize_second_page(self):
+        self.second_page_layout.addWidget(self._section_title("Local HTTP proxy"))
+        self.second_page_layout.addWidget(
+            self._description(
+                "When enabled, TorProxy starts a loopback HTTP proxy with the primary Tor session. "
+                "HTTPS and raw TCP applications use HTTP CONNECT; the listener is not a direct Internet proxy."
+            )
+        )
+        self.chk_http_proxy_enabled = QCheckBox("Enable local HTTP proxy", self)
+        self.chk_http_proxy_enabled.setObjectName("httpProxyEnabledPreference")
+        self.chk_http_proxy_enabled.setToolTip(
+            "Enabled by default. The listener is available on 127.0.0.1 and routes requests through Tor's verified SOCKS gateway."
+        )
+        self.chk_http_proxy_enabled.setChecked(bool(CONFIG["http_proxy_enabled"]))
+        self.chk_http_proxy_enabled.toggled.connect(self.http_proxy_enabled_changed)
+        self.second_page_layout.addWidget(self.chk_http_proxy_enabled)
+
+        proxy_test_row = QFrame(self)
+        proxy_test_row.setObjectName("settingsRowCard")
+        proxy_test_layout = QHBoxLayout(proxy_test_row)
+        proxy_test_layout.setContentsMargins(14, 9, 14, 9)
+        proxy_test_layout.setSpacing(12)
+        self.lbl_http_proxy_status = self._description("HTTP proxy status will appear here.")
+        self.lbl_http_proxy_status.setWordWrap(True)
+        proxy_test_layout.addWidget(self.lbl_http_proxy_status, 1)
+        self.btn_test_http_connect = QPushButton("Test HTTP CONNECT", self)
+        self.btn_test_http_connect.setObjectName("settingsActionButton")
+        self.btn_test_http_connect.setToolTip(
+            "Checks a real HTTPS request through HTTP CONNECT and Tor; a listening TCP port alone is not considered a pass."
+        )
+        self.btn_test_http_connect.clicked.connect(self.test_http_connect)
+        proxy_test_layout.addWidget(self.btn_test_http_connect, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.second_page_layout.addWidget(proxy_test_row)
+        self._refresh_http_proxy_status()
+
+        self.second_page_layout.addSpacing(12)
         self.second_page_layout.addWidget(self._section_title("Listener ports"))
         description = self._description(
             "TorProxy automatically selects and remembers distinct loopback ports. The displayed values are reused on later launches. "
@@ -808,6 +851,176 @@ class SettingWindow(QWidget):
             status = self._listener_port_status_labels.get(port)
             if status is not None:
                 status.setText("AUTO")
+
+    def _refresh_http_proxy_status(self) -> None:
+        """Keep Settings truthful about listener availability and Tor readiness."""
+        if not hasattr(self, "lbl_http_proxy_status"):
+            return
+        enabled = bool(CONFIG["http_proxy_enabled"])
+        proxy_widget = getattr(self._parent, "proxyWidget", None)
+        runner = getattr(proxy_widget, "proxy", None)
+        listener_ready = bool(getattr(runner, "is_running", False))
+        tor_ready = bool(
+            getattr(proxy_widget, "running", False)
+            and getattr(proxy_widget, "connected", False)
+            and not getattr(proxy_widget, "_stopping", False)
+        )
+        if not enabled:
+            status = "Disabled · Tor SOCKS and System Tunnel are unaffected."
+        elif listener_ready and tor_ready:
+            status = f"Ready · 127.0.0.1:{getattr(runner, 'port', CONFIG['proxy_port'])} · HTTPS uses CONNECT."
+        elif listener_ready:
+            status = "Listening · waiting for a verified Tor network connection."
+        elif getattr(proxy_widget, "running", False):
+            status = "Enabled · HTTP listener is not running; check the Event Log."
+        else:
+            status = "Enabled · the listener starts automatically when you connect to Tor."
+        self.lbl_http_proxy_status.setText(status)
+        busy = self._http_proxy_toggle_pending or self._http_proxy_test_busy
+        self.btn_test_http_connect.setEnabled(bool(enabled and listener_ready and tor_ready and not busy))
+
+    def http_proxy_enabled_changed(self, checked: bool) -> None:
+        """Persist and apply the HTTP listener preference without changing Tor."""
+        enabled = bool(checked)
+        previous = bool(CONFIG["http_proxy_enabled"])
+        if self._http_proxy_toggle_pending:
+            self.chk_http_proxy_enabled.blockSignals(True)
+            self.chk_http_proxy_enabled.setChecked(previous)
+            self.chk_http_proxy_enabled.blockSignals(False)
+            return
+        if enabled == previous:
+            self._refresh_http_proxy_status()
+            return
+
+        proxy_widget = getattr(self._parent, "proxyWidget", None)
+        if not enabled and (
+            CONFIG["system_proxy_mode"] == "set"
+            or bool(getattr(proxy_widget, "proxy_set", False))
+        ):
+            self.chk_http_proxy_enabled.blockSignals(True)
+            self.chk_http_proxy_enabled.setChecked(True)
+            self.chk_http_proxy_enabled.blockSignals(False)
+            QMessageBox.warning(
+                self,
+                "HTTP proxy is required",
+                "The operating-system proxy is configured to use this listener. Change System Proxy to Unchanged or Clear before disabling the HTTP proxy.",
+            )
+            self._refresh_http_proxy_status()
+            return
+        if bool(getattr(proxy_widget, "_stopping", False)):
+            self.chk_http_proxy_enabled.blockSignals(True)
+            self.chk_http_proxy_enabled.setChecked(previous)
+            self.chk_http_proxy_enabled.blockSignals(False)
+            self._refresh_http_proxy_status()
+            return
+
+        try:
+            CONFIG["http_proxy_enabled"] = enabled
+        except (ValueError, OSError, KeyError) as exc:
+            self.chk_http_proxy_enabled.blockSignals(True)
+            self.chk_http_proxy_enabled.setChecked(previous)
+            self.chk_http_proxy_enabled.blockSignals(False)
+            QMessageBox.warning(self, "Settings could not be saved", str(exc))
+            self._refresh_http_proxy_status()
+            return
+
+        self._http_proxy_toggle_previous = previous
+        runner = getattr(proxy_widget, "proxy", None)
+        if runner is None:
+            self._refresh_http_proxy_status()
+            return
+
+        self._http_proxy_toggle_pending = True
+        self.chk_http_proxy_enabled.setEnabled(False)
+        self.btn_test_http_connect.setEnabled(False)
+        self.lbl_http_proxy_status.setText(
+            "Starting the local HTTP listener…" if enabled else "Stopping the local HTTP listener…"
+        )
+        worker = Worker(runner.set_http_enabled, enabled)
+        worker.signals.finished.connect(self._on_http_proxy_toggle_finished)
+        worker.signals.error.connect(self._on_http_proxy_toggle_failed)
+        self._http_proxy_toggle_worker = worker
+        self._http_proxy_test_pool.start(worker)
+
+    def _on_http_proxy_toggle_finished(self, result: str) -> None:
+        self._http_proxy_toggle_pending = False
+        self._http_proxy_toggle_worker = None
+        self.chk_http_proxy_enabled.setEnabled(True)
+        self._refresh_http_proxy_status()
+        if result:
+            self.lbl_http_proxy_status.setText(str(result))
+
+    def _on_http_proxy_toggle_failed(self, error: str) -> None:
+        self._http_proxy_toggle_pending = False
+        self._http_proxy_toggle_worker = None
+        previous = self._http_proxy_toggle_previous
+        try:
+            CONFIG["http_proxy_enabled"] = previous
+        except (ValueError, OSError, KeyError):
+            logger.exception("Could not restore HTTP proxy preference after listener failure.")
+        self.chk_http_proxy_enabled.blockSignals(True)
+        self.chk_http_proxy_enabled.setChecked(previous)
+        self.chk_http_proxy_enabled.blockSignals(False)
+        self.chk_http_proxy_enabled.setEnabled(True)
+        detail = str(error or "Unknown HTTP proxy listener error.")
+        self.lbl_http_proxy_status.setText("HTTP listener change failed · " + detail)
+        logger.warning("Could not apply HTTP proxy preference: %s", detail)
+        QMessageBox.warning(self, "HTTP proxy", detail)
+        self._refresh_http_proxy_status()
+
+    def test_http_connect(self) -> None:
+        """Verify an actual HTTPS request through this HTTP proxy and Tor."""
+        if self._http_proxy_test_busy or self._http_proxy_toggle_pending:
+            return
+        proxy_widget = getattr(self._parent, "proxyWidget", None)
+        runner = getattr(proxy_widget, "proxy", None)
+        if (
+            not bool(CONFIG["http_proxy_enabled"])
+            or not bool(getattr(runner, "is_running", False))
+            or not bool(getattr(proxy_widget, "connected", False))
+        ):
+            self.lbl_http_proxy_status.setText("Connect to Tor and start the HTTP proxy before running this test.")
+            self._refresh_http_proxy_status()
+            return
+
+        self._http_proxy_test_busy = True
+        self.btn_test_http_connect.setText("Testing…")
+        self._refresh_http_proxy_status()
+        self.btn_test_http_connect.setEnabled(False)
+        proxy_url = f"http://127.0.0.1:{int(runner.port)}"
+        worker = Worker(proxy_widget._perform_exit_ip_check, proxy_url)
+        worker.signals.finished.connect(self._on_http_connect_test_finished)
+        worker.signals.error.connect(self._on_http_connect_test_failed)
+        self._http_proxy_test_worker = worker
+        self._http_proxy_test_pool.start(worker)
+
+    def _finish_http_connect_test(self) -> None:
+        self._http_proxy_test_busy = False
+        self._http_proxy_test_worker = None
+        self.btn_test_http_connect.setText("Test HTTP CONNECT")
+        proxy_widget = getattr(self._parent, "proxyWidget", None)
+        runner = getattr(proxy_widget, "proxy", None)
+        ready = bool(
+            CONFIG["http_proxy_enabled"]
+            and getattr(runner, "is_running", False)
+            and getattr(proxy_widget, "connected", False)
+            and not getattr(proxy_widget, "_stopping", False)
+        )
+        self.btn_test_http_connect.setEnabled(ready and not self._http_proxy_toggle_pending)
+
+    def _on_http_connect_test_finished(self, result: str) -> None:
+        value = str(result or "").strip()
+        if value and value.casefold() != "none":
+            self.lbl_http_proxy_status.setText("Verified · HTTP CONNECT reached an external HTTPS endpoint through Tor.")
+        else:
+            self.lbl_http_proxy_status.setText("Test incomplete · no Tor exit response was verified.")
+        self._finish_http_connect_test()
+
+    def _on_http_connect_test_failed(self, error: str) -> None:
+        detail = str(error or "Unknown CONNECT test failure.")
+        self.lbl_http_proxy_status.setText("HTTP CONNECT test failed · " + detail)
+        logger.warning("HTTP CONNECT diagnostic failed: %s", detail)
+        self._finish_http_connect_test()
 
     def initialize_tor_services_page(self):
         """Attach the persistent multi-instance Tor manager to Settings."""

@@ -30,6 +30,7 @@ class TorProxyConfig:
     blocked_hosts: tuple[str, ...] = field(default_factory=tuple)
     excluded_hosts: tuple[str, ...] = field(default_factory=tuple)
     system_proxy_auto: bool = False
+    http_proxy_enabled: bool = True
     kill_switch_enabled: bool = False
     newnym_interval_seconds: int = 0
     max_circuit_dirtiness_seconds: int = 600
@@ -48,7 +49,12 @@ class TorProxyConfig:
             raise ConfigurationError("Ports must be integers in the range 1..65535.")
         if len(set(ports)) != len(ports):
             raise ConfigurationError("Proxy, SOCKS, and Control ports must be distinct.")
-        if type(self.bridge_enabled) is not bool or type(self.system_proxy_auto) is not bool or type(self.kill_switch_enabled) is not bool:
+        if (
+            type(self.bridge_enabled) is not bool
+            or type(self.system_proxy_auto) is not bool
+            or type(self.http_proxy_enabled) is not bool
+            or type(self.kill_switch_enabled) is not bool
+        ):
             raise ConfigurationError("Boolean configuration values must be true or false.")
         if type(self.newnym_interval_seconds) is not int or not 0 <= self.newnym_interval_seconds <= 86400:
             raise ConfigurationError("newnym_interval_seconds must be between 0 and 86400.")
@@ -69,6 +75,7 @@ def migrate_legacy_config(raw: dict[str, Any]) -> dict[str, Any]:
         "mode": "mode",
         "bridge": "bridge_enabled",
         "kill_switch_enabled": "kill_switch_enabled",
+        "http_proxy_enabled": "http_proxy_enabled",
         "bridges": "bridges",
         "proxy_port": "proxy_port",
         "tor_port": "socks_port",

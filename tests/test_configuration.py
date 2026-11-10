@@ -286,3 +286,24 @@ def test_tor_service_profiles_cannot_reuse_primary_listener_ports():
     }]
     with pytest.raises(AppConfigError, match="primary application listener"):
         AppConfig._validate(data)
+
+
+
+def test_http_proxy_preference_defaults_enabled_and_requires_a_boolean():
+    assert DEFAULT_DATA["http_proxy_enabled"] is True
+    assert TorProxyConfig().http_proxy_enabled is True
+
+    data = dict(DEFAULT_DATA)
+    for invalid in (0, 1, "true", None):
+        data["http_proxy_enabled"] = invalid
+        with pytest.raises(AppConfigError, match="http_proxy_enabled"):
+            AppConfig._validate(data)
+
+    with pytest.raises(ConfigurationError, match="Boolean"):
+        TorProxyConfig(http_proxy_enabled=1)
+
+
+def test_http_proxy_preference_survives_typed_legacy_migration():
+    migrated = migrate_legacy_config({"http_proxy_enabled": False})
+    assert migrated["http_proxy_enabled"] is False
+    assert TorProxyConfig(**migrated).http_proxy_enabled is False

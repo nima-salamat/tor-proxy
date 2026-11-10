@@ -484,6 +484,9 @@ def _connect_upstream(host: str, port: int, route: str, tor_socks_port: int) -> 
 
 class ProxyHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    # CONNECT is a raw TCP tunnel after its headers. Disable read-ahead so early
+    # tunnel bytes cannot be stranded in a buffered reader instead of the relay.
+    rbufsize = 0
 
     def setup(self) -> None:
         # Close idle or incomplete client requests instead of pinning a worker thread.
@@ -512,6 +515,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
     def do_CONNECT(self) -> None:
         remote = None
+        # Once CONNECT succeeds, this socket is a byte stream, not HTTP keep-alive.
+        self.close_connection = True
         try:
             host, port = _parse_authority(self.path)
             route = _route_for_host(host)

@@ -25,6 +25,7 @@ Writes use a unique temporary file, restrictive permissions where supported, and
 | `control_port` | Optional ControlPort override | automatically chosen when unset/disabled |
 | `dns_port` | Optional DNS listener override | automatically chosen when unset/disabled |
 | `proxy_port` | Optional local HTTP proxy override | automatically chosen when unset/disabled |
+| `http_proxy_enabled` | Start the local HTTP proxy with the primary Tor session | `true` |
 | `*_checked` | Whether a manual port override is enabled | `false` |
 | `tor_path` | Explicit local Tor executable or bundle directory | unset; discover managed bundles |
 | `MaxCircuitDirtiness` | Tor circuit dirtiness in seconds | `600` |
@@ -39,6 +40,10 @@ Unknown keys are ignored by the compatibility facade during loading. The newer t
 ## Listener defaults and safety
 
 Tor's SOCKS, ControlPort, DNSPort, and TorProxy's HTTP proxy are configured for `127.0.0.1`. Listener ports must be valid and distinct. Do not configure a non-loopback proxy interface.
+
+The HTTP proxy is enabled by default and starts with the primary Tor session; it can be turned off in Settings → Ports without disabling the Tor SOCKS listener or System Tunnel. The listener is loopback-only at `127.0.0.1:<proxy_port>`. It supports HTTP requests and HTTPS/raw TCP tunneling through HTTP `CONNECT`. A listening port or successful TCP ping is not proof that Tor is ready: use Settings → Ports → Test HTTP CONNECT to verify an actual HTTPS request through Tor.
+
+For Telegram Android, select HTTP Proxy and enable “Transparent TCP connection” so Telegram uses HTTP `CONNECT` for TCP streams. Telegram client support for HTTP proxy varies by app; Telegram generally lists SOCKS5 and MTProto as its common proxy types, with HTTP available in certain clients.
 
 Automatic listener ports are initialized once and stored in the existing `proxy_port`, `tor_port`, `control_port` and `dns_port` fields. They are reused across application launches while available. If another process occupies an automatic port, TorProxy allocates and atomically saves a replacement before connection. When the corresponding `*_checked` flag is enabled, the port is user-pinned: TorProxy reports a conflict rather than silently changing the requested value. The DNSPort is probed against both TCP and UDP binds. These stored values do not reserve sockets while TorProxy is stopped; the connection preflight probes them again immediately before starting the listeners.
 

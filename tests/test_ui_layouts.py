@@ -2496,3 +2496,14 @@ def test_settings_exposes_isolated_tor_profiles_and_parallel_bridge_workers():
     assert 'def _build_tor_service_settings(self, profile: dict) -> TorSettings:' in proxy_source
     assert 'self.tor_service_pool.stop_all()' in proxy_source
     assert '"bridge_probe_workers"' in tor_source and "DEFAULT_MAX_WORKERS" in tor_source
+
+
+
+def test_settings_expose_default_enabled_http_proxy_and_connectivity_diagnostic():
+    repository = Path(__file__).resolve().parents[1]
+    settings = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
+    config = (repository / "config.py").read_text(encoding="utf-8")
+    assert '"http_proxy_enabled": True' in config
+    assert 'self.chk_http_proxy_enabled = QCheckBox("Enable local HTTP proxy", self)' in settings
+    assert 'self.btn_test_http_connect = QPushButton("Test HTTP CONNECT", self)' in settings
+    assert "def test_http_connect(self)" in settings

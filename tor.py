@@ -1509,7 +1509,7 @@ class TorRunner(QObject):
 
 
 class Runner:
-    """Own the loopback HTTP proxy and its traffic-counter worker."""
+    """Own the optional loopback HTTP proxy and traffic-accounting worker."""
 
     def __init__(self, port, tor_socks_port, app_window):
         self.app_window = app_window
@@ -1519,56 +1519,144 @@ class Runner:
         self.thread = None
         self.data_usage_tracker = None
         self.stop_data_usage_tracker_event = None
+        try:
+            self.http_enabled = bool(CONFIG["http_proxy_enabled"])
+        except (KeyError, TypeError):
+            self.http_enabled = True
+        self._started = False
+        self._lifecycle_lock = threading.RLock()
 
-    def start(self):
-        if self.server:
+    @property
+    def is_running(self) -> bool:
+        """Whether the HTTP listener thread is currently serving requests."""
+        with self._lifecycle_lock:
+            return bool(self.server is not None and self.thread is not None and self.thread.is_alive())
+
+    def _start_http_listener(self) -> None:
+        if self.server is not None and self.thread is not None and self.thread.is_alive():
             return
+        if self.server is not None:
+            try:
+                self.server.server_close()
+            finally:
+                self.server = None
+                self.thread = None
+
         ProxyHandler.app_window = self.app_window
         server = ThreadedHTTPServer(("127.0.0.1", self.port), ProxyHandler, self.tor_socks_port)
+        thread = threading.Thread(target=server.serve_forever, name="torproxy-http-proxy", daemon=True)
+        try:
+            thread.start()
+        except Exception:
+            server.server_close()
+            raise
         self.server = server
-        self.thread = threading.Thread(target=server.serve_forever, name="torproxy-http-proxy", daemon=True)
-        self.thread.start()
-        self.stop_data_usage_tracker_event = threading.Event()
-        self.data_usage_tracker = threading.Thread(
-            target=worker_data_usage_tracker,
-            args=(self.stop_data_usage_tracker_event,),
-            name="torproxy-traffic-accounting",
-            daemon=True,
-        )
-        self.data_usage_tracker.start()
+        self.thread = thread
         logger.info("Loopback HTTP proxy started on 127.0.0.1:%s.", self.port)
 
-    def stop(self):
-        if not self.server:
-            return
+    def _stop_http_listener(self) -> None:
         server = self.server
+        if server is None:
+            return
         thread = self.thread
-        tracker = self.data_usage_tracker
-        if self.stop_data_usage_tracker_event:
-            self.stop_data_usage_tracker_event.set()
-        server.shutdown()
+        if thread is not None and thread.is_alive():
+            server.shutdown()
         server.server_close()
-        if thread and thread is not threading.current_thread():
+        if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=5)
-        if tracker and tracker is not threading.current_thread():
-            tracker.join(timeout=5)
-
-        server_thread_alive = bool(thread and thread.is_alive())
-        tracker_alive = bool(tracker and tracker.is_alive())
-        if server_thread_alive or tracker_alive:
-            active = []
-            if server_thread_alive:
-                active.append("HTTP listener")
-            if tracker_alive:
-                active.append("traffic-accounting worker")
-            raise RuntimeError(
-                "Local proxy shutdown is incomplete; "
-                + " and ".join(active)
-                + " is still active. The service references were retained for safe recovery."
-            )
-
-        logger.info("Loopback HTTP proxy stopped.")
+        if thread is not None and thread.is_alive():
+            raise RuntimeError("Local HTTP proxy shutdown is incomplete; its listener thread is still active.")
         self.server = None
         self.thread = None
-        self.data_usage_tracker = None
-        self.stop_data_usage_tracker_event = None
+        logger.info("Loopback HTTP proxy stopped.")
+
+    def set_http_enabled(self, enabled: bool) -> str:
+        """Apply the persisted preference immediately when a Tor session is active."""
+        target = bool(enabled)
+        with self._lifecycle_lock:
+            previous = self.http_enabled
+            self.http_enabled = target
+            try:
+                if self._started:
+                    if target:
+                        self._start_http_listener()
+                    else:
+                        self._stop_http_listener()
+            except Exception:
+                self.http_enabled = previous
+                raise
+            if target:
+                if self.is_running:
+                    return f"HTTP proxy listening at 127.0.0.1:{self.port}."
+                return "HTTP proxy enabled; it will start with the next Tor connection."
+            return "HTTP proxy disabled. Tor SOCKS and System Tunnel remain available."
+
+    def start(self):
+        with self._lifecycle_lock:
+            try:
+                self.http_enabled = bool(CONFIG["http_proxy_enabled"])
+            except (KeyError, TypeError):
+                self.http_enabled = True
+            if self._started:
+                if self.http_enabled:
+                    self._start_http_listener()
+                else:
+                    self._stop_http_listener()
+                return
+
+            if self.http_enabled:
+                self._start_http_listener()
+
+            tracker = self.data_usage_tracker
+            if tracker is None or not tracker.is_alive():
+                self.stop_data_usage_tracker_event = threading.Event()
+                tracker = threading.Thread(
+                    target=worker_data_usage_tracker,
+                    args=(self.stop_data_usage_tracker_event,),
+                    name="torproxy-traffic-accounting",
+                    daemon=True,
+                )
+                try:
+                    tracker.start()
+                except Exception:
+                    self.stop_data_usage_tracker_event = None
+                    if self.server is not None:
+                        try:
+                            self._stop_http_listener()
+                        except Exception:
+                            logger.exception("Could not roll back HTTP listener after tracker startup failed.")
+                    raise
+                self.data_usage_tracker = tracker
+            self._started = True
+            if self.http_enabled:
+                logger.info("Local HTTP proxy is enabled for the primary Tor session on 127.0.0.1:%s.", self.port)
+            else:
+                logger.info("Local HTTP proxy is disabled by Settings.")
+
+    def stop(self):
+        with self._lifecycle_lock:
+            errors = []
+            try:
+                self._stop_http_listener()
+            except Exception as exc:
+                errors.append(f"HTTP listener: {exc}")
+
+            tracker = self.data_usage_tracker
+            stop_event = self.stop_data_usage_tracker_event
+            if stop_event is not None:
+                stop_event.set()
+            if tracker is not None and tracker is not threading.current_thread():
+                tracker.join(timeout=5)
+            if tracker is not None and tracker.is_alive():
+                errors.append("traffic-accounting worker is still active")
+
+            if errors:
+                raise RuntimeError(
+                    "Local proxy shutdown is incomplete; " + " | ".join(errors)
+                    + ". Service references were retained for safe recovery."
+                )
+
+            self.data_usage_tracker = None
+            self.stop_data_usage_tracker_event = None
+            self._started = False
+            logger.info("Local proxy services stopped.")

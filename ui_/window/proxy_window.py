@@ -601,6 +601,16 @@ class ProxyWindow(QWidget):
         mode = self.system_proxy_mode.itemData(index)
         if mode not in {"set", "unchanged", "clear"}:
             return
+        if mode == "set" and not bool(CONFIG["http_proxy_enabled"]):
+            previous = self.system_proxy_mode.findData(CONFIG["system_proxy_mode"])
+            self.system_proxy_mode.blockSignals(True)
+            if previous >= 0:
+                self.system_proxy_mode.setCurrentIndex(previous)
+            self.system_proxy_mode.blockSignals(False)
+            self.proxy_status_label.setText(
+                "Enable the local HTTP proxy in Settings → Ports before applying the system proxy."
+            )
+            return
         try:
             CONFIG["system_proxy_mode"] = mode
         except (ValueError, OSError, KeyError) as exc:
@@ -621,11 +631,14 @@ class ProxyWindow(QWidget):
     def _update_proxy_mode_status(self):
         mode = CONFIG["system_proxy_mode"]
         if mode == "set":
-            status = (
-                "System proxy is active at 127.0.0.1:{}.".format(self.proxy.port)
-                if self.proxy_set else
-                "Will apply the system proxy automatically after Tor connects."
-            )
+            if not bool(CONFIG["http_proxy_enabled"]):
+                status = "System proxy unavailable · enable the local HTTP proxy in Settings → Ports."
+            else:
+                status = (
+                    "System proxy is active at 127.0.0.1:{}.".format(self.proxy.port)
+                    if self.proxy_set else
+                    "Will apply the system proxy automatically after Tor connects."
+                )
         elif mode == "clear":
             if self._system_proxy_action_busy:
                 status = "Clearing the system proxy…"
@@ -749,6 +762,7 @@ class ProxyWindow(QWidget):
             refresh_tunnel_page = getattr(tunnel_page, "_refresh_state", None)
             if callable(refresh_tunnel_page):
                 refresh_tunnel_page()
+            self._refresh_http_proxy_settings()
             self._apply_system_proxy_mode()
             self.timer_data_usage.start()
 
@@ -782,6 +796,7 @@ class ProxyWindow(QWidget):
             self.set_btn_status_style("connecting")
 
         self._update_proxy_buttons()
+        self._refresh_http_proxy_settings()
         self._update_tunnel_hint()
         tunnel_page = getattr(self._parent, "tunnel_window", None)
         refresh_tunnel_page = getattr(tunnel_page, "_refresh_state", None)
@@ -833,6 +848,7 @@ class ProxyWindow(QWidget):
         self.timer_data_usage.stop()
         self._update_proxy_buttons()
         self._update_proxy_mode_status()
+        self._refresh_http_proxy_settings()
         self._update_tunnel_hint()
 
         if self._parent is not None and getattr(self._parent, "_shutdown_in_progress", False):
@@ -1241,6 +1257,15 @@ class ProxyWindow(QWidget):
                 "Will apply the system proxy automatically after Tor connects."
             )
             return
+        if not bool(CONFIG["http_proxy_enabled"]) or not bool(getattr(self.proxy, "is_running", False)):
+            self.proxy_status_label.setText(
+                "System proxy was not applied because the local HTTP proxy listener is disabled or unavailable."
+            )
+            self.logs_widget.update_log(
+                "System proxy was not applied: the local HTTP proxy listener is disabled or unavailable.",
+                level="warning",
+            )
+            return
         if getattr(self, "_system_proxy_action_busy", False):
             return
         self._system_proxy_action_busy = True
@@ -1302,6 +1327,12 @@ class ProxyWindow(QWidget):
         self.logs_widget.update_log(f"Error clearing proxy: {err}")
         QMessageBox.warning(self, "Proxy Error", f"Failed to clear proxy: {err}")
         self._update_proxy_buttons()
+
+    def _refresh_http_proxy_settings(self):
+        settings_page = getattr(self._parent, "settingWidget", None)
+        refresh = getattr(settings_page, "_refresh_http_proxy_status", None)
+        if callable(refresh):
+            refresh()
 
     def _update_proxy_buttons(self):
         browser_button = getattr(self, "btn_open_browser", None)
