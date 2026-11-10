@@ -692,9 +692,10 @@ class TorServicesPage(QWidget):
         outer.addLayout(header)
 
         dns = profile.get("dns_port")
+        socks_endpoint = f"127.0.0.1:{profile.get('socks_port')}"
         detail = (
-            f"SOCKS  {profile.get('socks_port')}    ·    "
-            f"Control  {profile.get('control_port')}    ·    "
+            f"SOCKS endpoint  {socks_endpoint}    ·    "
+            f"Control  127.0.0.1:{profile.get('control_port')}    ·    "
             f"DNS  {dns if dns else 'off'}"
         )
         details = QLabel(detail)
@@ -719,6 +720,14 @@ class TorServicesPage(QWidget):
         actions = QHBoxLayout()
         actions.setSpacing(7)
         service_id = str(profile.get("id", ""))
+        copy_button = QPushButton("Copy SOCKS endpoint", card)
+        copy_button.setObjectName("settingsActionButton")
+        copy_button.setIcon(qta.icon("fa6s.copy"))
+        copy_button.setToolTip("Copy the loopback SOCKS endpoint for this isolated Tor profile.")
+        copy_button.clicked.connect(
+            lambda _checked=False, endpoint=socks_endpoint: QApplication.clipboard().setText(endpoint)
+        )
+        actions.addWidget(copy_button)
         is_busy = self._busy_all or service_id in self._busy_services
         can_start = state not in {"ready", "starting", "bootstrapping"}
         can_stop = state not in {"stopped", "bundle unavailable", "not registered", "needs attention"}
