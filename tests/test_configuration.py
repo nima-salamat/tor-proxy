@@ -181,3 +181,83 @@ def test_config_store_persists_the_kill_switch_preference(tmp_path):
     loaded = store.load()
     assert loaded.kill_switch_enabled is True
     assert json.loads(path.read_text(encoding="utf-8"))["kill_switch_enabled"] is True
+
+
+def test_isolated_tor_profiles_and_worker_counts_are_persisted(tmp_path):
+    store = AppConfig()
+    store.path = tmp_path / "config.json"
+    store.load()
+    profile = {
+        "id": "personal",
+        "display_name": "Personal",
+        "socks_port": 19155,
+        "control_port": 19156,
+        "dns_port": 19157,
+        "use_primary_bridges": True,
+        "bridge_enabled": False,
+        "bridges": "",
+        "data_directory": None,
+    }
+
+    store.update_many({
+        "bridge_probe_workers": 6,
+        "tor_service_workers": 3,
+        "tor_services": [profile],
+    })
+
+    reloaded = AppConfig()
+    reloaded.path = store.path
+    loaded = reloaded.load()
+    assert loaded["bridge_probe_workers"] == 6
+    assert loaded["tor_service_workers"] == 3
+    assert loaded["tor_services"] == [profile]
+
+
+def test_tor_worker_settings_are_bounded_to_eight():
+    for key in ("bridge_probe_workers", "tor_service_workers"):
+        for invalid in (0, 9, True, "4"):
+            data = dict(DEFAULT_DATA)
+            data[key] = invalid
+            with pytest.raises(AppConfigError, match=key):
+                AppConfig._validate(data)
+
+
+def test_tor_service_profiles_reject_duplicate_ids_and_listener_ports():
+    profile = {
+        "id": "personal",
+        "display_name": "Personal",
+        "socks_port": 19155,
+        "control_port": 19156,
+        "dns_port": 19157,
+        "use_primary_bridges": True,
+        "bridge_enabled": False,
+        "bridges": "",
+        "data_directory": None,
+    }
+    data = dict(DEFAULT_DATA)
+    data["tor_services"] = [profile, dict(profile)]
+    with pytest.raises(AppConfigError, match="duplicated"):
+        AppConfig._validate(data)
+
+    second = dict(profile, id="work", socks_port=19157, control_port=19158, dns_port=None)
+    data["tor_services"] = [profile, second]
+    with pytest.raises(AppConfigError, match="reuses a port"):
+        AppConfig._validate(data)
+
+
+def test_tor_service_profiles_cannot_reuse_primary_listener_ports():
+    data = dict(DEFAULT_DATA)
+    data["proxy_port"] = 18888
+    data["tor_services"] = [{
+        "id": "work",
+        "display_name": "Work",
+        "socks_port": 18888,
+        "control_port": 19156,
+        "dns_port": None,
+        "use_primary_bridges": True,
+        "bridge_enabled": False,
+        "bridges": "",
+        "data_directory": None,
+    }]
+    with pytest.raises(AppConfigError, match="primary application listener"):
+        AppConfig._validate(data)
