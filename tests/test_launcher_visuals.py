@@ -30,3 +30,14 @@ def test_windows_launcher_uses_one_consistent_rounded_window_edge():
     assert "#include <dwmapi.h>" not in source
     assert "DWMWCP_ROUND" not in source
     assert "Dwmapi" not in cmake
+
+
+
+def test_windows_launcher_compiles_source_literals_as_utf8():
+    repository = Path(__file__).resolve().parents[1]
+    cmake = (repository / "launcher/CMakeLists.txt").read_text(encoding="utf-8")
+    source = (repository / "launcher/src/bootstrap.cpp").read_text(encoding="utf-8")
+
+    assert "target_compile_options(TorProxyLauncher PRIVATE /W4 /permissive- /utf-8)" in cmake
+    assert 's.status = L"Starting TorProxy…";' in source
+    assert "Starting TorProxy€" not in source

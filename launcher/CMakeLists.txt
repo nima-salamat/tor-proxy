@@ -71,7 +71,9 @@ else()
 endif()
 
 if(MSVC)
-    target_compile_options(TorProxyLauncher PRIVATE /W4 /permissive-)
+    # Launcher UI strings use Unicode wide literals. Keep MSVC's source
+    # character set explicit so UTF-8 punctuation is never decoded as CP1252.
+    target_compile_options(TorProxyLauncher PRIVATE /W4 /permissive- /utf-8)
     if(TARGET TorProxyLauncherUI)
         target_compile_options(TorProxyLauncherUI PRIVATE /W4 /permissive-)
     endif()
