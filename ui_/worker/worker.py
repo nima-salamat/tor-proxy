@@ -34,8 +34,17 @@ class Worker(QRunnable):
                 logger.exception("Could not notify the GUI about a background task failure.")
         except Exception as exc:
             task_name = getattr(self.fn, "__qualname__", type(self.fn).__name__)
+            detail = f"{type(exc).__name__}: {exc}"
+            if getattr(exc, "expected_cancellation", False):
+                logger.info("Background task cancelled (%s): %s", task_name, exc)
+                try:
+                    self.signals.cancelled.emit(detail)
+                except RuntimeError:
+                    logger.debug("Could not notify the GUI about a cancelled background task.")
+                return
+
             logger.exception("Unexpected background task failure (%s).", task_name)
             try:
-                self.signals.error.emit(f"{type(exc).__name__}: {exc}")
+                self.signals.error.emit(detail)
             except RuntimeError:
                 logger.exception("Could not notify the GUI about a background task failure.")
