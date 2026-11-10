@@ -644,14 +644,32 @@ class Runner:
     def stop(self):
         if not self.server:
             return
+        server = self.server
+        thread = self.thread
+        tracker = self.data_usage_tracker
         if self.stop_data_usage_tracker_event:
             self.stop_data_usage_tracker_event.set()
-        self.server.shutdown()
-        self.server.server_close()
-        if self.thread and self.thread is not threading.current_thread():
-            self.thread.join(timeout=5)
-        if self.data_usage_tracker and self.data_usage_tracker is not threading.current_thread():
-            self.data_usage_tracker.join(timeout=5)
+        server.shutdown()
+        server.server_close()
+        if thread and thread is not threading.current_thread():
+            thread.join(timeout=5)
+        if tracker and tracker is not threading.current_thread():
+            tracker.join(timeout=5)
+
+        server_thread_alive = bool(thread and thread.is_alive())
+        tracker_alive = bool(tracker and tracker.is_alive())
+        if server_thread_alive or tracker_alive:
+            active = []
+            if server_thread_alive:
+                active.append("HTTP listener")
+            if tracker_alive:
+                active.append("traffic-accounting worker")
+            raise RuntimeError(
+                "Local proxy shutdown is incomplete; "
+                + " and ".join(active)
+                + " is still active. The service references were retained for safe recovery."
+            )
+
         logger.info("Loopback HTTP proxy stopped.")
         self.server = None
         self.thread = None
