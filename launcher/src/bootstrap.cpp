@@ -1040,7 +1040,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         const bool logoLoaded = state.logo && state.logo->GetLastStatus() == Gdiplus::Ok;
         const bool themeMatches = expectedTheme.empty() ||
             (expectedTheme == L"dark" && state.darkTheme) ||
-            (expectedTheme == L"light" && !state.darkTheme);
+            (expectedTheme == L"light" && !state.darkTheme) ||
+            (expectedTheme == L"system" &&
+             state.darkTheme == windowsUsesDarkTheme());
         const bool bufferedPaintReady = state.backBufferDc != nullptr &&
             state.backBufferBitmap != nullptr &&
             state.backBufferWidth == bounds.right - bounds.left &&
