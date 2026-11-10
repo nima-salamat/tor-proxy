@@ -743,7 +743,7 @@ class ProxyWindow(QWidget):
         )
         self.set_btn_status_style("connected" if self.connected else "disconnected")
         self.logs_widget.update_log(
-            "Disconnect cancelled; Tor and the system tunnel were left running. "
+            "Disconnect cancelled; the services and system-tunnel state were left unchanged. "
             + str(reason or ""),
             level="info",
         )
