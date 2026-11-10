@@ -10,6 +10,7 @@ import ctypes
 import hashlib
 import ipaddress
 import json
+import logging
 import os
 import platform
 import re
@@ -31,6 +32,8 @@ from urllib.parse import urlsplit
 
 import psutil
 import requests
+
+logger = logging.getLogger(__name__)
 
 from .network import NetworkRouteError, create_session
 from .paths import user_directories
@@ -1581,7 +1584,7 @@ def _helper_start(args: Any) -> dict[str, Any]:
         if existing is not None:
             if _interface_exists(args.interface):
                 return {"ok": True, "active": True, "pid": existing.pid, "detail": "System tunnel is already active."}
-            LOGGER.warning(
+            logger.warning(
                 "Reaping stale TorProxy sing-box process pid=%s: executable, start time and config match, but the TUN interface is absent.",
                 existing.pid,
             )
