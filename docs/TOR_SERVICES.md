@@ -2,6 +2,21 @@
 
 TorProxy's core now exposes `TorServicePool` from `torproxy.service_pool`. It manages multiple independent Tor processes; it does not share a Tor data directory or ControlPort between profiles.
 
+## Primary connection redundancy
+
+This is separate from the optional per-application profiles described below. The main connection uses a stable SOCKS gateway on the configured `tor_port` and starts 1–4 Tor instances (default 2). One ready instance is selected as the active backend; the others remain bootstrapped as hot standbys. When the active Tor process exits, the supervisor updates the gateway so **new SOCKS sessions** use a ready standby. The same stable endpoint remains in use by the HTTP proxy, browser configuration, TorProxy's own routed requests, and System Tunnel.
+
+Open **Settings → Tor Services → Primary connection redundancy** and set **Primary Tor instances**:
+- `1`: single Tor process, no standby.
+- `2`: one active process plus one hot standby (recommended default).
+- `3–4`: extra failover capacity at higher memory, CPU, socket and relay-connection cost.
+
+The selected count is saved immediately and applies on the next Tor connection. Primary instances share the configured bridge list but keep separate DataDirectories, ControlPort cookies, SOCKS listeners and Tor circuit/guard state. The gateway is loopback-only and fails closed when no backend is healthy. It never sends traffic directly.
+
+Failover is not seamless TCP migration: a CONNECT tunnel, download, or other socket already pinned to a Tor process can still fail if that process exits. New sessions are routed to a healthy backend. The supervisor retries failed instances with a bounded restart policy to restore standby capacity. The active backend stays preferred while healthy to avoid needless circuit/identity changes.
+
+The following **Additional isolated Tor profiles** feature is different: it is for manually assigning independent SOCKS endpoints to separate applications or identities. Those profiles are not automatically used as primary backups.
+
 ## Isolation guarantees
 
 Each registered service gets its own:
