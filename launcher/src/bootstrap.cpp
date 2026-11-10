@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <memory>
 #include <gdiplus.h>
 #include <dwmapi.h>
 
@@ -18,6 +19,7 @@ constexpr wchar_t kClassName[] = L"TorProxy.LauncherWindow";
 constexpr UINT_PTR kTimer = 1;
 constexpr UINT kClose = 1003;
 constexpr int kDesignWidth = 760, kDesignHeight = 480;
+constexpr float kPanelCornerRadius = 25.0f;
 constexpr float kMaximumWorkAreaWidth = 0.88f;
 constexpr float kMaximumWorkAreaHeight = 0.86f;
 constexpr ULONGLONG kIdleTimeout = 180000;
@@ -25,6 +27,7 @@ constexpr ULONGLONG kIdleTimeout = 180000;
 struct State {
     HWND window = nullptr;
     HICON icon = nullptr;
+    std::unique_ptr<Gdiplus::Bitmap> logo;
     HDC backBufferDc = nullptr;
     HBITMAP backBufferBitmap = nullptr;
     HGDIOBJ backBufferPreviousBitmap = nullptr;
@@ -41,6 +44,21 @@ struct State {
     bool closeHover = false, trackingMouse = false;
     bool failed = false, ready = false;
 };
+
+bool loadSplashLogo(State &s) {
+    const std::wstring candidates[] = {
+        s.root + L"\\assets\\icon.png",
+        s.root + L"\\_internal\\assets\\icon.png"
+    };
+    for (const auto &candidatePath : candidates) {
+        auto image = std::make_unique<Gdiplus::Bitmap>(candidatePath.c_str());
+        if (image->GetLastStatus() == Gdiplus::Ok) {
+            s.logo = std::move(image);
+            return true;
+        }
+    }
+    return false;
+}
 
 std::wstring executablePath() {
     std::wstring value(32768, L'\0');
@@ -318,7 +336,7 @@ void paintFrame(State &s, HDC dc) {
     const RectF canvas(0.0f, 0.0f, static_cast<float>(kDesignWidth),
                        static_cast<float>(kDesignHeight));
     GraphicsPath panel;
-    addRoundedPath(panel, canvas, 25.0f);
+    addRoundedPath(panel, canvas, kPanelCornerRadius);
     LinearGradientBrush background(
         canvas, Color(255, 20, 34, 47), Color(255, 10, 19, 29),
         LinearGradientModeForwardDiagonal
@@ -362,13 +380,10 @@ void paintFrame(State &s, HDC dc) {
     graphics.DrawLine(&closePen, 714.0f, 34.0f, 728.0f, 48.0f);
     graphics.DrawLine(&closePen, 728.0f, 34.0f, 714.0f, 48.0f);
 
-    if (s.icon) {
-        Bitmap logo(s.icon);
-        if (logo.GetLastStatus() == Ok) {
-            SolidBrush logoHalo(Color(30, 77, 221, 194));
-            graphics.FillEllipse(&logoHalo, RectF(319.0f, 73.0f, 122.0f, 122.0f));
-            graphics.DrawImage(&logo, RectF(331.0f, 85.0f, 98.0f, 98.0f));
-        }
+    if (s.logo && s.logo->GetLastStatus() == Ok) {
+        SolidBrush logoHalo(Color(30, 77, 221, 194));
+        graphics.FillEllipse(&logoHalo, RectF(319.0f, 73.0f, 122.0f, 122.0f));
+        graphics.DrawImage(s.logo.get(), RectF(331.0f, 85.0f, 98.0f, 98.0f));
     }
 
     if (!s.failed) {
@@ -534,9 +549,15 @@ void updateMonitorLayout(State &s, UINT dpi) {
     const int y = monitorInfo.rcWork.top + (availableHeight - s.height) / 2;
     SetWindowPos(s.window, HWND_TOPMOST, x, y, s.width, s.height,
                  SWP_NOACTIVATE | SWP_NOOWNERZORDER);
-    const int corner = static_cast<int>(std::lround(46.0f * s.scale));
-    HRGN roundedRegion = CreateRoundRectRgn(0, 0, s.width + 1, s.height + 1,
-                                             corner, corner);
+    // The window region and painted outline use the same 25-DIP radius.
+    // Do not also ask DWM to round this custom-shaped popup: that creates a
+    // second, independently rounded edge that looks like a nested border.
+    const int cornerDiameter = static_cast<int>(
+        std::lround(2.0f * kPanelCornerRadius * s.scale)
+    );
+    HRGN roundedRegion = CreateRoundRectRgn(
+        0, 0, s.width + 1, s.height + 1, cornerDiameter, cornerDiameter
+    );
     if (roundedRegion && !SetWindowRgn(s.window, roundedRegion, TRUE))
         DeleteObject(roundedRegion);
     InvalidateRect(s.window, nullptr, FALSE);
@@ -691,8 +712,6 @@ bool createWindow(State &s, HINSTANCE instance) {
     if (!s.window) return false;
 
     updateMonitorLayout(s, GetDpiForWindow(s.window));
-    const DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUND;
-    DwmSetWindowAttribute(s.window, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
     ShowWindow(s.window, SW_SHOWNORMAL);
     UpdateWindow(s.window);
     return true;
@@ -731,7 +750,16 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
             if (std::wstring(argv[i]) == L"--self-test") selfTest = true;
         LocalFree(argv);
     }
+    if (!loadSplashLogo(state)) {
+        Gdiplus::GdiplusShutdown(gdiplusToken);
+        MessageBoxW(nullptr,
+                    L"Could not load the high-resolution TorProxy logo (assets\\icon.png).",
+                    L"TorProxy", MB_OK | MB_ICONERROR);
+        return 6;
+    }
+
     if (!createWindow(state, instance)) {
+        state.logo.reset();
         Gdiplus::GdiplusShutdown(gdiplusToken);
         MessageBoxW(nullptr, L"Could not create the TorProxy startup window.",
                     L"TorProxy", MB_OK | MB_ICONERROR);
@@ -748,13 +776,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
             (bounds.right - bounds.left) >= 680 &&
             (bounds.bottom - bounds.top) >= 420;
         const bool iconLoaded = state.icon != nullptr;
+        const bool logoLoaded = state.logo && state.logo->GetLastStatus() == Gdiplus::Ok;
         const bool bufferedPaintReady = state.backBufferDc != nullptr &&
             state.backBufferBitmap != nullptr &&
             state.backBufferWidth == bounds.right - bounds.left &&
             state.backBufferHeight == bounds.bottom - bounds.top;
         DestroyWindow(state.window);
+        state.logo.reset();
         Gdiplus::GdiplusShutdown(gdiplusToken);
-        return (frameless && sizeValid && iconLoaded && bufferedPaintReady) ? 0 : 4;
+        return (frameless && sizeValid && iconLoaded && logoLoaded && bufferedPaintReady) ? 0 : 4;
     }
 
     startApp(state);
@@ -763,6 +793,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
+    state.logo.reset();
     Gdiplus::GdiplusShutdown(gdiplusToken);
     return static_cast<int>(msg.wParam);
 }

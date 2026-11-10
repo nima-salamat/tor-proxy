@@ -10,11 +10,12 @@ if(WIN32)
     enable_language(RC)
     # The Windows launcher is a small Win32/GDI application. It deliberately
     # has no Qt dependency so users do not wait for a second Qt runtime before
-    # Python starts, and the embedded icon is available to Explorer/taskbar.
+    # Python starts. The ICO remains the native Explorer/taskbar icon; the
+    # splash artwork itself is loaded from the higher-resolution PNG asset.
     add_executable(TorProxyLauncher WIN32 src/bootstrap.cpp)
     target_compile_features(TorProxyLauncher PRIVATE cxx_std_17)
     target_compile_definitions(TorProxyLauncher PRIVATE _WIN32_WINNT=0x0A00 WINVER=0x0A00)
-    target_link_libraries(TorProxyLauncher PRIVATE Shell32 Ole32 Gdiplus Dwmapi)
+    target_link_libraries(TorProxyLauncher PRIVATE Shell32 Ole32 Gdiplus)
 
     # The kill switch uses native WFP filters rather than editing every
     # pre-existing Windows Firewall rule through PowerShell/CIM.
