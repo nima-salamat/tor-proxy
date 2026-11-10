@@ -188,6 +188,24 @@ class TorServicePool:
                 raise TorServicePoolError(f"Unknown Tor service '{service_id}'.") from exc
 
     @property
+    def max_workers(self) -> int:
+        with self._lock:
+            return self._max_workers
+
+    def set_max_workers(self, max_workers: int) -> None:
+        """Update the bounded concurrency used by future start_all/stop_all calls."""
+        if type(max_workers) is not int or not 1 <= max_workers <= MAX_SERVICE_WORKERS:
+            raise TorServicePoolError(
+                f"Service worker count must be an integer between 1 and {MAX_SERVICE_WORKERS}."
+            )
+        with self._lock:
+            if any(entry.active_calls or entry.stopping for entry in self._services.values()):
+                raise TorServicePoolError(
+                    "Service worker count cannot be changed while a Tor service operation is running."
+                )
+            self._max_workers = max_workers
+
+    @property
     def service_ids(self) -> tuple[str, ...]:
         with self._lock:
             return tuple(self._services)
