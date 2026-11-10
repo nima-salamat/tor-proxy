@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 
 import qtawesome as qta
-from PySide6.QtCore import Qt, QThreadPool
+from PySide6.QtCore import Qt, QThreadPool, QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -276,11 +276,61 @@ class TorServicesPage(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        layout.addWidget(self._section_title("Tor services"))
+        layout.addWidget(self._section_title("Primary connection redundancy"))
+        primary_description = QLabel(
+            "TorProxy keeps one stable local SOCKS endpoint and starts the configured number of "
+            "independent Tor processes behind it. One instance handles new sessions; the others stay "
+            "bootstrapped as hot standbys. If the active process exits, new SOCKS sessions move to a "
+            "healthy standby without changing browser or system-tunnel settings. Existing TCP sessions "
+            "on a failed process can still disconnect."
+        )
+        primary_description.setObjectName("settingsDescription")
+        primary_description.setWordWrap(True)
+        layout.addWidget(primary_description)
+
+        primary_card = QFrame(self)
+        primary_card.setObjectName("settingsRowCard")
+        primary_layout = QHBoxLayout(primary_card)
+        primary_layout.setContentsMargins(14, 10, 14, 10)
+        primary_layout.setSpacing(12)
+        primary_copy = QVBoxLayout()
+        primary_title = QLabel("Primary Tor instances")
+        primary_title.setObjectName("settingsFieldLabel")
+        primary_help = QLabel(
+            "Total number of Tor processes for the main TorProxy connection, including the active "
+            "instance. 1 disables standby failover; 2 is the recommended balance. More instances "
+            "use more memory, CPU, sockets and relay connections. Applied on the next connection."
+        )
+        primary_help.setObjectName("settingsDescription")
+        primary_help.setWordWrap(True)
+        primary_copy.addWidget(primary_title)
+        primary_copy.addWidget(primary_help)
+        primary_layout.addLayout(primary_copy, 1)
+        self.spin_primary_instances = QSpinBox(self)
+        self.spin_primary_instances.setRange(1, 4)
+        self.spin_primary_instances.setSuffix(" instances")
+        self.spin_primary_instances.setValue(int(CONFIG["primary_tor_instances"] or 2))
+        self.spin_primary_instances.setToolTip("1–4 total primary Tor processes. The default is 2.")
+        self.spin_primary_instances.valueChanged.connect(self._save_primary_instances)
+        primary_layout.addWidget(self.spin_primary_instances)
+        layout.addWidget(primary_card)
+
+        self.lbl_primary_pool_status = QLabel("")
+        self.lbl_primary_pool_status.setObjectName("settingsDescription")
+        self.lbl_primary_pool_status.setWordWrap(True)
+        layout.addWidget(self.lbl_primary_pool_status)
+        self._primary_status_timer = QTimer(self)
+        self._primary_status_timer.setInterval(1500)
+        self._primary_status_timer.timeout.connect(self._refresh_primary_pool_status)
+        self._primary_status_timer.start()
+        self._refresh_primary_pool_status()
+
+        layout.addSpacing(8)
+        layout.addWidget(self._section_title("Additional isolated Tor profiles"))
         description = QLabel(
-            "Create independent Tor processes for separate applications or identities. "
-            "Profiles keep their own SOCKS, ControlPort, optional DNSPort, state directory, "
-            "control cookie and log. They can run alongside the primary Tor connection."
+            "Optional separate Tor processes for applications or identities that need their own "
+            "SOCKS endpoint and DataDirectory. These manually managed profiles are independent of "
+            "the primary failover group above; they are not used as automatic backups."
         )
         description.setObjectName("settingsDescription")
         description.setWordWrap(True)
@@ -382,6 +432,50 @@ class TorServicesPage(QWidget):
         label = QLabel(title)
         label.setObjectName("settingsSectionTitle")
         return label
+
+    def _save_primary_instances(self, value: int) -> None:
+        previous = int(CONFIG["primary_tor_instances"] or 2)
+        try:
+            CONFIG["primary_tor_instances"] = int(value)
+            self.lbl_primary_pool_status.setText(
+                f"Saved {value} primary Tor instance(s). Disconnect and reconnect to apply the new count."
+            )
+        except (ValueError, OSError, KeyError) as exc:
+            self._restore_spin(self.spin_primary_instances, previous)
+            QMessageBox.warning(self, "Primary Tor redundancy", str(exc))
+
+    def _refresh_primary_pool_status(self) -> None:
+        tor = getattr(self._proxy, "tor", None)
+        if tor is None:
+            self.lbl_primary_pool_status.setText("Primary Tor status is unavailable.")
+            return
+        managers = getattr(tor, "instance_managers", {}) or {}
+        ready = []
+        for instance_id, manager in managers.items():
+            state = getattr(getattr(manager, "state", None), "value", getattr(manager, "state", None))
+            process = getattr(manager, "process", None)
+            try:
+                alive = process is not None and process.poll() is None
+            except Exception:
+                alive = False
+            if str(state).lower() == "ready" and alive:
+                ready.append(instance_id)
+        active_id = getattr(tor, "_active_instance_id", None)
+        configured = int(CONFIG["primary_tor_instances"] or 2)
+        if str(getattr(tor, "state", "")).upper() == "READY" and active_id:
+            self.lbl_primary_pool_status.setText(
+                f"Connected · {len(ready)}/{configured} instance(s) ready · active backend: {active_id} · "
+                f"stable SOCKS endpoint: 127.0.0.1:{tor.socks_port}"
+            )
+        elif managers:
+            self.lbl_primary_pool_status.setText(
+                f"Primary pool state: {getattr(tor, 'state', 'unknown')} · "
+                f"{len(ready)}/{configured} instance(s) ready"
+            )
+        else:
+            self.lbl_primary_pool_status.setText(
+                f"Configured: {configured} primary instance(s). This setting applies on the next connection."
+            )
 
     def _profiles(self) -> list[dict]:
         value = CONFIG["tor_services"] or []
