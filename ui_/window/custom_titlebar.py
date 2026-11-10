@@ -1,7 +1,10 @@
 """Compact Windows title bar with native multi-monitor window dragging."""
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSize
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QLabel, QWidget, QHBoxLayout, QPushButton, QSizePolicy
 import qtawesome as qta
+
+from utils import resource_path
 
 
 class CustomTitleBar(QWidget):
@@ -11,6 +14,17 @@ class CustomTitleBar(QWidget):
         self.setObjectName("customTitleBar")
         self.setFixedHeight(40)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+        # Keep the app identity beside the window controls, using the
+        # high-resolution PNG rather than scaling the small Windows ICO.
+        self.app_icon = QLabel(self)
+        self.app_icon.setObjectName("customTitleBarAppIcon")
+        self.app_icon.setAccessibleName("TorProxy application icon")
+        self.app_icon.setToolTip("TorProxy")
+        self.app_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.app_icon.setFixedSize(24, 24)
+        self.app_icon.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._source_app_icon = QPixmap(resource_path("assets/icon.png"))
 
         self.title = QLabel("TorProxy", self)
         self.title.setObjectName("windowTitle")
@@ -43,12 +57,31 @@ class CustomTitleBar(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 5, 7, 5)
         layout.setSpacing(5)
-        layout.addWidget(self.title)
         layout.addStretch(1)
+        layout.addWidget(self.app_icon, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(self.title, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(self.btn_min)
         layout.addWidget(self.btn_max)
         layout.addWidget(self.btn_close)
         self._start_pos = None
+        self._screen_signal_connected = False
+        self._refresh_app_icon()
+
+    def _refresh_app_icon(self, *_args):
+        """Render the PNG at the current screen's device-pixel ratio."""
+        if self._source_app_icon.isNull():
+            self.app_icon.clear()
+            return
+
+        ratio = max(1.0, float(self.devicePixelRatioF()))
+        physical_size = QSize(round(20 * ratio), round(20 * ratio))
+        pixmap = self._source_app_icon.scaled(
+            physical_size,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        pixmap.setDevicePixelRatio(ratio)
+        self.app_icon.setPixmap(pixmap)
 
     def _toggle_maximized(self):
         if self.parent_.isMaximized():
@@ -71,6 +104,12 @@ class CustomTitleBar(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+        self._refresh_app_icon()
+        if not self._screen_signal_connected:
+            handle = self.window().windowHandle()
+            if handle is not None:
+                handle.screenChanged.connect(self._refresh_app_icon)
+                self._screen_signal_connected = True
         self._sync_maximize_button()
 
     def mousePressEvent(self, event):

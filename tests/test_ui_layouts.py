@@ -2290,3 +2290,20 @@ def test_settings_emergency_tunnel_cleanup_handles_declined_uac_as_cancellation(
     assert 'level="info"' in callback
     assert 'level="error"' not in callback
 
+
+
+
+def test_custom_titlebar_shows_high_resolution_app_icon_beside_title():
+    from PySide6.QtWidgets import QMainWindow
+    from ui_.window.custom_titlebar import CustomTitleBar
+
+    parent = QMainWindow()
+    titlebar = CustomTitleBar(parent)
+    logo = titlebar.app_icon
+    pixmap = logo.pixmap()
+
+    assert logo.objectName() == "customTitleBarAppIcon"
+    assert pixmap is not None and not pixmap.isNull()
+    assert titlebar.layout().indexOf(logo) < titlebar.layout().indexOf(titlebar.title)
+    assert titlebar.layout().indexOf(titlebar.title) < titlebar.layout().indexOf(titlebar.btn_min)
+    assert logo.width() == 24 and logo.height() == 24
