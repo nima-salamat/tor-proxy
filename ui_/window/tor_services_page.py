@@ -266,6 +266,7 @@ class TorServicesPage(QWidget):
         super().__init__(parent)
         self._app_window = app_window
         self._proxy = getattr(app_window, "proxyWidget", None)
+        self._primary_tor = getattr(self._proxy, "tor", None)
         self._thread_pool = QThreadPool(self)
         self._workers: dict[str, Worker] = {}
         self._busy_services: set[str] = set()
@@ -314,6 +315,13 @@ class TorServicesPage(QWidget):
         self.spin_primary_instances.valueChanged.connect(self._save_primary_tor_instances)
         primary_pool_layout.addWidget(self.spin_primary_instances)
         layout.addWidget(primary_pool_card)
+        self.lbl_primary_pool_health = QLabel("Primary Tor pool is not running.")
+        self.lbl_primary_pool_health.setObjectName("settingsDescription")
+        self.lbl_primary_pool_health.setWordWrap(True)
+        layout.addWidget(self.lbl_primary_pool_health)
+        if self._primary_tor is not None:
+            self._primary_tor.bridge_usage_changed.connect(self._update_primary_pool_health)
+            self._update_primary_pool_health(self._primary_tor.pool_health_snapshot)
 
         layout.addWidget(self._section_title("Parallel bridge checks"))
         bridge_card = QFrame(self)
@@ -423,6 +431,50 @@ class TorServicesPage(QWidget):
         if pool is not None or not create:
             return pool
         return self._proxy._ensure_tor_service_pool()
+
+    def _update_primary_pool_health(self, health) -> None:
+        """Show the individually verified state of each primary Tor worker."""
+        if not isinstance(health, dict):
+            return
+        try:
+            ready = max(0, int(health.get("ready_instances", 0)))
+            total = max(0, int(health.get("total_instances", 0)))
+        except (TypeError, ValueError):
+            return
+        if total <= 0:
+            self.lbl_primary_pool_health.setText("Primary Tor pool is not running.")
+            return
+
+        labels = []
+        for item in health.get("instances", []):
+            if not isinstance(item, dict):
+                continue
+            try:
+                index = int(item.get("index", len(labels) + 1))
+            except (TypeError, ValueError):
+                index = len(labels) + 1
+            state = str(item.get("state", "unknown")).lower()
+            if item.get("healthy"):
+                latency = item.get("latency_ms")
+                try:
+                    suffix = f" · {float(latency):.0f} ms" if latency is not None else ""
+                except (TypeError, ValueError):
+                    suffix = ""
+                description = "Healthy" + suffix
+            elif state == "ready-checking":
+                description = "Tor process ready · checking network"
+            elif state == "unhealthy":
+                description = "Process running · Tor network unavailable"
+            elif state in {"failed", "stopped"}:
+                description = state.title()
+            else:
+                description = "Starting or bootstrapping"
+            labels.append(f"Instance {index}: {description}")
+
+        detail = "  |  ".join(labels) if labels else "Waiting for instance status."
+        self.lbl_primary_pool_health.setText(
+            f"Primary connection · {ready}/{total} instances verified healthy\n{detail}"
+        )
 
     def _save_primary_tor_instances(self, value: int) -> None:
         previous = int(CONFIG["primary_tor_instances"] or 2)
@@ -691,6 +743,8 @@ class TorServicesPage(QWidget):
         self._run_operation("__all__", stop_registered)
 
     def refresh_services(self) -> None:
+        if self._primary_tor is not None:
+            self._update_primary_pool_health(self._primary_tor.pool_health_snapshot)
         if self._service_cards_layout is None:
             return
         while self._service_cards_layout.count():

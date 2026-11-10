@@ -4,6 +4,8 @@ All notable changes are recorded here. Dates and release numbers are added only 
 
 ## Unreleased
 
+- Added per-instance end-to-end Tor health probes through each worker's own SOCKS5 listener using the Tor Project Check API; only workers confirmed with `IsTor: true` are eligible for traffic, and two consecutive probe failures withdraw a worker until it recovers. Settings → Tor Services now displays each primary instance's verified state and probe latency.
+- Replaced primary SOCKS round-robin routing with least-active-connection and latency-aware backend selection, plus per-backend cooldown/fallback when a SOCKS connection fails; a sole healthy worker carries all new connections.
 - Replaced the single-backend primary Tor SOCKS path with a stable loopback SOCKS5 failover gateway backed by 1–4 isolated Tor workers; the HTTP proxy and sing-box System Tunnel continue to use the configured endpoint, and new connections retry healthy workers when one backend fails. Unexpectedly exited workers receive up to three supervised restart attempts with backoff.
 - Added Settings → Tor Services → Primary connection redundancy to configure how many Tor workers back the main connection (default 2). Documented that failover affects new connections only; existing TCP streams cannot migrate and each worker has separate Tor state/circuits.
 - Prevented duplicate GUI ControlPort authentication from turning an already verified Tor READY state into a false disconnect; NEWNYM now uses TorManager's authenticated controller.

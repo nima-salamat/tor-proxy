@@ -6,6 +6,7 @@ import os
 import socket
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
@@ -15,6 +16,7 @@ from proxy import ProxyHandler, ThreadedHTTPServer, worker_data_usage_tracker
 from torproxy.paths import user_directories
 from torproxy.tor_manager import TorManager, TorManagerError, TorSettings, TorState
 from torproxy.socks_gateway import SocksFailoverGateway
+from torproxy.health import TorProbeResult, probe_tor_socks
 from torproxy.bridge_health import DEFAULT_MAX_WORKERS
 from utils import resource_path
 
@@ -166,12 +168,14 @@ class TorRunner(QObject):
         self.app_window = None
         self._stopping = threading.Event()
         self._last_report: tuple[str, int | None, str] | None = None
-        self._last_bridge_usage_report: tuple[bool, bool, int, int, tuple[str, ...]] | None = None
+        self._last_bridge_usage_report: tuple[object, ...] | None = None
         self._backend_managers: list[TorManager] = []
         self._backend_threads: list[threading.Thread] = []
         self._backend_start_locks: list[threading.Lock] = []
         self._backend_statuses: dict[int, str] = {}
         self._backend_errors: dict[int, str] = {}
+        self._backend_health: dict[int, dict[str, object]] = {}
+        self._pool_ever_healthy = False
         self._backend_ever_ready: set[int] = set()
         self._backend_restart_attempts: dict[int, int] = {}
         self._backend_restart_at: dict[int, float] = {}
@@ -273,12 +277,15 @@ class TorRunner(QObject):
             new_circuit_period_seconds=max(10, min(86400, int(self.NewCircuitPeriod))),
         ))
 
-    def _healthy_managers(self) -> list[TorManager]:
-        managers = list(self._backend_managers)
-        if not managers and self.manager is not None:
-            managers = [self.manager]
-        healthy = []
-        for manager in managers:
+    def _process_ready_managers(self) -> list[tuple[int, TorManager]]:
+        """Return Tor processes that passed bootstrap and remain alive."""
+        with self._backend_lock:
+            managers = list(self._backend_managers)
+            fallback = self.manager
+        if not managers and fallback is not None:
+            managers = [fallback]
+        ready = []
+        for index, manager in enumerate(managers):
             state = getattr(manager, "state", None)
             state = str(getattr(state, "value", state)).lower().split(".")[-1]
             process = getattr(manager, "process", None)
@@ -286,16 +293,47 @@ class TorRunner(QObject):
                 continue
             try:
                 if process.poll() is None:
-                    healthy.append(manager)
+                    ready.append((index, manager))
             except Exception:
                 continue
-        return healthy
+        return ready
 
-    def _ready_backend_endpoints(self) -> list[tuple[str, int]]:
-        return [
-            ("127.0.0.1", int(manager.settings.socks_port))
-            for manager in self._healthy_managers()
-        ]
+    def _healthy_managers(self) -> list[TorManager]:
+        """Return only workers confirmed by a real request through their SOCKS port."""
+        process_ready = self._process_ready_managers()
+        if not process_ready:
+            return []
+        if not self._backend_managers:
+            # Preserve the small compatibility surface for tests/legacy callers
+            # that manually provide one already-READY manager.
+            if str(self.state).upper() == "READY":
+                return [manager for _index, manager in process_ready]
+            return []
+        with self._backend_lock:
+            ranked = [
+                (
+                    float(self._backend_health.get(index, {}).get("latency_ms") or 750.0),
+                    manager,
+                )
+                for index, manager in process_ready
+                if bool(self._backend_health.get(index, {}).get("healthy", False))
+            ]
+        ranked.sort(key=lambda item: item[0])
+        return [manager for _latency, manager in ranked]
+
+    def _ready_backend_endpoints(self) -> list[tuple[str, int, float | None]]:
+        endpoints = []
+        for index, manager in self._process_ready_managers():
+            with self._backend_lock:
+                health = dict(self._backend_health.get(index, {}))
+            if not health.get("healthy"):
+                continue
+            endpoints.append((
+                "127.0.0.1",
+                int(manager.settings.socks_port),
+                float(health["latency_ms"]) if health.get("latency_ms") is not None else None,
+            ))
+        return endpoints
 
     def _on_worker_status(self, index: int, manager: TorManager, state, progress, message) -> None:
         state_text = getattr(state, "value", str(state))
@@ -305,9 +343,21 @@ class TorRunner(QObject):
             self._backend_statuses[index] = normalized
             if normalized == "FAILED":
                 self._backend_errors[index] = detail or "Tor worker failed during startup."
+                self._backend_health[index] = {
+                    "healthy": False,
+                    "latency_ms": None,
+                    "consecutive_failures": 0,
+                    "last_error": self._backend_errors[index],
+                }
             elif normalized == "READY":
                 self._backend_errors.pop(index, None)
                 self._backend_ever_ready.add(index)
+                self._backend_health.setdefault(index, {
+                    "healthy": False,
+                    "latency_ms": None,
+                    "consecutive_failures": 0,
+                    "last_error": "Waiting for an end-to-end Tor connectivity check.",
+                })
 
         ready = self._healthy_managers()
         if ready:
@@ -318,19 +368,136 @@ class TorRunner(QObject):
             self.last_error = None
             if self.app_window is not None:
                 self.app_window.data.value = "100%"
-            self._publish_bridge_usage()
         else:
-            pending = any(value in {"STARTING", "BOOTSTRAPPING"} for value in self._backend_statuses.values())
-            self.state = "BOOTSTRAPPING" if pending else normalized
-            if self.app_window is not None and progress is not None and progress < 100:
-                self.app_window.data.value = f"{progress}%"
+            process_ready = self._process_ready_managers()
+            pending = any(
+                value in {"STARTING", "BOOTSTRAPPING"}
+                for value in self._backend_statuses.values()
+            )
+            self.state = "BOOTSTRAPPING" if pending or process_ready else normalized
+            if self.app_window is not None:
+                if process_ready:
+                    self.app_window.data.value = "Verifying Tor network access…"
+                elif progress is not None and progress < 100:
+                    self.app_window.data.value = f"{progress}%"
 
+        self._publish_bridge_usage()
         if normalized == "READY":
-            self.log_message.emit(f"Primary Tor instance {index + 1} is ready.")
+            self.log_message.emit(
+                f"Primary Tor instance {index + 1} completed bootstrap; checking real SOCKS connectivity."
+            )
         elif normalized == "FAILED":
             self.log_message.emit(f"Primary Tor instance {index + 1} failed: {detail or 'startup error'}")
         elif progress is not None and normalized in {"BOOTSTRAPPING", "STARTING"}:
             self.log_message.emit(f"Primary Tor instance {index + 1}: {progress}% bootstrap.")
+
+    def _probe_ready_backends(self) -> bool:
+        """Probe each bootstrapped worker through its own SOCKS listener in parallel."""
+        candidates = self._process_ready_managers()
+        if not candidates or self._stopping.is_set():
+            return False
+
+        results: dict[int, TorProbeResult] = {}
+        worker_count = max(1, min(4, len(candidates)))
+        with ThreadPoolExecutor(
+            max_workers=worker_count,
+            thread_name_prefix="torproxy-health-check",
+        ) as executor:
+            futures = {
+                index: executor.submit(
+                    probe_tor_socks,
+                    int(manager.settings.socks_port),
+                    timeout=8.0,
+                )
+                for index, manager in candidates
+            }
+            for index, future in futures.items():
+                if self._stopping.is_set():
+                    return False
+                try:
+                    results[index] = future.result(timeout=10.0)
+                except Exception as exc:
+                    results[index] = TorProbeResult(
+                        False,
+                        detail=f"Tor connectivity probe failed ({type(exc).__name__}).",
+                    )
+
+        changed = []
+        with self._backend_lock:
+            current_managers = list(self._backend_managers)
+            for index, result in results.items():
+                if index >= len(current_managers):
+                    continue
+                manager = dict(candidates).get(index)
+                if current_managers[index] is not manager:
+                    continue
+                state = dict(self._backend_health.get(index, {}))
+                was_healthy = bool(state.get("healthy", False))
+                if result.healthy:
+                    previous_latency = state.get("latency_ms")
+                    if previous_latency is None:
+                        latency = float(result.latency_ms or 0.0)
+                    else:
+                        latency = (
+                            float(previous_latency) * 0.65
+                            + float(result.latency_ms or 0.0) * 0.35
+                        )
+                    state.update({
+                        "healthy": True,
+                        "latency_ms": latency,
+                        "consecutive_failures": 0,
+                        "last_error": "",
+                        "last_check": time.monotonic(),
+                    })
+                else:
+                    failures = int(state.get("consecutive_failures", 0)) + 1
+                    # Require two consecutive failures before withdrawing a
+                    # previously-working worker, avoiding a single probe flap.
+                    healthy = was_healthy and failures < 2
+                    state.update({
+                        "healthy": healthy,
+                        "consecutive_failures": failures,
+                        "last_error": result.detail,
+                        "last_check": time.monotonic(),
+                    })
+                self._backend_health[index] = state
+                if was_healthy != bool(state.get("healthy")):
+                    changed.append((index, bool(state.get("healthy")), result))
+
+        healthy = self._healthy_managers()
+        if healthy:
+            self._pool_ever_healthy = True
+            if self.manager not in healthy:
+                self.manager = healthy[0]
+            self.proc = getattr(self.manager, "process", None)
+            self.state = "READY"
+            self.last_error = None
+            if self.app_window is not None:
+                self.app_window.data.value = "100%"
+        elif self._process_ready_managers():
+            self.proc = None
+            self.state = "BOOTSTRAPPING"
+            if self.app_window is not None:
+                self.app_window.data.value = (
+                    "Rechecking Tor network access…"
+                    if self._pool_ever_healthy
+                    else "Verifying Tor network access…"
+                )
+
+        for index, is_healthy, result in changed:
+            if is_healthy:
+                latency = result.latency_ms or 0.0
+                self.log_message.emit(
+                    f"Primary Tor instance {index + 1} passed Tor Check "
+                    f"({latency:.0f} ms); it is now available for new connections."
+                )
+            else:
+                self.log_message.emit(
+                    f"Primary Tor instance {index + 1} failed two consecutive Tor Check probes; "
+                    "new connections have been moved to the remaining healthy instances."
+                )
+        self._publish_bridge_usage()
+        return bool(healthy)
 
     def _start_backend(self, index: int, manager: TorManager) -> None:
         if index >= len(self._backend_start_locks):
@@ -369,6 +536,8 @@ class TorRunner(QObject):
         self._backend_start_locks = []
         self._backend_statuses = {}
         self._backend_errors = {}
+        self._backend_health = {}
+        self._pool_ever_healthy = False
         self._backend_ever_ready = set()
         self._backend_restart_attempts = {}
         self._backend_restart_at = {}
@@ -410,6 +579,43 @@ class TorRunner(QObject):
         self.thread.start()
         logger.info("Primary Tor pool supervisor started on loopback SOCKS port %s.", self.socks_port)
 
+    @property
+    def pool_health_snapshot(self) -> dict:
+        """Return safe per-instance health metadata for the Settings UI."""
+        with self._backend_lock:
+            managers = list(self._backend_managers)
+            statuses = dict(self._backend_statuses)
+            health = {
+                index: dict(value)
+                for index, value in self._backend_health.items()
+            }
+            if not managers and self.manager is not None:
+                managers = [self.manager]
+            instances = []
+            for index in range(len(managers)):
+                state = health.get(index, {})
+                worker_state = str(statuses.get(index, "stopped")).lower()
+                healthy = bool(state.get("healthy", False)) and worker_state == "ready"
+                failures = int(state.get("consecutive_failures", 0) or 0)
+                if healthy and worker_state == "ready":
+                    worker_state = "healthy"
+                elif worker_state == "ready" and failures >= 2:
+                    worker_state = "unhealthy"
+                elif worker_state == "ready":
+                    worker_state = "ready-checking"
+                instances.append({
+                    "index": index + 1,
+                    "state": worker_state,
+                    "healthy": healthy,
+                    "latency_ms": state.get("latency_ms"),
+                    "consecutive_failures": failures,
+                })
+        return {
+            "ready_instances": sum(1 for item in instances if item["healthy"]),
+            "total_instances": len(instances),
+            "instances": instances,
+        }
+
     def _publish_bridge_usage(self, manager: TorManager | None = None):
         """Publish bridge identities from every healthy worker without exposing bridge records."""
         managers = self._healthy_managers()
@@ -424,7 +630,40 @@ class TorRunner(QObject):
                     logger.debug("Could not resolve active bridge fingerprints for a Tor worker.", exc_info=True)
         ready_count = len(managers)
         total_count = len(self._backend_managers) or (1 if self.manager is not None else 0)
-        report = (enabled, ready, ready_count, total_count, tuple(sorted(active)))
+        with self._backend_lock:
+            health_items = tuple(
+                (
+                    index,
+                    str(self._backend_statuses.get(index, "stopped")).lower(),
+                    bool(state.get("healthy", False)),
+                    int(state.get("consecutive_failures", 0) or 0),
+                )
+                for index, state in sorted(self._backend_health.items())
+            )
+            instance_details = [
+                {
+                    "index": index + 1,
+                    "state": (
+                        "failed" if self._backend_statuses.get(index) == "FAILED" else
+                        "healthy" if bool(state.get("healthy", False)) else
+                        "unhealthy" if (
+                            self._backend_statuses.get(index) == "READY"
+                            and int(state.get("consecutive_failures", 0) or 0) >= 2
+                        ) else
+                        "ready-checking" if self._backend_statuses.get(index) == "READY" else
+                        self._backend_statuses.get(index, "starting").lower()
+                    ),
+                    "healthy": bool(state.get("healthy", False))
+                    and self._backend_statuses.get(index) == "READY",
+                    "latency_ms": state.get("latency_ms"),
+                    "consecutive_failures": int(state.get("consecutive_failures", 0) or 0),
+                }
+                for index, state in sorted(self._backend_health.items())
+            ]
+        report = (
+            enabled, ready, ready_count, total_count,
+            tuple(sorted(active)), health_items,
+        )
         if report == self._last_bridge_usage_report:
             return
         self._last_bridge_usage_report = report
@@ -434,6 +673,7 @@ class TorRunner(QObject):
             "active_fingerprints": report[4],
             "ready_instances": ready_count,
             "total_instances": total_count,
+            "instances": instance_details,
         })
 
     def _on_status(self, state, progress, message):
@@ -733,6 +973,16 @@ class TorRunner(QObject):
                     self._backend_start_locks = [threading.Lock() for _ in managers]
                     self._backend_statuses = {index: "STARTING" for index in range(len(managers))}
                     self._backend_errors = {}
+                    self._backend_health = {
+                        index: {
+                            "healthy": False,
+                            "latency_ms": None,
+                            "consecutive_failures": 0,
+                            "last_error": "Waiting for an end-to-end Tor connectivity check.",
+                        }
+                        for index in range(len(managers))
+                    }
+                    self._pool_ever_healthy = False
                     self._backend_ever_ready = set()
                     self._backend_restart_attempts = {index: 0 for index in range(len(managers))}
                     self._backend_restart_at = {}
@@ -752,7 +1002,18 @@ class TorRunner(QObject):
                     break
                 worker.start()
 
+            next_health_probe = 0.0
+            network_health_deadline: float | None = None
             while not self._stopping.wait(0.5):
+                now = time.monotonic()
+                if now >= next_health_probe:
+                    if self._process_ready_managers():
+                        self._probe_ready_backends()
+                        next_health_probe = time.monotonic() + 20.0
+                    else:
+                        # Do not wait a full health interval while all Tor
+                        # workers are still bootstrapping.
+                        next_health_probe = now + 2.0
                 # TorManager reports READY only after authenticated ControlPort
                 # verification and a live SOCKS listener. Re-check process
                 # liveness so an exited worker is removed from future routing.
@@ -772,6 +1033,16 @@ class TorRunner(QObject):
                         with self._backend_lock:
                             self._backend_statuses[index] = "FAILED"
                             self._backend_errors[index] = detail
+                            health = dict(self._backend_health.get(index, {}))
+                            health.update({
+                                "healthy": False,
+                                "last_error": detail,
+                                "consecutive_failures": max(
+                                    2, int(health.get("consecutive_failures", 0) or 0)
+                                ),
+                            })
+                            self._backend_health[index] = health
+                        self._publish_bridge_usage()
                         self.log_message.emit(
                             f"Primary Tor instance {index + 1} was removed from the failover pool: {detail}"
                         )
@@ -849,6 +1120,12 @@ class TorRunner(QObject):
                                     self._backend_restart_attempts[index] = attempts + 1
                                     self._backend_restart_at.pop(index, None)
                                     self._backend_statuses[index] = "STARTING"
+                                    self._backend_health[index] = {
+                                        "healthy": False,
+                                        "latency_ms": None,
+                                        "consecutive_failures": 0,
+                                        "last_error": "Tor worker restarted; waiting for a fresh Tor Check probe.",
+                                    }
                                 retry_thread.start()
                                 self.log_message.emit(
                                     f"Restarting primary Tor instance {index + 1} "
@@ -882,7 +1159,54 @@ class TorRunner(QObject):
                         any(worker.is_alive() for worker in self._backend_threads)
                         or restart_scheduled
                     )
-                    if startup_pending:
+                    process_ready = self._process_ready_managers()
+                    if process_ready:
+                        if startup_pending:
+                            # Do not let a slow secondary bootstrap worker get
+                            # overtaken by the network-verification deadline.
+                            self.state = "BOOTSTRAPPING"
+                            if self.app_window is not None:
+                                self.app_window.data.value = "Connecting remaining Tor instances…"
+                        elif self._pool_ever_healthy:
+                            # A network outage is not a dead Tor process. Keep
+                            # probing and leave the stable gateway in place so
+                            # it can resume automatically when a worker recovers.
+                            self.state = "BOOTSTRAPPING"
+                            if self.app_window is not None:
+                                self.app_window.data.value = "Rechecking Tor network access…"
+                        else:
+                            if network_health_deadline is None:
+                                network_health_deadline = time.monotonic() + 90.0
+                            if time.monotonic() < network_health_deadline:
+                                self.state = "BOOTSTRAPPING"
+                                if self.app_window is not None:
+                                    self.app_window.data.value = "Verifying Tor network access…"
+                            else:
+                                details = []
+                                with self._backend_lock:
+                                    health = {
+                                        index: dict(value)
+                                        for index, value in self._backend_health.items()
+                                    }
+                                for index, _current in process_ready:
+                                    detail = str(
+                                        health.get(index, {}).get(
+                                            "last_error",
+                                            "Tor Check did not confirm network access.",
+                                        )
+                                    )
+                                    details.append(f"instance {index + 1}: {detail}")
+                                message = (
+                                    "Tor bootstrapped, but none of the primary instances passed the "
+                                    "end-to-end Tor Check. The connection was not marked as connected. "
+                                    + " | ".join(details)
+                                )
+                                self.state = "FAILED"
+                                self.last_error = message
+                                self.log_message.emit(message)
+                                self.service_failed.emit(message)
+                                return
+                    elif startup_pending:
                         self.state = "BOOTSTRAPPING"
                         if self.app_window is not None:
                             self.app_window.data.value = "Connecting Tor instances…"
@@ -890,12 +1214,12 @@ class TorRunner(QObject):
                         details = []
                         with self._backend_lock:
                             errors = dict(self._backend_errors)
-                        for index in range(len(managers)):
+                        for index in range(len(self._backend_managers)):
                             detail = errors.get(index, "No healthy Tor process remained.")
                             details.append(f"instance {index + 1}: {detail}")
                         message = (
-                            "All primary Tor instances failed. The stable SOCKS gateway remains available, "
-                            "but it has no healthy Tor backend. " + " | ".join(details)
+                            "All primary Tor instances failed before a verified network connection "
+                            "could be established. " + " | ".join(details)
                         )
                         self.state = "FAILED"
                         self.last_error = message

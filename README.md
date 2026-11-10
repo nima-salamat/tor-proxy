@@ -1,6 +1,6 @@
 # TorProxy
 
-TorProxy is a PySide6 desktop front-end for running a locally managed Tor process and exposing a loopback-only HTTP proxy to applications that support manual proxy configuration.
+TorProxy is a PySide6 desktop front-end for running a locally managed pool of Tor processes and exposing stable loopback SOCKS5 and HTTP proxy endpoints to applications that support manual proxy configuration.
 
 The project is being modernized from a flat desktop utility into a testable Python core with safer Tor lifecycle management, validated host policy, configurable bundle signature verification, and reversible system-proxy integration.
 
@@ -8,7 +8,8 @@ The project is being modernized from a flat desktop utility into a testable Pyth
 
 ## Features
 
-- Start/stop supervision for an application-owned Tor process, with bounded startup and shutdown.
+- Start/stop supervision for a configurable pool of 1–4 application-owned Tor processes, with bounded startup and shutdown.
+- Per-instance end-to-end Tor Check probes, automatic removal/recovery of unhealthy workers, and least-connections/latency-aware routing for new SOCKS connections.
 - Loopback-only SOCKS, ControlPort, DNSPort (when configured), and HTTP proxy listeners.
 - Stem-based Tor control with cookie authentication, bootstrap status, process-identity checks, and rate-limited `NEWNYM` requests.
 - HTTP forwarding and HTTPS `CONNECT` tunnels through Tor's SOCKS endpoint, with remote DNS for Tor-routed destinations.
@@ -25,19 +26,24 @@ The project is being modernized from a flat desktop utility into a testable Pyth
 
 ```mermaid
 flowchart TD
-    UI[PySide6 UI] --> Supervisor[TorRunner compatibility adapter]
-    Supervisor --> Manager[TorManager / Stem controller]
-    Manager --> Tor[Tor process]
+    UI[PySide6 UI] --> Supervisor[TorRunner primary pool supervisor]
+    Supervisor --> M1[TorManager / Stem · instance 1]
+    Supervisor --> M2[TorManager / Stem · instance 2..N]
+    M1 --> T1[Tor process 1]
+    M2 --> T2[Tor process 2..N]
+    M1 --> H1[Tor Check through SOCKS 1]
+    M2 --> H2[Tor Check through SOCKS 2..N]
     UI --> LocalProxy[Loopback HTTP proxy]
     LocalProxy --> Policy[Block and bypass host rules]
-    Policy -->|Default route| Socks[Loopback Tor SOCKS]
-    Socks --> Tor
+    Policy -->|Default route| Gateway[Stable loopback SOCKS5 gateway]
+    Gateway -->|Healthy backends only · least active + latency| T1
+    Gateway -->|Healthy backends only · least active + latency| T2
     Policy -->|Explicit exclusion only| Direct[Direct connection outside Tor]
     UI --> Bundle[Signed bundle manager]
     UI --> Config[Per-user configuration and state]
 ```
 
-The new, independently testable code lives in `src/torproxy/`. Existing UI modules continue to use a small compatibility layer while migration progresses. See [Architecture](docs/ARCHITECTURE.md) for lifecycle and thread boundaries.
+The new, independently testable code lives in `src/torproxy/`. Existing UI modules continue to use a small compatibility layer. See [Architecture](docs/ARCHITECTURE.md) and [Tor service management](docs/TOR_SERVICES.md) for lifecycle, health-check and routing details.
 
 ## Requirements and support status
 

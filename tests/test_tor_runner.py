@@ -268,3 +268,130 @@ def test_http_proxy_keeps_service_reference_when_server_thread_does_not_stop():
 
     assert runner.server is server
     assert runner.thread is not None
+
+
+def _ready_fake_backend(port: int):
+    return SimpleNamespace(
+        state="ready",
+        process=SimpleNamespace(poll=lambda: None),
+        settings=SimpleNamespace(socks_port=port),
+        get_active_bridge_fingerprints=lambda: (),
+    )
+
+
+def test_primary_pool_routes_only_to_network_verified_tor_instances(monkeypatch, tmp_path):
+    from torproxy.health import TorProbeResult
+
+    runner, _config = _runner(monkeypatch, tmp_path, "")
+    first = _ready_fake_backend(19460)
+    second = _ready_fake_backend(19461)
+    runner._backend_managers = [first, second]
+    runner._backend_statuses = {0: "READY", 1: "READY"}
+    runner._backend_health = {
+        0: {"healthy": False, "latency_ms": None, "consecutive_failures": 0},
+        1: {"healthy": False, "latency_ms": None, "consecutive_failures": 0},
+    }
+
+    monkeypatch.setattr(
+        tor,
+        "probe_tor_socks",
+        lambda port, timeout=8.0: TorProbeResult(
+            port == 19460,
+            latency_ms=125.0 if port == 19460 else None,
+            detail="probe result",
+        ),
+    )
+
+    assert runner._healthy_managers() == []
+    assert runner._probe_ready_backends() is True
+    assert runner._healthy_managers() == [first]
+    assert runner._ready_backend_endpoints() == [("127.0.0.1", 19460, 125.0)]
+
+
+def test_primary_pool_withdraws_a_previously_healthy_worker_after_two_failed_probes(
+    monkeypatch, tmp_path
+):
+    from torproxy.health import TorProbeResult
+
+    runner, _config = _runner(monkeypatch, tmp_path, "")
+    backend = _ready_fake_backend(19462)
+    runner._backend_managers = [backend]
+    runner._backend_statuses = {0: "READY"}
+    runner._backend_health = {
+        0: {
+            "healthy": True,
+            "latency_ms": 100.0,
+            "consecutive_failures": 0,
+        }
+    }
+    monkeypatch.setattr(
+        tor,
+        "probe_tor_socks",
+        lambda *_args, **_kwargs: TorProbeResult(False, detail="network unavailable"),
+    )
+
+    assert runner._probe_ready_backends() is True
+    assert runner._healthy_managers() == [backend]
+    assert runner._probe_ready_backends() is False
+    assert runner._healthy_managers() == []
+
+
+def test_primary_pool_does_not_report_connected_before_tor_check_passes(
+    monkeypatch, tmp_path
+):
+    from torproxy.tor_manager import TorState
+
+    runner, _config = _runner(monkeypatch, tmp_path, "")
+    backend = _ready_fake_backend(19463)
+    runner.manager = backend
+    runner._backend_managers = [backend]
+    runner._backend_statuses = {0: "STARTING"}
+    runner._backend_health = {
+        0: {
+            "healthy": False,
+            "latency_ms": None,
+            "consecutive_failures": 0,
+        }
+    }
+    runner.app_window = SimpleNamespace(data=SimpleNamespace(value="0%"))
+
+    runner._on_worker_status(
+        0,
+        backend,
+        TorState.READY,
+        100,
+        "Tor bootstrap completed.",
+    )
+
+    assert runner.state == "BOOTSTRAPPING"
+    assert runner.app_window.data.value == "Verifying Tor network access…"
+    assert runner._healthy_managers() == []
+
+
+def test_primary_pool_health_snapshot_identifies_each_instance(monkeypatch, tmp_path):
+    runner, _config = _runner(monkeypatch, tmp_path, "")
+    runner._backend_managers = [
+        _ready_fake_backend(19464),
+        _ready_fake_backend(19465),
+    ]
+    runner._backend_statuses = {0: "READY", 1: "FAILED"}
+    runner._backend_health = {
+        0: {
+            "healthy": True,
+            "latency_ms": 83.0,
+            "consecutive_failures": 0,
+        },
+        1: {
+            "healthy": False,
+            "latency_ms": None,
+            "consecutive_failures": 2,
+        },
+    }
+
+    snapshot = runner.pool_health_snapshot
+
+    assert snapshot["ready_instances"] == 1
+    assert snapshot["total_instances"] == 2
+    assert snapshot["instances"][0]["state"] == "healthy"
+    assert snapshot["instances"][0]["latency_ms"] == 83.0
+    assert snapshot["instances"][1]["state"] == "failed"

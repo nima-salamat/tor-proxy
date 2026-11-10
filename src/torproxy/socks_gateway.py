@@ -5,6 +5,7 @@ import logging
 import select
 import socket
 import threading
+import time
 from collections.abc import Callable, Iterable
 
 LOGGER = logging.getLogger(__name__)
@@ -24,7 +25,7 @@ class SocksFailoverGateway:
     def __init__(
         self,
         port: int,
-        backend_provider: Callable[[], Iterable[tuple[str, int]]],
+        backend_provider: Callable[[], Iterable[tuple[str, int] | tuple[str, int, float | None]]],
         *,
         host: str = "127.0.0.1",
         connect_timeout: float = 8.0,
@@ -47,6 +48,7 @@ class SocksFailoverGateway:
         self._lock = threading.RLock()
         self._clients: set[socket.socket] = set()
         self._cursor = 0
+        self._backend_stats: dict[tuple[str, int], dict[str, float | int]] = {}
 
     @property
     def running(self) -> bool:
@@ -92,7 +94,7 @@ class SocksFailoverGateway:
                 return
             try:
                 client, _address = listener.accept()
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except OSError:
                 if not self._stop.is_set():
@@ -160,23 +162,133 @@ class SocksFailoverGateway:
 
     def _ordered_backends(self) -> list[tuple[str, int]]:
         candidates: list[tuple[str, int]] = []
+        health_latencies: dict[tuple[str, int], float] = {}
         for item in self._backend_provider() or ():
             try:
-                host, port = item
-                host = str(host)
-                port = int(port)
+                values = tuple(item)
+                if len(values) not in {2, 3}:
+                    continue
+                host = str(values[0])
+                port = int(values[1])
                 if host in {"127.0.0.1", "::1", "localhost"} and 1 <= port <= 65535:
                     candidate = (host, port)
                     if candidate not in candidates:
                         candidates.append(candidate)
+                    if len(values) == 3 and values[2] is not None:
+                        latency = float(values[2])
+                        if latency >= 0:
+                            health_latencies[candidate] = latency
             except (TypeError, ValueError):
                 continue
         if not candidates:
             return []
+
+        now = time.monotonic()
         with self._lock:
-            offset = self._cursor % len(candidates)
-            self._cursor = (self._cursor + 1) % len(candidates)
-        return candidates[offset:] + candidates[:offset]
+            for endpoint in candidates:
+                self._backend_stats.setdefault(endpoint, {
+                    "active": 0,
+                    "latency_ms": 750.0,
+                    "health_latency_ms": 750.0,
+                    "failures": 0,
+                    "cooldown_until": 0.0,
+                    "last_success": 0.0,
+                })
+                if endpoint in health_latencies:
+                    self._backend_stats[endpoint]["health_latency_ms"] = health_latencies[endpoint]
+            # Healthy backends are always preferred, but cooled-down peers
+            # remain as fallbacks in case every preferred endpoint fails.
+            available = list(candidates)
+            offset = self._cursor % len(available)
+            self._cursor = (self._cursor + 1) % max(1, len(available))
+            tie_order = {
+                endpoint: (position - offset) % len(available)
+                for position, endpoint in enumerate(available)
+            }
+            def backend_score(endpoint: tuple[str, int]):
+                stats = self._backend_stats[endpoint]
+                cooldown_until = float(stats["cooldown_until"])
+                active = int(stats["active"])
+                latency = (
+                    float(stats["health_latency_ms"]) * 0.65
+                    + float(stats["latency_ms"]) * 0.35
+                )
+                return (
+                    1 if cooldown_until > now else 0,
+                    cooldown_until if cooldown_until > now else 0.0,
+                    active * max(1.0, latency),
+                    active,
+                    # With no active streams, rotate evenly rather than
+                    # sending every short-lived connection to one fast node.
+                    tie_order[endpoint] if active == 0 else 0,
+                    latency,
+                    int(stats["failures"]),
+                )
+
+            available.sort(key=backend_score)
+            return available
+
+    def _reserve_backend(self, endpoint: tuple[str, int]) -> bool:
+        with self._lock:
+            if self._stop.is_set():
+                return False
+            stats = self._backend_stats.setdefault(endpoint, {
+                "active": 0,
+                "latency_ms": 750.0,
+                "health_latency_ms": 750.0,
+                "failures": 0,
+                "cooldown_until": 0.0,
+                "last_success": 0.0,
+            })
+            stats["active"] = int(stats["active"]) + 1
+            return True
+
+    def _record_backend_success(self, endpoint: tuple[str, int], latency_ms: float) -> None:
+        with self._lock:
+            stats = self._backend_stats.setdefault(endpoint, {
+                "active": 0,
+                "latency_ms": float(latency_ms),
+                "health_latency_ms": float(latency_ms),
+                "failures": 0,
+                "cooldown_until": 0.0,
+                "last_success": 0.0,
+            })
+            previous = float(stats["latency_ms"])
+            stats["latency_ms"] = max(0.0, latency_ms) if previous <= 0 else (
+                previous * 0.7 + max(0.0, latency_ms) * 0.3
+            )
+            stats["failures"] = 0
+            stats["cooldown_until"] = 0.0
+            stats["last_success"] = time.monotonic()
+
+    def _record_backend_failure(self, endpoint: tuple[str, int]) -> None:
+        with self._lock:
+            stats = self._backend_stats.setdefault(endpoint, {
+                "active": 0,
+                "latency_ms": 750.0,
+                "health_latency_ms": 750.0,
+                "failures": 0,
+                "cooldown_until": 0.0,
+                "last_success": 0.0,
+            })
+            failures = int(stats["failures"]) + 1
+            stats["failures"] = failures
+            stats["cooldown_until"] = time.monotonic() + min(30.0, float(2 ** min(failures, 5)))
+
+    def _release_backend(self, endpoint: tuple[str, int]) -> None:
+        with self._lock:
+            stats = self._backend_stats.get(endpoint)
+            if stats is not None:
+                stats["active"] = max(0, int(stats["active"]) - 1)
+
+    @property
+    def backend_metrics(self) -> dict[tuple[str, int], dict[str, float | int]]:
+        """Return a snapshot of per-backend active load and recent dial quality."""
+        with self._lock:
+            return {
+                endpoint: dict(stats)
+                for endpoint, stats in self._backend_stats.items()
+            }
 
     @staticmethod
     def _relay(left: socket.socket, right: socket.socket, idle_timeout: float) -> None:
@@ -209,6 +321,7 @@ class SocksFailoverGateway:
 
     def _handle_client(self, client: socket.socket) -> None:
         upstream: socket.socket | None = None
+        leased_backend: tuple[str, int] | None = None
         try:
             client.settimeout(self._handshake_timeout)
             version_and_count = self._recv_exact(client, 2)
@@ -224,12 +337,19 @@ class SocksFailoverGateway:
             request = self._read_request(client)
             last_reply: bytes | None = None
 
-            for host, port in self._ordered_backends():
+            for endpoint in self._ordered_backends():
                 if self._stop.is_set():
                     return
+                if not self._reserve_backend(endpoint):
+                    continue
                 candidate: socket.socket | None = None
+                keep_reservation = False
+                attempt_started = time.monotonic()
                 try:
-                    candidate = socket.create_connection((host, port), timeout=self._connect_timeout)
+                    candidate = socket.create_connection(
+                        endpoint,
+                        timeout=self._connect_timeout,
+                    )
                     if not self._track(candidate, True):
                         raise OSError("SOCKS gateway is stopping.")
                     candidate.settimeout(self._handshake_timeout)
@@ -238,16 +358,30 @@ class SocksFailoverGateway:
                         raise OSError("Tor SOCKS backend rejected no-auth negotiation.")
                     candidate.sendall(request)
                     reply = self._read_reply(candidate)
+                    elapsed_ms = (time.monotonic() - attempt_started) * 1000.0
                     if reply[1] == 0:
-                        client.sendall(reply)
+                        self._record_backend_success(endpoint, elapsed_ms)
+                        try:
+                            client.sendall(reply)
+                        except OSError:
+                            # The local application may close while the SOCKS
+                            # reply is being written; that is not a Tor failure.
+                            return
                         client.settimeout(None)
                         candidate.settimeout(None)
                         upstream = candidate
                         candidate = None
+                        leased_backend = endpoint
+                        keep_reservation = True
                         self._relay(client, upstream, self._idle_timeout)
                         return
+                    # A destination refusal is not evidence that the Tor worker
+                    # is unhealthy. Record a successful backend handshake and
+                    # let another healthy instance try the same destination.
+                    self._record_backend_success(endpoint, elapsed_ms)
                     last_reply = reply
                 except (OSError, TimeoutError, ValueError):
+                    self._record_backend_failure(endpoint)
                     LOGGER.debug("A Tor SOCKS backend failed before CONNECT was established.", exc_info=True)
                 finally:
                     if candidate is not None:
@@ -256,6 +390,8 @@ class SocksFailoverGateway:
                             candidate.close()
                         except OSError:
                             pass
+                    if not keep_reservation:
+                        self._release_backend(endpoint)
 
             try:
                 client.sendall(last_reply or self._failure_reply(4))
@@ -270,6 +406,8 @@ class SocksFailoverGateway:
                     upstream.close()
                 except OSError:
                     pass
+            if leased_backend is not None:
+                self._release_backend(leased_backend)
             self._track(client, False)
             try:
                 client.close()

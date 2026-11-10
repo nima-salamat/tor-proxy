@@ -98,3 +98,70 @@ def test_gateway_rejects_clients_that_do_not_offer_no_auth():
             assert _recv_exact(client, 2) == b"\x05\xff"
     finally:
         gateway.stop()
+
+
+def test_gateway_prefers_the_least_loaded_and_lowest_latency_backend():
+    first = ("127.0.0.1", 25001)
+    second = ("127.0.0.1", 25002)
+    gateway = SocksFailoverGateway(
+        25003,
+        lambda: [
+            ("127.0.0.1", 25001, 300.0),
+            ("127.0.0.1", 25002, 90.0),
+        ],
+    )
+    gateway._backend_stats[first] = {
+        "active": 5,
+        "latency_ms": 10.0,
+        "health_latency_ms": 300.0,
+        "failures": 0,
+        "cooldown_until": 0.0,
+        "last_success": 0.0,
+    }
+    gateway._backend_stats[second] = {
+        "active": 1,
+        "latency_ms": 250.0,
+        "health_latency_ms": 90.0,
+        "failures": 0,
+        "cooldown_until": 0.0,
+        "last_success": 0.0,
+    }
+
+    assert gateway._ordered_backends()[0] == second
+
+
+def test_gateway_prefers_a_healthy_backend_before_one_in_cooldown():
+    first = ("127.0.0.1", 25101)
+    second = ("127.0.0.1", 25102)
+    gateway = SocksFailoverGateway(
+        25103,
+        lambda: [first, second],
+    )
+    gateway._backend_stats[first] = {
+        "active": 0,
+        "latency_ms": 20.0,
+        "health_latency_ms": 20.0,
+        "failures": 1,
+        "cooldown_until": 9999999999.0,
+        "last_success": 0.0,
+    }
+    gateway._backend_stats[second] = {
+        "active": 2,
+        "latency_ms": 200.0,
+        "health_latency_ms": 200.0,
+        "failures": 0,
+        "cooldown_until": 0.0,
+        "last_success": 0.0,
+    }
+
+    assert gateway._ordered_backends()[0] == second
+
+
+def test_gateway_tracks_backend_reservations_for_active_load_balancing():
+    endpoint = ("127.0.0.1", 25201)
+    gateway = SocksFailoverGateway(25202, lambda: [endpoint])
+
+    assert gateway._reserve_backend(endpoint) is True
+    assert gateway.backend_metrics[endpoint]["active"] == 1
+    gateway._release_backend(endpoint)
+    assert gateway.backend_metrics[endpoint]["active"] == 0
