@@ -289,3 +289,30 @@ def test_cancelled_check_preserves_original_bridge_list_and_does_not_probe(tmp_p
     assert calls == []
     assert result.retained == BRIDGES
     assert result.should_prune is False
+
+
+def test_bridge_probes_are_run_concurrently(tmp_path):
+    settings = _settings(tmp_path)
+    barrier = threading.Barrier(3)
+    active_lock = threading.Lock()
+    active = 0
+    peak_active = 0
+
+    def fake_probe(_settings, _record, _timeout, _excluded, _claimed, _lock, _cancel):
+        nonlocal active, peak_active
+        with active_lock:
+            active += 1
+            peak_active = max(peak_active, active)
+        try:
+            # A barrier makes the test fail if the implementation silently
+            # falls back to sequential bridge checks.
+            barrier.wait(timeout=2.0)
+            return True
+        finally:
+            with active_lock:
+                active -= 1
+
+    result = check_bridges(settings, max_workers=3, probe=fake_probe)
+
+    assert len(result.working) == 3
+    assert peak_active == 3
