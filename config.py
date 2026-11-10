@@ -187,7 +187,7 @@ class Config:
                     raise ConfigError(f"Tor service '{service_id}' has an invalid {port_key}.")
                 profile_ports.append(port_value)
             dns_value = profile.get("dns_port")
-            if dns_value not in (None, 0):
+            if dns_value is not None and not (type(dns_value) is int and dns_value == 0):
                 if type(dns_value) is not int or not 1 <= dns_value <= 65535:
                     raise ConfigError(f"Tor service '{service_id}' has an invalid dns_port.")
                 profile_ports.append(dns_value)
