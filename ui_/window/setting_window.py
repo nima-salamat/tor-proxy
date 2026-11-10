@@ -736,7 +736,7 @@ class SettingWindow(QWidget):
         self.second_page_layout.addWidget(description)
         ports = ["tor_port", "proxy_port", "dns_port", "control_port"]
         port_labels = {
-            "tor_port": "SOCKS listener",
+            "tor_port": "Stable SOCKS gateway",
             "proxy_port": "HTTP proxy",
             "dns_port": "DNS listener",
             "control_port": "Control interface",
