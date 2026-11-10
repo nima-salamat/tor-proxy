@@ -2228,11 +2228,9 @@ def test_home_disconnect_preserves_uac_cancellation_and_restores_connected_state
     assert "QMessageBox.warning" not in callback
 
 
-def test_home_system_tunnel_action_icon_tracks_enabled_hover_and_theme_colors(qt_app, monkeypatch):
+def test_home_system_tunnel_action_icon_tracks_enabled_hover_and_theme_colors(qt_app):
     import ui_.window.proxy_window as home
 
-    calls = []
-    monkeypatch.setattr(home.qta, "icon", lambda name, color: calls.append((name, color)) or (name, color))
     button = home.SystemTunnelActionButton()
     try:
         button.set_icon_name("fa6s.play")
@@ -2266,4 +2264,17 @@ def test_home_tunnel_action_uses_state_aware_icon_colors():
     assert "self.btn_system_tunnel_action.set_theme_colors(text=text, muted=muted)" in source
     assert "action_button.set_icon_name(action_icon)" in source
     assert 'action_button.setIcon(qta.icon(action_icon, color="#ffffff"))' not in source
+
+def test_connection_preflight_treats_declined_tunnel_recovery_as_cancellation():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+
+    assert "worker.signals.cancelled.connect(self._on_port_check_cancelled)" in source
+    assert "except SystemTunnelCancelled:" in source
+    callback = source[source.index("def _on_port_check_cancelled"):source.index("def _on_port_check_error")]
+    assert "self._connect_operation_busy = False" in callback
+    assert "self.connect_btn.setEnabled(True)" in callback
+    assert 'level="info"' in callback
+    assert 'level="error"' not in callback
+    assert "CONNECTION CANCELLED" in callback
 
