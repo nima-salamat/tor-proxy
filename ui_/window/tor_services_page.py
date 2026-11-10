@@ -754,7 +754,9 @@ class TorServicesPage(QWidget):
         )
         actions.addWidget(copy_button)
         is_busy = self._busy_all or service_id in self._busy_services
-        can_start = state not in {"ready", "starting", "bootstrapping"}
+        # A failed service must be explicitly stopped/reconciled before restart.
+        # This avoids retrying against a child that may still own its ports or data lock.
+        can_start = state in {"stopped", "not registered", "needs attention"}
         can_stop = state not in {"stopped", "bundle unavailable", "not registered", "needs attention"}
         if pool := self._pool():
             can_start = can_start and not is_busy
