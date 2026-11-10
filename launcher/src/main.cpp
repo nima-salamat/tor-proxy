@@ -13,7 +13,9 @@
 #include <QLocalSocket>
 #include <QProcess>
 #include <QProcessEnvironment>
+#include <QPalette>
 #include <QScreen>
+#include <QStyleHints>
 #include <QStandardPaths>
 #include <QTimer>
 #include <QUuid>
@@ -58,6 +60,65 @@ QString applicationIconPath() {
     }
     // PyInstaller 6 uses an _internal directory for collected data files.
     return QDir(root).filePath(QStringLiteral("_internal/assets/icon.png"));
+}
+
+
+QString launcherConfigPath() {
+    const QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+    QString configRoot = environment.value(QStringLiteral("XDG_CONFIG_HOME"));
+    if (configRoot.isEmpty()) {
+        configRoot = QDir::home().filePath(QStringLiteral(".config"));
+    }
+    return QDir(configRoot)
+        .filePath(QStringLiteral("torproxy/config.json"));
+}
+
+QString systemThemeMode(QApplication *application) {
+    if (!application) {
+        return QStringLiteral("light");
+    }
+
+    const Qt::ColorScheme scheme = application->styleHints()->colorScheme();
+    if (scheme == Qt::ColorScheme::Dark) {
+        return QStringLiteral("dark");
+    }
+    if (scheme == Qt::ColorScheme::Light) {
+        return QStringLiteral("light");
+    }
+
+    const QColor windowColor = application->palette().color(QPalette::ColorRole::Window);
+    return windowColor.lightness() < 128
+        ? QStringLiteral("dark")
+        : QStringLiteral("light");
+}
+
+QString resolveSplashTheme(QApplication *application) {
+    QFile configFile(launcherConfigPath());
+    if (configFile.open(QIODevice::ReadOnly)) {
+        const QJsonDocument document = QJsonDocument::fromJson(configFile.readAll());
+        if (document.isObject()) {
+            const QJsonObject configuration = document.object();
+            const QString preference =
+                configuration.value(QStringLiteral("theme_preference")).toString();
+            if (preference == QStringLiteral("dark") ||
+                preference == QStringLiteral("light")) {
+                return preference;
+            }
+            if (preference == QStringLiteral("system")) {
+                return systemThemeMode(application);
+            }
+
+            // Compatibility with configurations created before theme_preference
+            // was introduced: those files persist only the effective mode.
+            const QString legacyMode =
+                configuration.value(QStringLiteral("mode")).toString();
+            if (legacyMode == QStringLiteral("dark") ||
+                legacyMode == QStringLiteral("light")) {
+                return legacyMode;
+            }
+        }
+    }
+    return systemThemeMode(application);
 }
 
 QString tailOfFile(const QString &path, qsizetype maximumCharacters = 1100) {
@@ -345,13 +406,23 @@ int main(int argc, char *argv[]) {
     QApplication::setQuitOnLastWindowClosed(false);
 
     SplashWindow splash(applicationIconPath());
+    splash.setThemeMode(resolveSplashTheme(&application));
     application.setWindowIcon(QIcon(applicationIconPath()));
 
     if (application.arguments().contains(QStringLiteral("--self-test"))) {
+        QString expectedTheme;
+        for (const QString &argument : application.arguments()) {
+            if (argument.startsWith(QStringLiteral("--expect-theme="))) {
+                expectedTheme = argument.mid(QStringLiteral("--expect-theme=").size());
+                break;
+            }
+        }
         splash.centerOnPrimaryScreen();
         splash.show();
         application.processEvents();
-        const bool ready = splash.isVisible() && splash.logoLoaded();
+        const bool themeMatches = expectedTheme.isEmpty() ||
+            splash.themeMode() == expectedTheme;
+        const bool ready = splash.isVisible() && splash.logoLoaded() && themeMatches;
         splash.close();
         return ready ? 0 : 2;
     }
