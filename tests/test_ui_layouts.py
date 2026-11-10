@@ -2165,3 +2165,12 @@ def test_statistics_back_button_icon_tracks_the_active_theme_foreground():
 
     assert 'self.back_button.setIcon(qta.icon("fa6s.arrow-left", color=text))' in styles
     assert "QPushButton#statisticsBackButton {{ color: {text};" in styles
+
+def test_system_tunnel_recovery_warning_uses_the_module_logger():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "src/torproxy/system_tunnel.py").read_text(encoding="utf-8")
+
+    assert "logger = logging.getLogger(__name__)" in source
+    assert "logger.warning(" in source
+    assert "LOGGER.warning(" not in source
+
