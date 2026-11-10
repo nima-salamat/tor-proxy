@@ -33,11 +33,11 @@ from urllib.parse import urlsplit
 import psutil
 import requests
 
-logger = logging.getLogger(__name__)
-
 from .network import NetworkRouteError, create_session
 from .paths import user_directories
 from .host_rules import HostRuleError, HostRules, MatchMode
+
+logger = logging.getLogger(__name__)
 
 
 SING_BOX_LATEST_VERSION = "1.14.4"
