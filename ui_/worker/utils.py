@@ -22,4 +22,5 @@ class Data(QObject):
 class QRWorkerSignals(QObject):
     started = Signal()
     finished = Signal(str)
+    cancelled = Signal(str)
     error = Signal(str)
