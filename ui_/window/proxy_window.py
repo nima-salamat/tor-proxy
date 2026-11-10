@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 )
 
 
-from PySide6.QtCore import Qt, QTimer, QThreadPool, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import QEvent, Qt, QTimer, QThreadPool, QPropertyAnimation, QEasingCurve
 from stem import Signal as TorSignal
 from stem.control import Controller
 from stem import SocketClosed, OperationFailed
@@ -29,7 +29,7 @@ from ui_.worker.utils import Data
 from config import CONFIG
 from ui_.window.dialogs import QMessageBox
 from torproxy.paths import user_directories
-from torproxy.system_tunnel import SystemTunnelManager
+from torproxy.system_tunnel import SystemTunnelCancelled, SystemTunnelManager
 from ui_.window.tor_log_dialog import TorLogDialog
 from ui_.window.open_browser_dialog import OpenBrowserDialog
 import json
@@ -39,6 +39,56 @@ import qtawesome as qta
 
 logger = logging.getLogger(__name__)
 
+
+class SystemTunnelActionButton(QPushButton):
+    """Keep the tunnel action icon in sync with normal, hover and disabled text colors."""
+
+    def __init__(self, text: str = "Start", parent=None):
+        super().__init__(text, parent)
+        self._icon_name = "fa6s.play"
+        self._hovered = False
+        self._hover_color = "#253041"
+        self._disabled_color = "#667386"
+        self._icon_color = "#ffffff"
+        self._sync_icon()
+
+    def set_icon_name(self, name: str) -> None:
+        self._icon_name = str(name)
+        self._sync_icon()
+
+    def set_theme_colors(self, *, text: str, muted: str) -> None:
+        self._hover_color = str(text)
+        self._disabled_color = str(muted)
+        self._sync_icon()
+
+    def _sync_icon(self) -> None:
+        if not self.isEnabled():
+            color = self._disabled_color
+        elif self._hovered:
+            color = self._hover_color
+        else:
+            color = "#ffffff"
+        self._icon_color = color
+        self.setIcon(qta.icon(self._icon_name, color=color))
+
+    def _set_hovered(self, hovered: bool) -> None:
+        hovered = bool(hovered)
+        if hovered != self._hovered:
+            self._hovered = hovered
+            self._sync_icon()
+
+    def enterEvent(self, event):
+        self._set_hovered(True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._set_hovered(False)
+        super().leaveEvent(event)
+
+    def changeEvent(self, event):
+        if event.type() == QEvent.Type.EnabledChange:
+            self._sync_icon()
+        super().changeEvent(event)
 
 
 class ProxyWindow(QWidget):
@@ -186,7 +236,7 @@ class ProxyWindow(QWidget):
         self.system_tunnel_hint_label.setObjectName("systemTunnelHintLabel")
         self.system_tunnel_hint_label.setWordWrap(False)
         tunnel_hint_layout.addWidget(self.system_tunnel_hint_label, 1)
-        self.btn_system_tunnel_action = QPushButton("Start", self.system_tunnel_hint)
+        self.btn_system_tunnel_action = SystemTunnelActionButton("Start", self.system_tunnel_hint)
         self.btn_system_tunnel_action.setObjectName("systemTunnelAction")
         self.btn_system_tunnel_action.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_system_tunnel_action.clicked.connect(self.toggle_system_tunnel)
@@ -445,6 +495,7 @@ class ProxyWindow(QWidget):
         self.btn_log.setIcon(qta.icon("fa6s.align-left", color=icon_color))
         self.btn_whatismyip.setIcon(qta.icon("fa6s.globe", color=icon_color))
         self.btn_open_browser.setIcon(qta.icon("fa6s.globe", color=icon_color))
+        self.btn_system_tunnel_action.set_theme_colors(text=text, muted=muted)
         self.btn_statistics.setIcon(qta.icon("fa6s.chart-line", color=accent))
 
     def _on_system_proxy_mode_changed(self, index):
@@ -679,6 +730,31 @@ class ProxyWindow(QWidget):
 
         if self._parent is not None and getattr(self._parent, "_shutdown_in_progress", False):
             self._parent._on_proxy_shutdown_complete(True, "")
+
+    def _on_services_stop_cancelled(self, reason: str) -> None:
+        """Restore the connected UI when the user declines the elevated cleanup prompt."""
+        self._stopping = False
+        self._disconnect_worker = None
+        self.connect_btn.set_connected(bool(self.connected))
+        self.connect_btn.setEnabled(True)
+        self.btn_status.setText(
+            "DISCONNECT CANCELLED · SERVICES STILL RUNNING"
+            if self.running else "DISCONNECT CANCELLED"
+        )
+        self.set_btn_status_style("connected" if self.connected else "disconnected")
+        self.logs_widget.update_log(
+            "Disconnect cancelled; Tor and the system tunnel were left running. "
+            + str(reason or ""),
+            level="info",
+        )
+        self._update_proxy_buttons()
+        self._update_tunnel_hint()
+
+        if self._parent is not None and getattr(self._parent, "_shutdown_in_progress", False):
+            self._parent._on_proxy_shutdown_complete(
+                False,
+                "Administrator approval was cancelled. TorProxy remains open and running.",
+            )
 
     def _on_services_stop_failed(self, error: str) -> None:
         detail = str(error or "Unknown disconnect error.")
@@ -916,6 +992,7 @@ class ProxyWindow(QWidget):
 
         worker = Worker(self._stop_services_worker)
         worker.signals.finished.connect(self._on_services_stopped)
+        worker.signals.cancelled.connect(self._on_services_stop_cancelled)
         worker.signals.error.connect(self._on_services_stop_failed)
         self._disconnect_worker = worker
         self.thread_pool.start(worker)
@@ -929,6 +1006,8 @@ class ProxyWindow(QWidget):
         if tunnel_record_exists or tunnel_status.get("active") or not tunnel_status.get("verified", True):
             try:
                 messages.append(self.system_tunnel_manager.cleanup_previous_session())
+            except SystemTunnelCancelled:
+                raise
             except Exception as exc:
                 raise RuntimeError(
                     "System tunnel cleanup failed; Tor and its SOCKS listener were kept running: "
@@ -1164,7 +1243,7 @@ class ProxyWindow(QWidget):
         label.setText(message)
         if action_button is not None:
             action_button.setText(action_text)
-            action_button.setIcon(qta.icon(action_icon, color="#ffffff"))
+            action_button.set_icon_name(action_icon)
             action_button.setToolTip(action_tooltip)
             action_button.setEnabled(action_enabled)
             action_button.setVisible(show_action)
