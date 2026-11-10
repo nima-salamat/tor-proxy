@@ -182,3 +182,23 @@ def test_service_cannot_be_unregistered_while_its_data_lock_is_held(tmp_path):
 
     with pytest.raises(TorServicePoolError, match="still active"):
         pool.unregister("locked")
+
+
+def test_service_pool_worker_limit_can_be_updated_safely(tmp_path):
+    pool = _pool(tmp_path, max_workers=2)
+
+    assert pool.max_workers == 2
+    pool.set_max_workers(7)
+    assert pool.max_workers == 7
+
+    with pytest.raises(TorServicePoolError, match="between 1 and 8"):
+        pool.set_max_workers(9)
+
+
+def test_service_pool_worker_limit_cannot_change_during_an_operation(tmp_path):
+    pool = _pool(tmp_path)
+    pool.register("active", _settings(tmp_path))
+    pool._services["active"].active_calls = 1
+
+    with pytest.raises(TorServicePoolError, match="operation is running"):
+        pool.set_max_workers(2)
