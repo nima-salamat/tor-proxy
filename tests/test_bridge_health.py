@@ -79,6 +79,24 @@ def test_duplicate_records_are_checked_once_and_deduplicated_in_saved_list(tmp_p
     assert result.should_prune is False
 
 
+def test_bridge_checks_run_concurrently_with_a_bounded_worker_count(tmp_path):
+    barrier = threading.Barrier(3)
+
+    def concurrent_probe(*_args):
+        barrier.wait(timeout=3)
+        return True
+
+    result = check_bridges(
+        _settings(tmp_path),
+        max_workers=3,
+        probe=concurrent_probe,
+    )
+
+    assert len(result.working) == len(BRIDGES)
+    assert result.failed == ()
+    assert result.inconclusive == ()
+
+
 def test_missing_transport_is_reported_as_local_issue_not_bridge_failure(tmp_path):
     settings = _settings(tmp_path)
     progress = []

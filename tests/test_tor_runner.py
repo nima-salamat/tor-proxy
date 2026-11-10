@@ -206,6 +206,121 @@ def test_with_one_working_bridge_only_confirmed_failures_are_pruned(monkeypatch,
     assert config["bridges"] == "\n".join(retained)
     assert runner.bridges == "\n".join(retained)
 
+    managers = [
+        next_manager,
+        SimpleNamespace(settings=SimpleNamespace(bridges="")),
+    ]
+    distribution = runner._apply_bridge_distribution(managers)
+    assert distribution is not None
+    assigned = set().union(*(set(item.settings.bridges.splitlines()) for item in managers))
+    assert assigned == set(retained)
+    assert BRIDGES[1] not in assigned
+    assert distribution.shared_groups == 1
+    assert all(parsed_records[0] in item.settings.bridges.splitlines() for item in managers)
+
+
+def test_primary_bridge_pool_is_split_evenly_without_cross_instance_overlap(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    bridge_text = "\n".join(
+        f"obfs4 192.0.2.{index}:443 {index:040X}"
+        for index in range(10, 30)
+    )
+    runner, _config = _runner(monkeypatch, tmp_path, bridge_text)
+    managers = [
+        SimpleNamespace(settings=SimpleNamespace(bridges=bridge_text))
+        for _index in range(4)
+    ]
+
+    distribution = runner._apply_bridge_distribution(managers)
+
+    assert distribution is not None
+    assert distribution.unique_records == 20
+    assert distribution.unique_groups == 20
+    assert distribution.shared_groups == 0
+    assert distribution.instance_record_counts == (5, 5, 5, 5)
+    assigned = [set(item.settings.bridges.splitlines()) for item in managers]
+    assert all(len(items) == 5 for items in assigned)
+    for left in range(len(assigned)):
+        for right in range(left + 1, len(assigned)):
+            assert assigned[left].isdisjoint(assigned[right])
+    assert set().union(*assigned) == set(bridge_text.splitlines())
+
+
+def test_primary_bridge_pool_reuses_groups_only_when_there_are_too_few(monkeypatch, tmp_path):
+    bridge_text = "\n".join(BRIDGES[:2])
+    runner, _config = _runner(monkeypatch, tmp_path, bridge_text)
+    managers = [
+        SimpleNamespace(settings=SimpleNamespace(bridges=bridge_text))
+        for _index in range(4)
+    ]
+
+    distribution = runner._apply_bridge_distribution(managers)
+
+    assert distribution is not None
+    assert distribution.shared_groups == 2
+    assigned = [set(item.settings.bridges.splitlines()) for item in managers]
+    assert [len(items) for items in assigned] == [1, 1, 1, 1]
+    assert assigned[0] == assigned[2]
+    assert assigned[1] == assigned[3]
+
+
+def test_duplicate_and_same_fingerprint_bridge_records_are_kept_in_one_group(monkeypatch, tmp_path):
+    first = f"obfs4 192.0.2.10:443 {FINGERPRINTS[0]}"
+    alternate = f"webtunnel 192.0.2.11:443 {FINGERPRINTS[0]} url=https://bridge.example/ ver=0.0.1"
+    other = f"obfs4 192.0.2.12:443 {FINGERPRINTS[1]}"
+    bridge_text = "\n".join((first, first, alternate, other))
+    runner, _config = _runner(monkeypatch, tmp_path, bridge_text)
+    managers = [
+        SimpleNamespace(settings=SimpleNamespace(bridges=bridge_text))
+        for _index in range(2)
+    ]
+
+    distribution = runner._apply_bridge_distribution(managers)
+
+    assert distribution is not None
+    assert distribution.unique_records == 3
+    assert distribution.unique_groups == 2
+    assert distribution.shared_groups == 0
+    assert set(managers[0].settings.bridges.splitlines()) == {first, alternate}
+    assert managers[1].settings.bridges.splitlines() == [other]
+
+
+def test_restarted_primary_worker_keeps_its_original_bridge_shard(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    bridge_text = "\n".join(BRIDGES)
+    runner, _config = _runner(monkeypatch, tmp_path, bridge_text)
+    original_managers = [
+        SimpleNamespace(settings=SimpleNamespace(bridges=bridge_text))
+        for _index in range(3)
+    ]
+    distribution = runner._apply_bridge_distribution(original_managers)
+    assert distribution is not None
+
+    replacement = SimpleNamespace(settings=SimpleNamespace(bridges=bridge_text))
+    runner._apply_bridge_assignment(replacement, 1)
+
+    assert replacement.settings.bridges == distribution.bridge_texts[1]
+    assert replacement.settings.bridges != bridge_text
+
+
+def test_primary_bridge_pool_can_reuse_a_single_bridge_for_every_instance(monkeypatch, tmp_path):
+    bridge_text = "\n".join((BRIDGES[0], BRIDGES[0], BRIDGES[0]))
+    runner, _config = _runner(monkeypatch, tmp_path, bridge_text)
+    managers = [
+        SimpleNamespace(settings=SimpleNamespace(bridges=bridge_text))
+        for _index in range(4)
+    ]
+
+    distribution = runner._apply_bridge_distribution(managers)
+
+    assert distribution is not None
+    assert distribution.unique_records == 1
+    assert distribution.unique_groups == 1
+    assert distribution.shared_groups == 1
+    assert all(item.settings.bridges.splitlines() == [BRIDGES[0]] for item in managers)
+
 
 def test_tor_runner_identity_uses_its_managed_tor_controller(monkeypatch, tmp_path):
     runner, _config = _runner(monkeypatch, tmp_path, "\n".join(BRIDGES))

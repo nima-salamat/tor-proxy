@@ -339,8 +339,9 @@ class TorServicesPage(QWidget):
         bridge_title = QLabel("Concurrent bridge probes")
         bridge_title.setObjectName("settingsFieldLabel")
         bridge_description = QLabel(
-            "How many bridge records may be tested at the same time before a Tor connection. "
-            "Higher values can finish faster, but use more CPU and sockets."
+            "When Auto prune is enabled, bridge preflight runs in parallel using a bounded thread pool: each unique record is "
+            "tested once in its own temporary Tor process. Higher concurrency can finish faster, but uses "
+            "more CPU, memory and sockets."
         )
         bridge_description.setObjectName("settingsDescription")
         bridge_description.setWordWrap(True)
@@ -474,11 +475,36 @@ class TorServicesPage(QWidget):
                 description = state.title()
             else:
                 description = "Starting or bootstrapping"
-            labels.append(f"Instance {index}: {description}")
+            try:
+                bridge_count = max(0, int(item.get("bridge_count", 0) or 0))
+            except (TypeError, ValueError):
+                bridge_count = 0
+            bridge_suffix = f" · {bridge_count} bridge record(s)" if bridge_count else ""
+            labels.append(f"Instance {index}: {description}{bridge_suffix}")
 
         detail = "  |  ".join(labels) if labels else "Waiting for instance status."
+        distribution = health.get("bridge_distribution")
+        distribution_note = ""
+        if isinstance(distribution, dict):
+            try:
+                records = max(0, int(distribution.get("unique_records", 0)))
+                groups = max(0, int(distribution.get("unique_groups", 0)))
+                shared = max(0, int(distribution.get("shared_groups", 0)))
+            except (TypeError, ValueError):
+                records = groups = shared = 0
+            if records:
+                if shared:
+                    distribution_note = (
+                        f"\nBridge pool: {records} unique records in {groups} groups; "
+                        f"{shared} group(s) are reused because the pool is small or to share verified coverage across workers."
+                    )
+                else:
+                    distribution_note = (
+                        f"\nBridge pool: {records} unique records in {groups} groups; "
+                        "assignments are isolated between instances."
+                    )
         self.lbl_primary_pool_health.setText(
-            f"Primary connection · {ready}/{total} instances verified healthy\n{detail}"
+            f"Primary connection · {ready}/{total} instances verified healthy\n{detail}{distribution_note}"
         )
 
     def _save_primary_tor_instances(self, value: int) -> None:

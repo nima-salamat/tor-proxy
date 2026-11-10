@@ -7,17 +7,19 @@ import socket
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
 
 from config import BUNDLE_DIR, CONFIG, IS_WINDOWS
 from proxy import ProxyHandler, ThreadedHTTPServer, worker_data_usage_tracker
-from torproxy.paths import user_directories
-from torproxy.tor_manager import TorManager, TorManagerError, TorSettings, TorState
-from torproxy.socks_gateway import SocksFailoverGateway
-from torproxy.health import TorProbeResult, probe_tor_socks
+from torproxy.bridge_distribution import BridgeDistribution, distribute_bridge_records
 from torproxy.bridge_health import DEFAULT_MAX_WORKERS
+from torproxy.health import TorProbeResult, probe_tor_socks
+from torproxy.paths import user_directories
+from torproxy.socks_gateway import SocksFailoverGateway
+from torproxy.tor_manager import TorManager, TorManagerError, TorSettings, TorState
 from utils import resource_path
 
 logger = logging.getLogger(__name__)
@@ -183,6 +185,8 @@ class TorRunner(QObject):
         self._gateway: SocksFailoverGateway | None = None
         self._last_pool_ready_count = -1
         self._allocated_backend_ports: set[int] = set()
+        self._bridge_distribution: BridgeDistribution | None = None
+        self._verified_bridge_records: tuple[str, ...] = ()
         self.state = "STOPPED"
         self.last_error: str | None = None
         self.update_path(CONFIG["tor_path"])
@@ -531,6 +535,8 @@ class TorRunner(QObject):
         self._last_report = None
         self._last_bridge_usage_report = None
         self._last_pool_ready_count = -1
+        self._bridge_distribution = None
+        self._verified_bridge_records = ()
         self._backend_managers = []
         self._backend_threads = []
         self._backend_start_locks = []
@@ -603,17 +609,35 @@ class TorRunner(QObject):
                     worker_state = "unhealthy"
                 elif worker_state == "ready":
                     worker_state = "ready-checking"
+                bridge_count = (
+                    len(self._bridge_distribution.assignments[index])
+                    if self._bridge_distribution is not None
+                    and index < len(self._bridge_distribution.assignments)
+                    else 0
+                )
                 instances.append({
                     "index": index + 1,
                     "state": worker_state,
                     "healthy": healthy,
                     "latency_ms": state.get("latency_ms"),
                     "consecutive_failures": failures,
+                    "bridge_count": bridge_count,
                 })
+            distribution = self._bridge_distribution
+            bridge_summary = (
+                {
+                    "unique_records": distribution.unique_records,
+                    "unique_groups": distribution.unique_groups,
+                    "shared_groups": distribution.shared_groups,
+                    "instance_record_counts": distribution.instance_record_counts,
+                }
+                if distribution is not None else None
+            )
         return {
             "ready_instances": sum(1 for item in instances if item["healthy"]),
             "total_instances": len(instances),
             "instances": instances,
+            "bridge_distribution": bridge_summary,
         }
 
     def _publish_bridge_usage(self, manager: TorManager | None = None):
@@ -631,12 +655,26 @@ class TorRunner(QObject):
         ready_count = len(managers)
         total_count = len(self._backend_managers) or (1 if self.manager is not None else 0)
         with self._backend_lock:
+            distribution = self._bridge_distribution
+            bridge_counts = (
+                distribution.instance_record_counts if distribution is not None else ()
+            )
+            bridge_summary = (
+                {
+                    "unique_records": distribution.unique_records,
+                    "unique_groups": distribution.unique_groups,
+                    "shared_groups": distribution.shared_groups,
+                    "instance_record_counts": distribution.instance_record_counts,
+                }
+                if distribution is not None else None
+            )
             health_items = tuple(
                 (
                     index,
                     str(self._backend_statuses.get(index, "stopped")).lower(),
                     bool(state.get("healthy", False)),
                     int(state.get("consecutive_failures", 0) or 0),
+                    bridge_counts[index] if index < len(bridge_counts) else 0,
                 )
                 for index, state in sorted(self._backend_health.items())
             )
@@ -657,12 +695,19 @@ class TorRunner(QObject):
                     and self._backend_statuses.get(index) == "READY",
                     "latency_ms": state.get("latency_ms"),
                     "consecutive_failures": int(state.get("consecutive_failures", 0) or 0),
+                    "bridge_count": bridge_counts[index] if index < len(bridge_counts) else 0,
                 }
                 for index, state in sorted(self._backend_health.items())
             ]
         report = (
             enabled, ready, ready_count, total_count,
             tuple(sorted(active)), health_items,
+            (
+                bridge_summary["unique_records"],
+                bridge_summary["unique_groups"],
+                bridge_summary["shared_groups"],
+                bridge_summary["instance_record_counts"],
+            ) if bridge_summary is not None else None,
         )
         if report == self._last_bridge_usage_report:
             return
@@ -674,6 +719,7 @@ class TorRunner(QObject):
             "ready_instances": ready_count,
             "total_instances": total_count,
             "instances": instance_details,
+            "bridge_distribution": bridge_summary,
         })
 
     def _on_status(self, state, progress, message):
@@ -717,7 +763,18 @@ class TorRunner(QObject):
         if len({record for _kind, record in parsed}) < 2:
             return manager
 
-        self.log_message.emit("Checking configured bridges independently before connecting. Bridge addresses are hidden from the event log.")
+        probe_workers = max(
+            1,
+            min(
+                8,
+                int(getattr(CONFIG, "bridge_probe_workers", DEFAULT_MAX_WORKERS) or DEFAULT_MAX_WORKERS),
+            ),
+        )
+        self.log_message.emit(
+            f"Checking {len(parsed)} unique bridge records concurrently "
+            f"(up to {min(probe_workers, len(parsed))} workers). "
+            "Each record is tested in an isolated temporary Tor process; bridge addresses are hidden from the event log."
+        )
         if self.app_window is not None:
             self.app_window.data.value = "Checking bridges…"
         from torproxy.bridge_health import check_bridges
@@ -745,7 +802,7 @@ class TorRunner(QObject):
             result = check_bridges(
                 manager.settings,
                 timeout_seconds=30.0,
-                max_workers=max(1, min(8, int(getattr(CONFIG, "bridge_probe_workers", DEFAULT_MAX_WORKERS) or DEFAULT_MAX_WORKERS))),
+                max_workers=probe_workers,
                 excluded_ports=(port for port in reserved_ports if port),
                 cancel_event=self._stopping,
                 on_result=report_progress,
@@ -757,6 +814,7 @@ class TorRunner(QObject):
 
         if self._stopping.is_set():
             return manager
+        self._verified_bridge_records = tuple(result.working)
         if result.issues:
             issue = result.issues[0]
             if issue == "transport_launch_failed":
@@ -938,6 +996,84 @@ class TorRunner(QObject):
             replacement.start(on_status=self._on_status)
             return replacement
 
+
+
+    def _apply_bridge_assignment(
+        self,
+        manager: TorManager,
+        worker_index: int,
+        distribution: BridgeDistribution | None = None,
+    ) -> None:
+        """Apply the worker's stable bridge shard before its Tor process starts."""
+        assignment = distribution or self._bridge_distribution
+        if assignment is None:
+            return
+        if not 0 <= worker_index < len(assignment.bridge_texts):
+            raise TorManagerError("A Tor worker has no matching bridge assignment.")
+        settings = getattr(manager, "settings", None)
+        if settings is None or not hasattr(settings, "bridges"):
+            raise TorManagerError(
+                f"Primary Tor instance {worker_index + 1} does not expose bridge configuration."
+            )
+        bridge_text = assignment.bridge_texts[worker_index]
+        if isinstance(settings, TorSettings):
+            # TorSettings is frozen; the process has not started yet, so
+            # replace only its bridge list while retaining its own ports
+            # and isolated DataDirectory.
+            manager.settings = replace(settings, bridges=bridge_text)
+        else:
+            # Keep the compatibility adapter friendly to lightweight test
+            # managers without weakening the production TorSettings path.
+            settings.bridges = bridge_text
+
+    def _apply_bridge_distribution(self, managers: list[TorManager]) -> BridgeDistribution | None:
+        """Partition the filtered bridge pool across isolated primary Tor workers.
+
+        Records sharing an explicit bridge fingerprint stay in one group so
+        alternate transport/configuration lines for the same bridge are not
+        spread across separate Tor DataDirectories. When there are fewer
+        distinct groups than workers, groups are intentionally shared rather
+        than leaving a worker with no configured bridge.
+        """
+        if not self.bridge:
+            self._bridge_distribution = None
+            return None
+        if not managers:
+            raise TorManagerError("The primary Tor pool has no workers for bridge assignment.")
+
+        distribution = distribute_bridge_records(
+            self.bridges,
+            len(managers),
+            preferred_records=self._verified_bridge_records,
+        )
+        if distribution.unique_records == 0:
+            raise TorManagerError(
+                "Bridge mode is enabled, but no valid bridge records are available for the primary Tor instances."
+            )
+
+        for index, manager in enumerate(managers):
+            self._apply_bridge_assignment(manager, index, distribution)
+
+        self._bridge_distribution = distribution
+        counts = ", ".join(
+            f"{index + 1}:{count}"
+            for index, count in enumerate(distribution.instance_record_counts)
+        )
+        if distribution.shared_groups:
+            self.log_message.emit(
+                f"Bridge distribution: {distribution.unique_records} unique records across "
+                f"{distribution.unique_groups} bridge groups and {len(managers)} Tor instances; "
+                f"{distribution.shared_groups} bridge group(s) are shared because the pool is small or fewer verified "
+                f"groups were available than instances. Per-instance record counts: {counts}."
+            )
+        else:
+            self.log_message.emit(
+                f"Bridge distribution: {distribution.unique_records} unique records across "
+                f"{distribution.unique_groups} bridge groups and {len(managers)} Tor instances; "
+                f"bridge groups are not shared between instances. Per-instance record counts: {counts}."
+            )
+        return distribution
+
     def _run(self):
         try:
             manager = self.manager or self._make_manager(0)
@@ -952,6 +1088,8 @@ class TorRunner(QObject):
             managers = [manager]
             for worker_index in range(1, worker_count):
                 managers.append(self._make_manager(worker_index))
+
+            self._apply_bridge_distribution(managers)
 
             workers = [
                 threading.Thread(
@@ -1096,6 +1234,10 @@ class TorRunner(QObject):
                                     continue
                             try:
                                 replacement = self._make_manager(index)
+                                # A supervised replacement must preserve its
+                                # original shard instead of restoring the full
+                                # master bridge list to every process.
+                                self._apply_bridge_assignment(replacement, index)
                             except Exception as exc:
                                 with self._backend_lock:
                                     self._backend_restart_attempts[index] = attempts + 1
