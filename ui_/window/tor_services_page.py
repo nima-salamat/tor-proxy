@@ -6,7 +6,8 @@ from pathlib import Path
 
 import qtawesome as qta
 from PySide6.QtCore import Qt, QThreadPool
-from PySide6.QtWidgets import (
+from PySide6.QtWidgets (
+    QApplication,
     QCheckBox,
     QDialog,
     QDialogButtonBox,
@@ -16,7 +17,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QMessageBox,
     QPushButton,
     QSpinBox,
     QTextEdit,
@@ -28,6 +28,7 @@ from config import CONFIG
 from torproxy.bridges import parse_bridge_text
 from torproxy.service_pool import TorServicePoolError
 from ui_.worker.worker import Worker
+from ui_.window.dialogs import QMessageBox
 
 logger = logging.getLogger(__name__)
 _SERVICE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
@@ -461,6 +462,19 @@ class TorServicesPage(QWidget):
                     pool = self._pool(create=True)
                 except Exception:
                     pool = None
+
+            # Pool creation may restore the old persisted version of this profile.
+            # Detect and replace that late registration before writing the edited copy.
+            if old_profile is not None and pool is not None and not old_registered:
+                if service_id in pool.service_ids:
+                    current_state = pool.status(service_id)["state"]
+                    if current_state != "stopped":
+                        raise TorServicePoolError(
+                            "Stop this isolated Tor service before editing its ports or configuration."
+                        )
+                    pool.unregister(service_id)
+                    old_was_unregistered = True
+
             if pool is not None:
                 self._register_profile(profile, pool)
                 new_registered = True
@@ -585,16 +599,27 @@ class TorServicesPage(QWidget):
         self.btn_refresh.setEnabled(not busy)
 
     def _service_operation(self, service_id: str, operation: str) -> None:
-        pool = self._pool(create=True)
-        profile = next((item for item in self._profiles() if item.get("id") == service_id), None)
-        if profile is None:
-            raise TorServicePoolError(f"Unknown saved Tor service '{service_id}'.")
-        self._register_profile(profile, pool)
-        method = pool.start_service if operation == "start" else pool.stop_service
-        self._run_operation(service_id, method, service_id)
+        try:
+            pool = self._pool(create=True)
+            profile = next((item for item in self._profiles() if item.get("id") == service_id), None)
+            if profile is None:
+                raise TorServicePoolError(f"Unknown saved Tor service '{service_id}'.")
+            self._register_profile(profile, pool)
+            method = pool.start_service if operation == "start" else pool.stop_service
+            self._run_operation(service_id, method, service_id)
+        except Exception as exc:
+            self.lbl_runtime_status.setText(str(exc))
+            QMessageBox.warning(self, "Tor service", str(exc))
+            self.refresh_services()
 
     def start_all(self) -> None:
-        pool = self._pool(create=True)
+        try:
+            pool = self._pool(create=True)
+        except Exception as exc:
+            self.lbl_runtime_status.setText(str(exc))
+            QMessageBox.warning(self, "Tor service pool", str(exc))
+            self.refresh_services()
+            return
         if pool is None:
             QMessageBox.warning(self, "Tor service pool", "Tor services are not available until a Tor bundle is installed.")
             return
