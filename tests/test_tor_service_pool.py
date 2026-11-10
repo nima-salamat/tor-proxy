@@ -32,11 +32,12 @@ def _settings(tmp_path: Path, socks: int = 21050, control: int = 21051, dns: int
     )
 
 
-def _pool(tmp_path: Path, *, manager_factory=FakeManager, reserved_ports=(), max_workers=4):
+def _pool(tmp_path: Path, *, manager_factory=FakeManager, reserved_ports=(), reserved_paths=(), max_workers=4):
     directories = SimpleNamespace(data=tmp_path / "app-data", logs=tmp_path / "app-logs")
     return TorServicePool(
         manager_factory=manager_factory,
         reserved_ports=reserved_ports,
+        reserved_paths=reserved_paths,
         max_workers=max_workers,
         directories=directories,
     )
@@ -202,3 +203,17 @@ def test_service_pool_worker_limit_cannot_change_during_an_operation(tmp_path):
 
     with pytest.raises(TorServicePoolError, match="operation is running"):
         pool.set_max_workers(2)
+
+
+def test_service_data_directories_cannot_overlap_primary_tor_paths(tmp_path):
+    primary_state = tmp_path / "primary-tor-state"
+    pool = _pool(tmp_path, reserved_paths=(primary_state,))
+    settings = TorSettings(
+        executable=tmp_path / "tor.exe",
+        socks_port=25050,
+        control_port=25051,
+        data_directory=primary_state / "nested-profile",
+    )
+
+    with pytest.raises(TorServicePoolError, match="reserved primary Tor state or log path"):
+        pool.register("unsafe", settings)
