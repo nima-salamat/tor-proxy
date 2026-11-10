@@ -15,7 +15,7 @@ if(WIN32)
     add_executable(TorProxyLauncher WIN32 src/bootstrap.cpp)
     target_compile_features(TorProxyLauncher PRIVATE cxx_std_17)
     target_compile_definitions(TorProxyLauncher PRIVATE _WIN32_WINNT=0x0A00 WINVER=0x0A00)
-    target_link_libraries(TorProxyLauncher PRIVATE Shell32 Ole32 Gdiplus)
+    target_link_libraries(TorProxyLauncher PRIVATE Shell32 Ole32 Gdiplus Advapi32)
 
     # The kill switch uses native WFP filters rather than editing every
     # pre-existing Windows Firewall rule through PowerShell/CIM.
