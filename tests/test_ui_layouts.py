@@ -2298,7 +2298,11 @@ def test_custom_titlebar_shows_high_resolution_app_icon_beside_title(qt_app):
     from PySide6.QtWidgets import QMainWindow
     from ui_.window.custom_titlebar import CustomTitleBar
 
-    parent = QMainWindow()
+    class _TitleBarHost(QMainWindow):
+        def hide_to_tray(self):
+            self.hide()
+
+    parent = _TitleBarHost()
     titlebar = CustomTitleBar(parent)
     logo = titlebar.app_icon
     pixmap = logo.pixmap()

@@ -21,7 +21,11 @@ def test_custom_titlebar_branding_is_left_aligned_and_controls_are_right_aligned
     from PySide6.QtWidgets import QMainWindow
     from ui_.window.custom_titlebar import CustomTitleBar
 
-    parent = QMainWindow()
+    class _TitleBarHost(QMainWindow):
+        def hide_to_tray(self):
+            self.hide()
+
+    parent = _TitleBarHost()
     titlebar = CustomTitleBar(parent)
     layout = titlebar.layout()
 
