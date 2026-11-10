@@ -742,7 +742,10 @@ class ProxyWindow(QWidget):
         self.connected = bool(tor_ready and proxy_active)
         self._stopping = False
         self._disconnect_worker = None
-        self.connect_btn.set_connected(self.connected)
+        if self.running:
+            self.connect_btn.set_disconnect_available()
+        else:
+            self.connect_btn.set_connected(False)
         self.connect_btn.setEnabled(True)
 
         if tor_active and proxy_active:
