@@ -56,12 +56,49 @@ logger = logging.getLogger(__name__)
 _THEME_STYLESHEET_CACHE = {}
 
 
-# Native hit-test values used by custom Windows title bars.
+# Native hit-test values used by custom Windows title bars and resize borders.
 _HTCLIENT = 1
 _HTCAPTION = 2
 _HTMAXBUTTON = 9
+_HTLEFT = 10
+_HTRIGHT = 11
+_HTTOP = 12
+_HTTOPLEFT = 13
+_HTTOPRIGHT = 14
+_HTBOTTOM = 15
+_HTBOTTOMLEFT = 16
+_HTBOTTOMRIGHT = 17
 _WM_NCCALCSIZE = 0x0083
 _WM_NCHITTEST = 0x0084
+
+
+def _native_resize_hit_test(point, window_rect, border=8):
+    """Return the Win32 resize hit-test code for an edge or corner."""
+    if border <= 0 or not window_rect.contains(point):
+        return None
+
+    on_left = point.x() < window_rect.left() + border
+    on_right = point.x() > window_rect.right() - border
+    on_top = point.y() < window_rect.top() + border
+    on_bottom = point.y() > window_rect.bottom() - border
+
+    if on_top and on_left:
+        return _HTTOPLEFT
+    if on_top and on_right:
+        return _HTTOPRIGHT
+    if on_bottom and on_left:
+        return _HTBOTTOMLEFT
+    if on_bottom and on_right:
+        return _HTBOTTOMRIGHT
+    if on_left:
+        return _HTLEFT
+    if on_right:
+        return _HTRIGHT
+    if on_top:
+        return _HTTOP
+    if on_bottom:
+        return _HTBOTTOM
+    return None
 
 
 def _native_titlebar_hit_test(point, titlebar_rect, maximize_rect, other_button_rects):
@@ -424,7 +461,7 @@ class Window(QMainWindow):
                 # Keep the custom Qt frame edge-to-edge while the native
                 # thick-frame style supplies resize and Snap behavior.
                 return True, 0
-            if native_message.message == _WM_NCHITTEST and hasattr(self, "title_bar"):
+            if native_message.message == _WM_NCHITTEST:
                 screen_point = wintypes.POINT(
                     ctypes.c_short(native_message.lParam & 0xFFFF).value,
                     ctypes.c_short((native_message.lParam >> 16) & 0xFFFF).value,
@@ -445,25 +482,37 @@ class Window(QMainWindow):
                     round(screen_point.x / ratio),
                     round(screen_point.y / ratio),
                 )
-                titlebar = self.title_bar
-                titlebar_rect = QRect(
-                    titlebar.mapTo(self, QPoint(0, 0)), titlebar.size()
-                )
-                maximize = titlebar.btn_max
-                maximize_rect = QRect(
-                    maximize.mapTo(self, QPoint(0, 0)), maximize.size()
-                )
-                other_button_rects = []
-                for button in (titlebar.btn_min, titlebar.btn_close):
-                    other_button_rects.append(
-                        QRect(button.mapTo(self, QPoint(0, 0)), button.size())
-                    )
 
-                hit_test = _native_titlebar_hit_test(
-                    point, titlebar_rect, maximize_rect, other_button_rects
-                )
-                if hit_test is not None:
-                    return True, hit_test
+                # Native edge/corner hit tests let Windows perform the resize
+                # loop itself, including the correct cursor and min-size handling.
+                # Do not expose resize handles while maximized or in full-screen.
+                if not self.isMaximized() and not self.isFullScreen():
+                    resize_hit = _native_resize_hit_test(
+                        point, QRect(0, 0, self.width(), self.height())
+                    )
+                    if resize_hit is not None:
+                        return True, resize_hit
+
+                if hasattr(self, "title_bar"):
+                    titlebar = self.title_bar
+                    titlebar_rect = QRect(
+                        titlebar.mapTo(self, QPoint(0, 0)), titlebar.size()
+                    )
+                    maximize = titlebar.btn_max
+                    maximize_rect = QRect(
+                        maximize.mapTo(self, QPoint(0, 0)), maximize.size()
+                    )
+                    other_button_rects = []
+                    for button in (titlebar.btn_min, titlebar.btn_close):
+                        other_button_rects.append(
+                            QRect(button.mapTo(self, QPoint(0, 0)), button.size())
+                        )
+
+                    hit_test = _native_titlebar_hit_test(
+                        point, titlebar_rect, maximize_rect, other_button_rects
+                    )
+                    if hit_test is not None:
+                        return True, hit_test
         except (AttributeError, OSError, TypeError, ValueError):
             logger.debug("Native title-bar hit testing failed.", exc_info=True)
 
