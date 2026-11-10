@@ -6,7 +6,7 @@ from pathlib import Path
 
 import qtawesome as qta
 from PySide6.QtCore import Qt, QThreadPool
-from PySide6.QtWidgets (
+from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QDialog,
