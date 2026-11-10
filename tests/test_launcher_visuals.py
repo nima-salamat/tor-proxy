@@ -27,5 +27,6 @@ def test_windows_launcher_uses_one_consistent_rounded_window_edge():
     assert "2.0f * kPanelCornerRadius * s.scale" in source
     assert "CreateRoundRectRgn(" in source
     assert "DwmSetWindowAttribute" not in source
+    assert "#include <dwmapi.h>" not in source
     assert "DWMWCP_ROUND" not in source
     assert "Dwmapi" not in cmake

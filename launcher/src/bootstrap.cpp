@@ -12,7 +12,7 @@
 #include <string>
 #include <memory>
 #include <gdiplus.h>
-#include <dwmapi.h>
+
 
 namespace {
 constexpr wchar_t kClassName[] = L"TorProxy.LauncherWindow";
