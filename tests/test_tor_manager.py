@@ -593,3 +593,44 @@ def test_linux_kill_switch_requires_a_dedicated_cgroup_callback(tmp_path):
         cgroup_callback=callback,
     )
     assert settings.isolate_in_cgroup is True
+
+
+def test_failed_forced_shutdown_keeps_process_owned_and_data_directory_locked(tmp_path, monkeypatch):
+    from subprocess import TimeoutExpired
+
+    executable = tmp_path / "tor.exe"
+    executable.write_text("fake")
+    manager = TorManager(TorSettings(
+        executable=executable,
+        socks_port=19060,
+        control_port=19061,
+        data_directory=tmp_path / "state" / "tor",
+    ))
+
+    class StuckProcess:
+        pid = 12345
+        returncode = None
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            pass
+
+        def kill(self):
+            pass
+
+        def wait(self, timeout=None):
+            raise TimeoutExpired("tor.exe", timeout)
+
+    process = StuckProcess()
+    manager.process = process
+    release_calls = []
+    monkeypatch.setattr(manager, "_release_data_directory_lock", lambda: release_calls.append(True))
+
+    with pytest.raises(TorManagerError, match="did not exit after graceful termination"):
+        manager.stop()
+
+    assert manager.process is process
+    assert manager.state is TorState.FAILED
+    assert release_calls == []
