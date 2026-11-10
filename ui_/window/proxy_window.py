@@ -316,6 +316,11 @@ class ProxyWindow(QWidget):
         values = (self.tor_socks_port, self.tor_control_port, self.tor_dns_port, self.proxy_port)
         return tuple(sorted({int(value) for value in values if value}))
 
+    def _tor_service_reserved_paths(self) -> tuple[Path, ...]:
+        """Keep secondary profiles away from the primary Tor DataDirectory and log."""
+        directories = user_directories()
+        return (directories.data / "tor", directories.logs / "tor.log")
+
     def _build_tor_service_settings(self, profile: dict) -> TorSettings:
         """Build an isolated manager configuration from a persisted profile."""
         if not self.tor.path_set or not self.tor.tor_path:
@@ -370,6 +375,7 @@ class ProxyWindow(QWidget):
 
             pool = TorServicePool(
                 reserved_ports=self._tor_service_reserved_ports(),
+                reserved_paths=self._tor_service_reserved_paths(),
                 max_workers=configured_workers,
             )
             self.tor_service_pool = pool
