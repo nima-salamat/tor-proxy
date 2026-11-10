@@ -135,8 +135,8 @@ std::wstring readFile(const std::wstring &path, DWORD limit = 16384) {
 
 void skipJsonWhitespace(const std::wstring &json, size_t &position) {
     while (position < json.size() &&
-           (json[position] == L' ' || json[position] == L'\\t' ||
-            json[position] == L'\\r' || json[position] == L'\\n')) {
+           (json[position] == L' ' || json[position] == L'\t' ||
+            json[position] == L'\r' || json[position] == L'\n')) {
         ++position;
     }
 }
@@ -161,11 +161,11 @@ bool readJsonString(const std::wstring &json, size_t &position, std::wstring *de
         case L'"': character = L'"'; break;
         case L'\\': character = L'\\'; break;
         case L'/': character = L'/'; break;
-        case L'b': character = L'\\b'; break;
-        case L'f': character = L'\\f'; break;
-        case L'n': character = L'\\n'; break;
-        case L'r': character = L'\\r'; break;
-        case L't': character = L'\\t'; break;
+        case L'b': character = L'\b'; break;
+        case L'f': character = L'\f'; break;
+        case L'n': character = L'\n'; break;
+        case L'r': character = L'\r'; break;
+        case L't': character = L'\t'; break;
         case L'u': {
             if (position + 4 > json.size()) return false;
             unsigned int codepoint = 0;
