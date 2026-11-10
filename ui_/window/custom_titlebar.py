@@ -15,8 +15,8 @@ class CustomTitleBar(QWidget):
         self.setFixedHeight(40)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
-        # Keep the app identity beside the window controls, using the
-        # high-resolution PNG rather than scaling the small Windows ICO.
+        # Keep the app identity anchored to the left, using the high-resolution
+        # PNG rather than scaling the small Windows ICO.
         self.app_icon = QLabel(self)
         self.app_icon.setObjectName("customTitleBarAppIcon")
         self.app_icon.setAccessibleName("TorProxy application icon")
@@ -57,9 +57,11 @@ class CustomTitleBar(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 5, 7, 5)
         layout.setSpacing(5)
-        layout.addStretch(1)
         layout.addWidget(self.app_icon, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(self.title, 0, Qt.AlignmentFlag.AlignVCenter)
+        # The flexible gap belongs between the left-aligned branding and
+        # right-aligned window controls, not before the branding.
+        layout.addStretch(1)
         layout.addWidget(self.btn_min)
         layout.addWidget(self.btn_max)
         layout.addWidget(self.btn_close)
