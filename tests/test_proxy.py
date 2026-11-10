@@ -21,8 +21,6 @@ def test_proxy_server_only_binds_loopback():
         server.server_close()
 
 
-@pytest.mark.parametrize("address", ["0.0.0.0", "192.0.2.1", "::"])
-
 def test_http_proxy_caps_concurrent_client_handlers(monkeypatch):
     monkeypatch.setattr(proxy_module, "REQUEST_READ_TIMEOUT_SECONDS", 5.0)
     server = proxy_module.ThreadedHTTPServer(
@@ -59,6 +57,7 @@ def test_http_proxy_caps_concurrent_client_handlers(monkeypatch):
     assert server.client_metrics["active_clients"] == 0
 
 
+@pytest.mark.parametrize("address", ["0.0.0.0", "192.0.2.1", "::"])
 def test_proxy_server_rejects_non_loopback_listeners(address):
     with pytest.raises(ValueError, match="only bind to loopback"):
         proxy_module.ThreadedHTTPServer((address, 0), proxy_module.ProxyHandler, 9050)
