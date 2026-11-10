@@ -105,6 +105,12 @@ class SystemTunnelError(RuntimeError):
     """The system-wide Tor tunnel could not be installed, started, or stopped."""
 
 
+class SystemTunnelCancelled(SystemTunnelError):
+    """The user declined or dismissed the Windows administrator prompt."""
+
+    expected_cancellation = True
+
+
 def _host_rule_route_fields(rule) -> dict[str, list[str]]:
     """Translate one validated TorProxy host rule into sing-box match fields."""
     try:
@@ -1327,7 +1333,7 @@ class SystemTunnelManager:
             if not shell32.ShellExecuteExW(ctypes.byref(info)):
                 error = ctypes.get_last_error()
                 if error == 1223:
-                    raise SystemTunnelError("Administrator approval was cancelled.")
+                    raise SystemTunnelCancelled("Administrator approval was cancelled.")
                 raise SystemTunnelError(f"Could not request administrator privileges (error {error}).")
             wait = kernel32.WaitForSingleObject(info.hProcess, int(timeout * 1000))
             if wait == 0x00000102:
