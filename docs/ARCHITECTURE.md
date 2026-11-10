@@ -10,12 +10,23 @@ flowchart TD
   Manager -->|Stem / authenticated ControlPort| Tor
   View --> Http[HTTP proxy server]
   Http --> Rules[Immutable host-policy snapshot]
-  Rules --> Socks[SOCKS5 with remote DNS]
-  Socks --> Tor
+  Rules --> Socks[Stable loopback SOCKS gateway]
+  Socks --> Active[Active Tor SOCKS backend]
+  Socks -. failover .-> Standby[Ready Tor standby]
+  Active --> Tor[Tor processes with isolated state]
+  Standby --> Tor
   Rules -->|explicit exclude only| Direct[Direct socket connection]
   View --> Bundle[Bundle download and signature verification]
   View --> Config[Per-user state / config]
 ```
+
+## Primary Tor redundancy and failover
+
+The configured `tor_port` is a stable loopback SOCKS gateway, not the SOCKS listener of an individual Tor process. TorProxy starts the configured number of independent Tor processes (1–4, default 2) concurrently. Each process owns a unique DataDirectory, ControlPort cookie, SOCKS listener and log. The first configured process is preferred; the others are bootstrapped hot standbys. The gateway pins each incoming SOCKS TCP session to one Tor backend and tries the next ready backend if the preferred listener has died. The supervisor changes the preferred backend after detecting a process exit and restarts failed instances with bounded retry attempts while another backend is available.
+
+The HTTP proxy, TorProxy's own SOCKS-routed downloads, browser settings, and System Tunnel continue to use the same stable `127.0.0.1:<tor_port>` endpoint. No direct-network fallback is introduced. This protects new sessions from a single Tor process exit; it cannot migrate an established TCP stream to a different Tor process, so active downloads or web sockets on a failed backend may still reconnect. One active backend is preferred rather than round-robin balancing, avoiding unnecessary circuit/identity changes between new requests. All instances share the configured bridge records but maintain independent Tor circuit and guard state.
+
+**Settings → Tor Services → Primary connection redundancy** controls the number of Tor processes. Set it to 1 for the previous single-instance resource profile, 2 for one hot standby, or 3–4 for additional failover capacity. Increasing the count increases resource usage and the number of independent relay connections. The lower **Additional isolated Tor profiles** section is a separate feature for applications/identities that need their own SOCKS endpoint; those profiles do not participate in primary failover.
 
 ## Process lifecycle
 
