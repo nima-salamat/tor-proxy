@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 import qtawesome as qta
 from PySide6.QtCore import Qt, QTimer, QPointF, QRectF
-from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPalette, QPen
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -647,6 +647,10 @@ class StatisticsWindow(QWidget):
         muted = "#aab4c1" if dark else "#68778a"
         accent = "#52a8f5" if dark else "#167ac6"
         ok = "#55d49a" if dark else "#188b68"
+        tooltip_palette = QToolTip.palette()
+        tooltip_palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(surface))
+        tooltip_palette.setColor(QPalette.ColorRole.ToolTipText, QColor(text))
+        QToolTip.setPalette(tooltip_palette)
         self.back_button.setIcon(qta.icon("fa6s.arrow-left", color=text))
         self.setStyleSheet(f"""
             QWidget#statisticsPage {{ background: transparent; }}
