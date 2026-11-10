@@ -754,9 +754,8 @@ class SettingWindow(QWidget):
             inp_port.setText(str(current_val) if current_val is not None else "")
 
             enabled_initial = bool(CONFIG[port + "_checked"]) if CONFIG[port + "_checked"] is not None else False
-            # Fixed controls pin the port; automatic values stay editable so a user can
-            # adjust the preferred value before choosing whether to pin it.
-            inp_port.setEnabled(True)
+            # Automatic mode owns this value; only Fixed ports are manually editable.
+            inp_port.setEnabled(enabled_initial)
 
             lbl_status = QLabel(
                 CORRECT if enabled_initial and self._is_valid_port(current_val)
@@ -1054,8 +1053,7 @@ class SettingWindow(QWidget):
                     checkbox.setChecked(False)
                 return
 
-        if inp_port is not None:
-            inp_port.setEnabled(True)
+        previous_fixed = bool(CONFIG[port + "_checked"])
         try:
             CONFIG[port + "_checked"] = enabled
         except (ValueError, OSError) as exc:
@@ -1063,9 +1061,14 @@ class SettingWindow(QWidget):
             if lbl_status is not None:
                 lbl_status.setText(WRONG)
             checkbox = self.sender()
-            if enabled and checkbox is not None and hasattr(checkbox, "setChecked"):
-                checkbox.setChecked(False)
+            if checkbox is not None and hasattr(checkbox, "setChecked"):
+                checkbox.blockSignals(True)
+                checkbox.setChecked(previous_fixed)
+                checkbox.blockSignals(False)
             return
+
+        if inp_port is not None:
+            inp_port.setEnabled(enabled)
 
         if lbl_status is not None:
             lbl_status.setText(
