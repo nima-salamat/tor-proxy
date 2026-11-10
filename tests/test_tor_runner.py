@@ -205,3 +205,38 @@ def test_with_one_working_bridge_only_confirmed_failures_are_pruned(monkeypatch,
     assert result is next_manager
     assert config["bridges"] == "\n".join(retained)
     assert runner.bridges == "\n".join(retained)
+
+
+def test_tor_runner_identity_uses_its_managed_tor_controller(monkeypatch, tmp_path):
+    runner, _config = _runner(monkeypatch, tmp_path, "\\n".join(BRIDGES))
+    manager = SimpleNamespace(request_new_identity=lambda: 7.5)
+    runner.manager = manager
+    runner.state = "READY"
+
+    assert runner.request_new_identity() == 7.5
+
+
+def test_tor_runner_stop_does_not_claim_stopped_while_supervisor_is_alive(monkeypatch, tmp_path):
+    from torproxy.tor_manager import TorManagerError
+
+    runner, _config = _runner(monkeypatch, tmp_path, "\\n".join(BRIDGES))
+
+    class LiveThread:
+        def is_alive(self):
+            return True
+
+        def join(self, timeout=None):
+            pass
+
+    manager = SimpleNamespace(
+        stop=lambda: None,
+        process=None,
+    )
+    runner.manager = manager
+    runner.thread = LiveThread()
+
+    with pytest.raises(TorManagerError, match="supervisor/process is still active"):
+        runner.stop()
+
+    assert runner.state == "FAILED"
+    assert runner.thread is not None
