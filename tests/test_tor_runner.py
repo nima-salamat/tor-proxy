@@ -208,7 +208,7 @@ def test_with_one_working_bridge_only_confirmed_failures_are_pruned(monkeypatch,
 
 
 def test_tor_runner_identity_uses_its_managed_tor_controller(monkeypatch, tmp_path):
-    runner, _config = _runner(monkeypatch, tmp_path, "\\n".join(BRIDGES))
+    runner, _config = _runner(monkeypatch, tmp_path, "\n".join(BRIDGES))
     manager = SimpleNamespace(request_new_identity=lambda: 7.5)
     runner.manager = manager
     runner.state = "READY"
@@ -219,7 +219,7 @@ def test_tor_runner_identity_uses_its_managed_tor_controller(monkeypatch, tmp_pa
 def test_tor_runner_stop_does_not_claim_stopped_while_supervisor_is_alive(monkeypatch, tmp_path):
     from torproxy.tor_manager import TorManagerError
 
-    runner, _config = _runner(monkeypatch, tmp_path, "\\n".join(BRIDGES))
+    runner, _config = _runner(monkeypatch, tmp_path, "\n".join(BRIDGES))
 
     class LiveThread:
         def is_alive(self):
