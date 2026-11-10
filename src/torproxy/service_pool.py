@@ -116,6 +116,10 @@ class TorServicePool:
                 f"Tor service '{service_id}' conflicts with a reserved application listener port: "
                 + ", ".join(map(str, collisions))
             )
+        if self._paths_overlap(settings.data_directory, settings.log_path):
+            raise TorServicePoolError(
+                f"Tor service '{service_id}' must keep its log file outside its DataDirectory."
+            )
 
         for existing_id, existing in self._services.items():
             existing_ports = {existing.settings.socks_port, existing.settings.control_port}
@@ -132,9 +136,15 @@ class TorServicePool:
                     f"Tor service '{service_id}' has a DataDirectory that overlaps '{existing_id}'. "
                     "Each isolated Tor process must own a separate, non-nested directory."
                 )
-            if self._canonical_path(settings.log_path) == self._canonical_path(existing.settings.log_path):
+            if self._paths_overlap(settings.log_path, existing.settings.log_path):
                 raise TorServicePoolError(
-                    f"Tor service '{service_id}' shares a log file with '{existing_id}'."
+                    f"Tor service '{service_id}' has a log path that overlaps '{existing_id}'."
+                )
+            if self._paths_overlap(settings.data_directory, existing.settings.log_path) or self._paths_overlap(
+                settings.log_path, existing.settings.data_directory
+            ):
+                raise TorServicePoolError(
+                    f"Tor service '{service_id}' overlaps the state and log paths owned by '{existing_id}'."
                 )
 
     def register(self, service_id: str, settings: TorSettings) -> TorManager:
