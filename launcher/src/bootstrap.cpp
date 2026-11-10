@@ -13,6 +13,9 @@
 #include <memory>
 #include <gdiplus.h>
 
+#ifdef _MSC_VER
+#pragma comment(lib, "Advapi32.lib")
+#endif
 
 namespace {
 constexpr wchar_t kClassName[] = L"TorProxy.LauncherWindow";
@@ -43,6 +46,7 @@ struct State {
     int hoverAction = -1;
     bool closeHover = false, trackingMouse = false;
     bool failed = false, ready = false;
+    bool darkTheme = true;
 };
 
 bool loadSplashLogo(State &s) {
@@ -128,6 +132,192 @@ std::wstring readFile(const std::wstring &path, DWORD limit = 16384) {
     if (!ok || !got) return {};
     bytes.resize(got); return utf8(bytes);
 }
+
+void skipJsonWhitespace(const std::wstring &json, size_t &position) {
+    while (position < json.size() &&
+           (json[position] == L' ' || json[position] == L'\\t' ||
+            json[position] == L'\\r' || json[position] == L'\\n')) {
+        ++position;
+    }
+}
+
+bool readJsonString(const std::wstring &json, size_t &position, std::wstring *decoded) {
+    if (position >= json.size() || json[position] != L'"') return false;
+    ++position;
+    if (decoded) decoded->clear();
+
+    while (position < json.size()) {
+        const wchar_t value = json[position++];
+        if (value == L'"') return true;
+        if (value != L'\\') {
+            if (decoded) decoded->push_back(value);
+            continue;
+        }
+        if (position >= json.size()) return false;
+
+        const wchar_t escaped = json[position++];
+        wchar_t character = 0;
+        switch (escaped) {
+        case L'"': character = L'"'; break;
+        case L'\\': character = L'\\'; break;
+        case L'/': character = L'/'; break;
+        case L'b': character = L'\\b'; break;
+        case L'f': character = L'\\f'; break;
+        case L'n': character = L'\\n'; break;
+        case L'r': character = L'\\r'; break;
+        case L't': character = L'\\t'; break;
+        case L'u': {
+            if (position + 4 > json.size()) return false;
+            unsigned int codepoint = 0;
+            for (int digit = 0; digit < 4; ++digit) {
+                const wchar_t hex = json[position++];
+                unsigned int part = 0;
+                if (hex >= L'0' && hex <= L'9') part = static_cast<unsigned int>(hex - L'0');
+                else if (hex >= L'a' && hex <= L'f') part = static_cast<unsigned int>(hex - L'a' + 10);
+                else if (hex >= L'A' && hex <= L'F') part = static_cast<unsigned int>(hex - L'A' + 10);
+                else return false;
+                codepoint = (codepoint << 4) | part;
+            }
+            // Only ASCII theme names are decoded by this launcher.
+            character = codepoint <= 0x7F ? static_cast<wchar_t>(codepoint) : L'?';
+            break;
+        }
+        default:
+            return false;
+        }
+        if (decoded) decoded->push_back(character);
+    }
+    return false;
+}
+
+bool skipJsonValue(const std::wstring &json, size_t &position) {
+    skipJsonWhitespace(json, position);
+    if (position >= json.size()) return false;
+
+    if (json[position] == L'"') {
+        return readJsonString(json, position, nullptr);
+    }
+    if (json[position] == L'{' || json[position] == L'[') {
+        int depth = 0;
+        while (position < json.size()) {
+            const wchar_t value = json[position];
+            if (value == L'"') {
+                if (!readJsonString(json, position, nullptr)) return false;
+                continue;
+            }
+            if (value == L'{' || value == L'[') ++depth;
+            else if (value == L'}' || value == L']') {
+                --depth;
+                ++position;
+                if (depth == 0) return true;
+                continue;
+            }
+            ++position;
+        }
+        return false;
+    }
+
+    const size_t start = position;
+    while (position < json.size() && json[position] != L',' &&
+           json[position] != L'}' && json[position] != L']') {
+        ++position;
+    }
+    return position > start;
+}
+
+bool readJsonStringProperty(const std::wstring &json, const std::wstring &property,
+                            std::wstring &value) {
+    size_t position = 0;
+    skipJsonWhitespace(json, position);
+    if (position >= json.size() || json[position++] != L'{') return false;
+
+    while (position < json.size()) {
+        skipJsonWhitespace(json, position);
+        if (position >= json.size() || json[position] == L'}') return false;
+
+        std::wstring key;
+        if (!readJsonString(json, position, &key)) return false;
+        skipJsonWhitespace(json, position);
+        if (position >= json.size() || json[position++] != L':') return false;
+        skipJsonWhitespace(json, position);
+
+        if (key == property) {
+            return readJsonString(json, position, &value);
+        }
+        if (!skipJsonValue(json, position)) return false;
+        skipJsonWhitespace(json, position);
+        if (position < json.size() && json[position] == L',') ++position;
+        else return false;
+    }
+    return false;
+}
+
+bool windowsUsesDarkTheme() {
+    DWORD appsUseLightTheme = 1;
+    DWORD valueSize = sizeof(appsUseLightTheme);
+    const LSTATUS registryStatus = RegGetValueW(
+        HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+        L"AppsUseLightTheme",
+        RRF_RT_REG_DWORD,
+        nullptr,
+        &appsUseLightTheme,
+        &valueSize
+    );
+    if (registryStatus == ERROR_SUCCESS) {
+        return appsUseLightTheme == 0;
+    }
+
+    // Registry access can be unavailable in restricted profiles. Fall back to
+    // the effective system window color instead of forcing the dark palette.
+    const COLORREF windowColor = GetSysColor(COLOR_WINDOW);
+    const unsigned int luminance =
+        (299u * GetRValue(windowColor) + 587u * GetGValue(windowColor) +
+         114u * GetBValue(windowColor)) / 1000u;
+    return luminance < 128u;
+}
+
+bool resolveConfiguredDarkTheme() {
+    std::wstring roamingDirectory;
+    DWORD required = GetEnvironmentVariableW(L"APPDATA", nullptr, 0);
+    if (required > 1 && required < 32768) {
+        roamingDirectory.resize(required);
+        const DWORD copied = GetEnvironmentVariableW(
+            L"APPDATA", roamingDirectory.data(), required
+        );
+        if (copied > 0 && copied < required) roamingDirectory.resize(copied);
+        else roamingDirectory.clear();
+    }
+    if (roamingDirectory.empty()) {
+        PWSTR knownFolder = nullptr;
+        if (SUCCEEDED(SHGetKnownFolderPath(
+                FOLDERID_RoamingAppData, KF_FLAG_DEFAULT, nullptr, &knownFolder)) &&
+            knownFolder) {
+            roamingDirectory = knownFolder;
+            CoTaskMemFree(knownFolder);
+        }
+    }
+
+    if (!roamingDirectory.empty()) {
+        const std::wstring configPath =
+            roamingDirectory + L"\\TorProxy\\config.json";
+        const std::wstring config = readFile(configPath, 1024u * 1024u);
+        std::wstring preference;
+        if (readJsonStringProperty(config, L"theme_preference", preference)) {
+            if (preference == L"dark") return true;
+            if (preference == L"light") return false;
+            if (preference == L"system") return windowsUsesDarkTheme();
+        }
+
+        // Older configuration files only persisted the effective mode.
+        if (readJsonStringProperty(config, L"mode", preference)) {
+            if (preference == L"dark") return true;
+            if (preference == L"light") return false;
+        }
+    }
+    return windowsUsesDarkTheme();
+}
+
 std::wstring logTail(const std::wstring &path) {
     HANDLE file = CreateFileW(path.c_str(), GENERIC_READ,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
@@ -181,6 +371,7 @@ bool preparePaths(State &s) {
 void startApp(State &s) {
     if (s.ready) return;
     stopChild(s); DeleteFileW(s.statusPath.c_str());
+    s.darkTheme = resolveConfiguredDarkTheme();
     s.failed = false; s.error.clear(); s.lastPayload.clear();
     s.status = L"Starting TorProxy…"; s.lastProgress = GetTickCount64();
     InvalidateRect(s.window, nullptr, FALSE);
@@ -292,23 +483,87 @@ void drawText(Gdiplus::Graphics &graphics, const std::wstring &text,
     graphics.DrawString(text.c_str(), static_cast<INT>(text.size()), &font,
                         rect, &format, &brush);
 }
+struct ThemePalette {
+    Gdiplus::Color backgroundStart, backgroundEnd, glowCenter, glowEdge, outline;
+    Gdiplus::Color accentStart, accentEnd, eyebrow, metadata;
+    Gdiplus::Color closeHoverFill, closePen, closePenHover, logoHalo;
+    Gdiplus::Color title, subtitle, spinnerTrack, spinner, status;
+    Gdiplus::Color progressTrack, progressStart, progressEnd, footer;
+    Gdiplus::Color errorTitle, errorSubtitle, errorDetail;
+    Gdiplus::Color primaryTop, primaryBottom, primaryHoverTop, primaryHoverBottom;
+    Gdiplus::Color secondaryTop, secondaryBottom, secondaryHoverTop, secondaryHoverBottom;
+    Gdiplus::Color primaryText, secondaryText, buttonBorder, buttonHoverBorder;
+};
+
+ThemePalette themePalette(bool dark) {
+    using Gdiplus::Color;
+    if (dark) {
+        return {
+            Color(255, 20, 34, 47), Color(255, 10, 19, 29),
+            Color(42, 37, 172, 153), Color(0, 37, 172, 153),
+            Color(70, 143, 185, 198),
+            Color(255, 57, 210, 187), Color(255, 39, 127, 157),
+            Color(255, 143, 170, 182), Color(255, 100, 127, 141),
+            Color(32, 232, 245, 248), Color(155, 220, 234, 238),
+            Color(245, 220, 234, 238), Color(30, 77, 221, 194),
+            Color(255, 241, 247, 249), Color(255, 151, 174, 184),
+            Color(65, 139, 174, 184), Color(255, 65, 220, 195),
+            Color(255, 202, 219, 224),
+            Color(55, 130, 164, 176), Color(255, 50, 205, 181),
+            Color(255, 44, 137, 167), Color(255, 102, 132, 145),
+            Color(255, 244, 247, 248), Color(255, 159, 181, 190),
+            Color(255, 172, 191, 198),
+            Color(255, 36, 151, 137), Color(255, 25, 119, 111),
+            Color(255, 48, 178, 161), Color(255, 34, 145, 133),
+            Color(255, 31, 48, 62), Color(255, 23, 37, 50),
+            Color(255, 42, 64, 79), Color(255, 29, 47, 62),
+            Color(255, 234, 245, 247), Color(255, 234, 245, 247),
+            Color(65, 125, 190, 190), Color(125, 125, 190, 190)
+        };
+    }
+    return {
+        Color(255, 248, 251, 252), Color(255, 230, 238, 242),
+        Color(30, 33, 151, 139), Color(0, 33, 151, 139),
+        Color(95, 93, 125, 139),
+        Color(255, 24, 148, 135), Color(255, 42, 118, 157),
+        Color(255, 76, 103, 115), Color(255, 108, 129, 140),
+        Color(28, 28, 52, 64), Color(190, 42, 66, 77),
+        Color(255, 26, 46, 56), Color(36, 45, 160, 150),
+        Color(255, 22, 40, 50), Color(255, 74, 97, 108),
+        Color(65, 74, 109, 122), Color(255, 20, 143, 133),
+        Color(255, 58, 80, 92),
+        Color(60, 91, 119, 132), Color(255, 32, 155, 142),
+        Color(255, 37, 130, 165), Color(255, 111, 132, 143),
+        Color(255, 22, 40, 50), Color(255, 84, 104, 114),
+        Color(255, 76, 96, 107),
+        Color(255, 24, 137, 126), Color(255, 20, 113, 105),
+        Color(255, 40, 158, 145), Color(255, 30, 133, 124),
+        Color(255, 229, 239, 243), Color(255, 219, 232, 237),
+        Color(255, 212, 227, 233), Color(255, 199, 218, 225),
+        Color(255, 247, 252, 253), Color(255, 33, 57, 67),
+        Color(95, 72, 112, 130), Color(145, 72, 112, 130)
+    };
+}
+
 void drawButton(Gdiplus::Graphics &graphics, const Gdiplus::RectF &rect,
-                const std::wstring &label, bool primary, bool hovered) {
+                const std::wstring &label, bool primary, bool hovered,
+                const ThemePalette &colors) {
     using namespace Gdiplus;
     GraphicsPath path;
     addRoundedPath(path, rect, 12.0f);
-    Color top = primary ? Color(255, 36, 151, 137) : Color(255, 31, 48, 62);
-    Color bottom = primary ? Color(255, 25, 119, 111) : Color(255, 23, 37, 50);
+    Color top = primary ? colors.primaryTop : colors.secondaryTop;
+    Color bottom = primary ? colors.primaryBottom : colors.secondaryBottom;
     if (hovered) {
-        top = primary ? Color(255, 48, 178, 161) : Color(255, 42, 64, 79);
-        bottom = primary ? Color(255, 34, 145, 133) : Color(255, 29, 47, 62);
+        top = primary ? colors.primaryHoverTop : colors.secondaryHoverTop;
+        bottom = primary ? colors.primaryHoverBottom : colors.secondaryHoverBottom;
     }
     LinearGradientBrush fill(rect, top, bottom, LinearGradientModeVertical);
     graphics.FillPath(&fill, &path);
-    Pen border(Color(hovered ? 125 : 65, 125, 190, 190), hovered ? 1.4f : 1.0f);
+    Pen border(hovered ? colors.buttonHoverBorder : colors.buttonBorder,
+               hovered ? 1.4f : 1.0f);
     graphics.DrawPath(&border, &path);
     drawText(graphics, label, rect, 13.0f,
-             Color(255, 234, 245, 247), true);
+             primary ? colors.primaryText : colors.secondaryText, true);
 }
 int hitAction(const State &s, int x, int y) {
     const float lx = logicalX(s, x), ly = logicalX(s, y);
@@ -323,8 +578,9 @@ int hitAction(const State &s, int x, int y) {
 }
 void paintFrame(State &s, HDC dc) {
     using namespace Gdiplus;
+    const ThemePalette colors = themePalette(s.darkTheme);
     Graphics graphics(dc);
-    graphics.Clear(Color(255, 8, 14, 21));
+    graphics.Clear(colors.backgroundEnd);
     graphics.SetSmoothingMode(SmoothingModeAntiAlias);
     graphics.SetPixelOffsetMode(PixelOffsetModeHighQuality);
     graphics.SetCompositingQuality(CompositingQualityHighQuality);
@@ -338,7 +594,7 @@ void paintFrame(State &s, HDC dc) {
     GraphicsPath panel;
     addRoundedPath(panel, canvas, kPanelCornerRadius);
     LinearGradientBrush background(
-        canvas, Color(255, 20, 34, 47), Color(255, 10, 19, 29),
+        canvas, colors.backgroundStart, colors.backgroundEnd,
         LinearGradientModeForwardDiagonal
     );
     graphics.FillPath(&background, &panel);
@@ -346,67 +602,66 @@ void paintFrame(State &s, HDC dc) {
     GraphicsPath glowPath;
     glowPath.AddEllipse(RectF(210.0f, 20.0f, 340.0f, 300.0f));
     PathGradientBrush glow(&glowPath);
-    glow.SetCenterColor(Color(42, 37, 172, 153));
-    Color glowEdges[] = {Color(0, 37, 172, 153)};
+    glow.SetCenterColor(colors.glowCenter);
+    Color glowEdges[] = {colors.glowEdge};
     INT edgeCount = 1;
     glow.SetSurroundColors(glowEdges, &edgeCount);
     graphics.FillPath(&glow, &glowPath);
 
-    Pen outline(Color(70, 143, 185, 198), 1.0f);
+    Pen outline(colors.outline, 1.0f);
     graphics.DrawPath(&outline, &panel);
     LinearGradientBrush accent(RectF(30.0f, 0.0f, 700.0f, 3.0f),
-                               Color(255, 57, 210, 187),
-                               Color(255, 39, 127, 157),
+                               colors.accentStart, colors.accentEnd,
                                LinearGradientModeHorizontal);
     graphics.FillRectangle(&accent, RectF(30.0f, 0.0f, 700.0f, 3.0f));
 
     drawText(graphics, L"TORPROXY  /  DESKTOP",
              RectF(42.0f, 25.0f, 300.0f, 24.0f), 11.0f,
-             Color(255, 143, 170, 182), true, StringAlignmentNear);
+             colors.eyebrow, true, StringAlignmentNear);
     drawText(graphics, L"WINDOWS",
              RectF(610.0f, 25.0f, 70.0f, 24.0f), 10.0f,
-             Color(255, 100, 127, 141), false, StringAlignmentFar);
+             colors.metadata, false, StringAlignmentFar);
 
     const RectF closeRect(698.0f, 18.0f, 46.0f, 46.0f);
     if (s.closeHover) {
         GraphicsPath closeBg;
         addRoundedPath(closeBg, closeRect, 14.0f);
-        SolidBrush hover(Color(32, 232, 245, 248));
+        SolidBrush hover(colors.closeHoverFill);
         graphics.FillPath(&hover, &closeBg);
     }
-    Pen closePen(Color(s.closeHover ? 245 : 155, 220, 234, 238),
+    Pen closePen(s.closeHover ? colors.closePenHover : colors.closePen,
                  s.closeHover ? 2.2f : 1.8f);
     closePen.SetStartCap(LineCapRound); closePen.SetEndCap(LineCapRound);
     graphics.DrawLine(&closePen, 714.0f, 34.0f, 728.0f, 48.0f);
     graphics.DrawLine(&closePen, 728.0f, 34.0f, 714.0f, 48.0f);
 
     if (s.logo && s.logo->GetLastStatus() == Ok) {
-        SolidBrush logoHalo(Color(30, 77, 221, 194));
+        SolidBrush logoHalo(colors.logoHalo);
         graphics.FillEllipse(&logoHalo, RectF(319.0f, 73.0f, 122.0f, 122.0f));
         graphics.DrawImage(s.logo.get(), RectF(331.0f, 85.0f, 98.0f, 98.0f));
     }
 
     if (!s.failed) {
         drawText(graphics, L"TorProxy", RectF(60.0f, 190.0f, 640.0f, 55.0f),
-                 35.0f, Color(255, 241, 247, 249), true);
+                 35.0f, colors.title, true);
         drawText(graphics, L"Private connections, simplified",
                  RectF(80.0f, 245.0f, 600.0f, 30.0f), 14.0f,
-                 Color(255, 151, 174, 184));
+                 colors.subtitle);
 
-        Pen spinnerTrack(Color(65, 139, 174, 184), 3.6f);
+        Pen spinnerTrack(colors.spinnerTrack, 3.6f);
         spinnerTrack.SetStartCap(LineCapRound); spinnerTrack.SetEndCap(LineCapRound);
         graphics.DrawEllipse(&spinnerTrack, RectF(367.0f, 309.0f, 26.0f, 26.0f));
-        Pen spinner(Color(255, 65, 220, 195), 3.8f);
+        Pen spinner(colors.spinner, 3.8f);
         spinner.SetStartCap(LineCapRound); spinner.SetEndCap(LineCapRound);
         graphics.DrawArc(&spinner, RectF(367.0f, 309.0f, 26.0f, 26.0f),
                          static_cast<REAL>(s.angle), 255.0f);
         drawText(graphics, s.status, RectF(58.0f, 345.0f, 644.0f, 30.0f),
-                 13.0f, Color(255, 202, 219, 224), true);
+                 13.0f, colors.status, true);
 
         const RectF track(52.0f, 402.0f, 656.0f, 5.0f);
         GraphicsPath trackPath;
         addRoundedPath(trackPath, track, 2.5f);
-        SolidBrush trackBrush(Color(55, 130, 164, 176));
+        SolidBrush trackBrush(colors.progressTrack);
         graphics.FillPath(&trackBrush, &trackPath);
         const float segmentWidth = 115.0f;
         const float travel = track.Width + segmentWidth;
@@ -420,35 +675,35 @@ void paintFrame(State &s, HDC dc) {
             RectF visible(visibleLeft, visibleTop, visibleRight - visibleLeft, visibleBottom - visibleTop);
             GraphicsPath movingPath;
             addRoundedPath(movingPath, visible, 2.5f);
-            LinearGradientBrush movingBrush(visible, Color(255, 50, 205, 181),
-                                             Color(255, 44, 137, 167), LinearGradientModeHorizontal);
+            LinearGradientBrush movingBrush(visible, colors.progressStart,
+                                             colors.progressEnd, LinearGradientModeHorizontal);
             graphics.FillPath(&movingBrush, &movingPath);
         }
         drawText(graphics, L"Loading Python and desktop components",
                  RectF(65.0f, 423.0f, 630.0f, 22.0f), 10.5f,
-                 Color(255, 102, 132, 145));
+                 colors.footer);
     } else {
         drawText(graphics, L"Startup needs attention",
                  RectF(55.0f, 190.0f, 650.0f, 52.0f), 30.0f,
-                 Color(255, 244, 247, 248), true);
+                 colors.errorTitle, true);
         drawText(graphics, L"The desktop process stopped before it became ready.",
                  RectF(68.0f, 242.0f, 624.0f, 30.0f), 13.0f,
-                 Color(255, 159, 181, 190));
+                 colors.errorSubtitle);
         std::wstring detail = s.error;
         if (detail.size() > 700) detail = detail.substr(0, 690) + L"…";
         drawText(graphics, detail, RectF(80.0f, 284.0f, 600.0f, 92.0f),
-                 11.0f, Color(255, 172, 191, 198), false,
+                 11.0f, colors.errorDetail, false,
                  StringAlignmentNear, StringAlignmentNear, true);
 
         drawButton(graphics, RectF(73.0f, 394.0f, 192.0f, 46.0f),
-                   L"Try again", true, s.hoverAction == 0);
+                   L"Try again", true, s.hoverAction == 0, colors);
         drawButton(graphics, RectF(281.0f, 394.0f, 192.0f, 46.0f),
-                   L"Open logs", false, s.hoverAction == 1);
+                   L"Open logs", false, s.hoverAction == 1, colors);
         drawButton(graphics, RectF(489.0f, 394.0f, 192.0f, 46.0f),
-                   L"Close", false, s.hoverAction == 2);
+                   L"Close", false, s.hoverAction == 2, colors);
     }
 
-    Pen footerLine(Color(30, 137, 174, 187), 1.0f);
+    Pen footerLine(s.darkTheme ? Color(30, 137, 174, 187) : Color(55, 92, 119, 132), 1.0f);
     graphics.DrawLine(&footerLine, 34.0f, 461.0f, 726.0f, 461.0f);
 }
 
@@ -731,6 +986,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     }
 
     State state;
+    state.darkTheme = resolveConfiguredDarkTheme();
     const auto path = executablePath();
     if (path.empty()) {
         Gdiplus::GdiplusShutdown(gdiplusToken);
@@ -743,11 +999,16 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     state.executable = state.root + L"\\TorProxy.exe";
 
     bool selfTest = false;
+    std::wstring expectedTheme;
     int argc = 0;
     LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     if (argv) {
-        for (int i = 1; i < argc; ++i)
-            if (std::wstring(argv[i]) == L"--self-test") selfTest = true;
+        for (int i = 1; i < argc; ++i) {
+            const std::wstring argument(argv[i]);
+            if (argument == L"--self-test") selfTest = true;
+            else if (argument.compare(0, 15, L"--expect-theme=") == 0)
+                expectedTheme = argument.substr(15);
+        }
         LocalFree(argv);
     }
     if (!loadSplashLogo(state)) {
@@ -777,6 +1038,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
             (bounds.bottom - bounds.top) >= 420;
         const bool iconLoaded = state.icon != nullptr;
         const bool logoLoaded = state.logo && state.logo->GetLastStatus() == Gdiplus::Ok;
+        const bool themeMatches = expectedTheme.empty() ||
+            (expectedTheme == L"dark" && state.darkTheme) ||
+            (expectedTheme == L"light" && !state.darkTheme);
         const bool bufferedPaintReady = state.backBufferDc != nullptr &&
             state.backBufferBitmap != nullptr &&
             state.backBufferWidth == bounds.right - bounds.left &&
@@ -784,7 +1048,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         DestroyWindow(state.window);
         state.logo.reset();
         Gdiplus::GdiplusShutdown(gdiplusToken);
-        return (frameless && sizeValid && iconLoaded && logoLoaded && bufferedPaintReady) ? 0 : 4;
+        return (frameless && sizeValid && iconLoaded && logoLoaded &&
+                bufferedPaintReady && themeMatches) ? 0 : 4;
     }
 
     startApp(state);
