@@ -2308,3 +2308,25 @@ def test_custom_titlebar_shows_high_resolution_app_icon_beside_title(qt_app):
     assert titlebar.layout().indexOf(logo) < titlebar.layout().indexOf(titlebar.title)
     assert titlebar.layout().indexOf(titlebar.title) < titlebar.layout().indexOf(titlebar.btn_min)
     assert logo.width() == 24 and logo.height() == 24
+
+
+
+def test_updates_and_notifications_dropdowns_use_dedicated_modern_theme_styles():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui.py").read_text(encoding="utf-8")
+
+    assert 'self.updates_menu.setObjectName("updatesMenu")' in source
+    assert 'self.notifications_menu.setObjectName("notificationsMenu")' in source
+    assert 'QWidget#updatesMenuHeader' in source
+    assert 'QWidget#notificationsMenuHeader' in source
+    assert 'QLabel#notificationCountBadge' in source
+    assert 'QToolButton#notificationClearButton' in source
+    assert 'QLabel#notificationDescription' in source
+    assert 'QMenu#updatesMenu, QMenu#notificationsMenu' in source
+    assert 'QMenu#updatesMenu::item:selected, QMenu#notificationsMenu::item:selected' in source
+    assert 'def _rebuild_notifications_menu(self, mode=None):' in source
+    assert 'self._rebuild_notifications_menu(mode)' in source
+    assert 'self._rebuild_notifications_menu()' in source
+    # Notification dismissal and the existing update shortcut remain connected.
+    assert 'self.notification_clear_button.clicked.connect(self._clear_notifications)' in source
+    assert 'self.bundles_update_action.setShortcut("Ctrl+U")' in source

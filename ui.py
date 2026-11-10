@@ -669,6 +669,28 @@ class Window(QMainWindow):
         self.updates_nav_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.updates_nav_button.setToolTip("Manage Tor bundles and the system tunnel")
         self.updates_menu = QMenu(self.updates_nav_button)
+        self.updates_menu.setObjectName("updatesMenu")
+        self.updates_menu.setMinimumWidth(268)
+        self.updates_menu.setSeparatorsCollapsible(False)
+
+        self.updates_menu_header = QWidget(self.updates_menu)
+        self.updates_menu_header.setObjectName("updatesMenuHeader")
+        updates_header_layout = QVBoxLayout(self.updates_menu_header)
+        updates_header_layout.setContentsMargins(14, 10, 14, 8)
+        updates_header_layout.setSpacing(2)
+        updates_header_title = QLabel("UPDATES", self.updates_menu_header)
+        updates_header_title.setObjectName("updatesMenuEyebrow")
+        updates_header_subtitle = QLabel(
+            "Manage software components", self.updates_menu_header
+        )
+        updates_header_subtitle.setObjectName("updatesMenuSubtitle")
+        updates_header_layout.addWidget(updates_header_title)
+        updates_header_layout.addWidget(updates_header_subtitle)
+        self.updates_menu_header_action = QWidgetAction(self.updates_menu)
+        self.updates_menu_header_action.setDefaultWidget(self.updates_menu_header)
+        self.updates_menu.addAction(self.updates_menu_header_action)
+        self.updates_menu.addSeparator()
+
         self.bundles_update_action = self.updates_menu.addAction(
             qta.icon("fa6s.boxes-stacked", color=icon_color), "Bundles"
         )
@@ -714,8 +736,46 @@ class Window(QMainWindow):
         self.global_state.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._notification_entries = []
         self.notifications_menu = QMenu(self)
-        empty_notification = self.notifications_menu.addAction("No notifications")
-        empty_notification.setEnabled(False)
+        self.notifications_menu.setObjectName("notificationsMenu")
+        self.notifications_menu.setMinimumWidth(344)
+        self.notifications_menu.setSeparatorsCollapsible(False)
+
+        self.notifications_menu_header = QWidget(self.notifications_menu)
+        self.notifications_menu_header.setObjectName("notificationsMenuHeader")
+        notifications_header_layout = QHBoxLayout(self.notifications_menu_header)
+        notifications_header_layout.setContentsMargins(14, 10, 12, 9)
+        notifications_header_layout.setSpacing(8)
+        notifications_heading_layout = QVBoxLayout()
+        notifications_heading_layout.setContentsMargins(0, 0, 0, 0)
+        notifications_heading_layout.setSpacing(1)
+        notifications_title = QLabel("Notifications", self.notifications_menu_header)
+        notifications_title.setObjectName("notificationsMenuTitle")
+        notifications_subtitle = QLabel(
+            "Recent activity", self.notifications_menu_header
+        )
+        notifications_subtitle.setObjectName("notificationsMenuSubtitle")
+        notifications_heading_layout.addWidget(notifications_title)
+        notifications_heading_layout.addWidget(notifications_subtitle)
+        notifications_header_layout.addLayout(notifications_heading_layout)
+        notifications_header_layout.addStretch(1)
+        self.notification_count_label = QLabel("0", self.notifications_menu_header)
+        self.notification_count_label.setObjectName("notificationCountBadge")
+        self.notification_count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        notifications_header_layout.addWidget(self.notification_count_label)
+        self.notification_clear_button = QToolButton(self.notifications_menu_header)
+        self.notification_clear_button.setObjectName("notificationClearButton")
+        self.notification_clear_button.setText("Clear all")
+        self.notification_clear_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.notification_clear_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.notification_clear_button.clicked.connect(self._clear_notifications)
+        notifications_header_layout.addWidget(self.notification_clear_button)
+        self.notifications_menu_header_action = QWidgetAction(self)
+        self.notifications_menu_header_action.setDefaultWidget(
+            self.notifications_menu_header
+        )
+        self.notifications_menu.addAction(self.notifications_menu_header_action)
+        self.notifications_menu.addSeparator()
+        self._notification_menu_actions = []
         self.notification_btn = QPushButton(self)
         self.notification_btn.setObjectName("notificationButton")
         self.notification_btn.setToolTip("Notifications")
@@ -756,18 +816,76 @@ class Window(QMainWindow):
         count = len(self._notification_entries)
         self.notification_btn.setText(str(count if count < 100 else "99+"))
         self.notification_btn.setToolTip("{}: {}".format(title, message))
-        self.notifications_menu.clear()
-        clear_action = self.notifications_menu.addAction("Clear notifications")
-        clear_action.triggered.connect(self._clear_notifications)
-        self.notifications_menu.addSeparator()
-        for notice in reversed(self._notification_entries):
-            action = self.notifications_menu.addAction(
-                "{} · {}".format("⚠" if notice["level"] == "warning" else "●", notice["title"])
+        self._rebuild_notifications_menu()
+
+    def _rebuild_notifications_menu(self, mode=None):
+        """Refresh the notification popup while keeping its branded header intact."""
+        menu = getattr(self, "notifications_menu", None)
+        if menu is None:
+            return
+
+        for action in getattr(self, "_notification_menu_actions", []):
+            menu.removeAction(action)
+            action.deleteLater()
+        self._notification_menu_actions = []
+
+        dark = (mode or CONFIG.get("mode", "dark")) == "dark"
+        text = "#e8edf6" if dark else "#253246"
+        muted = "#94a2b5" if dark else "#7b8798"
+        accent = "#5797ed" if dark else "#2878d0"
+        warning = "#e5b45b" if dark else "#b87818"
+
+        count = len(self._notification_entries)
+        self.notification_count_label.setText(str(count if count < 100 else "99+"))
+        self.notification_count_label.setToolTip(
+            "{} stored notification{}".format(count, "" if count == 1 else "s")
+        )
+        self.notification_clear_button.setEnabled(count > 0)
+        self.notification_clear_button.setVisible(count > 0)
+
+        if not count:
+            empty_action = menu.addAction(
+                qta.icon("fa6s.inbox", color=muted), "You're all caught up"
             )
+            empty_action.setEnabled(False)
+            empty_action.setToolTip("New TorProxy activity will appear here.")
+            self._notification_menu_actions.append(empty_action)
+            return
+
+        for index, notice in enumerate(reversed(self._notification_entries)):
+            is_warning = notice["level"] == "warning"
+            icon = qta.icon(
+                "fa6s.triangle-exclamation" if is_warning else "fa6s.circle-info",
+                color=warning if is_warning else accent,
+            )
+            action = menu.addAction(icon, notice["title"])
             action.setToolTip(notice["message"])
+            action.setStatusTip(notice["message"])
             action.triggered.connect(
-                lambda _checked=False, t=notice["title"], m=notice["message"], lv=notice["level"]: self._show_notice(t, m, lv)
+                lambda _checked=False, t=notice["title"], m=notice["message"], lv=notice["level"]:
+                    self._show_notice(t, m, lv)
             )
+            self._notification_menu_actions.append(action)
+
+            description_widget = QWidget(menu)
+            description_widget.setObjectName("notificationDescriptionContainer")
+            description_layout = QHBoxLayout(description_widget)
+            description_layout.setContentsMargins(38, 0, 14, 8)
+            description_layout.setSpacing(0)
+            description_label = QLabel(notice["message"], description_widget)
+            description_label.setObjectName("notificationDescription")
+            description_label.setWordWrap(True)
+            description_label.setMinimumWidth(260)
+            description_label.setMaximumWidth(304)
+            description_layout.addWidget(description_label)
+            description_action = QWidgetAction(self)
+            description_action.setDefaultWidget(description_widget)
+            menu.addAction(description_action)
+            self._notification_menu_actions.append(description_action)
+
+            if index < count - 1:
+                separator = menu.addSeparator()
+                self._notification_menu_actions.append(separator)
 
     def _show_notice(self, title, message, level):
         if level == "warning":
@@ -779,9 +897,7 @@ class Window(QMainWindow):
         self._notification_entries.clear()
         self.notification_btn.setText("0")
         self.notification_btn.setToolTip("No new notifications")
-        self.notifications_menu.clear()
-        empty = self.notifications_menu.addAction("No notifications")
-        empty.setEnabled(False)
+        self._rebuild_notifications_menu()
 
     def _on_updates_menu_about_to_show(self):
         """Point the dropdown chevron upward while the menu is visible."""
@@ -859,6 +975,79 @@ class Window(QMainWindow):
             QMenu {{ background: {menu_surface}; color: {text}; border: 1px solid {border}; padding: 5px; }}
             QMenu::item {{ padding: 7px 20px 7px 10px; border-radius: 5px; }}
             QMenu::item:selected {{ background: {hover}; }}
+            QMenu#updatesMenu, QMenu#notificationsMenu {{
+                background: {"#171e29" if dark else "#ffffff"};
+                color: {text};
+                border: 1px solid {"#303b4c" if dark else "#dfe6ef"};
+                border-radius: 13px;
+                padding: 7px;
+            }}
+            QMenu#updatesMenu::item, QMenu#notificationsMenu::item {{
+                color: {text};
+                background: transparent;
+                padding: 9px 16px 9px 36px;
+                margin: 2px 4px;
+                min-height: 22px;
+                border-radius: 8px;
+            }}
+            QMenu#updatesMenu::item:selected, QMenu#notificationsMenu::item:selected {{
+                color: {text};
+                background: {"#29384d" if dark else "#edf3fb"};
+            }}
+            QMenu#updatesMenu::item:disabled, QMenu#notificationsMenu::item:disabled {{
+                color: {"#94a2b5" if dark else "#7b8798"};
+            }}
+            QMenu#updatesMenu::separator, QMenu#notificationsMenu::separator {{
+                height: 1px;
+                background: {"#303b4c" if dark else "#e7ecf2"};
+                margin: 5px 12px;
+            }}
+            QWidget#updatesMenuHeader, QWidget#notificationsMenuHeader,
+            QWidget#notificationDescriptionContainer {{ background: transparent; }}
+            QLabel#updatesMenuEyebrow {{
+                color: {"#94a2b5" if dark else "#7b8798"};
+                font-size: 8pt;
+                font-weight: 750;
+                letter-spacing: 1px;
+            }}
+            QLabel#updatesMenuSubtitle, QLabel#notificationsMenuSubtitle {{
+                color: {"#94a2b5" if dark else "#7b8798"};
+                font-size: 8pt;
+            }}
+            QLabel#notificationsMenuTitle {{
+                color: {text};
+                font-size: 10pt;
+                font-weight: 750;
+            }}
+            QLabel#notificationCountBadge {{
+                color: {accent};
+                background: {"#263c55" if dark else "#eaf2fc"};
+                border: 1px solid {"#385574" if dark else "#d8e7f8"};
+                border-radius: 9px;
+                min-width: 22px;
+                min-height: 19px;
+                padding: 1px 6px;
+                font-size: 8pt;
+                font-weight: 750;
+            }}
+            QToolButton#notificationClearButton {{
+                color: {accent};
+                background: transparent;
+                border: none;
+                border-radius: 6px;
+                padding: 5px 7px;
+                font-size: 8pt;
+                font-weight: 650;
+            }}
+            QToolButton#notificationClearButton:hover {{
+                background: {"#29384d" if dark else "#edf3fb"};
+            }}
+            QLabel#notificationDescription {{
+                color: {"#94a2b5" if dark else "#7b8798"};
+                background: transparent;
+                font-size: 8pt;
+                padding: 0;
+            }}
         """)
         icon_color = text
         for index, (action, icon_name) in enumerate(zip(self.page_actions, self.page_icon_names)):
@@ -877,6 +1066,7 @@ class Window(QMainWindow):
             str(len(self._notification_entries) if len(self._notification_entries) < 100 else "99+")
         )
         self.notification_btn.setFixedSize(44, 30)
+        self._rebuild_notifications_menu(mode)
         if IS_WINDOWS and hasattr(self, "title_bar"):
             self.title_bar.update_theme(icon_color)
         if hasattr(self, "proxyWidget") and hasattr(self.proxyWidget, "_apply_home_theme"):
