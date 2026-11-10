@@ -14,7 +14,7 @@ from PySide6.QtCore import QEvent, Qt, QTimer, QThreadPool, QPropertyAnimation, 
 from pathlib import Path
 
 from torproxy.ports import PortAllocationError, resolve_listener_ports
-from torproxy.service_pool import TorServicePool, TorServicePoolError
+from torproxy.service_pool import TorServicePool
 from torproxy.tor_manager import TorManagerError, TorSettings
 from set_proxy import has_proxy_snapshot, manage_proxy
 from tor import TorRunner, Runner
