@@ -554,8 +554,15 @@ class TorRunner(QObject):
                 self.control_port,
                 self.dns_port,
                 getattr(getattr(self.app_window, "proxy", None), "port", None),
+                *self.backend_listener_ports,
             ) if value
         }
+        for profile in CONFIG["tor_services"] or []:
+            if isinstance(profile, dict):
+                for key in ("socks_port", "control_port", "dns_port"):
+                    value = profile.get(key)
+                    if type(value) is int and 1 <= value <= 65535:
+                        reserved.add(value)
         sockets: list[socket.socket] = []
         allocated: list[int] = []
         try:
@@ -677,6 +684,7 @@ class TorRunner(QObject):
     def _on_instance_status(self, instance_id: str, manager: TorManager, state, progress, message) -> None:
         state_text = getattr(state, "value", str(state))
         normalized = str(state_text).upper().split(".")[-1]
+        previous_pool_state = self.state
         with self._instance_lock:
             self._instance_states[instance_id] = normalized
             if normalized == "FAILED" and message:
@@ -686,7 +694,11 @@ class TorRunner(QObject):
         self.log_message.emit(f"{instance_id}: {str(message or state_text).strip()}")
         self._refresh_instance_selection(announce=True)
         if self.state == "READY":
-            if self.app_window is not None and progress is not None and normalized == "READY":
+            if (
+                previous_pool_state != "READY"
+                and self.app_window is not None
+                and normalized == "READY"
+            ):
                 self.app_window.data.value = "100%"
             return
         if self.app_window is not None and progress is not None:
