@@ -294,7 +294,7 @@ def test_settings_and_bundle_pages_use_available_height_without_duplicate_subtit
     settings_source = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
     updater_source = (repository / "ui_/window/updater_window.py").read_text(encoding="utf-8")
     proxy_source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
-    assert '("General", "Bridges", "Ports", "Advanced"), self.settings_nav_icon_names' in settings_source
+    assert '("General", "Bridges", "Ports", "Tor Services", "Advanced"), self.settings_nav_icon_names' in settings_source
     assert "verify_tor_signatures" in settings_source
     assert "QScrollArea" in settings_source and "setWidgetResizable(True)" in settings_source
     assert "lbl_page_number" not in settings_source
@@ -2477,3 +2477,22 @@ def test_listener_port_inputs_are_editable_only_when_fixed_is_checked():
     assert 'previous_fixed = bool(CONFIG[port + "_checked"])' in handler
     assert "checkbox.setChecked(previous_fixed)" in handler
 
+
+
+def test_settings_exposes_isolated_tor_profiles_and_parallel_bridge_workers():
+    repository = Path(__file__).resolve().parents[1]
+    settings_source = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
+    services_source = (repository / "ui_/window/tor_services_page.py").read_text(encoding="utf-8")
+    proxy_source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+    tor_source = (repository / "tor.py").read_text(encoding="utf-8")
+
+    assert '"Tor Services"' in settings_source
+    assert "TorServicesPage(self, app_window=self._parent)" in settings_source
+    assert '"Concurrent bridge probes"' in services_source
+    assert '"Concurrent service operations"' in services_source
+    assert 'def add_service(self)' in services_source
+    assert 'def start_all(self)' in services_source
+    assert 'def stop_all(self)' in services_source
+    assert 'def _build_tor_service_settings(self, profile: dict) -> TorSettings:' in proxy_source
+    assert 'self.tor_service_pool.stop_all()' in proxy_source
+    assert '"bridge_probe_workers"' in tor_source and "DEFAULT_MAX_WORKERS" in tor_source

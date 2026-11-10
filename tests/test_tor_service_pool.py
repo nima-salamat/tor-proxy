@@ -32,11 +32,12 @@ def _settings(tmp_path: Path, socks: int = 21050, control: int = 21051, dns: int
     )
 
 
-def _pool(tmp_path: Path, *, manager_factory=FakeManager, reserved_ports=(), max_workers=4):
+def _pool(tmp_path: Path, *, manager_factory=FakeManager, reserved_ports=(), reserved_paths=(), max_workers=4):
     directories = SimpleNamespace(data=tmp_path / "app-data", logs=tmp_path / "app-logs")
     return TorServicePool(
         manager_factory=manager_factory,
         reserved_ports=reserved_ports,
+        reserved_paths=reserved_paths,
         max_workers=max_workers,
         directories=directories,
     )
@@ -137,7 +138,7 @@ def test_stop_all_isolates_failures_per_service(tmp_path):
 
     results = pool.stop_all()
 
-    assert results["first"].startswith("RuntimeError:")
+    assert results["first"].startswith("TorServicePoolError: Tor service 'first' did not stop cleanly: synthetic stop failure")
     assert results["second"] is None
 
 
@@ -182,3 +183,37 @@ def test_service_cannot_be_unregistered_while_its_data_lock_is_held(tmp_path):
 
     with pytest.raises(TorServicePoolError, match="still active"):
         pool.unregister("locked")
+
+
+def test_service_pool_worker_limit_can_be_updated_safely(tmp_path):
+    pool = _pool(tmp_path, max_workers=2)
+
+    assert pool.max_workers == 2
+    pool.set_max_workers(7)
+    assert pool.max_workers == 7
+
+    with pytest.raises(TorServicePoolError, match="between 1 and 8"):
+        pool.set_max_workers(9)
+
+
+def test_service_pool_worker_limit_cannot_change_during_an_operation(tmp_path):
+    pool = _pool(tmp_path)
+    pool.register("active", _settings(tmp_path))
+    pool._services["active"].active_calls = 1
+
+    with pytest.raises(TorServicePoolError, match="operation is running"):
+        pool.set_max_workers(2)
+
+
+def test_service_data_directories_cannot_overlap_primary_tor_paths(tmp_path):
+    primary_state = tmp_path / "primary-tor-state"
+    pool = _pool(tmp_path, reserved_paths=(primary_state,))
+    settings = TorSettings(
+        executable=tmp_path / "tor.exe",
+        socks_port=25050,
+        control_port=25051,
+        data_directory=primary_state / "nested-profile",
+    )
+
+    with pytest.raises(TorServicePoolError, match="reserved primary Tor state or log path"):
+        pool.register("unsafe", settings)

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 import sys
 import tempfile
 import threading
@@ -59,6 +60,9 @@ DEFAULT_DATA: dict[str, Any] = {
     "kill_switch_enabled": False,
     "confirm_exit": True,
     "global_shortcut": "Ctrl+Alt+P",
+    "bridge_probe_workers": 8,
+    "tor_service_workers": 4,
+    "tor_services": [],
 }
 LEGACY_KEYS = set(DEFAULT_DATA) | {"data_usage_bytes", "exclude_hosts", "blocked_hosts"}
 
@@ -149,6 +153,60 @@ class Config:
         new_circuit_period = data.get("NewCircuitPeriod", 60)
         if type(new_circuit_period) is not int or not 10 <= new_circuit_period <= 86400:
             raise ConfigError("NewCircuitPeriod must be an integer between 10 and 86400 seconds.")
+
+        for worker_key in ("bridge_probe_workers", "tor_service_workers"):
+            workers = data.get(worker_key, 8 if worker_key == "bridge_probe_workers" else 4)
+            if type(workers) is not int or not 1 <= workers <= 8:
+                raise ConfigError(f"{worker_key} must be an integer between 1 and 8.")
+
+        services = data.get("tor_services", [])
+        if not isinstance(services, list) or len(services) > 32:
+            raise ConfigError("tor_services must be a list containing at most 32 profiles.")
+        service_ids: set[str] = set()
+        claimed_service_ports: set[int] = set()
+        primary_ports = {
+            data.get("tor_port"), data.get("control_port"),
+            data.get("dns_port"), data.get("proxy_port"),
+        } - {None, ""}
+        for index, profile in enumerate(services, start=1):
+            if not isinstance(profile, dict):
+                raise ConfigError(f"Tor service profile #{index} must be an object.")
+            service_id = profile.get("id")
+            if not isinstance(service_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", service_id):
+                raise ConfigError(f"Tor service profile #{index} has an invalid ID.")
+            if service_id in service_ids:
+                raise ConfigError(f"Tor service ID '{service_id}' is duplicated.")
+            service_ids.add(service_id)
+            display_name = profile.get("display_name", service_id)
+            if not isinstance(display_name, str) or not display_name.strip() or len(display_name) > 80:
+                raise ConfigError(f"Tor service '{service_id}' needs a display name of at most 80 characters.")
+            profile_ports = []
+            for port_key in ("socks_port", "control_port"):
+                port_value = profile.get(port_key)
+                if type(port_value) is not int or not 1 <= port_value <= 65535:
+                    raise ConfigError(f"Tor service '{service_id}' has an invalid {port_key}.")
+                profile_ports.append(port_value)
+            dns_value = profile.get("dns_port")
+            if dns_value is not None and not (type(dns_value) is int and dns_value == 0):
+                if type(dns_value) is not int or not 1 <= dns_value <= 65535:
+                    raise ConfigError(f"Tor service '{service_id}' has an invalid dns_port.")
+                profile_ports.append(dns_value)
+            if len(profile_ports) != len(set(profile_ports)):
+                raise ConfigError(f"Tor service '{service_id}' listener ports must be distinct.")
+            if set(profile_ports) & primary_ports:
+                raise ConfigError(f"Tor service '{service_id}' conflicts with a primary application listener port.")
+            if set(profile_ports) & claimed_service_ports:
+                raise ConfigError(f"Tor service '{service_id}' reuses a port assigned to another profile.")
+            claimed_service_ports.update(profile_ports)
+            for bool_key in ("bridge_enabled", "use_primary_bridges"):
+                if type(profile.get(bool_key, False)) is not bool:
+                    raise ConfigError(f"Tor service '{service_id}' {bool_key} must be true or false.")
+            bridges = profile.get("bridges", "")
+            if not isinstance(bridges, str) or len(bridges) > 65536:
+                raise ConfigError(f"Tor service '{service_id}' bridges must be text of at most 65536 characters.")
+            data_directory = profile.get("data_directory")
+            if data_directory is not None and (not isinstance(data_directory, str) or len(data_directory) > 4096):
+                raise ConfigError(f"Tor service '{service_id}' data_directory must be a path or null.")
 
     def _save_data(self, data: dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)

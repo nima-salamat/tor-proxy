@@ -8,6 +8,8 @@ All notable changes are recorded here. Dates and release numbers are added only 
 - Treat Tor and local HTTP proxy shutdown as incomplete while a process or worker thread remains alive, retaining service ownership and retryable Disconnect state.
 - Increased the bounded concurrent bridge-health worker limit to eight and clarified completion-order progress reporting.
 - Added the TorServicePool core API for multiple isolated Tor processes with unique data directories, log files and listener ports.
+- Added Settings → Tor Services with persistent profile creation/editing/removal, independent SOCKS/Control/DNS listeners, per-profile bridge selection and DataDirectory controls, asynchronous Start/Stop and concurrent bulk operations; explicit app exit now stops all registered isolated services.
+- Added configurable 1–8 worker limits for parallel bridge health checks and concurrent isolated-service operations.
 - Improved Windows elevated tunnel-helper diagnostics for STATUS_CONTROL_C_EXIT and made ShellExecuteEx activation synchronous from background workers.
 
 ## v1.2.0 — 2026-11-10
