@@ -2358,3 +2358,55 @@ def test_dropdown_header_copy_has_no_individual_background_or_border():
         source.index("QWidget#updatesMenuHeader"):
         source.index("QLabel#updatesMenuEyebrow")
     ]
+
+
+def test_native_titlebar_hit_testing_exposes_windows_snap_regions(qt_app):
+    from PySide6.QtCore import QPoint, QRect
+
+    from ui import (
+        _HTCAPTION,
+        _HTCLIENT,
+        _HTMAXBUTTON,
+        _native_titlebar_hit_test,
+    )
+
+    titlebar = QRect(0, 0, 500, 40)
+    minimize = QRect(374, 5, 36, 30)
+    maximize = QRect(415, 5, 36, 30)
+    close = QRect(456, 5, 36, 30)
+
+    assert _native_titlebar_hit_test(
+        QPoint(120, 20), titlebar, maximize, (minimize, close)
+    ) == _HTCAPTION
+    assert _native_titlebar_hit_test(
+        maximize.center(), titlebar, maximize, (minimize, close)
+    ) == _HTMAXBUTTON
+    assert _native_titlebar_hit_test(
+        minimize.center(), titlebar, maximize, (minimize, close)
+    ) == _HTCLIENT
+    assert _native_titlebar_hit_test(
+        close.center(), titlebar, maximize, (minimize, close)
+    ) == _HTCLIENT
+    assert _native_titlebar_hit_test(
+        QPoint(120, 80), titlebar, maximize, (minimize, close)
+    ) is None
+
+
+def test_main_window_advertises_native_windows_snap_and_maximize_support():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui.py").read_text(encoding="utf-8")
+    titlebar_source = (repository / "ui_/window/custom_titlebar.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "def _enable_native_snap_support(self):" in source
+    assert "ws_thickframe = 0x00040000" in source
+    assert "ws_maximizebox = 0x00010000" in source
+    assert "ws_minimizebox = 0x00020000" in source
+    assert "ws_sysmenu = 0x00080000" in source
+    assert "def nativeEvent(self, event_type, message):" in source
+    assert "native_message.message == _WM_NCHITTEST" in source
+    assert "return True, hit_test" in source
+    assert "self.title_bar._sync_maximize_button()" in source
+    assert "handle.startSystemMove()" in titlebar_source
+    assert "self.parent_.showMaximized()" in titlebar_source
