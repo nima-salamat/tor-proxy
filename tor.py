@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import logging
 import os
+import socket
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
@@ -12,7 +14,8 @@ from PySide6.QtCore import QObject, Signal
 from config import BUNDLE_DIR, CONFIG, IS_WINDOWS
 from proxy import ProxyHandler, ThreadedHTTPServer, worker_data_usage_tracker
 from torproxy.paths import user_directories
-from torproxy.tor_manager import TorManager, TorManagerError, TorSettings
+from torproxy.tor_manager import TorManager, TorManagerError, TorSettings, TorState
+from torproxy.socks_gateway import SocksGateway
 from torproxy.bridge_health import DEFAULT_MAX_WORKERS
 from utils import resource_path
 
@@ -163,6 +166,19 @@ class TorRunner(QObject):
         self.manager: TorManager | None = None
         self.app_window = None
         self._stopping = threading.Event()
+        # The configured SOCKS port remains a stable loopback gateway. Tor
+        # processes use private backend ports and isolated DataDirectories.
+        self.socks_gateway: SocksGateway | None = None
+        self.instance_managers: dict[str, TorManager] = {}
+        self._instance_lock = threading.RLock()
+        self._instance_threads: dict[str, threading.Thread] = {}
+        self._instance_states: dict[str, str] = {}
+        self._instance_errors: dict[str, str] = {}
+        self._instance_attempts: dict[str, int] = {}
+        self._instance_retry_at: dict[str, float] = {}
+        self._instance_ever_ready = False
+        self._active_instance_id: str | None = None
+        self.backend_listener_ports: tuple[int, ...] = ()
         self._last_report: tuple[str, int | None, str] | None = None
         self._last_bridge_usage_report: tuple[bool, bool, tuple[str, ...]] | None = None
         self.state = "STOPPED"
@@ -222,7 +238,19 @@ class TorRunner(QObject):
         self._last_report = None
         self._last_bridge_usage_report = None
         self.last_error = None
+        self.instance_managers = {}
+        self._instance_threads = {}
+        self._instance_states = {}
+        self._instance_errors = {}
+        self._instance_attempts = {}
+        self._instance_retry_at = {}
+        self._instance_ever_ready = False
+        self._active_instance_id = None
+        self.backend_listener_ports = ()
+        self.socks_gateway = None
         try:
+            # This first manager is a settings template. _run() moves its Tor
+            # SOCKS listener to a private backend port before launching Tor.
             self.manager = self._make_manager()
         except Exception as exc:
             self.state = "FAILED"
@@ -231,7 +259,7 @@ class TorRunner(QObject):
         self.state = "STARTING"
         self.thread = threading.Thread(target=self._run, name="torproxy-tor-supervisor", daemon=True)
         self.thread.start()
-        logger.info("Managed Tor supervisor started.")
+        logger.info("Managed Tor failover supervisor started.")
 
     def _publish_bridge_usage(self, manager: TorManager | None = None):
         """Publish only bridge identities verified from Tor's live built circuits."""
@@ -517,98 +545,356 @@ class TorRunner(QObject):
             replacement.start(on_status=self._on_status)
             return replacement
 
+    def _allocate_backend_ports(self, instance_count: int) -> tuple[list[int], list[int]]:
+        """Reserve distinct ephemeral loopback ports for private Tor listeners."""
+        needed = instance_count + max(0, instance_count - 1)
+        reserved = {
+            int(value) for value in (
+                self.socks_port,
+                self.control_port,
+                self.dns_port,
+                getattr(getattr(self.app_window, "proxy", None), "port", None),
+            ) if value
+        }
+        sockets: list[socket.socket] = []
+        allocated: list[int] = []
+        try:
+            attempts = 0
+            while len(allocated) < needed and attempts < needed * 20:
+                attempts += 1
+                listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                try:
+                    listener.bind(("127.0.0.1", 0))
+                    listener.listen(1)
+                    port = int(listener.getsockname()[1])
+                    if port in reserved or port in allocated:
+                        listener.close()
+                        continue
+                    sockets.append(listener)
+                    allocated.append(port)
+                except OSError:
+                    listener.close()
+                    continue
+            if len(allocated) != needed:
+                raise TorManagerError("TorProxy could not reserve unique ports for its primary Tor instances.")
+        finally:
+            for listener in sockets:
+                listener.close()
+        socks_ports = allocated[:instance_count]
+        control_ports = [int(self.control_port), *allocated[instance_count:]]
+        return socks_ports, control_ports
+
+    def _prepare_primary_instances(self, template: TorManager, count: int) -> dict[str, TorManager]:
+        """Build a primary Tor process plus isolated hot-standby processes."""
+        socks_ports, control_ports = self._allocate_backend_ports(count)
+        base_settings = template.settings
+        directories = user_directories()
+        managers: dict[str, TorManager] = {}
+        all_ports: list[int] = []
+        for index in range(count):
+            instance_id = f"primary-{index + 1}"
+            if index == 0:
+                settings = replace(
+                    base_settings,
+                    socks_port=socks_ports[index],
+                    control_port=control_ports[index],
+                )
+                manager = template
+                manager.settings = settings
+            else:
+                data_directory = directories.data / "tor-ha" / f"instance-{index + 1:02d}"
+                log_path = directories.logs / "tor-ha" / f"instance-{index + 1:02d}" / "tor.log"
+                settings = replace(
+                    base_settings,
+                    socks_port=socks_ports[index],
+                    control_port=control_ports[index],
+                    dns_port=None,
+                    data_directory=data_directory,
+                    log_path=log_path,
+                )
+                manager = TorManager(settings)
+            managers[instance_id] = manager
+            all_ports.extend((socks_ports[index], control_ports[index]))
+            if settings.dns_port is not None:
+                all_ports.append(settings.dns_port)
+        self.backend_listener_ports = tuple(sorted(set(all_ports)))
+        return managers
+
+    @staticmethod
+    def _manager_is_ready(manager: TorManager) -> bool:
+        state = getattr(manager.state, "value", manager.state)
+        process = manager.process
+        return str(state).lower() == "ready" and process is not None and process.poll() is None
+
+    def _ready_instances_locked(self) -> list[tuple[str, TorManager]]:
+        return [
+            (instance_id, manager)
+            for instance_id, manager in self.instance_managers.items()
+            if self._manager_is_ready(manager)
+        ]
+
+    def _refresh_instance_selection(self, *, announce: bool = False) -> None:
+        """Keep the active backend sticky; select a standby only after failure."""
+        with self._instance_lock:
+            ready = self._ready_instances_locked()
+            ready_ids = {instance_id for instance_id, _manager in ready}
+            previous_id = self._active_instance_id
+            if previous_id not in ready_ids:
+                self._active_instance_id = ready[0][0] if ready else None
+            active_id = self._active_instance_id
+            active_manager = self.instance_managers.get(active_id) if active_id else None
+            self.manager = active_manager
+            self.proc = active_manager.process if active_manager is not None else None
+            if active_manager is not None:
+                self.state = "READY"
+                self.last_error = None
+                self._instance_ever_ready = True
+            elif self._instance_managers_started():
+                self.state = "BOOTSTRAPPING"
+
+            ordered = []
+            if active_id:
+                ordered.append(active_id)
+            ordered.extend(instance_id for instance_id, _manager in ready if instance_id != active_id)
+            backends = [
+                (instance_id, self.instance_managers[instance_id].settings.socks_port)
+                for instance_id in ordered
+            ]
+            gateway = self.socks_gateway
+            changed = previous_id != active_id
+        if gateway is not None:
+            gateway.set_backends(backends)
+        if changed and active_id and announce:
+            self.log_message.emit(
+                f"Primary Tor route is now using {active_id}; new SOCKS sessions will use this healthy instance."
+            )
+        if active_manager is not None:
+            self._publish_bridge_usage(active_manager)
+
+    def _instance_managers_started(self) -> bool:
+        return bool(self.instance_managers)
+
+    def _on_instance_status(self, instance_id: str, manager: TorManager, state, progress, message) -> None:
+        state_text = getattr(state, "value", str(state))
+        normalized = str(state_text).upper().split(".")[-1]
+        with self._instance_lock:
+            self._instance_states[instance_id] = normalized
+            if normalized == "FAILED" and message:
+                self._instance_errors[instance_id] = str(message)
+            if normalized == "READY":
+                self._instance_errors.pop(instance_id, None)
+        self.log_message.emit(f"{instance_id}: {str(message or state_text).strip()}")
+        self._refresh_instance_selection(announce=True)
+        if self.state == "READY":
+            if self.app_window is not None and progress is not None and normalized == "READY":
+                self.app_window.data.value = "100%"
+            return
+        if self.app_window is not None and progress is not None:
+            # Only a real verified READY event produces the exact 100% value
+            # consumed by the Home connected-state transition.
+            safe_progress = max(0, min(99, int(progress)))
+            self.app_window.data.value = f"{instance_id}: {safe_progress}%"
+
+    def _start_backend(self, instance_id: str, manager: TorManager) -> None:
+        try:
+            manager.start(
+                on_status=lambda state, progress, message: self._on_instance_status(
+                    instance_id, manager, state, progress, message
+                )
+            )
+        except Exception as exc:
+            with self._instance_lock:
+                self._instance_errors[instance_id] = f"{type(exc).__name__}: {exc}"
+                self._instance_states[instance_id] = "FAILED"
+            logger.warning("Primary Tor instance %s failed: %s", instance_id, exc)
+            self.log_message.emit(f"{instance_id} failed: {exc}")
+            self._refresh_instance_selection(announce=True)
+
+    def _launch_backend(self, instance_id: str, manager: TorManager) -> None:
+        thread = threading.Thread(
+            target=self._start_backend,
+            args=(instance_id, manager),
+            name=f"torproxy-{instance_id}",
+            daemon=True,
+        )
+        with self._instance_lock:
+            self._instance_threads[instance_id] = thread
+            self._instance_attempts[instance_id] = self._instance_attempts.get(instance_id, 0) + 1
+            self._instance_states[instance_id] = "STARTING"
+        thread.start()
+
     def _run(self):
         try:
-            manager = self.manager or self._make_manager()
-            manager = self._auto_prune_bridges_before_start(manager)
+            template = self.manager or self._make_manager()
+            template = self._auto_prune_bridges_before_start(template)
             if self._stopping.is_set():
                 return
-            self.manager = manager
-            manager = self._start_with_bridge_recovery(manager)
-            self.manager = manager
-            self.proc = manager.process
-            self._publish_bridge_usage(self.manager)
-            while not self._stopping.wait(1.0):
-                self._publish_bridge_usage(self.manager)
-                process = self.manager.process
-                if process is None or process.poll() is not None:
-                    if not self._stopping.is_set():
-                        self.proc = None
-                        detail = self.manager._recent_tor_log_detail() if self.manager is not None else ""
-                        message = "The managed Tor process exited unexpectedly."
+
+            instance_count = max(1, min(4, int(CONFIG["primary_tor_instances"] or 2)))
+            managers = self._prepare_primary_instances(template, instance_count)
+            gateway = SocksGateway(int(self.socks_port))
+            gateway.start()
+            self.socks_gateway = gateway
+            self.instance_managers = managers
+            self._instance_states = {key: "STARTING" for key in managers}
+            self._instance_attempts = {key: 0 for key in managers}
+            self.log_message.emit(
+                f"Started the stable SOCKS failover gateway on 127.0.0.1:{self.socks_port}; "
+                f"bootstrapping {instance_count} isolated Tor instance(s) in parallel."
+            )
+            for instance_id, manager in managers.items():
+                if self._stopping.is_set():
+                    return
+                self._launch_backend(instance_id, manager)
+
+            while not self._stopping.wait(0.25):
+                # Detect a process that exited after it had reached READY.
+                for instance_id, manager in tuple(self.instance_managers.items()):
+                    process = manager.process
+                    if (
+                        str(getattr(manager.state, "value", manager.state)).lower() == "ready"
+                        and (process is None or process.poll() is not None)
+                    ):
+                        detail = manager._recent_tor_log_detail(max_lines=12)
+                        message = f"{instance_id} exited unexpectedly."
                         if detail:
                             message += " " + detail
-                        self.state = "FAILED"
-                        self.last_error = message
+                        try:
+                            manager.stop()
+                        except Exception as exc:
+                            message += f" Cleanup failed: {exc}"
+                            # An unverified process/lock must never be reused.
+                            self._instance_attempts[instance_id] = 3
+                        with self._instance_lock:
+                            self._instance_errors[instance_id] = message
+                            self._instance_states[instance_id] = "FAILED"
                         self.log_message.emit(message)
-                        self.service_failed.emit(message)
-                    if self.manager is not None:
-                        # Do not retain an app-level data-directory lock after
-                        # Tor exits outside the startup path.
-                        self.manager._terminate_process()
-                        self.manager._release_data_directory_lock()
-                    return
+
+                self._refresh_instance_selection(announce=True)
+                now = time.monotonic()
+                for instance_id, manager in tuple(self.instance_managers.items()):
+                    worker = self._instance_threads.get(instance_id)
+                    worker_alive = bool(worker and worker.is_alive())
+                    instance_state = str(
+                        getattr(manager.state, "value", manager.state)
+                    ).lower()
+                    if (
+                        not worker_alive
+                        and instance_state in {"failed", "stopped"}
+                        and self._instance_attempts.get(instance_id, 0) < 3
+                        and self._instance_ever_ready
+                    ):
+                        self._instance_retry_at.setdefault(
+                            instance_id,
+                            now + min(30.0, 3.0 * (2 ** max(0, self._instance_attempts[instance_id] - 1))),
+                        )
+                    retry_at = self._instance_retry_at.get(instance_id)
+                    if retry_at is not None and now >= retry_at and not worker_alive and not self._stopping.is_set():
+                        self._instance_retry_at.pop(instance_id, None)
+                        self.log_message.emit(f"Retrying {instance_id} to restore primary Tor redundancy.")
+                        self._launch_backend(instance_id, manager)
+
+                ready = self._ready_instances_locked()
+                any_worker_alive = any(
+                    worker.is_alive() for worker in self._instance_threads.values()
+                )
+                pending_retry = bool(self._instance_retry_at)
+                if not ready and not any_worker_alive and not pending_retry:
+                    details = "; ".join(
+                        f"{key}: {value}"
+                        for key, value in self._instance_errors.items()
+                    )
+                    raise TorManagerError(
+                        "No primary Tor instance is ready. " + (details or "All Tor startup attempts failed.")
+                    )
+                self._publish_bridge_usage(self.manager)
+
         except Exception as exc:
             if not self._stopping.is_set():
                 message = str(exc)
                 self.state = "FAILED"
                 self.last_error = message
-                logger.exception("Failed to start or supervise Tor.")
-                self.log_message.emit(f"Tor failed: {message}")
+                logger.exception("Failed to start or supervise the redundant Tor pool.")
+                self.log_message.emit(f"Tor failover pool failed: {message}")
                 self.service_failed.emit(message)
         finally:
             if self._stopping.is_set():
                 self.proc = None
 
     def request_new_identity(self) -> float:
-        """Request NEWNYM through the already-authenticated manager controller."""
+        """Request NEWNYM from the currently active primary Tor instance."""
         manager = self.manager
-        if manager is None or self.state != "READY":
-            raise TorManagerError("Tor is not ready; identity changes are unavailable.")
+        if manager is None or self.state != "READY" or not self._manager_is_ready(manager):
+            raise TorManagerError("No primary Tor instance is ready; identity changes are unavailable.")
         return manager.request_new_identity()
 
     def stop(self):
         self.state = "STOPPING"
         self._publish_bridge_usage(self.manager)
         self._stopping.set()
-        manager = self.manager
-        stop_error = None
-        if manager is not None:
+        managers = list(self.instance_managers.values())
+        if not managers and self.manager is not None:
+            managers = [self.manager]
+        stop_errors: list[str] = []
+        for manager in managers:
             try:
                 manager.stop()
             except Exception as exc:
-                stop_error = exc
+                stop_errors.append(f"{type(exc).__name__}: {exc}")
 
+        for worker in tuple(self._instance_threads.values()):
+            if worker.is_alive() and worker is not threading.current_thread():
+                worker.join(timeout=10)
         thread = self.thread
         if thread and thread.is_alive() and thread is not threading.current_thread():
             thread.join(timeout=10)
 
-        thread_alive = bool(thread and thread.is_alive())
-        process = getattr(manager, "process", None) if manager is not None else None
-        process_alive = bool(process is not None and process.poll() is None)
-        if thread_alive or process_alive:
+        alive_instances = []
+        for instance_id, manager in self.instance_managers.items():
+            process = manager.process
+            if process is not None and process.poll() is None:
+                alive_instances.append(instance_id)
+        worker_alive = [
+            instance_id for instance_id, worker in self._instance_threads.items()
+            if worker.is_alive()
+        ]
+        supervisor_alive = bool(thread and thread.is_alive())
+        if alive_instances or worker_alive or supervisor_alive or stop_errors:
             detail = (
-                "Tor did not stop completely; its supervisor/process is still active. "
-                "The service remains registered and its data-directory lock must not be reused."
+                "Tor failover pool did not stop completely. "
+                f"Live instance(s): {', '.join(alive_instances) or 'none'}; "
+                f"startup worker(s): {', '.join(worker_alive) or 'none'}; "
+                f"supervisor alive: {supervisor_alive}."
             )
-            if stop_error is not None:
-                detail += " Stop error: " + str(stop_error)
+            if stop_errors:
+                detail += " Shutdown errors: " + " | ".join(stop_errors)
             self.state = "FAILED"
             self.last_error = detail
-            raise TorManagerError(detail) from stop_error
+            raise TorManagerError(detail)
 
-        if stop_error is not None:
-            detail = f"Tor shutdown reported an error: {stop_error}"
-            self.state = "FAILED"
-            self.last_error = detail
-            raise TorManagerError(detail) from stop_error
+        gateway = self.socks_gateway
+        if gateway is not None:
+            try:
+                gateway.stop()
+            except Exception as exc:
+                detail = f"Tor processes stopped but the local SOCKS gateway did not: {exc}"
+                self.state = "FAILED"
+                self.last_error = detail
+                raise TorManagerError(detail) from exc
 
         self.proc = None
         self.thread = None
+        self.socks_gateway = None
+        self.instance_managers = {}
+        self._instance_threads = {}
+        self._instance_states = {}
+        self._instance_retry_at = {}
+        self.backend_listener_ports = ()
+        self._active_instance_id = None
         self.state = "STOPPED"
         self.last_error = None
         self._publish_bridge_usage(self.manager)
-        logger.info("Managed Tor supervisor stopped.")
+        logger.info("Managed Tor failover pool stopped.")
 
 
 class Runner:
