@@ -623,10 +623,41 @@ class TorServicePool:
         return self._run_many(selected, "start")
 
     def stop_all(self, service_ids: Iterable[str] | None = None) -> dict[str, str | None]:
-        """Stop registered services concurrently; failures are isolated per service."""
+        """Stop every selected service, joining/escalating any stop already in progress."""
         with self._lock:
             selected = tuple(self._services) if service_ids is None else tuple(service_ids)
-        return self._run_many(selected, "stop")
+            unknown = [service_id for service_id in selected if service_id not in self._services]
+        if unknown:
+            raise TorServicePoolError("Unknown Tor service(s): " + ", ".join(unknown))
+        if not selected:
+            return {}
+
+        def stop_one(service_id: str) -> None:
+            try:
+                self.stop_service(service_id)
+                return
+            except TorServicePoolError:
+                # An explicit application exit must not fail just because the
+                # user started a graceful Stop from the Custom Tor page first.
+                with self._lock:
+                    entry = self._services.get(service_id)
+                    already_stopping = bool(entry and entry.stopping)
+                if not already_stopping:
+                    raise
+                self.force_stop_service(service_id)
+
+        results: dict[str, str | None] = {}
+        worker_count = min(self._max_workers, len(selected))
+        with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="torproxy-stop-all") as executor:
+            futures = {executor.submit(stop_one, service_id): service_id for service_id in selected}
+            for future in as_completed(futures):
+                service_id = futures[future]
+                try:
+                    future.result()
+                    results[service_id] = None
+                except Exception as exc:
+                    results[service_id] = f"{type(exc).__name__}: {exc}"
+        return {service_id: results[service_id] for service_id in selected}
 
     def unregister(self, service_id: str) -> None:
         """Forget a stopped service; never detach a running or starting process."""
