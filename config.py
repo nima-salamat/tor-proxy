@@ -1,8 +1,8 @@
 """Backward-compatible configuration facade using per-user, atomic storage."""
 from __future__ import annotations
 
-import json
 import ipaddress
+import json
 import os
 import platform
 import re
