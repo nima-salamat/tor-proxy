@@ -538,6 +538,77 @@ def test_shutdown_cancels_an_idle_connect_relay_and_reaps_its_handler(monkeypatc
 
 
 
+
+
+def test_shutdown_interrupts_a_blocking_tor_socks_connect_on_windows(monkeypatch):
+    class BlockingSocksSocket:
+        def __init__(self):
+            self.connect_started = threading.Event()
+            self.release_connect = threading.Event()
+            self.closed = False
+
+        def set_proxy(self, *_args, **_kwargs):
+            pass
+
+        def settimeout(self, _timeout):
+            pass
+
+        def connect(self, _address):
+            # Simulate a Winsock/PySocks connect that does not immediately
+            # unwind when another thread closes its socket.
+            self.connect_started.set()
+            self.release_connect.wait(timeout=10)
+            if self.closed:
+                raise OSError("socket was closed during connect")
+
+        def shutdown(self, _how):
+            self.closed = True
+
+        def close(self):
+            self.closed = True
+
+    remote = BlockingSocksSocket()
+    monkeypatch.setattr(proxy_module.socks, "socksocket", lambda: remote)
+    monkeypatch.setattr(proxy_module, "_route_for_host", lambda _host: "tor")
+
+    server = proxy_module.ThreadedHTTPServer(
+        ("127.0.0.1", 0), proxy_module.ProxyHandler, 9050
+    )
+    listener_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    listener_thread.start()
+    client = socket.create_connection(("127.0.0.1", server.server_address[1]), timeout=2)
+    try:
+        client.sendall(
+            b"CONNECT telegram.example:443 HTTP/1.1\r\n"
+            b"Host: telegram.example:443\r\n"
+            b"\r\n"
+        )
+        assert remote.connect_started.wait(timeout=2)
+
+        started = time.monotonic()
+        server.begin_shutdown()
+        server.shutdown()
+        server.server_close()
+        listener_thread.join(timeout=2)
+
+        deadline = time.monotonic() + 2
+        while server.client_metrics["active_clients"] and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+        assert not listener_thread.is_alive()
+        assert remote.closed is True
+        assert server.client_metrics["active_clients"] == 0
+        assert not server._active_upstreams
+        assert time.monotonic() - started < 2
+    finally:
+        remote.release_connect.set()
+        client.close()
+        server.begin_shutdown()
+        server.shutdown()
+        server.server_close()
+        listener_thread.join(timeout=2)
+
+
 def test_http_server_rejects_a_client_racing_with_shutdown():
     server = proxy_module.ThreadedHTTPServer(
         ("127.0.0.1", 0), proxy_module.ProxyHandler, 9050
