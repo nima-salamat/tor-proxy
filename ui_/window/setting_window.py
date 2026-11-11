@@ -88,7 +88,7 @@ class SettingWindow(QWidget):
             "fa6s.shield-halved",
         )
         for index, (title, icon_name) in enumerate(zip(
-            ("General", "Bridges", "Ports", "Tor Services", "Advanced"), self.settings_nav_icon_names
+            ("General", "Bridges", "Ports", "Custom Tor", "Advanced"), self.settings_nav_icon_names
         )):
             button = QPushButton(title, self)
             button.setObjectName("settingsNavButton")
