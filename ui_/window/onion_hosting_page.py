@@ -305,6 +305,16 @@ class DeveloperTorSettingsDialog(_FramelessDialog):
         self.add_footer_spacer()
         self.add_button("Cancel", primary=False, callback=self.reject)
         self.add_button("Save settings", primary=True, callback=self._accept_form)
+        self.setStyleSheet(self.styleSheet() + f"""
+            QLineEdit, QComboBox, QSpinBox, QTextEdit {{
+                min-height: 31px; padding: 3px 8px;
+                border: 1px solid {self._colors["border"]};
+                border-radius: 7px; background: {self._colors["panel"]};
+                color: {self._colors["text"]};
+            }}
+            QTextEdit {{ min-height: 100px; padding: 7px; }}
+            QCheckBox {{ color: {self._colors["text"]}; spacing: 8px; }}
+        """)
         self.resize(660, 690)
         self._remember_preferred_size()
 
@@ -566,6 +576,7 @@ class OnionHostingPage(QWidget):
         field = "#171c23" if dark else "#f5f7fa"
         accent = "#2385c3"
         hover = "rgba(71, 163, 242, 0.14)" if dark else "rgba(24, 118, 191, 0.08)"
+        self.settings_button.setIcon(qta.icon("fa6s.sliders", color=text))
         self.setStyleSheet(f"""
             QWidget {{ color: {text}; background: transparent; }}
             QLabel#onionPageTitle {{ font-size: 16px; font-weight: 800; }}
