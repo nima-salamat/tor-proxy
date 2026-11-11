@@ -232,3 +232,19 @@ def test_missing_persistent_identity_is_not_silently_regenerated(hosting):
         manager.start_service(profile_id)
 
     assert sum(command.startswith("ADD_ONION") for command in tor.commands) == add_count
+
+
+def test_edit_refuses_persistent_service_with_missing_identity_key(hosting):
+    manager, _config, tor = hosting
+    profile_id = manager.create_service(
+        display_name="Persistent app",
+        local_host="127.0.0.1",
+        local_port=9011,
+        persistent=True,
+    )
+    manager.start_service(profile_id)
+    manager.stop_service(profile_id)
+    manager._key_path(profile_id).unlink()
+
+    with pytest.raises(OnionHostingError, match="cannot be safely edited"):
+        manager.update_service(profile_id, display_name="Renamed app")
