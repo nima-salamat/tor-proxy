@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 import qtawesome as qta
 from PySide6.QtCore import Qt, QThreadPool, QTimer, Signal, QUrl
@@ -24,7 +23,6 @@ from PySide6.QtWidgets import (
 )
 
 from config import CONFIG
-from torproxy.onion_hosting import OnionHostingError
 from torproxy.paths import user_directories
 from ui_.worker.worker import Worker
 from ui_.window.dialogs import QMessageBox, StandardButton, _FramelessDialog
