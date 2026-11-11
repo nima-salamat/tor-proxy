@@ -2530,3 +2530,11 @@ def test_tor_service_status_refresh_keeps_start_stop_actions_in_sync():
     assert 'manager_state == "stopped" and not is_busy' in source
     assert 'manager_state == "failed"' in source
     assert "PROCESS EXITED · STOP TO RECONCILE" in source
+
+
+def test_disconnect_shutdown_keeps_tor_alive_when_http_listener_is_still_owned():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+    assert "http_proxy_blocks_tor_shutdown = False" in source
+    assert "if self.tor and not http_proxy_blocks_tor_shutdown:" in source
+    assert "Tor was deliberately kept running" in source

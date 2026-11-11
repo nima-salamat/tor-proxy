@@ -1616,6 +1616,12 @@ class Runner:
         if server is None:
             return
         thread = self.thread
+        # Signal handlers and close upstream dials before waiting for
+        # serve_forever(); otherwise an idle CONNECT can keep a handler in
+        # select() for the full relay idle timeout on Windows.
+        begin_shutdown = getattr(server, "begin_shutdown", None)
+        if callable(begin_shutdown):
+            begin_shutdown()
         if thread is not None and thread.is_alive():
             server.shutdown()
         server.server_close()

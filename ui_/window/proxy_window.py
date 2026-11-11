@@ -1214,6 +1214,7 @@ class ProxyWindow(QWidget):
                 messages.append(f"System proxy restoration failed: {exc}")
 
         stop_errors: list[str] = []
+        http_proxy_blocks_tor_shutdown = False
         if self.proxy:
             try:
                 self.proxy.stop()
@@ -1221,8 +1222,22 @@ class ProxyWindow(QWidget):
             except Exception as exc:
                 logger.exception("Error stopping the local HTTP proxy.")
                 stop_errors.append(f"HTTP proxy shutdown failed: {exc}")
+                # Never tear down the Tor SOCKS backends while an HTTP handler
+                # still owns an upstream tunnel. Keep both service references
+                # alive so a retry can finish cleanup without stranding clients.
+                listener = getattr(self.proxy, "server", None)
+                listener_thread = getattr(self.proxy, "thread", None)
+                http_proxy_blocks_tor_shutdown = (
+                    listener is not None
+                    or bool(listener_thread is not None and listener_thread.is_alive())
+                )
+                if http_proxy_blocks_tor_shutdown:
+                    stop_errors.append(
+                        "Tor was deliberately kept running because the local HTTP proxy "
+                        "still owns active client handlers."
+                    )
 
-        if self.tor:
+        if self.tor and not http_proxy_blocks_tor_shutdown:
             try:
                 self.tor.stop()
                 messages.append("Tor stopped.")

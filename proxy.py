@@ -38,6 +38,7 @@ MAX_REQUEST_BODY_BYTES = 32 * 1024 * 1024
 SOCKET_TIMEOUT_SECONDS = 30.0
 REQUEST_READ_TIMEOUT_SECONDS = 30.0
 RELAY_IDLE_TIMEOUT_SECONDS = 120.0
+RELAY_SHUTDOWN_POLL_SECONDS = 0.25
 
 _rule_lock = threading.RLock()
 _blocked_rules = HostRules()
@@ -470,16 +471,68 @@ def _parse_authority(authority: str, default_port: int | None = None) -> tuple[s
     return normalize_hostname(parsed.hostname), port
 
 
-def _connect_upstream(host: str, port: int, route: str, tor_socks_port: int) -> socket.socket:
+def _register_upstream(server, remote: socket.socket) -> None:
+    register = getattr(server, "register_upstream", None)
+    if callable(register) and not register(remote):
+        try:
+            remote.close()
+        except OSError:
+            pass
+        raise OSError("The local HTTP proxy is shutting down.")
+
+
+def _unregister_upstream(server, remote: socket.socket | None) -> None:
+    if remote is None:
+        return
+    unregister = getattr(server, "unregister_upstream", None)
+    if callable(unregister):
+        unregister(remote)
+
+
+def _connect_upstream(
+    host: str,
+    port: int,
+    route: str,
+    tor_socks_port: int,
+    *,
+    server=None,
+) -> socket.socket:
     if route == "direct":
-        # This is a deliberate bypass: DNS and traffic may leave the local
-        # machine outside Tor. It is never selected by default.
-        return socket.create_connection((host, port), timeout=SOCKET_TIMEOUT_SECONDS)
+        # Explicit bypass; track the socket before connect so shutdown can cancel it.
+        last_error = None
+        for family, socktype, proto, _canonname, sockaddr in socket.getaddrinfo(
+            host, port, type=socket.SOCK_STREAM
+        ):
+            remote = socket.socket(family, socktype, proto)
+            remote.settimeout(SOCKET_TIMEOUT_SECONDS)
+            try:
+                _register_upstream(server, remote)
+                remote.connect(sockaddr)
+                return remote
+            except OSError as exc:
+                last_error = exc
+                _unregister_upstream(server, remote)
+                remote.close()
+        if last_error is not None:
+            raise last_error
+        raise OSError("No usable network address was returned for the destination.")
+
     remote = socks.socksocket()
     remote.set_proxy(socks.SOCKS5, "127.0.0.1", tor_socks_port, rdns=True)
     remote.settimeout(SOCKET_TIMEOUT_SECONDS)
-    remote.connect((host, port))
-    return remote
+    try:
+        # Register before SOCKS CONNECT: the Tor circuit/destination handshake
+        # may still be in progress when the user disconnects the proxy.
+        _register_upstream(server, remote)
+        remote.connect((host, port))
+        return remote
+    except Exception:
+        _unregister_upstream(server, remote)
+        try:
+            remote.close()
+        except OSError:
+            pass
+        raise
 
 
 class ProxyHandler(BaseHTTPRequestHandler):
@@ -523,13 +576,20 @@ class ProxyHandler(BaseHTTPRequestHandler):
             if route == "blocked":
                 self.send_error(403, "Destination blocked by host policy")
                 return
-            remote = _connect_upstream(host, port, route, self.server.tor_socks_port)
+            remote = _connect_upstream(
+                host, port, route, self.server.tor_socks_port, server=self.server
+            )
             self.connection.settimeout(RELAY_IDLE_TIMEOUT_SECONDS)
             remote.settimeout(RELAY_IDLE_TIMEOUT_SECONDS)
             self.send_response(200, "Connection Established")
             self.end_headers()
             self.wfile.flush()
-            self._relay(self.connection, remote, left_to_right_direction="upload")
+            self._relay(
+                self.connection,
+                remote,
+                left_to_right_direction="upload",
+                stop_event=self.server.shutdown_event,
+            )
         except (ValueError, HostRuleError):
             self.send_error(400, "Malformed CONNECT authority")
         except (OSError, socks.ProxyError, socks.GeneralProxyError):
@@ -538,6 +598,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 self.send_error(502, "Upstream connection failed")
         finally:
             if remote is not None:
+                _unregister_upstream(self.server, remote)
                 try:
                     remote.close()
                 except OSError:
@@ -606,7 +667,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 self.send_error(413, "Request body exceeds the proxy limit")
                 return
 
-            remote = _connect_upstream(host, port, route, self.server.tor_socks_port)
+            remote = _connect_upstream(
+                host, port, route, self.server.tor_socks_port, server=self.server
+            )
             remote.settimeout(RELAY_IDLE_TIMEOUT_SECONDS)
             request_path = parsed.path or "/"
             if parsed.query:
@@ -644,7 +707,12 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 _record_bytes(len(chunk), "upload")
                 remaining -= len(chunk)
             self.connection.settimeout(RELAY_IDLE_TIMEOUT_SECONDS)
-            self._relay(remote, self.connection, left_to_right_direction="download")
+            self._relay(
+                remote,
+                self.connection,
+                left_to_right_direction="download",
+                stop_event=self.server.shutdown_event,
+            )
         except (ValueError, HostRuleError):
             if not self.wfile.closed:
                 self.send_error(400, "Malformed HTTP proxy request")
@@ -654,6 +722,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 self.send_error(502, "Upstream connection failed")
         finally:
             if remote is not None:
+                _unregister_upstream(self.server, remote)
                 try:
                     remote.close()
                 except OSError:
@@ -664,18 +733,31 @@ class ProxyHandler(BaseHTTPRequestHandler):
         left: socket.socket,
         right: socket.socket,
         left_to_right_direction: str = "upload",
+        stop_event: threading.Event | None = None,
     ) -> None:
         active = {left, right}
         peers = {left: right, right: left}
+        last_activity = time.monotonic()
         try:
             while active:
+                if stop_event is not None and stop_event.is_set():
+                    break
+                idle_remaining = RELAY_IDLE_TIMEOUT_SECONDS - (time.monotonic() - last_activity)
+                if idle_remaining <= 0:
+                    logger.debug("Proxy relay ended after idle timeout.")
+                    break
+                poll_timeout = min(
+                    idle_remaining,
+                    RELAY_SHUTDOWN_POLL_SECONDS if stop_event is not None else idle_remaining,
+                )
                 try:
-                    readable, _, _ = select.select(list(active), [], [], RELAY_IDLE_TIMEOUT_SECONDS)
+                    readable, _, _ = select.select(list(active), [], [], poll_timeout)
                 except (OSError, ValueError):
                     break
                 if not readable:
-                    logger.debug("Proxy relay ended after idle timeout.")
-                    break
+                    if stop_event is not None and stop_event.is_set():
+                        break
+                    continue
                 for source in readable:
                     try:
                         data = source.recv(65536)
@@ -700,6 +782,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                         else ("download" if left_to_right_direction == "upload" else "upload")
                     )
                     _record_bytes(len(data), direction)
+                    last_activity = time.monotonic()
                     try:
                         destination.sendall(data)
                     except (OSError, TimeoutError):
@@ -722,6 +805,8 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
         self._client_slots = threading.BoundedSemaphore(max_clients)
         self._client_lock = threading.RLock()
         self._active_clients: set[socket.socket] = set()
+        self._active_upstreams: set[socket.socket] = set()
+        self.shutdown_event = threading.Event()
         self._rejected_clients = 0
         host = addr[0]
         try:
@@ -741,6 +826,33 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
                 "max_clients": self._max_clients,
                 "rejected_clients": self._rejected_clients,
             }
+
+    def register_upstream(self, remote: socket.socket) -> bool:
+        """Track outbound sockets before connect so shutdown can cancel the dial."""
+        with self._client_lock:
+            if self.shutdown_event.is_set():
+                return False
+            self._active_upstreams.add(remote)
+            return True
+
+    def unregister_upstream(self, remote: socket.socket) -> None:
+        with self._client_lock:
+            self._active_upstreams.discard(remote)
+
+    def begin_shutdown(self) -> None:
+        """Signal handlers and close both sides of every in-flight tunnel."""
+        self.shutdown_event.set()
+        with self._client_lock:
+            sockets = tuple(self._active_clients | self._active_upstreams)
+        for current in sockets:
+            try:
+                current.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                current.close()
+            except OSError:
+                pass
 
     def process_request(self, request, client_address):
         if not self._client_slots.acquire(blocking=False):
@@ -769,15 +881,5 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
             self._client_slots.release()
 
     def server_close(self):
-        with self._client_lock:
-            clients = tuple(self._active_clients)
-        for client in clients:
-            try:
-                client.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-            try:
-                client.close()
-            except OSError:
-                pass
+        self.begin_shutdown()
         super().server_close()

@@ -479,3 +479,80 @@ def test_legacy_kill_switch_preference_does_not_change_direct_exclusion_routing(
 
     assert proxy_module._route_for_host("safe.example") == "direct"
     assert proxy_module._route_for_host("unlisted.example.net") == "tor"
+
+
+def test_shutdown_cancels_an_idle_connect_relay_and_reaps_its_handler(monkeypatch):
+    remote, remote_peer = socket.socketpair()
+    monkeypatch.setattr(
+        proxy_module,
+        "_connect_upstream",
+        lambda _host, _port, _route, _tor_port, server=None: remote,
+    )
+    server = proxy_module.ThreadedHTTPServer(
+        ("127.0.0.1", 0), proxy_module.ProxyHandler, 9050
+    )
+    listener_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    listener_thread.start()
+    client = socket.create_connection(("127.0.0.1", server.server_address[1]), timeout=2)
+    client.settimeout(2)
+    try:
+        client.sendall(
+            b"CONNECT example.com:443 HTTP/1.1\r\n"
+            b"Host: example.com:443\r\n"
+            b"\r\n"
+        )
+        response = bytearray()
+        while b"\r\n\r\n" not in response:
+            chunk = client.recv(1024)
+            assert chunk, "HTTP CONNECT closed before returning 200"
+            response.extend(chunk)
+        assert b"200 Connection Established" in response
+
+        deadline = time.monotonic() + 2
+        while server.client_metrics["active_clients"] != 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert server.client_metrics["active_clients"] == 1
+
+        started = time.monotonic()
+        server.begin_shutdown()
+        server.shutdown()
+        server.server_close()
+        listener_thread.join(timeout=2)
+        deadline = time.monotonic() + 2
+        while server.client_metrics["active_clients"] and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+        assert not listener_thread.is_alive()
+        assert server.shutdown_event.is_set()
+        assert server.client_metrics["active_clients"] == 0
+        assert time.monotonic() - started < 2
+        assert remote.fileno() == -1
+    finally:
+        client.close()
+        remote_peer.close()
+        server.begin_shutdown()
+        server.shutdown()
+        server.server_close()
+        listener_thread.join(timeout=2)
+
+
+def test_http_server_rejects_new_upstream_sockets_after_shutdown():
+    server = proxy_module.ThreadedHTTPServer(
+        ("127.0.0.1", 0), proxy_module.ProxyHandler, 9050
+    )
+    remote, peer = socket.socketpair()
+    try:
+        assert server.register_upstream(remote) is True
+        server.begin_shutdown()
+        assert server.shutdown_event.is_set()
+        assert remote.fileno() == -1
+        replacement, replacement_peer = socket.socketpair()
+        try:
+            assert server.register_upstream(replacement) is False
+        finally:
+            replacement_peer.close()
+        assert server.client_metrics["active_clients"] == 0
+    finally:
+        server.server_close()
+        peer.close()
+
