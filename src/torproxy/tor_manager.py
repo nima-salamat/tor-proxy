@@ -379,6 +379,17 @@ class TorManager:
         return any(transport != "webtunnel" for transport, _record in bridges)
 
     @staticmethod
+    def _has_ambiguous_bridge_handshake_error(diagnostic: str) -> bool:
+        """Detect bridge handshake errors that cannot prove the whole PT or bridge list is unusable."""
+        lowered = str(diagnostic or "").casefold()
+        return any(marker in lowered for marker in (
+            "tls: curvepreferences includes unsupported curve",
+            "remote error: tls: illegal parameter",
+            "tls: illegal parameter",
+            "unrecognized reply",
+        ))
+
+    @staticmethod
     def _bridge_input_shape_diagnostics(text: str, *, max_records: int = 8) -> str:
         """Summarize bridge token shapes without logging endpoints or fingerprints."""
         parsed = parse_bridge_text(text)
@@ -847,7 +858,7 @@ class TorManager:
                 self.process = self._popen_factory(launch_command, **kwargs)
             deadline = time.monotonic() + self.settings.startup_timeout_seconds
             last_detail = "Waiting for Tor ControlPort."
-            curve_warning_reported = False
+            handshake_warning_reported = False
             while time.monotonic() < deadline:
                 if cancellation_requested():
                     raise TorManagerError("Tor startup was cancelled.")
@@ -883,33 +894,19 @@ class TorManager:
                             "Check the transport executable path and its file permissions. The bridge itself "
                             "has not been shown to be offline. Live Tor log details: " + diagnostic
                         )
-                    if "tls: curvepreferences includes unsupported curve" in lowered_diagnostic:
-                        try:
-                            configured_bridges = self._parse_bridges(self.settings.bridges)
-                        except TorManagerError:
-                            configured_bridges = []
-                        # This error is associated with WebTunnel's TLS setup,
-                        # not proof that the remote bridge is dead. Give any
-                        # non-WebTunnel alternative (including obfs4/Snowflake or
-                        # a direct bridge) a chance before declaring startup failed.
-                        has_non_webtunnel_alternative = self._has_non_webtunnel_bridge_alternative(
-                            configured_bridges
-                        )
-                        if not has_non_webtunnel_alternative:
-                            raise TorManagerError(
-                                "The bundled Lyrebird WebTunnel transport cannot negotiate TLS with this "
-                                "Go/TLS runtime ('CurvePreferences includes unsupported curve'). This is a "
-                                "transport-bundle compatibility issue, not proof that the configured bridges "
-                                "are dead. Automatic cleanup will not remove bridge records for this error. "
-                                "The installed bundle appears to be an alpha/prerelease; try a verified stable "
-                                "Tor Expert Bundle in the updater. Live Tor log details: " + diagnostic
-                            )
-                        if not curve_warning_reported:
+                    if self._has_ambiguous_bridge_handshake_error(diagnostic):
+                        # Lyrebird logs a failed connection attempt per bridge. One
+                        # peer's TLS alert (or one unsupported group in a handshake)
+                        # must not abort Tor while other configured bridges are still
+                        # being attempted. The final bootstrap deadline below is the
+                        # authority for deciding whether the runtime actually failed.
+                        if not handshake_warning_reported:
                             LOGGER.warning(
-                                "Lyrebird's WebTunnel TLS settings are incompatible, but a non-WebTunnel "
-                                "alternative exists; continuing bootstrap rather than aborting on that transport."
+                                "Lyrebird reported an ambiguous bridge TLS handshake failure. "
+                                "Continuing Tor bootstrap; this does not prove the remaining bridge "
+                                "records or the complete transport bundle are unusable."
                             )
-                            curve_warning_reported = True
+                            handshake_warning_reported = True
                     if "no configured transport called" in lowered_diagnostic:
                         transport_match = re.search(
                             r'no configured transport called\s+["\']([^"\']+)["\']',
@@ -971,14 +968,18 @@ class TorManager:
                     LOGGER.debug("%s", last_detail)
                 time.sleep(0.5)
             if self.settings.bridges_enabled:
-                diagnostic = self._recent_tor_log_detail(max_lines=20)
-                if "tls: curvepreferences includes unsupported curve" in diagnostic.lower():
+                diagnostic = self._recent_tor_log_detail(max_lines=30)
+                if self._has_ambiguous_bridge_handshake_error(diagnostic):
                     raise TorManagerError(
-                        f"Tor did not become ready within {self.settings.startup_timeout_seconds:.0f}s. "
-                        "Lyrebird also reported 'tls: CurvePreferences includes unsupported curve'. "
-                        "Any direct-bridge alternatives were allowed to continue, but no ready Tor connection was "
-                        "verified. The original bridge list remains intact. Live Tor log details: "
-                        + diagnostic
+                        f"Tor did not reach verified readiness within {self.settings.startup_timeout_seconds:.0f}s. "
+                        "Lyrebird recorded one or more inconclusive bridge TLS handshake failures "
+                        "(including a peer TLS alert or an unsupported TLS curve). Tor was allowed to continue "
+                        "trying the configured bridges for the full startup window, but no working Tor connection "
+                        "was verified. These messages do not prove that every bridge is offline or that the whole "
+                        "Expert Bundle is incompatible. TorProxy preserved the complete Bridge list and will not "
+                        "delete records based on these ambiguous handshake errors. Try fresh bridge lines or a "
+                        "different WebTunnel url=/servername/utls configuration, then inspect the live log. "
+                        "Live Tor log details: " + diagnostic
                     )
             raise TorManagerError(f"Tor did not become ready within {self.settings.startup_timeout_seconds:.0f}s. Last status: {last_detail}")
         except Exception as exc:

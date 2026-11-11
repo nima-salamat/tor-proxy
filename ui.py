@@ -1729,6 +1729,16 @@ class Window(QMainWindow):
         self._closing = False
         self._exit_authorized = False
         self._shutdown_complete = False
+        # The exit worker may have stopped Developer Tor successfully before
+        # another child (for example the system tunnel) failed. Re-open the
+        # Developer Tor lifecycle when the application exit is rolled back.
+        onion_manager = getattr(self.proxyWidget, "onion_hosting_manager", None)
+        resume_runtime = getattr(onion_manager, "resume_after_cancelled_shutdown", None)
+        if callable(resume_runtime):
+            try:
+                resume_runtime()
+            except Exception:
+                logger.exception("Could not resume Developer Tor after the application exit was cancelled.")
         try:
             self.tray_icon.show()
         except Exception:

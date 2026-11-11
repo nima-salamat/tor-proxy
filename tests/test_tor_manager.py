@@ -84,6 +84,91 @@ def test_active_bridge_state_requires_ready_control_port_and_built_first_hop(tmp
     assert manager.get_active_bridge_fingerprints() == frozenset({fingerprint})
 
 
+@pytest.mark.parametrize(
+    "diagnostic",
+    (
+        "Managed proxy: Error dialing: tls: CurvePreferences includes unsupported curve",
+        "Managed proxy: Error dialing: remote error: tls: illegal parameter",
+    ),
+)
+def test_webtunnel_handshake_errors_do_not_abort_other_bridge_attempts(tmp_path, diagnostic):
+    from types import SimpleNamespace
+
+    class FakeProcess:
+        pid = 42421
+
+        def __init__(self):
+            self.returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = -9
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    class FakeController:
+        def get_info(self, key, default=None):
+            if key == "process/pid":
+                return str(process.pid)
+            if key == "status/bootstrap-phase":
+                return "PROGRESS=100 TAG=done SUMMARY=Done"
+            return default
+
+        def close(self):
+            pass
+
+    bundle = tmp_path / "bundle"
+    tor_dir = bundle / "tor"
+    transport_dir = tor_dir / "pluggable_transports"
+    transport_dir.mkdir(parents=True)
+    executable = tor_dir / ("tor.exe" if os.name == "nt" else "tor")
+    executable.write_bytes(b"fake tor executable")
+    transport = transport_dir / ("lyrebird.exe" if os.name == "nt" else "lyrebird")
+    transport.write_bytes(b"fake lyrebird")
+    if os.name != "nt":
+        executable.chmod(0o700)
+        transport.chmod(0o700)
+
+    process = FakeProcess()
+
+    def fake_run(*_args, **_kwargs):
+        return SimpleNamespace(returncode=0, stdout="")
+
+    manager = TorManager(
+        TorSettings(
+            executable=executable,
+            socks_port=0,
+            control_port=19451,
+            bridges_enabled=True,
+            bridges=(
+                "webtunnel 192.0.2.10:443 "
+                "A1B2C3D4E5F60718293A4B5C6D7E8F9012345678 "
+                "url=https://bridge.example/ ver=0.0.1"
+            ),
+            data_directory=tmp_path / "developer-tor",
+            startup_timeout_seconds=2,
+        ),
+        popen_factory=lambda *_args, **_kwargs: process,
+        run_factory=fake_run,
+    )
+    manager._transport_exec_path = lambda path: str(path)
+    manager._recent_tor_log_detail = lambda **_kwargs: diagnostic
+    manager._port_ready = lambda _port, **_kwargs: True
+    manager._connect_controller = lambda: FakeController()
+
+    manager.start()
+
+    assert manager.state is TorState.READY
+    assert manager.bootstrap_progress == 100
+    manager.stop()
+
+
 def test_custom_sni_override_only_targets_webtunnel_and_preserves_explicit_value(tmp_path):
     executable = tmp_path / "tor" / "tor.exe"
     executable.parent.mkdir(parents=True)

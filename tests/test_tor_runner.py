@@ -127,6 +127,28 @@ def test_early_exit_without_bridge_specific_dial_failure_skips_recheck(monkeypat
     )
 
 
+@pytest.mark.parametrize(
+    "diagnostic",
+    (
+        "remote error: tls: illegal parameter",
+        "tls: illegal parameter",
+        "unrecognized reply",
+    ),
+)
+def test_peer_tls_handshake_failure_does_not_trigger_bridge_cleanup(monkeypatch, tmp_path, diagnostic):
+    from torproxy.tor_manager import TorManagerError
+
+    bridge_text = "\\n".join(BRIDGES)
+    runner, _config = _runner(monkeypatch, tmp_path, bridge_text)
+    manager = SimpleNamespace(
+        _recent_tor_log_detail=lambda max_lines=30: "Managed proxy: Error dialing: " + diagnostic
+    )
+    assert not runner._should_recheck_bridges_after_start_failure(
+        manager,
+        TorManagerError("Tor did not become ready within 180s."),
+    )
+
+
 def test_global_tls_runtime_error_does_not_trigger_bridge_cleanup_retry(monkeypatch, tmp_path):
     from torproxy.tor_manager import TorManagerError
 

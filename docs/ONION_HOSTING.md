@@ -13,7 +13,7 @@ The dedicated runtime has its own:
 
 Its torrc explicitly uses `SocksPort 0` and no DNSPort. Developer Tor has its own saved network preferences and uses a direct connection by default. Main Tor bridges are never inherited automatically: the user may explicitly select the saved Main bridge list, or configure a separate Developer Tor bridge list. Only the bridge records are reused; the Main Tor process, DataDirectory, listeners, bridge-health decisions and control state are not shared. Custom Tor profiles and circuit controls also remain separate. This is a separate Tor client process, not a relay or exit node. Process separation does not make a full operating-system sandbox.
 
-The Home controller owns the `OnionHostingManager`. Navigating away from the page or closing the window with X only hides TorProxy to the system tray; the runtime remains active. Explicit Exit stops Developer Tor together with the other application-owned child processes.
+The Home controller owns the `OnionHostingManager`. Navigating away from the page or closing the window with X only hides TorProxy to the system tray; the runtime remains active. Explicit Exit first cancels any in-flight Developer Tor bootstrap, waits for the start operation to release its lifecycle lock, and then verifies that the owned Tor process and DataDirectory lock are gone. If another shutdown step fails and the application stays open, the Developer Tor lifecycle can be resumed.
 
 ## Developer Tor network settings
 
@@ -28,6 +28,8 @@ Open **Home → Developer Tor → Settings** to configure this runtime independe
 The runtime card reports the selected connection mode, configured bridge transports, first-hop identities observed on built circuits, enabled address families and upstream proxy type. First-hop verification is based on authenticated ControlPort circuit data; configured bridge records alone are not presented as proof of an active bridge.
 
 Changing network preferences while Developer Tor is running does not mutate the live process. Restart the Developer Tor runtime to apply them. The current version does not automatically prune Developer Tor bridges; bridge failures remain visible in its own Tor log and the saved list is preserved.
+
+WebTunnel transport errors such as an unsupported TLS curve, a peer TLS `illegal parameter` alert, or an unrecognized handshake reply are treated as inconclusive connection attempts. Tor is allowed to keep trying the configured bridge records until the configured startup timeout. A timeout reports the recent PT diagnostics but does not label every bridge dead, declare the complete Expert Bundle unusable, or delete Bridge records. Isolated bridge-health probes also retain records when they see these ambiguous handshake errors.
 
 ## Onion Service model
 

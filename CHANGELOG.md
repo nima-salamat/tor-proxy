@@ -4,6 +4,9 @@ All notable changes are recorded here. Dates and release numbers are added only 
 
 ## Unreleased
 
+- Fixed Tor startup aborting on the first Lyrebird WebTunnel TLS handshake error. Tor now keeps trying configured bridges through its startup window; peer TLS alerts and malformed handshake replies remain inconclusive and are never auto-pruned as dead bridges.
+- Made explicit application Exit synchronize with Developer Tor startup: an in-flight bootstrap is cancelled and joined before cleanup completes, live process/DataDirectory ownership is retained on cleanup failure, and the lifecycle is reopened if another shutdown step forces TorProxy to remain running.
+
 - Added independent **Developer Tor → Settings** for direct/custom/Main-bridge connection modes, WebTunnel SNI imitation, circuit and startup/shutdown timings, IPv4/IPv6 selection, and optional SOCKS5 or HTTP CONNECT upstream proxies. Proxy credentials are stored separately from `config.json`; runtime diagnostics now report configured bridge transports and first-hop identities confirmed by Tor's ControlPort.
 
 - Added **Home → Developer Tor** for independent v3 Onion Hosting: a dedicated Tor process with its own DataDirectory, ControlPort cookie, logs and lifecycle, with SOCKS/DNS listeners disabled and no bridge/config inheritance from Main or Custom Tor. The dashboard supports multiple services, loopback-only targets, public/private client authorization, persistent/temporary identities, Auto Start, runtime controls and logs. Persistent private keys are stored separately from config metadata; closing to tray leaves hosting running, while explicit Exit stops it.

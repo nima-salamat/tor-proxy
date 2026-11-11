@@ -171,6 +171,35 @@ def test_unsupported_tls_curve_is_a_global_transport_issue_not_dead_bridge(monke
     assert outcome == BridgeProbeOutcome(None, "transport_runtime_incompatible")
 
 
+@pytest.mark.parametrize(
+    ("diagnostic", "issue"),
+    (
+        (
+            "Managed proxy: Error dialing: remote error: tls: illegal parameter",
+            "transport_peer_handshake_inconclusive",
+        ),
+        (
+            "Managed proxy: Error dialing: unrecognized reply",
+            "transport_peer_handshake_inconclusive",
+        ),
+    ),
+)
+def test_peer_handshake_errors_are_inconclusive_and_preserve_bridge(
+    monkeypatch, tmp_path, diagnostic, issue
+):
+    outcome = _probe_with_fake_tor_log(monkeypatch, tmp_path, diagnostic)
+    assert outcome == BridgeProbeOutcome(None, issue)
+    result = check_bridges(
+        _settings(tmp_path),
+        probe=lambda *_args: outcome,
+    )
+    assert result.working == ()
+    assert result.failed == ()
+    assert result.inconclusive == BRIDGES
+    assert result.retained == BRIDGES
+    assert result.should_prune is False
+
+
 def test_single_webtunnel_dial_timeout_is_inconclusive(monkeypatch, tmp_path):
     outcome = _probe_with_fake_tor_log(
         monkeypatch,

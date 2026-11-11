@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -157,6 +158,81 @@ def test_temporary_service_metadata_and_keys_are_removed_when_runtime_stops(host
     assert tor.stop_called
     assert manager.services_snapshot() == []
     assert manager.runtime_snapshot()["state"] == "stopped"
+
+
+def test_application_shutdown_cancels_an_inflight_developer_tor_start(tmp_path):
+    entered_start = threading.Event()
+    stop_seen = threading.Event()
+
+    class BlockingTorManager(FakeTorManager):
+        def __init__(self):
+            super().__init__("b" * 56)
+            self.state = TorState.STOPPED
+
+        def start(self, on_status=None):
+            self.process = SimpleNamespace(pid=5252, poll=lambda: None)
+            self.state = TorState.STARTING
+            entered_start.set()
+            cancel_event = getattr(self, "_start_cancel_event", None)
+            assert cancel_event is not None
+            if not cancel_event.wait(timeout=3):
+                raise AssertionError("Application shutdown did not cancel Developer Tor startup")
+            raise OnionHostingError("Developer Tor startup cancelled by application shutdown.")
+
+        def stop(self):
+            super().stop()
+            stop_seen.set()
+
+    config = MemoryConfig()
+    directories = SimpleNamespace(data=tmp_path / "data", logs=tmp_path / "logs")
+    fake = BlockingTorManager()
+    manager = OnionHostingManager(
+        lambda: object(),
+        config=config,
+        manager_factory=lambda _settings: fake,
+        directories=directories,
+    )
+    start_errors = []
+
+    def start_runtime():
+        try:
+            manager.start_runtime()
+        except Exception as exc:
+            start_errors.append(exc)
+
+    starter = threading.Thread(target=start_runtime, daemon=True)
+    starter.start()
+    assert entered_start.wait(timeout=2)
+
+    manager.shutdown_runtime()
+    starter.join(timeout=2)
+
+    assert not starter.is_alive()
+    assert start_errors
+    assert stop_seen.is_set()
+    assert fake.process is None
+    assert manager.manager is None
+    assert manager.runtime_snapshot()["state"] == "stopped"
+    with pytest.raises(OnionHostingError, match="shutting down"):
+        manager.start_runtime()
+
+
+def test_stop_runtime_is_restartable_but_shutdown_runtime_is_terminal_until_rollback(hosting):
+    manager, _config, tor = hosting
+    manager.stop_runtime()
+    assert manager._shutdown_requested is False
+    assert manager.manager is None
+
+    # Explicit application shutdown prevents a late page action from starting
+    # another Tor process after the application has begun exiting.
+    manager._manager = tor
+    manager.shutdown_runtime()
+    assert manager._shutdown_requested is True
+    with pytest.raises(OnionHostingError, match="shutting down"):
+        manager.start_runtime()
+
+    manager.resume_after_cancelled_shutdown()
+    assert manager._shutdown_requested is False
 
 
 def test_persistent_to_temporary_transition_keeps_private_client_key(hosting):

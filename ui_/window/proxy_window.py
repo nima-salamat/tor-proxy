@@ -1354,7 +1354,7 @@ class ProxyWindow(QWidget):
             onion_manager = getattr(self, "onion_hosting_manager", None)
             if onion_manager is not None:
                 try:
-                    onion_manager.stop_runtime()
+                    onion_manager.shutdown_runtime()
                     messages.append("Developer Tor and its Onion Services stopped.")
                 except Exception as exc:
                     logger.exception("Error stopping Developer Tor during application exit.")

@@ -874,6 +874,11 @@ class TorRunner(QObject):
                     "The isolated bridge checks found 'tls: CurvePreferences includes unsupported curve' in Lyrebird. "
                     "This is a transport/runtime compatibility error, not evidence that the bridges are dead."
                 )
+            elif issue == "transport_peer_handshake_inconclusive":
+                detail = (
+                    "The isolated bridge checks received a TLS handshake alert or an unrecognized peer reply. "
+                    "This is inconclusive and is not enough to classify the bridge as offline."
+                )
             elif issue.startswith("missing_transport:"):
                 transport_name = issue.split(":", 1)[1]
                 detail = (
@@ -993,6 +998,10 @@ class TorRunner(QObject):
             "failed at launch",
             "no configured transport called",
             "curvepreferences includes unsupported curve",
+            "remote error: tls: illegal parameter",
+            "tls: illegal parameter",
+            "unrecognized reply",
+            "transport_peer_handshake_inconclusive",
             "unknown pluggable transport",
             "clienttransportplugin",
         )

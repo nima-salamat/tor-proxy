@@ -174,6 +174,18 @@ def _probe_single_bridge(
                         None,
                         "transport_runtime_incompatible",
                     )
+                if any(marker in diagnostic for marker in (
+                    "remote error: tls: illegal parameter",
+                    "tls: illegal parameter",
+                    "unrecognized reply",
+                )):
+                    # This is a peer/handshake outcome, not proof of a dead
+                    # Bridge endpoint. Preserve the record unless an independent
+                    # probe produces a definite bridge-specific failure.
+                    return BridgeProbeOutcome(
+                        None,
+                        "transport_peer_handshake_inconclusive",
+                    )
                 # Do not classify the log as a local transport failure just
                 # because Tor prefixes bridge dial errors with the lyrebird.exe
                 # path. Match actual transport setup/runtime diagnostics only.

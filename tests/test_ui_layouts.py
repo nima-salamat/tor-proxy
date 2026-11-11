@@ -745,6 +745,9 @@ def test_close_event_hides_to_tray_unless_exit_was_explicitly_authorized():
     assert 'self.proxyWidget._request_stop_services(final_status="APPLICATION EXIT")' in close_event
     assert "def _on_proxy_shutdown_complete(" in source
     assert "_shutdown_in_progress" in close_event
+    home_source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+    assert "onion_manager.shutdown_runtime()" in home_source
+    assert "resume_after_cancelled_shutdown()" in source
 
 
 def test_dialog_recalculates_size_and_styles_after_screen_change():
