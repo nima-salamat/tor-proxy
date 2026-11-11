@@ -96,6 +96,7 @@ class TorManager:
         self._lock = threading.RLock()
         self._start_lock = threading.Lock()
         self._stop_requested = threading.Event()
+        self._start_cancel_event: threading.Event | None = None
         self.process: subprocess.Popen | None = None
         self._controller = None
         self._log_handle = None
@@ -671,6 +672,13 @@ class TorManager:
         return True
 
     def start(self, on_status: BootstrapCallback | None = None) -> None:
+        cancel_event = self._start_cancel_event
+
+        def cancellation_requested() -> bool:
+            return self._stop_requested.is_set() or bool(
+                cancel_event is not None and cancel_event.is_set()
+            )
+
         if not self._start_lock.acquire(blocking=False):
             raise TorManagerError("A Tor start operation is already in progress.")
         try:
@@ -680,6 +688,8 @@ class TorManager:
                         return
                     raise TorManagerError("Tor is already starting or running.")
                 self._stop_requested.clear()
+                if cancel_event is not None and cancel_event.is_set():
+                    raise TorManagerError("Tor startup was cancelled before launch.")
                 self.last_error = None
                 self._emit(on_status, TorState.STARTING, 0, "Validating Tor configuration.")
             executable = Path(self.settings.executable).expanduser().resolve()
@@ -768,6 +778,8 @@ class TorManager:
             else:
                 kwargs["start_new_session"] = True
             launch_command = [str(executable), "-f", str(self.torrc_path)]
+            if cancellation_requested():
+                raise TorManagerError("Tor startup was cancelled before launch.")
             if self.settings.isolate_in_cgroup:
                 systemd_run = shutil.which("systemd-run")
                 if not systemd_run or not shutil.which("systemctl"):
@@ -780,7 +792,7 @@ class TorManager:
             last_detail = "Waiting for Tor ControlPort."
             curve_warning_reported = False
             while time.monotonic() < deadline:
-                if self._stop_requested.is_set():
+                if cancellation_requested():
                     raise TorManagerError("Tor startup was cancelled.")
                 proc = self.process
                 if proc is None or proc.poll() is not None:
@@ -905,7 +917,7 @@ class TorManager:
             raise TorManagerError(f"Tor did not become ready within {self.settings.startup_timeout_seconds:.0f}s. Last status: {last_detail}")
         except Exception as exc:
             self.last_error = str(exc)
-            was_stopped = self._stop_requested.is_set()
+            was_stopped = cancellation_requested()
             try:
                 self._terminate_process()
             except Exception as cleanup_exc:
@@ -938,7 +950,7 @@ class TorManager:
             self._controller.signal(Signal.NEWNYM)
             return 0.0
 
-    def _terminate_process(self) -> None:
+    def _terminate_process(self, *, force: bool = False) -> None:
         with self._lock:
             controller, self._controller = self._controller, None
             process = self.process
@@ -949,17 +961,26 @@ class TorManager:
                 pass
         if self._scope_unit:
             try:
+                command = (
+                    ["systemctl", "--user", "kill", "--kill-whom=all", "--signal=SIGKILL", self._scope_unit]
+                    if force else ["systemctl", "--user", "stop", self._scope_unit]
+                )
                 self._run_factory(
-                    ["systemctl", "--user", "stop", self._scope_unit],
+                    command,
                     stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                    text=True, timeout=max(10, int(self.settings.shutdown_timeout_seconds) + 5), check=False,
+                    text=True, timeout=5 if force else max(10, int(self.settings.shutdown_timeout_seconds) + 5),
+                    check=False,
                 )
             except (OSError, subprocess.SubprocessError):
                 LOGGER.exception("Could not stop the dedicated Tor systemd scope.")
         if process is not None and process.poll() is None:
             try:
-                process.terminate()
-                process.wait(timeout=self.settings.shutdown_timeout_seconds)
+                if force:
+                    process.kill()
+                    process.wait(timeout=2)
+                else:
+                    process.terminate()
+                    process.wait(timeout=self.settings.shutdown_timeout_seconds)
             except subprocess.TimeoutExpired:
                 try:
                     process.kill()
@@ -1007,6 +1028,8 @@ class TorManager:
 
     def stop(self) -> None:
         self._stop_requested.set()
+        if self._start_cancel_event is not None:
+            self._start_cancel_event.set()
         self._emit(None, TorState.STOPPING, None, "Stopping the managed Tor process.")
         try:
             self._terminate_process()
@@ -1016,3 +1039,18 @@ class TorManager:
             raise
         self._release_data_directory_lock()
         self._emit(None, TorState.STOPPED, None, "Tor stopped.")
+
+    def force_stop(self) -> None:
+        """Immediately kill this managed Tor process without its graceful wait window."""
+        self._stop_requested.set()
+        if self._start_cancel_event is not None:
+            self._start_cancel_event.set()
+        self._emit(None, TorState.STOPPING, None, "Force-stopping the managed Tor process.")
+        try:
+            self._terminate_process(force=True)
+        except Exception as exc:
+            self.last_error = str(exc)
+            self._emit(None, TorState.FAILED, None, self.last_error)
+            raise
+        self._release_data_directory_lock()
+        self._emit(None, TorState.STOPPED, None, "Tor process was force-stopped.")
