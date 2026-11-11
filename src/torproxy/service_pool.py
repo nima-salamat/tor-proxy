@@ -13,7 +13,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .health import TorProbeResult, probe_tor_socks
@@ -36,6 +36,7 @@ class _ServiceEntry:
     settings: TorSettings
     manager: TorManager
     start_lock: threading.Lock
+    start_cancel_event: threading.Event = field(default_factory=threading.Event)
     active_calls: int = 0
     stopping: bool = False
     network_healthy: bool = False
@@ -205,12 +206,14 @@ class TorServicePool:
             prepared = self._prepare_settings(service_id, settings)
             self._validate_resources(service_id, prepared)
             manager = self._manager_factory(prepared)
-            self._services[service_id] = _ServiceEntry(
+            entry = _ServiceEntry(
                 service_id=service_id,
                 settings=prepared,
                 manager=manager,
                 start_lock=threading.Lock(),
             )
+            manager._start_cancel_event = entry.start_cancel_event
+            self._services[service_id] = entry
             return manager
 
     def get(self, service_id: str) -> TorManager:
@@ -459,6 +462,7 @@ class TorServicePool:
                 raise TorServicePoolError(f"Unknown Tor service '{service_id}'.")
             if entry.stopping:
                 raise TorServicePoolError(f"Tor service '{service_id}' is stopping.")
+            entry.start_cancel_event.clear()
             entry.active_calls += 1
             acquired = entry.start_lock.acquire(blocking=False)
             if not acquired:
@@ -495,6 +499,7 @@ class TorServicePool:
             if entry.stopping:
                 raise TorServicePoolError(f"Tor service '{service_id}' is already stopping.")
             entry.stopping = True
+            entry.start_cancel_event.set()
             entry.active_calls += 1
 
         error = None
@@ -523,6 +528,52 @@ class TorServicePool:
             if error is not None:
                 raise TorServicePoolError(
                     f"Tor service '{service_id}' did not stop cleanly: {error}"
+                ) from error
+        finally:
+            with self._lock:
+                entry.network_healthy = False
+                entry.health_latency_ms = None
+                entry.consecutive_health_failures = 0
+                entry.network_health = (
+                    "stopped" if self._state_value(entry.manager) == "stopped" else "not_ready"
+                )
+                entry.last_health_error = ""
+                entry.stopping = False
+                entry.active_calls -= 1
+
+    def force_stop_service(self, service_id: str) -> None:
+        """Cancel startup and kill the owned Tor process immediately."""
+        with self._lock:
+            entry = self._services.get(service_id)
+            if entry is None:
+                raise TorServicePoolError(f"Unknown Tor service '{service_id}'.")
+            if entry.stopping:
+                raise TorServicePoolError(f"Tor service '{service_id}' is already stopping.")
+            entry.stopping = True
+            entry.start_cancel_event.set()
+            entry.active_calls += 1
+
+        error = None
+        try:
+            force_stop = getattr(entry.manager, "force_stop", None)
+            try:
+                force_stop() if callable(force_stop) else entry.manager.stop()
+            except Exception as exc:
+                error = exc
+
+            # Reconcile after any concurrent start() has observed cancellation.
+            with entry.start_lock:
+                force_stop = getattr(entry.manager, "force_stop", None)
+                try:
+                    force_stop() if callable(force_stop) else entry.manager.stop()
+                except Exception as exc:
+                    error = exc
+                else:
+                    error = None
+
+            if error is not None:
+                raise TorServicePoolError(
+                    f"Tor service '{service_id}' could not be force-stopped: {error}"
                 ) from error
         finally:
             with self._lock:
