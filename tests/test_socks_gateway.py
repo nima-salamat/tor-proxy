@@ -125,18 +125,18 @@ def test_gateway_routes_excluded_socks_domain_directly_without_using_tor_backend
     try:
         with socket.create_connection(("127.0.0.1", gateway_port), timeout=2) as client:
             client.settimeout(2)
-            client.sendall(b"\\x05\\x01\\x00")
-            assert _recv_exact(client, 2) == b"\\x05\\x00"
+            client.sendall(b"\x05\x01\x00")
+            assert _recv_exact(client, 2) == b"\x05\x00"
             encoded_host = b"localhost"
             request = (
-                b"\\x05\\x01\\x00\\x03"
+                b"\x05\x01\x00\x03"
                 + bytes((len(encoded_host),))
                 + encoded_host
                 + target_port.to_bytes(2, "big")
             )
             client.sendall(request)
             response = _recv_exact(client, 10)
-            assert response[:4] == b"\\x05\\x00\\x00\\x01"
+            assert response[:4] == b"\x05\x00\x00\x01"
             client.sendall(b"hello")
             assert _recv_exact(client, 5) == b"hello"
     finally:
