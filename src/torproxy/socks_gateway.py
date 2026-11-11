@@ -267,11 +267,11 @@ class SocksFailoverGateway:
             local = upstream.getsockname()
             if upstream.family == socket.AF_INET6:
                 address = socket.inet_pton(socket.AF_INET6, local[0])
-                return b"\\x05\\x00\\x00\\x04" + address + int(local[1]).to_bytes(2, "big")
+                return b"\x05\x00\x00\x04" + address + int(local[1]).to_bytes(2, "big")
             address = socket.inet_pton(socket.AF_INET, local[0])
-            return b"\\x05\\x00\\x00\\x01" + address + int(local[1]).to_bytes(2, "big")
+            return b"\x05\x00\x00\x01" + address + int(local[1]).to_bytes(2, "big")
         except (AttributeError, OSError, TypeError, ValueError, IndexError):
-            return b"\\x05\\x00\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00"
+            return b"\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00"
 
     def _connect_direct(self, hostname: str, port: int) -> socket.socket:
         """Connect explicitly excluded hosts outside Tor, tracking sockets for shutdown."""
