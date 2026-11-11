@@ -186,14 +186,27 @@ class OnionHostingManager:
     @staticmethod
     def _parse_control_response(response: Any) -> dict[str, str]:
         text = str(response)
+        if "ServiceID=" not in text:
+            content = getattr(response, "content", None)
+            if callable(content):
+                try:
+                    parsed = content()
+                    if isinstance(parsed, str):
+                        text += "\n" + parsed
+                    elif parsed:
+                        text += "\n" + "\n".join(
+                            str(item[-1] if isinstance(item, tuple) else item)
+                            for item in parsed
+                        )
+                except Exception:
+                    pass
         fields: dict[str, str] = {}
         for line in text.splitlines():
-            match = re.match(r"\s*250[- ]([A-Za-z0-9]+)=(.*?)(?:\r)?$", line)
+            match = re.match(r"\s*(?:250[- ]?)?([A-Za-z0-9]+)=(.*?)(?:\r)?$", line)
             if match:
                 fields[match.group(1)] = match.group(2)
-        # Stem's string representation can omit protocol prefixes on some versions.
-        if "ServiceID" not in fields:
-            for name in ("ServiceID", "PrivateKey"):
+        for name in ("ServiceID", "PrivateKey"):
+            if name not in fields:
                 match = re.search(rf"\b{name}=([^\s]+)", text)
                 if match:
                     fields[name] = match.group(1)
@@ -508,6 +521,8 @@ class OnionHostingManager:
                 command_key = stored_key
         else:
             key_material = dict(self._temporary_keys.get(profile_id, {}))
+            if key_material.get("tor_private_key"):
+                command_key = key_material["tor_private_key"]
         target_host = service["local_host"]
         target = f"[{target_host}]:{service['local_port']}" if ":" in target_host else f"{target_host}:{service['local_port']}"
         command = f"ADD_ONION {command_key} Flags={','.join(flags)} Port={service['onion_port']},{target}"
@@ -519,13 +534,15 @@ class OnionHostingManager:
         if not _SERVICE_ID_RE.fullmatch(onion_id):
             raise OnionHostingError("Tor did not return a valid v3 Onion Service address.")
         private_key = fields.get("PrivateKey", "")
-        if service.get("persistent") and not key_material.get("tor_private_key"):
+        if not key_material.get("tor_private_key"):
             if not private_key.startswith("ED25519-V3:"):
                 try:
                     self._control(f"DEL_ONION {onion_id}")
                 except Exception:
                     pass
-                raise OnionHostingError("Tor did not return the private key needed to preserve this Onion address.")
+                if service.get("persistent"):
+                    raise OnionHostingError("Tor did not return the private key needed to preserve this Onion address.")
+                raise OnionHostingError("Tor did not return the temporary service identity.")
             key_material["tor_private_key"] = private_key
         try:
             if service.get("persistent"):
