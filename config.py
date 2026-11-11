@@ -223,6 +223,14 @@ class Config:
         for index, service in enumerate(onion_services, start=1):
             if not isinstance(service, dict):
                 raise ConfigError(f"Onion Service #{index} must be an object.")
+            forbidden_secret_fields = {
+                "private_key", "client_private_key", "tor_private_key",
+                "private_key_base64", "client_auth_private_key",
+            }
+            if forbidden_secret_fields.intersection(service):
+                raise ConfigError(
+                    f"Onion Service #{index} contains private key material; secrets must stay outside config.json."
+                )
             service_id = service.get("id")
             if not isinstance(service_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", service_id):
                 raise ConfigError(f"Onion Service #{index} has an invalid ID.")
