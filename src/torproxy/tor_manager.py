@@ -1,6 +1,7 @@
 """Supervised Tor subprocess lifecycle with explicit loopback ControlPort authentication."""
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
 import re
@@ -12,7 +13,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
@@ -59,6 +60,14 @@ class TorSettings:
     shutdown_timeout_seconds: float = 5.0
     log_path: Path | None = None
     webtunnel_sni_imitation: str = ""
+    bridge_source: str = "custom"
+    client_use_ipv4: bool = True
+    client_use_ipv6: bool = True
+    upstream_proxy_type: str = "none"
+    upstream_proxy_host: str = ""
+    upstream_proxy_port: int = 1080
+    upstream_proxy_username: str = field(default="", repr=False)
+    upstream_proxy_password: str = field(default="", repr=False)
     isolate_in_cgroup: bool = False
     cgroup_callback: Callable[[int | None, int | None], None] | None = None
 
@@ -85,6 +94,36 @@ class TorSettings:
             normalize_sni_hostname(self.webtunnel_sni_imitation or "")
         except (TypeError, ValueError) as exc:
             raise TorManagerError(f"Invalid WebTunnel SNI imitation hostname: {exc}") from exc
+        if type(self.client_use_ipv4) is not bool or type(self.client_use_ipv6) is not bool:
+            raise TorManagerError("Client IPv4 and IPv6 preferences must be true or false.")
+        if not self.client_use_ipv4 and not self.client_use_ipv6:
+            raise TorManagerError("At least one of IPv4 or IPv6 must be enabled for Tor.")
+        if self.bridge_source not in {"direct", "custom", "main"}:
+            raise TorManagerError("Bridge source must be direct, custom, or main.")
+        if self.upstream_proxy_type not in {"none", "socks5", "https"}:
+            raise TorManagerError("Upstream proxy type must be none, socks5, or https.")
+        if self.upstream_proxy_type != "none":
+            host = str(self.upstream_proxy_host or "").strip()
+            if (
+                not host
+                or len(host) > 253
+                or not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?", host)
+                or ".." in host
+            ):
+                raise TorManagerError("Upstream proxy host must be an IP address or DNS hostname.")
+            if type(self.upstream_proxy_port) is not int or not 1 <= self.upstream_proxy_port <= 65535:
+                raise TorManagerError("Upstream proxy port must be between 1 and 65535.")
+            username = str(self.upstream_proxy_username or "")
+            password = str(self.upstream_proxy_password or "")
+            if bool(username) != bool(password):
+                raise TorManagerError("Both upstream proxy username and password must be supplied together.")
+            if username and (
+                len(username) > 255 or len(password) > 255
+                or any(ord(char) < 32 or ord(char) == 127 for char in username + password)
+            ):
+                raise TorManagerError("Upstream proxy credentials must be 1–255 printable characters.")
+            if self.upstream_proxy_type == "https" and (":" in username or ":" in password):
+                raise TorManagerError("HTTP CONNECT proxy credentials cannot contain a colon.")
         if self.startup_timeout_seconds <= 0 or self.shutdown_timeout_seconds <= 0:
             raise TorManagerError("Startup and shutdown timeouts must be positive.")
         if self.isolate_in_cgroup and (os.name == "nt" or self.cgroup_callback is None):
@@ -398,9 +437,21 @@ class TorManager:
             "Log notice stdout",
             f"MaxCircuitDirtiness {settings.max_circuit_dirtiness_seconds}",
             f"NewCircuitPeriod {settings.new_circuit_period_seconds}",
-            "ClientUseIPv4 1",
-            "ClientUseIPv6 1",
+            f"ClientUseIPv4 {int(settings.client_use_ipv4)}",
+            f"ClientUseIPv6 {int(settings.client_use_ipv6)}",
         ]
+        if settings.upstream_proxy_type == "socks5":
+            proxy_address = f"{settings.upstream_proxy_host}:{settings.upstream_proxy_port}"
+            lines.append("Socks5Proxy " + self._torrc_quote(proxy_address))
+            if settings.upstream_proxy_username:
+                lines.append("Socks5ProxyUsername " + self._torrc_quote(settings.upstream_proxy_username))
+                lines.append("Socks5ProxyPassword " + self._torrc_quote(settings.upstream_proxy_password))
+        elif settings.upstream_proxy_type == "https":
+            proxy_address = f"{settings.upstream_proxy_host}:{settings.upstream_proxy_port}"
+            lines.append("HTTPSProxy " + self._torrc_quote(proxy_address))
+            if settings.upstream_proxy_username:
+                authenticator = settings.upstream_proxy_username + ":" + settings.upstream_proxy_password
+                lines.append("HTTPSProxyAuthenticator " + self._torrc_quote(authenticator))
         if settings.dns_port is not None:
             lines.insert(3, f"DNSPort 127.0.0.1:{settings.dns_port}")
         if settings.geoip_path and Path(settings.geoip_path).is_file():

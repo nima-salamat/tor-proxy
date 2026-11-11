@@ -14,6 +14,7 @@ from PySide6.QtCore import QEvent, Qt, QTimer, QThreadPool, QPropertyAnimation, 
 from pathlib import Path
 
 from torproxy.onion_hosting import OnionHostingManager
+from torproxy.bridges import parse_bridge_text
 from torproxy.ports import PortAllocationError, ephemeral_loopback_port, resolve_listener_ports
 from torproxy.service_pool import TorServicePool
 from torproxy.tor_manager import TorManagerError, TorSettings
@@ -475,13 +476,39 @@ class ProxyWindow(QWidget):
             show_page()
 
     def _build_developer_tor_settings(self) -> TorSettings:
-        """Build the isolated Onion Hosting runtime without inheriting Main Tor settings."""
+        """Build an isolated Developer Tor configuration from its own saved preferences."""
         if not self.tor.path_set or not self.tor.tor_path:
             self.tor.update_path(CONFIG["tor_path"])
         if not self.tor.path_set or not self.tor.tor_path:
             raise TorManagerError(
                 "Install or select a compatible Tor Expert Bundle before starting Developer Tor."
             )
+        preferences = dict(CONFIG["developer_tor_settings"] or {})
+        bridge_mode = str(preferences.get("bridge_mode", "direct"))
+        bridges = ""
+        bridges_enabled = False
+        if bridge_mode == "main":
+            if not bool(CONFIG["bridge"]):
+                raise TorManagerError(
+                    "Developer Tor is set to use Main Tor bridges, but bridge mode is disabled in Settings → Bridges."
+                )
+            bridges = str(CONFIG["bridges"] or "")
+            bridges_enabled = True
+        elif bridge_mode == "custom":
+            bridges = str(preferences.get("bridges") or "")
+            bridges_enabled = True
+        elif bridge_mode != "direct":
+            raise TorManagerError("Unknown Developer Tor bridge mode.")
+        if bridges_enabled:
+            parsed = parse_bridge_text(bridges)
+            if parsed.invalid_records or not parsed.records:
+                details = " ".join(parsed.errors[:3]) or "No valid bridge records were found."
+                raise TorManagerError("Developer Tor Bridge configuration is invalid: " + details)
+            bridges = "\\n".join(parsed.records)
+
+        # Credentials are read from a separate, permission-restricted file;
+        # they are never persisted in config.json or included in routine logs.
+        credentials = self._ensure_onion_hosting_manager().network_proxy_credentials()
         directories = user_directories()
         return TorSettings(
             executable=Path(self.tor.tor_path),
@@ -491,12 +518,21 @@ class ProxyWindow(QWidget):
             data_directory=directories.data / "developer-tor",
             geoip_path=Path(self.tor.geoip_path) if self.tor.geoip_path else None,
             geoip6_path=Path(self.tor.geoip6_path) if self.tor.geoip6_path else None,
-            bridges_enabled=False,
-            bridges="",
-            max_circuit_dirtiness_seconds=600,
-            new_circuit_period_seconds=60,
-            startup_timeout_seconds=180.0,
-            shutdown_timeout_seconds=5.0,
+            bridges_enabled=bridges_enabled,
+            bridges=bridges,
+            bridge_source=bridge_mode,
+            webtunnel_sni_imitation=str(preferences.get("webtunnel_sni_imitation") or ""),
+            max_circuit_dirtiness_seconds=int(preferences.get("max_circuit_dirtiness_seconds", 600)),
+            new_circuit_period_seconds=int(preferences.get("new_circuit_period_seconds", 60)),
+            startup_timeout_seconds=float(preferences.get("startup_timeout_seconds", 180)),
+            shutdown_timeout_seconds=float(preferences.get("shutdown_timeout_seconds", 5)),
+            client_use_ipv4=bool(preferences.get("client_use_ipv4", True)),
+            client_use_ipv6=bool(preferences.get("client_use_ipv6", True)),
+            upstream_proxy_type=str(preferences.get("upstream_proxy_type", "none")),
+            upstream_proxy_host=str(preferences.get("upstream_proxy_host") or ""),
+            upstream_proxy_port=int(preferences.get("upstream_proxy_port", 1080)),
+            upstream_proxy_username=credentials["upstream_proxy_username"],
+            upstream_proxy_password=credentials["upstream_proxy_password"],
             log_path=directories.logs / "developer-tor" / "tor.log",
         )
 

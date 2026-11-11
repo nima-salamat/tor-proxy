@@ -18,12 +18,14 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSpinBox,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from config import CONFIG
 from torproxy.paths import user_directories
+from torproxy.bridges import normalize_sni_hostname, parse_bridge_text
 from ui_.worker.worker import Worker
 from ui_.window.dialogs import QMessageBox, StandardButton, _FramelessDialog
 from ui_.window.tor_log_dialog import TorLogDialog
@@ -150,6 +152,244 @@ class OnionServiceDialog(_FramelessDialog):
         return dict(self._values or {})
 
 
+class DeveloperTorSettingsDialog(_FramelessDialog):
+    """Network and transport settings for the independent Developer Tor runtime."""
+
+    def __init__(self, parent, settings: dict):
+        super().__init__(parent, "Developer Tor Settings", "fa6s.sliders", "#287db5", width=640)
+        values = dict(settings or {})
+        scroll = QScrollArea(self.body_host)
+        scroll.setObjectName("dialogScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        content = QWidget(scroll)
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(3, 3, 8, 8)
+        content_layout.setSpacing(10)
+
+        intro = QLabel(
+            "Configure the network used by the dedicated Developer Tor process. "
+            "These preferences do not modify Main Tor or Custom Tor settings.",
+            content,
+        )
+        intro.setObjectName("dialogMessage")
+        intro.setWordWrap(True)
+        content_layout.addWidget(intro)
+
+        bridge_title = QLabel("Connection and bridges", content)
+        bridge_title.setObjectName("shortcutCategory")
+        content_layout.addWidget(bridge_title)
+        bridge_form = QFormLayout()
+        bridge_form.setHorizontalSpacing(14)
+        bridge_form.setVerticalSpacing(8)
+        self.bridge_mode = QComboBox(content)
+        self.bridge_mode.addItem("Direct connection", "direct")
+        self.bridge_mode.addItem("Use custom Developer Tor bridges", "custom")
+        self.bridge_mode.addItem("Reuse the saved Main Tor bridge list", "main")
+        selected_mode = self.bridge_mode.findData(values.get("bridge_mode", "direct"))
+        self.bridge_mode.setCurrentIndex(max(0, selected_mode))
+        bridge_form.addRow("Connection mode", self.bridge_mode)
+        content_layout.addLayout(bridge_form)
+
+        self.bridge_editor = QTextEdit(content)
+        self.bridge_editor.setObjectName("developerBridgeEditor")
+        self.bridge_editor.setAcceptRichText(False)
+        self.bridge_editor.setPlaceholderText(
+            "Paste complete Bridge records, one per line…\\n"
+            "Example: obfs4 192.0.2.10:443 0123456789ABCDEF0123456789ABCDEF01234567 cert=… iat-mode=0"
+        )
+        self.bridge_editor.setPlainText(str(values.get("bridges", "")))
+        self.bridge_editor.setMinimumHeight(105)
+        content_layout.addWidget(self.bridge_editor)
+        self.bridge_hint = QLabel("", content)
+        self.bridge_hint.setObjectName("dialogHint")
+        self.bridge_hint.setWordWrap(True)
+        content_layout.addWidget(self.bridge_hint)
+
+        sni_form = QFormLayout()
+        self.sni_input = QLineEdit(content)
+        self.sni_input.setPlaceholderText("Use the hostname from each WebTunnel url= field")
+        self.sni_input.setText(str(values.get("webtunnel_sni_imitation", "")))
+        sni_form.addRow("WebTunnel SNI imitation", self.sni_input)
+        content_layout.addLayout(sni_form)
+        sni_note = QLabel(
+            "Optional. This is applied only to WebTunnel Bridge records and takes effect after restarting Developer Tor.",
+            content,
+        )
+        sni_note.setObjectName("dialogHint")
+        sni_note.setWordWrap(True)
+        content_layout.addWidget(sni_note)
+
+        advanced_title = QLabel("Advanced network", content)
+        advanced_title.setObjectName("shortcutCategory")
+        content_layout.addWidget(advanced_title)
+        advanced_form = QFormLayout()
+        advanced_form.setHorizontalSpacing(14)
+        advanced_form.setVerticalSpacing(8)
+        self.max_dirtiness = QSpinBox(content)
+        self.max_dirtiness.setRange(10, 86400)
+        self.max_dirtiness.setValue(int(values.get("max_circuit_dirtiness_seconds", 600)))
+        self.circuit_period = QSpinBox(content)
+        self.circuit_period.setRange(10, 86400)
+        self.circuit_period.setValue(int(values.get("new_circuit_period_seconds", 60)))
+        self.startup_timeout = QSpinBox(content)
+        self.startup_timeout.setRange(15, 900)
+        self.startup_timeout.setValue(int(values.get("startup_timeout_seconds", 180)))
+        self.shutdown_timeout = QSpinBox(content)
+        self.shutdown_timeout.setRange(1, 60)
+        self.shutdown_timeout.setValue(int(values.get("shutdown_timeout_seconds", 5)))
+        advanced_form.addRow("Max circuit dirtiness (seconds)", self.max_dirtiness)
+        advanced_form.addRow("New circuit period (seconds)", self.circuit_period)
+        advanced_form.addRow("Startup timeout (seconds)", self.startup_timeout)
+        advanced_form.addRow("Shutdown timeout (seconds)", self.shutdown_timeout)
+        content_layout.addLayout(advanced_form)
+
+        family_row = QHBoxLayout()
+        self.ipv4_enabled = QCheckBox("Allow IPv4", content)
+        self.ipv4_enabled.setChecked(bool(values.get("client_use_ipv4", True)))
+        self.ipv6_enabled = QCheckBox("Allow IPv6", content)
+        self.ipv6_enabled.setChecked(bool(values.get("client_use_ipv6", True)))
+        family_row.addWidget(self.ipv4_enabled)
+        family_row.addWidget(self.ipv6_enabled)
+        family_row.addStretch(1)
+        content_layout.addLayout(family_row)
+
+        proxy_title = QLabel("Upstream proxy (optional)", content)
+        proxy_title.setObjectName("shortcutCategory")
+        content_layout.addWidget(proxy_title)
+        proxy_form = QFormLayout()
+        proxy_form.setHorizontalSpacing(14)
+        proxy_form.setVerticalSpacing(8)
+        self.proxy_type = QComboBox(content)
+        self.proxy_type.addItem("No upstream proxy", "none")
+        self.proxy_type.addItem("SOCKS5 proxy", "socks5")
+        self.proxy_type.addItem("HTTP CONNECT proxy", "https")
+        proxy_index = self.proxy_type.findData(values.get("upstream_proxy_type", "none"))
+        self.proxy_type.setCurrentIndex(max(0, proxy_index))
+        self.proxy_host = QLineEdit(content)
+        self.proxy_host.setPlaceholderText("127.0.0.1 or proxy.example.net")
+        self.proxy_host.setText(str(values.get("upstream_proxy_host", "")))
+        self.proxy_port = QSpinBox(content)
+        self.proxy_port.setRange(1, 65535)
+        self.proxy_port.setValue(int(values.get("upstream_proxy_port", 1080)))
+        self.proxy_username = QLineEdit(content)
+        self.proxy_username.setText(str(values.get("upstream_proxy_username", "")))
+        self.proxy_password = QLineEdit(content)
+        self.proxy_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.proxy_password.setText(str(values.get("upstream_proxy_password", "")))
+        self.proxy_password.setPlaceholderText("Stored separately from config.json")
+        proxy_form.addRow("Proxy type", self.proxy_type)
+        proxy_form.addRow("Proxy host", self.proxy_host)
+        proxy_form.addRow("Proxy port", self.proxy_port)
+        proxy_form.addRow("Username (optional)", self.proxy_username)
+        proxy_form.addRow("Password (optional)", self.proxy_password)
+        content_layout.addLayout(proxy_form)
+        proxy_note = QLabel(
+            "Tor connects to the network through this proxy. Credentials are stored in a separate per-user file "
+            "with restrictive permissions and are written to the protected Developer Tor torrc only while starting. "
+            "The proxy host itself is resolved by the local system.",
+            content,
+        )
+        proxy_note.setObjectName("dialogHint")
+        proxy_note.setWordWrap(True)
+        content_layout.addWidget(proxy_note)
+
+        scroll.setWidget(content)
+        self.body_layout.addWidget(scroll, 1)
+        self.bridge_mode.currentIndexChanged.connect(self._sync_bridge_mode)
+        self.proxy_type.currentIndexChanged.connect(self._sync_proxy_fields)
+        self._sync_bridge_mode()
+        self._sync_proxy_fields()
+
+        self._values = None
+        self.add_footer_spacer()
+        self.add_button("Cancel", primary=False, callback=self.reject)
+        self.add_button("Save settings", primary=True, callback=self._accept_form)
+        self.resize(660, 690)
+        self._remember_preferred_size()
+
+    def _sync_bridge_mode(self, *_args):
+        mode = self.bridge_mode.currentData()
+        self.bridge_editor.setEnabled(mode == "custom")
+        if mode == "main":
+            self.bridge_hint.setText(
+                "The saved Main Tor bridge list is read when Developer Tor starts. "
+                "Main Tor must have bridge mode enabled; Main Tor's process and DataDirectory are not reused."
+            )
+        elif mode == "custom":
+            self.bridge_hint.setText(
+                "These records are stored separately and are used only by Developer Tor. "
+                "Supported transports: obfs4, Snowflake, WebTunnel and meek_lite."
+            )
+        else:
+            self.bridge_hint.setText("Direct mode does not configure Bridge records.")
+
+    def _sync_proxy_fields(self, *_args):
+        enabled = self.proxy_type.currentData() != "none"
+        for widget in (self.proxy_host, self.proxy_port, self.proxy_username, self.proxy_password):
+            widget.setEnabled(enabled)
+
+    def _accept_form(self):
+        mode = str(self.bridge_mode.currentData())
+        raw_bridges = self.bridge_editor.toPlainText()
+        parsed = parse_bridge_text(raw_bridges)
+        if parsed.invalid_records:
+            QMessageBox.warning(
+                self,
+                "Invalid Bridge records",
+                "Correct the invalid records before saving: " + " ".join(parsed.errors[:3]),
+            )
+            self.bridge_editor.setFocus()
+            return
+        if mode == "custom" and not parsed.records:
+            QMessageBox.warning(self, "Bridge list required", "Add at least one complete Bridge record or choose another connection mode.")
+            self.bridge_editor.setFocus()
+            return
+        try:
+            sni = normalize_sni_hostname(self.sni_input.text())
+        except (TypeError, ValueError) as exc:
+            QMessageBox.warning(self, "Invalid WebTunnel SNI", str(exc))
+            self.sni_input.setFocus()
+            return
+        if not self.ipv4_enabled.isChecked() and not self.ipv6_enabled.isChecked():
+            QMessageBox.warning(self, "Address family required", "Enable IPv4, IPv6, or both.")
+            return
+        proxy_type = str(self.proxy_type.currentData())
+        proxy_host = self.proxy_host.text().strip()
+        username = self.proxy_username.text()
+        password = self.proxy_password.text()
+        if proxy_type != "none" and not proxy_host:
+            QMessageBox.warning(self, "Proxy host required", "Enter the upstream proxy host.")
+            self.proxy_host.setFocus()
+            return
+        if proxy_type != "none" and bool(username) != bool(password):
+            QMessageBox.warning(self, "Proxy authentication", "Enter both username and password, or leave both empty.")
+            return
+        if proxy_type == "https" and (":" in username or ":" in password):
+            QMessageBox.warning(self, "Proxy authentication", "HTTP CONNECT proxy credentials cannot contain a colon.")
+            return
+        self._values = {
+            "bridge_mode": mode,
+            "bridges": "\\n".join(parsed.records) if parsed.records else raw_bridges.strip(),
+            "webtunnel_sni_imitation": sni,
+            "max_circuit_dirtiness_seconds": int(self.max_dirtiness.value()),
+            "new_circuit_period_seconds": int(self.circuit_period.value()),
+            "startup_timeout_seconds": int(self.startup_timeout.value()),
+            "shutdown_timeout_seconds": int(self.shutdown_timeout.value()),
+            "client_use_ipv4": bool(self.ipv4_enabled.isChecked()),
+            "client_use_ipv6": bool(self.ipv6_enabled.isChecked()),
+            "upstream_proxy_type": proxy_type,
+            "upstream_proxy_host": proxy_host,
+            "upstream_proxy_port": int(self.proxy_port.value()),
+            "upstream_proxy_username": username if proxy_type != "none" else "",
+            "upstream_proxy_password": password if proxy_type != "none" else "",
+        }
+        self.accept()
+
+    def values(self) -> dict:
+        return dict(self._values or {})
+
+
 class OnionHostingPage(QWidget):
     """Developer Tor dashboard. It never reuses the Main or Custom Tor pools."""
 
@@ -180,6 +420,11 @@ class OnionHostingPage(QWidget):
         self.page_title = QLabel("Developer Tor", self)
         self.page_title.setObjectName("onionPageTitle")
         header.addWidget(self.page_title)
+        self.settings_button = QPushButton("Settings", self)
+        self.settings_button.setObjectName("onionActionButton")
+        self.settings_button.setIcon(qta.icon("fa6s.sliders"))
+        self.settings_button.clicked.connect(self.open_settings)
+        header.addWidget(self.settings_button)
         root.addLayout(header)
 
         self.description = QLabel(
@@ -216,6 +461,13 @@ class OnionHostingPage(QWidget):
         self.runtime_metrics.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         details.addWidget(self.runtime_metrics)
         runtime_layout.addLayout(details)
+        self.runtime_network = QLabel(
+            "Saved connection settings will apply when Developer Tor starts.",
+            runtime,
+        )
+        self.runtime_network.setObjectName("onionMuted")
+        self.runtime_network.setWordWrap(True)
+        runtime_layout.addWidget(self.runtime_network)
 
         actions = QHBoxLayout()
         self.start_runtime_button = QPushButton("Start runtime", runtime)
@@ -355,7 +607,7 @@ class OnionHostingPage(QWidget):
                 color: {muted}; background: {field}; border: 1px solid {border};
                 border-radius: 6px; padding: 3px 7px; font-size: 8px; font-weight: 750;
             }}
-            QLineEdit, QComboBox, QSpinBox {{
+            QLineEdit, QComboBox, QSpinBox, QTextEdit {{
                 min-height: 30px; padding: 2px 8px; border: 1px solid {border};
                 border-radius: 7px; background: {field}; color: {text};
             }}
@@ -445,6 +697,27 @@ class OnionHostingPage(QWidget):
         self.restart_runtime_button.setEnabled(not busy)
         self.add_service_button.setEnabled(not busy)
         self.refresh_button.setEnabled(not busy)
+
+    def open_settings(self):
+        manager = self._manager()
+        dialog = DeveloperTorSettingsDialog(self, manager.settings_snapshot())
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+        try:
+            manager.save_settings(dialog.values())
+            state = manager.runtime_snapshot()["state"]
+            if state == "stopped":
+                self.status_label.setText("Developer Tor settings saved. They will apply on the next start.")
+            else:
+                self.status_label.setText("Developer Tor settings saved. Restart the runtime to apply them.")
+                QMessageBox.information(
+                    self,
+                    "Settings saved",
+                    "The active Developer Tor process is unchanged. Restart Developer Tor to apply the new network settings.",
+                )
+            self.refresh_dashboard()
+        except Exception as exc:
+            QMessageBox.warning(self, "Could not save Developer Tor settings", str(exc))
 
     def create_service(self):
         dialog = OnionServiceDialog(self)
@@ -539,6 +812,7 @@ class OnionHostingPage(QWidget):
             self.runtime_state.style().unpolish(self.runtime_state)
             self.runtime_state.style().polish(self.runtime_state)
             self.runtime_message.setText(str(runtime["message"]))
+            self.runtime_network.setText(str(runtime.get("network_summary") or "Network diagnostics unavailable."))
             if state == "ready" and runtime.get("progress") is not None:
                 self.runtime_message.setText(f"{runtime['progress']}% · {runtime['message']}")
             version = runtime.get("version") or "version unavailable"

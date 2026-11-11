@@ -11,9 +11,23 @@ The dedicated runtime has its own:
 - ControlPort bound only to `127.0.0.1`, with cookie authentication;
 - lifecycle, bootstrap status and process cleanup.
 
-Its torrc explicitly uses `SocksPort 0` and no DNSPort. Main Tor bridges, bridge health decisions, SOCKS/HTTP ports, Custom Tor profiles and circuit controls are not copied into Developer Tor. This is a separate Tor client process, not a relay or exit node. Process separation does not make a full operating-system sandbox.
+Its torrc explicitly uses `SocksPort 0` and no DNSPort. Developer Tor has its own saved network preferences and uses a direct connection by default. Main Tor bridges are never inherited automatically: the user may explicitly select the saved Main bridge list, or configure a separate Developer Tor bridge list. Only the bridge records are reused; the Main Tor process, DataDirectory, listeners, bridge-health decisions and control state are not shared. Custom Tor profiles and circuit controls also remain separate. This is a separate Tor client process, not a relay or exit node. Process separation does not make a full operating-system sandbox.
 
 The Home controller owns the `OnionHostingManager`. Navigating away from the page or closing the window with X only hides TorProxy to the system tray; the runtime remains active. Explicit Exit stops Developer Tor together with the other application-owned child processes.
+
+## Developer Tor network settings
+
+Open **Home → Developer Tor → Settings** to configure this runtime independently.
+
+- **Direct** is the default and does not configure bridges.
+- **Custom bridges** accepts separately stored obfs4, Snowflake, WebTunnel, meek_lite or vanilla Bridge records. The shared Bridge parser validates and normalizes each record before Tor starts.
+- **Main bridges** explicitly reads the saved Main Tor bridge-enabled flag and bridge list when Developer Tor starts. Main bridge mode must be enabled. This is a one-way settings reuse: it does not share the Main Tor process, DataDirectory, ControlPort, SOCKS listener, health state or bridge pruning. Changes to either list apply to Developer Tor only after its next restart.
+- WebTunnel SNI imitation, MaxCircuitDirtiness, NewCircuitPeriod, startup/shutdown timeouts and IPv4/IPv6 preferences are saved separately. At least one IP family must remain enabled.
+- An optional upstream SOCKS5 or HTTP CONNECT proxy can be configured for Tor's own network connections. This is not a local proxy listener for applications. When authentication is used, the username/password pair is stored in `developer-tor/keys/network-proxy.json`, outside `config.json`; on Unix the file is mode `0600` in a mode `0700` directory. The generated torrc is also written with restrictive permissions. On Windows the files inherit the per-user application-data ACL. A proxy hostname is resolved by the local system before Tor connects to it.
+
+The runtime card reports the selected connection mode, configured bridge transports, first-hop identities observed on built circuits, enabled address families and upstream proxy type. First-hop verification is based on authenticated ControlPort circuit data; configured bridge records alone are not presented as proof of an active bridge.
+
+Changing network preferences while Developer Tor is running does not mutate the live process. Restart the Developer Tor runtime to apply them. The current version does not automatically prune Developer Tor bridges; bridge failures remain visible in its own Tor log and the saved list is preserved.
 
 ## Onion Service model
 

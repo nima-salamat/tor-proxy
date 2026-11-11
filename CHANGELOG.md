@@ -4,6 +4,8 @@ All notable changes are recorded here. Dates and release numbers are added only 
 
 ## Unreleased
 
+- Added independent **Developer Tor → Settings** for direct/custom/Main-bridge connection modes, WebTunnel SNI imitation, circuit and startup/shutdown timings, IPv4/IPv6 selection, and optional SOCKS5 or HTTP CONNECT upstream proxies. Proxy credentials are stored separately from `config.json`; runtime diagnostics now report configured bridge transports and first-hop identities confirmed by Tor's ControlPort.
+
 - Added **Home → Developer Tor** for independent v3 Onion Hosting: a dedicated Tor process with its own DataDirectory, ControlPort cookie, logs and lifecycle, with SOCKS/DNS listeners disabled and no bridge/config inheritance from Main or Custom Tor. The dashboard supports multiple services, loopback-only targets, public/private client authorization, persistent/temporary identities, Auto Start, runtime controls and logs. Persistent private keys are stored separately from config metadata; closing to tray leaves hosting running, while explicit Exit stops it.
 - Added a dedicated Home → **Custom Tor** management page with Back to Home navigation, while keeping Tor resource/concurrency preferences under Settings. Profile creation/editing now uses the app's custom-framed dialogs, and each service card opens its own live Tor log.
 - Profile-list changes use the configuration store's atomic update API. Stop can now cancel an in-progress startup; Force stop can escalate an already-running graceful stop, and explicit application exit joins/escalates existing stops before closing the isolated service pool.

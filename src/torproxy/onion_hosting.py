@@ -27,6 +27,20 @@ _SERVICE_ID_RE = re.compile(r"^[a-z2-7]{56}$")
 _CLIENT_KEY_RE = re.compile(r"^[a-z2-7]{52}$")
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 _MAX_SERVICES = 32
+_DEVELOPER_SETTINGS_DEFAULTS = {
+    "bridge_mode": "direct",
+    "bridges": "",
+    "webtunnel_sni_imitation": "",
+    "max_circuit_dirtiness_seconds": 600,
+    "new_circuit_period_seconds": 60,
+    "startup_timeout_seconds": 180,
+    "shutdown_timeout_seconds": 5,
+    "client_use_ipv4": True,
+    "client_use_ipv6": True,
+    "upstream_proxy_type": "none",
+    "upstream_proxy_host": "",
+    "upstream_proxy_port": 1080,
+}
 
 
 class OnionHostingError(RuntimeError):
@@ -102,11 +116,118 @@ class OnionHostingManager:
     def key_directory(self) -> Path:
         return self._directories.data / "developer-tor" / "keys"
 
+    @property
+    def network_credentials_path(self) -> Path:
+        return self.key_directory / "network-proxy.json"
+
     def _config_store(self):
         if self._config is None:
             from config import CONFIG
             self._config = CONFIG
         return self._config
+
+    def _read_network_credentials(self) -> dict[str, str]:
+        path = self.network_credentials_path
+        if not path.is_file():
+            return {"upstream_proxy_username": "", "upstream_proxy_password": ""}
+        try:
+            if os.name != "nt":
+                mode = path.stat().st_mode & 0o777
+                if mode & 0o077:
+                    path.chmod(0o600)
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise OnionHostingError(
+                "Developer Tor upstream proxy credentials are unavailable or damaged. "
+                "The runtime will not start with missing authentication data."
+            ) from exc
+        if not isinstance(value, dict):
+            raise OnionHostingError("Developer Tor upstream proxy credential storage is invalid.")
+        username = value.get("username", "")
+        password = value.get("password", "")
+        if not isinstance(username, str) or not isinstance(password, str):
+            raise OnionHostingError("Developer Tor upstream proxy credentials are invalid.")
+        return {
+            "upstream_proxy_username": username,
+            "upstream_proxy_password": password,
+        }
+
+    def _write_network_credentials(self, username: str, password: str) -> None:
+        path = self.network_credentials_path
+        if not username and not password:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as exc:
+                raise OnionHostingError("Could not remove saved Developer Tor proxy credentials.") from exc
+            return
+        directory = path.parent
+        directory.mkdir(parents=True, exist_ok=True)
+        if os.name != "nt":
+            directory.chmod(0o700)
+        fd, temporary = tempfile.mkstemp(prefix=".network-proxy-", suffix=".tmp", dir=directory)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\\n") as handle:
+                json.dump({"username": username, "password": password}, handle, sort_keys=True)
+                handle.write("\\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            if os.name != "nt":
+                os.chmod(temporary, 0o600)
+            os.replace(temporary, path)
+            if os.name != "nt":
+                path.chmod(0o600)
+        except OSError as exc:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+            raise OnionHostingError("Could not securely store Developer Tor proxy credentials.") from exc
+
+    def network_proxy_credentials(self) -> dict[str, str]:
+        return self._read_network_credentials()
+
+    def settings_snapshot(self) -> dict[str, Any]:
+        saved = self._config_store()["developer_tor_settings"] or {}
+        return {**_DEVELOPER_SETTINGS_DEFAULTS, **dict(saved), **self._read_network_credentials()}
+
+    def save_settings(self, values: dict[str, Any]) -> None:
+        if not isinstance(values, dict):
+            raise OnionHostingError("Developer Tor settings must be an object.")
+        secret_keys = {"upstream_proxy_username", "upstream_proxy_password"}
+        allowed = set(_DEVELOPER_SETTINGS_DEFAULTS) | secret_keys
+        unknown = set(values).difference(allowed)
+        if unknown:
+            raise OnionHostingError("Unsupported Developer Tor setting: " + ", ".join(sorted(unknown)))
+        current = self.settings_snapshot()
+        merged = {**current, **values}
+        username = str(merged.get("upstream_proxy_username") or "")
+        password = str(merged.get("upstream_proxy_password") or "")
+        if merged.get("upstream_proxy_type") == "none":
+            username = password = ""
+        if bool(username) != bool(password):
+            raise OnionHostingError("Enter both the upstream proxy username and password, or leave both empty.")
+        if username and (
+            len(username) > 255 or len(password) > 255
+            or any(ord(char) < 32 or ord(char) == 127 for char in username + password)
+        ):
+            raise OnionHostingError("Upstream proxy credentials must be 1–255 printable characters.")
+        if merged.get("upstream_proxy_type") == "https" and (":" in username or ":" in password):
+            raise OnionHostingError("HTTP CONNECT proxy credentials cannot contain a colon.")
+
+        public_settings = {
+            key: merged[key]
+            for key in _DEVELOPER_SETTINGS_DEFAULTS
+        }
+        previous_credentials = self._read_network_credentials()
+        self._write_network_credentials(username, password)
+        try:
+            self._config_store().update_many({"developer_tor_settings": public_settings})
+        except Exception as exc:
+            self._write_network_credentials(
+                previous_credentials["upstream_proxy_username"],
+                previous_credentials["upstream_proxy_password"],
+            )
+            raise OnionHostingError(f"Could not save Developer Tor settings: {exc}") from exc
 
     def _saved_services(self) -> list[dict[str, Any]]:
         services = self._config_store()["onion_hosting_services"] or []
@@ -286,6 +407,7 @@ class OnionHostingManager:
             return {
                 "state": "stopped", "progress": None, "message": "Developer Tor is stopped.",
                 "version": "", "uptime_seconds": 0, "memory_bytes": 0, "pid": None,
+                "network_summary": "Saved connection settings will apply when Developer Tor starts.",
             }
         state = getattr(manager.state, "value", str(manager.state)).lower()
         process = manager.process
@@ -311,7 +433,60 @@ class OnionHostingManager:
             "uptime_seconds": max(0, int(time.monotonic() - started_at)) if started_at else 0,
             "memory_bytes": memory,
             "pid": pid,
+            "network_summary": self._network_summary(manager, state),
         }
+
+    @staticmethod
+    def _network_summary(manager: TorManager, state: str) -> str:
+        settings = getattr(manager, "settings", None)
+        if settings is None:
+            return "Network diagnostics unavailable."
+        parts: list[str] = []
+        if settings.bridges_enabled:
+            source = "Main" if getattr(settings, "bridge_source", "custom") == "main" else "Custom"
+            try:
+                records = TorManager._parse_bridges(settings.bridges)
+            except Exception:
+                records = []
+            transports = sorted({
+                transport or "vanilla"
+                for transport, _record in records
+            })
+            bridge_summary = f"{source} bridges · {len(records)} configured"
+            if transports:
+                bridge_summary += " · " + ", ".join(transports)
+            if state == "ready" and records:
+                try:
+                    active = set(manager.get_active_bridge_fingerprints())
+                except Exception:
+                    active = set()
+                fingerprints = {
+                    match.group(0).upper()
+                    for _transport, record in records
+                    for match in [re.search(r"\\b[0-9A-Fa-f]{40}\\b", record)]
+                    if match
+                }
+                if fingerprints:
+                    bridge_summary += f" · {len(active.intersection(fingerprints))}/{len(fingerprints)} first hops verified"
+                else:
+                    bridge_summary += " · first-hop identity unavailable"
+            else:
+                bridge_summary += " · waiting for a built circuit"
+            parts.append(bridge_summary)
+        else:
+            parts.append("Direct connection")
+        families = []
+        if settings.client_use_ipv4:
+            families.append("IPv4")
+        if settings.client_use_ipv6:
+            families.append("IPv6")
+        parts.append(" + ".join(families))
+        if settings.upstream_proxy_type == "none":
+            parts.append("no upstream proxy")
+        else:
+            label = "SOCKS5" if settings.upstream_proxy_type == "socks5" else "HTTP CONNECT"
+            parts.append(f"{label} proxy {settings.upstream_proxy_host}:{settings.upstream_proxy_port}")
+        return " · ".join(parts)
 
     def start_runtime(self, on_status: Callable[[str, int | None, str], None] | None = None) -> None:
         """Start the dedicated Tor process; persistent auto-start services are restored after bootstrap."""

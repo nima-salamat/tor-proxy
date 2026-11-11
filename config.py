@@ -20,7 +20,7 @@ if SRC_ROOT.is_dir() and str(SRC_ROOT) not in sys.path:
 from set_proxy import get_os_name, Os  # noqa: E402
 from torproxy.paths import user_directories  # noqa: E402
 from torproxy.hotkeys import parse_hotkey  # noqa: E402
-from torproxy.bridges import normalize_sni_hostname  # noqa: E402
+from torproxy.bridges import normalize_sni_hostname, parse_bridge_text  # noqa: E402
 
 IS_WINDOWS = get_os_name() == Os.Windows
 IS_LINUX = get_os_name() == Os.Linux
@@ -67,6 +67,20 @@ DEFAULT_DATA: dict[str, Any] = {
     "tor_service_workers": 4,
     "tor_services": [],
     "onion_hosting_services": [],
+    "developer_tor_settings": {
+        "bridge_mode": "direct",
+        "bridges": "",
+        "webtunnel_sni_imitation": "",
+        "max_circuit_dirtiness_seconds": 600,
+        "new_circuit_period_seconds": 60,
+        "startup_timeout_seconds": 180,
+        "shutdown_timeout_seconds": 5,
+        "client_use_ipv4": True,
+        "client_use_ipv6": True,
+        "upstream_proxy_type": "none",
+        "upstream_proxy_host": "",
+        "upstream_proxy_port": 1080,
+    },
 }
 LEGACY_KEYS = set(DEFAULT_DATA) | {"data_usage_bytes", "exclude_hosts", "blocked_hosts"}
 
@@ -149,6 +163,78 @@ class Config:
             )
         except (TypeError, ValueError) as exc:
             raise ConfigError(f"webtunnel_sni_imitation is invalid: {exc}") from exc
+        developer_defaults = DEFAULT_DATA["developer_tor_settings"]
+        developer_settings = data.get("developer_tor_settings", developer_defaults)
+        if not isinstance(developer_settings, dict):
+            raise ConfigError("developer_tor_settings must be an object.")
+        forbidden_developer_secrets = {
+            "username", "password", "upstream_proxy_username", "upstream_proxy_password",
+            "private_key", "client_private_key", "tor_private_key",
+        }
+        if forbidden_developer_secrets.intersection(developer_settings):
+            raise ConfigError(
+                "Developer Tor proxy credentials and private keys must be stored outside config.json."
+            )
+        unknown_developer_keys = set(developer_settings).difference(developer_defaults)
+        if unknown_developer_keys:
+            raise ConfigError(
+                "Unsupported Developer Tor settings: " + ", ".join(sorted(unknown_developer_keys))
+            )
+        developer_settings = {**developer_defaults, **developer_settings}
+        bridge_mode = developer_settings.get("bridge_mode")
+        if bridge_mode not in {"direct", "custom", "main"}:
+            raise ConfigError("Developer Tor bridge_mode must be direct, custom, or main.")
+        developer_bridges = developer_settings.get("bridges", "")
+        if not isinstance(developer_bridges, str) or len(developer_bridges) > 65536:
+            raise ConfigError("Developer Tor bridges must be text of at most 65536 characters.")
+        parsed_developer_bridges = parse_bridge_text(developer_bridges)
+        if parsed_developer_bridges.invalid_records:
+            raise ConfigError(
+                "Developer Tor contains invalid Bridge records: "
+                + " ".join(parsed_developer_bridges.errors[:3])
+            )
+        if bridge_mode == "custom" and not parsed_developer_bridges.records:
+            raise ConfigError("Custom Bridge mode requires at least one valid Bridge record.")
+        try:
+            developer_settings["webtunnel_sni_imitation"] = normalize_sni_hostname(
+                developer_settings.get("webtunnel_sni_imitation", "") or ""
+            )
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(f"Developer Tor WebTunnel SNI is invalid: {exc}") from exc
+        for key, minimum, maximum in (
+            ("max_circuit_dirtiness_seconds", 10, 86400),
+            ("new_circuit_period_seconds", 10, 86400),
+            ("startup_timeout_seconds", 15, 900),
+            ("shutdown_timeout_seconds", 1, 60),
+        ):
+            value = developer_settings.get(key)
+            if type(value) is not int or not minimum <= value <= maximum:
+                raise ConfigError(f"Developer Tor {key} must be an integer between {minimum} and {maximum}.")
+        for key in ("client_use_ipv4", "client_use_ipv6"):
+            if type(developer_settings.get(key)) is not bool:
+                raise ConfigError(f"Developer Tor {key} must be true or false.")
+        if not developer_settings["client_use_ipv4"] and not developer_settings["client_use_ipv6"]:
+            raise ConfigError("Developer Tor must allow at least one IP address family.")
+        proxy_type = developer_settings.get("upstream_proxy_type")
+        if proxy_type not in {"none", "socks5", "https"}:
+            raise ConfigError("Developer Tor upstream_proxy_type must be none, socks5, or https.")
+        proxy_host = developer_settings.get("upstream_proxy_host", "")
+        if not isinstance(proxy_host, str) or len(proxy_host) > 253:
+            raise ConfigError("Developer Tor upstream proxy host is invalid.")
+        if proxy_type != "none":
+            proxy_host = proxy_host.strip()
+            if (
+                not proxy_host
+                or not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?", proxy_host)
+                or ".." in proxy_host
+            ):
+                raise ConfigError("Developer Tor upstream proxy host must be an IP address or DNS hostname.")
+        proxy_port = developer_settings.get("upstream_proxy_port")
+        if type(proxy_port) is not int or not 1 <= proxy_port <= 65535:
+            raise ConfigError("Developer Tor upstream proxy port must be between 1 and 65535.")
+        developer_settings["upstream_proxy_host"] = proxy_host
+        data["developer_tor_settings"] = developer_settings
+
         if type(data.get("data_usage", 0)) is not int or data.get("data_usage", 0) < 0:
             raise ConfigError("data_usage must be a non-negative byte count.")
         interval = data.get("newnym_interval", 0)
