@@ -2566,6 +2566,8 @@ def test_custom_tor_supports_startup_cancellation_force_stop_and_live_logs():
     assert "stop_button.setEnabled(bool(pool) and can_stop" in page
     assert 'QPushButton("Force stop"' in page
     assert "_service_force_stop_buttons" in page
+    assert "self._stop_thread_pool = QThreadPool(self)" in page
+    assert "self._stop_thread_pool.start(worker)" in page
     assert "TorLogDialog(self, path, manager=manager).exec()" in page
     assert "manager._start_cancel_event = entry.start_cancel_event" in pool
     assert "entry.start_cancel_event.set()" in pool
