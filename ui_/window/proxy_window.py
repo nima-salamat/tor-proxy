@@ -508,7 +508,12 @@ class ProxyWindow(QWidget):
 
         # Credentials are read from a separate, permission-restricted file;
         # they are never persisted in config.json or included in routine logs.
-        credentials = self._ensure_onion_hosting_manager().network_proxy_credentials()
+        proxy_type = str(preferences.get("upstream_proxy_type", "none"))
+        credentials = (
+            self._ensure_onion_hosting_manager().network_proxy_credentials()
+            if proxy_type != "none"
+            else {"upstream_proxy_username": "", "upstream_proxy_password": ""}
+        )
         directories = user_directories()
         return TorSettings(
             executable=Path(self.tor.tor_path),
@@ -528,7 +533,7 @@ class ProxyWindow(QWidget):
             shutdown_timeout_seconds=float(preferences.get("shutdown_timeout_seconds", 5)),
             client_use_ipv4=bool(preferences.get("client_use_ipv4", True)),
             client_use_ipv6=bool(preferences.get("client_use_ipv6", True)),
-            upstream_proxy_type=str(preferences.get("upstream_proxy_type", "none")),
+            upstream_proxy_type=proxy_type,
             upstream_proxy_host=str(preferences.get("upstream_proxy_host") or ""),
             upstream_proxy_port=int(preferences.get("upstream_proxy_port", 1080)),
             upstream_proxy_username=credentials["upstream_proxy_username"],

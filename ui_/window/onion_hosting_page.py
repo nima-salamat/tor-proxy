@@ -692,6 +692,7 @@ class OnionHostingPage(QWidget):
 
     def _update_action_states(self):
         busy = "runtime" in self._workers
+        self.settings_button.setEnabled(not busy)
         self.start_runtime_button.setEnabled(not busy)
         self.stop_runtime_button.setEnabled(not busy)
         self.restart_runtime_button.setEnabled(not busy)
@@ -700,7 +701,12 @@ class OnionHostingPage(QWidget):
 
     def open_settings(self):
         manager = self._manager()
-        dialog = DeveloperTorSettingsDialog(self, manager.settings_snapshot())
+        try:
+            saved_settings = manager.settings_snapshot()
+        except Exception as exc:
+            QMessageBox.warning(self, "Developer Tor settings unavailable", str(exc))
+            return
+        dialog = DeveloperTorSettingsDialog(self, saved_settings)
         if dialog.exec() != dialog.DialogCode.Accepted:
             return
         try:

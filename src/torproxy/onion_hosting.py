@@ -187,8 +187,15 @@ class OnionHostingManager:
         return self._read_network_credentials()
 
     def settings_snapshot(self) -> dict[str, Any]:
-        saved = self._config_store()["developer_tor_settings"] or {}
-        return {**_DEVELOPER_SETTINGS_DEFAULTS, **dict(saved), **self._read_network_credentials()}
+        saved = dict(self._config_store()["developer_tor_settings"] or {})
+        settings = {**_DEVELOPER_SETTINGS_DEFAULTS, **saved}
+        try:
+            credentials = self._read_network_credentials()
+        except OnionHostingError:
+            if settings.get("upstream_proxy_type") != "none":
+                raise
+            credentials = {"upstream_proxy_username": "", "upstream_proxy_password": ""}
+        return {**settings, **credentials}
 
     def save_settings(self, values: dict[str, Any]) -> None:
         if not isinstance(values, dict):
