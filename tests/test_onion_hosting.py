@@ -194,3 +194,22 @@ def test_unavailable_local_target_fails_before_contacting_tor(hosting, monkeypat
     with pytest.raises(OnionHostingError, match="not accepting TCP"):
         manager.start_service(profile_id)
     assert not any(command.startswith("ADD_ONION") for command in tor.commands)
+
+
+def test_unexpected_runtime_exit_reconciles_active_services(hosting):
+    manager, _config, tor = hosting
+    profile_id = manager.create_service(
+        display_name="Website",
+        local_host="127.0.0.1",
+        local_port=9001,
+        persistent=True,
+    )
+    manager.start_service(profile_id)
+    tor.process = SimpleNamespace(pid=4242, poll=lambda: 1)
+
+    runtime = manager.runtime_snapshot()
+    service = manager.services_snapshot()[0]
+
+    assert runtime["state"] == "failed"
+    assert service["running"] is False
+    assert "no longer published" in service["error"]
