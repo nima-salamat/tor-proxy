@@ -101,7 +101,7 @@ def distribute_bridge_records(
         for worker_index in range(instance_count):
             group_index = preferred_indices[worker_index % len(preferred_indices)]
             assignments[worker_index].extend(groups[group_index])
-            record_loads[worker_index] += 1
+            record_loads[worker_index] += len(groups[group_index])
 
         preferred_set = set(preferred_indices)
         remaining_indices = [
@@ -113,22 +113,23 @@ def distribute_bridge_records(
                 key=lambda index: (record_loads[index], index),
             )
             assignments[worker_index].extend(groups[group_index])
-            record_loads[worker_index] += 1
+            record_loads[worker_index] += len(groups[group_index])
     elif len(groups) < instance_count:
         # A small bridge pool must not leave workers with an empty Bridge list.
         for worker_index in range(instance_count):
             group_index = worker_index % len(groups)
             assignments[worker_index].extend(groups[group_index])
-            record_loads[worker_index] += 1
+            record_loads[worker_index] += len(groups[group_index])
     else:
-        # Spread the whole input pool evenly without cross-worker overlap.
+        # Keep each fingerprint group together, but balance the actual number
+        # of bridge records assigned to each worker rather than group count.
         for group in groups:
             worker_index = min(
                 range(instance_count),
                 key=lambda index: (record_loads[index], index),
             )
             assignments[worker_index].extend(group)
-            record_loads[worker_index] += 1
+            record_loads[worker_index] += len(group)
 
     group_usage = [0] * len(groups)
     for worker in assignments:

@@ -76,6 +76,13 @@ class SocksFailoverGateway:
             family = socket.AF_INET6 if self.host == "::1" else socket.AF_INET
             listener = socket.socket(family, socket.SOCK_STREAM)
             try:
+                # Permit a clean local restart after old TCP tuples enter
+                # TIME_WAIT, without allowing another process to hijack the
+                # listening endpoint on Windows.
+                if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                    listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                else:
+                    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 listener.bind((self.host, self.port))
                 listener.listen(min(256, self._max_sessions))
                 listener.settimeout(0.5)
