@@ -429,6 +429,14 @@ def _route_for_host(host: str) -> str:
     return "tor"
 
 
+def is_host_blocked(host: str) -> bool:
+    """Return whether a normalized destination matches the shared block policy."""
+    normalized = normalize_hostname(host)
+    with _rule_lock:
+        blocked = _blocked_rules
+    return blocked.matches(normalized)
+
+
 def _parse_authority(authority: str, default_port: int | None = None) -> tuple[str, int]:
     if not authority or any(char in authority for char in ("/", "?", "#", "@", "\r", "\n")):
         raise ValueError("Malformed request authority.")
