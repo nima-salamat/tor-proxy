@@ -170,7 +170,7 @@ class TorServicesSettingsPage(QWidget):
                 index, latency = len(details) + 1, None
             state = f"Healthy · {latency:.0f} ms" if item.get("healthy") and latency is not None else ("Healthy" if item.get("healthy") else str(item.get("state", "starting")).replace("-", " ").title())
             details.append(f"Instance {index}: {state}")
-        self.primary_health.setText(f"{ready}/{total} primary Tor instance(s) verified healthy\\n" + "  |  ".join(details))
+        self.primary_health.setText(f"{ready}/{total} primary Tor instance(s) verified healthy\n" + "  |  ".join(details))
 
     def _open_manager(self) -> None:
         show = getattr(self._app_window, "_show_custom_tor", None)
@@ -638,7 +638,7 @@ class TorServicesPage(QWidget):
         text = "#e8edf3" if dark else "#253041"
         muted = "#aab5c4" if dark else "#667487"
         hover = "rgba(71, 163, 242, 0.14)" if dark else "rgba(24, 118, 191, 0.08)"
-        self.setStyleSheet(f\"\"\"
+        self.setStyleSheet(f"""
             QWidget#customTorContent {{ background: transparent; }}
             QLabel#customTorPageTitle {{ color: {text}; background: transparent; font-size: 15px; font-weight: 800; }}
             QLabel#settingsSectionTitle {{ color: {text}; background: transparent; font-size: 14px; font-weight: 750; }}
@@ -647,13 +647,13 @@ class TorServicesPage(QWidget):
             QFrame#settingsRowCard, QFrame#torServiceCard {{ background: {panel}; border: 1px solid {border}; border-radius: 9px; }}
             QFrame#torServiceCard:hover {{ border-color: {accent}; }}
             QLabel#torServiceStatus {{ color: {muted}; background: {field}; border: 1px solid {border}; border-radius: 6px; padding: 3px 7px; font-size: 8px; font-weight: 800; }}
-            QLabel#torServiceStatus[serviceState=\"ready\"] {{ color: #31b981; border-color: rgba(49,185,129,0.35); }}
-            QLabel#torServiceStatus[serviceState=\"failed\"] {{ color: #e36b75; border-color: rgba(227,107,117,0.35); }}
+            QLabel#torServiceStatus[serviceState="ready"] {{ color: #31b981; border-color: rgba(49,185,129,0.35); }}
+            QLabel#torServiceStatus[serviceState="failed"] {{ color: #e36b75; border-color: rgba(227,107,117,0.35); }}
             QPushButton#settingsActionButton {{ min-height: 32px; padding: 0 11px; border: 1px solid {border}; border-radius: 7px; background: transparent; color: {text}; font-weight: 650; }}
             QPushButton#settingsActionButton:hover, QPushButton#customTorBackButton:hover {{ background: {hover}; border-color: {accent}; }}
             QPushButton#settingsActionButton:disabled {{ color: {muted}; }}
             QPushButton#customTorBackButton {{ min-height: 34px; padding: 0 12px; border: 1px solid {border}; border-radius: 8px; background: {panel}; color: {text}; font-weight: 650; }}
-        \"\"\")
+        """)
         if hasattr(self, "btn_back_home"):
             self.btn_back_home.setIcon(qta.icon("fa6s.arrow-left", color=text))
         for button, name in (
@@ -1008,17 +1008,17 @@ class TorServicesPage(QWidget):
             self.refresh_services()
 
     def _request_service_stop(self, service_id: str, *, force: bool = False) -> None:
-        \"\"\"Stop independently of an in-flight start worker so startup is cancellable.\"\"\"
+        """Stop independently of an in-flight start worker so startup is cancellable."""
         if service_id in self._stop_workers:
             return
         try:
             pool = self._pool(create=False)
             if pool is None:
-                raise TorServicePoolError(\"Custom Tor services are not registered; install a Tor bundle first.\")
+                raise TorServicePoolError("Custom Tor services are not registered; install a Tor bundle first.")
             if service_id not in pool.service_ids:
-                profile = next((item for item in self._profiles() if item.get(\"id\") == service_id), None)
+                profile = next((item for item in self._profiles() if item.get("id") == service_id), None)
                 if profile is None:
-                    raise TorServicePoolError(f\"Unknown saved Tor service '{service_id}'.\")
+                    raise TorServicePoolError(f"Unknown saved Tor service '{service_id}'.")
                 self._register_profile(profile, pool)
             method = pool.force_stop_service if force else pool.stop_service
             worker = Worker(method, service_id)
@@ -1031,20 +1031,20 @@ class TorServicesPage(QWidget):
             self._stop_workers[service_id] = worker
             self._pending_stops.add(service_id)
             self.lbl_runtime_status.setText(
-                f\"{'Force-stopping' if force else 'Stopping'} '{service_id}'…\"
+                f"{'Force-stopping' if force else 'Stopping'} '{service_id}'…"
             )
             self.refresh_services()
             self._thread_pool.start(worker)
         except Exception as exc:
             self.lbl_runtime_status.setText(str(exc))
-            QMessageBox.warning(self, \"Tor service stop\", str(exc))
+            QMessageBox.warning(self, "Tor service stop", str(exc))
             self.refresh_services()
 
     def _on_stop_finished(self, service_id: str, force: bool, result: str) -> None:
         self._stop_workers.pop(service_id, None)
         self._pending_stops.discard(service_id)
         self.lbl_runtime_status.setText(
-            f\"{'Force-stopped' if force else 'Stopped'} '{service_id}'.\"
+            f"{'Force-stopped' if force else 'Stopped'} '{service_id}'."
         )
         self.refresh_services()
 
@@ -1053,18 +1053,18 @@ class TorServicesPage(QWidget):
         self._pending_stops.discard(service_id)
         self.lbl_runtime_status.setText(error)
         self.refresh_services()
-        QMessageBox.warning(self, \"Tor service stop failed\", error)
+        QMessageBox.warning(self, "Tor service stop failed", error)
 
     def open_service_logs(self, service_id: str) -> None:
-        \"\"\"Open the real per-profile Tor log, including while startup is in progress.\"\"\"
+        """Open the real per-profile Tor log, including while startup is in progress."""
         manager = None
         pool = self._pool(create=False)
         if pool is not None and service_id in pool.service_ids:
             try:
                 manager = pool.get(service_id)
             except Exception:
-                logger.exception(\"Could not obtain the manager for Tor profile '%s'.\", service_id)
-        path = getattr(manager, \"log_path\", None) or (user_directories().logs / \"tor-services\" / service_id / \"tor.log\")
+                logger.exception("Could not obtain the manager for Tor profile '%s'.", service_id)
+        path = getattr(manager, "log_path", None) or (user_directories().logs / "tor-services" / service_id / "tor.log")
         TorLogDialog(self, path, manager=manager).exec()
 
     def start_all(self) -> None:
@@ -1314,7 +1314,6 @@ class TorServicesPage(QWidget):
         can_stop = state not in {"stopped", "bundle unavailable", "not registered", "needs attention"}
         if pool := self._pool():
             can_start = can_start and not is_busy
-            can_stop = can_stop and not is_busy
 
         start_button = QPushButton("Start", card)
         start_button.setObjectName("settingsActionButton")
