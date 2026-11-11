@@ -50,6 +50,7 @@ from ui_.window.updater_window import UpdaterWindow
 from ui_.window.tunnel_window import TunnelManagerWindow
 from ui_.window.dialogs import QMessageBox, ExitConfirmDialog
 from ui_.window.shortcuts_window import ShortcutsWindow
+from ui_.window.onion_hosting_page import OnionHostingPage
 from ui_.window.statistics_window import StatisticsWindow
 from ui_.window.tor_services_page import TorServicesPage
 logger = logging.getLogger(__name__)
@@ -254,6 +255,8 @@ class Window(QMainWindow):
         self.stack.addWidget(self.statisticsWidget)
         self.customTorWidget = TorServicesPage(self, app_window=self, management_only=True)
         self.stack.addWidget(self.customTorWidget)
+        self.developerTorWidget = OnionHostingPage(self.proxyWidget, self)
+        self.stack.addWidget(self.developerTorWidget)
 
         if IS_WINDOWS:
             self.title_bar = CustomTitleBar(self)
@@ -1399,6 +1402,7 @@ class Window(QMainWindow):
             getattr(self, "shortcutsWidget", None),
             getattr(self, "statisticsWidget", None),
             getattr(self, "customTorWidget", None),
+            getattr(self, "developerTorWidget", None),
         ):
             apply_theme = getattr(page, "apply_theme", None)
             if callable(apply_theme):
@@ -1650,6 +1654,10 @@ class Window(QMainWindow):
     def _show_custom_tor(self):
         self._show_page(self.stack.indexOf(self.customTorWidget))
         self.customTorWidget.refresh_services()
+
+    def _show_developer_tor(self):
+        self._show_page(self.stack.indexOf(self.developerTorWidget))
+        self.developerTorWidget.refresh_dashboard()
 
     def _show_home(self):
         self._show_page(0)

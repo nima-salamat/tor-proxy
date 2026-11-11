@@ -1,6 +1,7 @@
 """Backward-compatible configuration facade using per-user, atomic storage."""
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import platform
@@ -65,6 +66,7 @@ DEFAULT_DATA: dict[str, Any] = {
     "primary_tor_instances": 2,
     "tor_service_workers": 4,
     "tor_services": [],
+    "onion_hosting_services": [],
 }
 LEGACY_KEYS = set(DEFAULT_DATA) | {"data_usage_bytes", "exclude_hosts", "blocked_hosts"}
 
@@ -213,6 +215,58 @@ class Config:
             data_directory = profile.get("data_directory")
             if data_directory is not None and (not isinstance(data_directory, str) or len(data_directory) > 4096):
                 raise ConfigError(f"Tor service '{service_id}' data_directory must be a path or null.")
+
+        onion_services = data.get("onion_hosting_services", [])
+        if not isinstance(onion_services, list) or len(onion_services) > 32:
+            raise ConfigError("onion_hosting_services must be a list containing at most 32 services.")
+        onion_ids: set[str] = set()
+        for index, service in enumerate(onion_services, start=1):
+            if not isinstance(service, dict):
+                raise ConfigError(f"Onion Service #{index} must be an object.")
+            forbidden_secret_fields = {
+                "private_key", "client_private_key", "tor_private_key",
+                "private_key_base64", "client_auth_private_key",
+            }
+            if forbidden_secret_fields.intersection(service):
+                raise ConfigError(
+                    f"Onion Service #{index} contains private key material; secrets must stay outside config.json."
+                )
+            service_id = service.get("id")
+            if not isinstance(service_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", service_id):
+                raise ConfigError(f"Onion Service #{index} has an invalid ID.")
+            if service_id in onion_ids:
+                raise ConfigError(f"Onion Service ID '{service_id}' is duplicated.")
+            onion_ids.add(service_id)
+            name = service.get("display_name")
+            if not isinstance(name, str) or not name.strip() or len(name) > 80:
+                raise ConfigError(f"Onion Service '{service_id}' needs a name of at most 80 characters.")
+            try:
+                host = ipaddress.ip_address(str(service.get("local_host", "")))
+            except ValueError as exc:
+                raise ConfigError(f"Onion Service '{service_id}' target must be a literal loopback IP.") from exc
+            if not host.is_loopback:
+                raise ConfigError(f"Onion Service '{service_id}' may forward only to a loopback target.")
+            for key in ("local_port", "onion_port"):
+                port = service.get(key)
+                if type(port) is not int or not 1 <= port <= 65535:
+                    raise ConfigError(f"Onion Service '{service_id}' has an invalid {key}.")
+            for key in ("persistent", "auto_start"):
+                if type(service.get(key)) is not bool:
+                    raise ConfigError(f"Onion Service '{service_id}' {key} must be true or false.")
+            if service.get("access_mode") not in {"public", "private"}:
+                raise ConfigError(f"Onion Service '{service_id}' access_mode must be public or private.")
+            public_key = service.get("client_public_key", "")
+            if service["access_mode"] == "private":
+                if not isinstance(public_key, str) or not re.fullmatch(r"[a-z2-7]{52}", public_key):
+                    raise ConfigError(f"Onion Service '{service_id}' has an invalid v3 client public key.")
+            elif public_key not in ("", None):
+                raise ConfigError(f"Public Onion Service '{service_id}' cannot keep a client authorization key.")
+            onion_address = service.get("service_id", "")
+            if onion_address and (
+                not isinstance(onion_address, str)
+                or not re.fullmatch(r"[a-z2-7]{56}", onion_address)
+            ):
+                raise ConfigError(f"Onion Service '{service_id}' has an invalid v3 address identifier.")
 
     def _save_data(self, data: dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
