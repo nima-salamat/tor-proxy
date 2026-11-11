@@ -213,3 +213,22 @@ def test_unexpected_runtime_exit_reconciles_active_services(hosting):
     assert runtime["state"] == "failed"
     assert service["running"] is False
     assert "no longer published" in service["error"]
+
+
+def test_missing_persistent_identity_is_not_silently_regenerated(hosting):
+    manager, _config, tor = hosting
+    profile_id = manager.create_service(
+        display_name="Identity-bound site",
+        local_host="127.0.0.1",
+        local_port=9010,
+        persistent=True,
+    )
+    manager.start_service(profile_id)
+    manager.stop_service(profile_id)
+    manager._key_path(profile_id).unlink()
+
+    add_count = sum(command.startswith("ADD_ONION") for command in tor.commands)
+    with pytest.raises(OnionHostingError, match="will not be recreated"):
+        manager.start_service(profile_id)
+
+    assert sum(command.startswith("ADD_ONION") for command in tor.commands) == add_count
