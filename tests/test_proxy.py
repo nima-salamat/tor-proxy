@@ -536,6 +536,25 @@ def test_shutdown_cancels_an_idle_connect_relay_and_reaps_its_handler(monkeypatc
         listener_thread.join(timeout=2)
 
 
+
+
+def test_http_server_rejects_a_client_racing_with_shutdown():
+    server = proxy_module.ThreadedHTTPServer(
+        ("127.0.0.1", 0), proxy_module.ProxyHandler, 9050
+    )
+    request, peer = socket.socketpair()
+    try:
+        server.begin_shutdown()
+        server.process_request(request, ("127.0.0.1", 12345))
+
+        assert server.client_metrics["active_clients"] == 0
+        assert request.fileno() == -1
+    finally:
+        request.close()
+        peer.close()
+        server.server_close()
+
+
 def test_http_server_rejects_new_upstream_sockets_after_shutdown():
     server = proxy_module.ThreadedHTTPServer(
         ("127.0.0.1", 0), proxy_module.ProxyHandler, 9050

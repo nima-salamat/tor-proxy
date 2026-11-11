@@ -489,6 +489,56 @@ def _unregister_upstream(server, remote: socket.socket | None) -> None:
         unregister(remote)
 
 
+def _run_interruptible_upstream_operation(operation, server=None, *, thread_name: str):
+    """Run a blocking resolver/connect outside the HTTP handler's shutdown path.
+
+    On Windows, closing a socket from another thread does not always interrupt
+    an in-progress blocking connect immediately. The handler polls the shutdown
+    event while a daemon worker owns the blocking operation, so application
+    shutdown does not wait for the full network timeout.
+    """
+    stop_event = getattr(server, "shutdown_event", None)
+    if stop_event is None:
+        return operation()
+    if stop_event.is_set():
+        raise OSError("The local HTTP proxy is shutting down.")
+
+    finished = threading.Event()
+    results = []
+    errors: list[Exception] = []
+
+    def operation_worker() -> None:
+        try:
+            results.append(operation())
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            finished.set()
+
+    worker = threading.Thread(
+        target=operation_worker,
+        name=thread_name,
+        daemon=True,
+    )
+    worker.start()
+    while not finished.wait(RELAY_SHUTDOWN_POLL_SECONDS):
+        if stop_event.is_set():
+            raise OSError("The local HTTP proxy is shutting down.")
+    if stop_event.is_set():
+        raise OSError("The local HTTP proxy is shutting down.")
+    if errors:
+        raise errors[0]
+    return results[0] if results else None
+
+
+def _connect_with_shutdown(remote: socket.socket, address, server=None) -> None:
+    _run_interruptible_upstream_operation(
+        lambda: remote.connect(address),
+        server,
+        thread_name="torproxy-http-upstream-connect",
+    )
+
+
 def _connect_upstream(
     host: str,
     port: int,
@@ -500,14 +550,17 @@ def _connect_upstream(
     if route == "direct":
         # Explicit bypass; track the socket before connect so shutdown can cancel it.
         last_error = None
-        for family, socktype, proto, _canonname, sockaddr in socket.getaddrinfo(
-            host, port, type=socket.SOCK_STREAM
-        ):
+        addresses = _run_interruptible_upstream_operation(
+            lambda: socket.getaddrinfo(host, port, type=socket.SOCK_STREAM),
+            server,
+            thread_name="torproxy-http-dns-lookup",
+        )
+        for family, socktype, proto, _canonname, sockaddr in addresses:
             remote = socket.socket(family, socktype, proto)
             remote.settimeout(SOCKET_TIMEOUT_SECONDS)
             try:
                 _register_upstream(server, remote)
-                remote.connect(sockaddr)
+                _connect_with_shutdown(remote, sockaddr, server)
                 return remote
             except OSError as exc:
                 last_error = exc
@@ -524,7 +577,7 @@ def _connect_upstream(
         # Register before SOCKS CONNECT: the Tor circuit/destination handshake
         # may still be in progress when the user disconnects the proxy.
         _register_upstream(server, remote)
-        remote.connect((host, port))
+        _connect_with_shutdown(remote, (host, port), server)
         return remote
     except Exception:
         _unregister_upstream(server, remote)
@@ -855,16 +908,20 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
                 pass
 
     def process_request(self, request, client_address):
-        if self.shutdown_event.is_set():
-            self.shutdown_request(request)
-            return
-        if not self._client_slots.acquire(blocking=False):
-            with self._client_lock:
-                self._rejected_clients += 1
-            self.shutdown_request(request)
-            return
+        # Check shutdown and reserve the slot under one lock. This prevents a
+        # just-accepted socket from slipping past the final shutdown snapshot.
         with self._client_lock:
-            self._active_clients.add(request)
+            if self.shutdown_event.is_set():
+                rejected = True
+            elif not self._client_slots.acquire(blocking=False):
+                self._rejected_clients += 1
+                rejected = True
+            else:
+                self._active_clients.add(request)
+                rejected = False
+        if rejected:
+            self.shutdown_request(request)
+            return
         try:
             super().process_request(request, client_address)
         except Exception:

@@ -672,10 +672,12 @@ class TorRunner(QObject):
         managers = self._healthy_managers()
         enabled = bool(self.bridge)
         ready = bool(managers)
+        stopping = self._stopping.is_set()
         now = time.monotonic()
         with self._backend_lock:
             refresh_fingerprints = (
                 enabled
+                and not stopping
                 and (
                     not self._bridge_fingerprints_initialized
                     or now - self._last_bridge_fingerprint_refresh >= 5.0
@@ -1459,8 +1461,11 @@ class TorRunner(QObject):
 
     def stop(self):
         self.state = "STOPPING"
-        self._publish_bridge_usage()
+        # Stop new supervisor work before publishing final state. In
+        # particular, do not query ControlPort immediately before closing
+        # the Stem controller sockets during manager.stop().
         self._stopping.set()
+        self._publish_bridge_usage()
 
         gateway_error = None
         gateway = self._gateway

@@ -108,3 +108,8 @@ Editing or removing a profile requires it to be stopped. Removing a profile pres
 ## Load-balancer implementation choice
 
 The primary gateway stays protocol-aware and in-process. HAProxy and Envoy are mature general-purpose TCP/HTTP load balancers, but a plain TCP check only proves that a listener accepts connections; it does not verify that a particular SOCKS endpoint exits through Tor. Reproducing TorProxy's per-worker SOCKS probe, privacy-preserving result handling, and lifecycle coordination would require a separate health-check agent and another packaged process. The bounded gateway is therefore retained instead of adding an external load balancer that would not replace the Tor-specific supervision logic.
+
+
+## Local HTTP proxy shutdown
+
+The HTTP server closes both the client socket and every registered upstream socket before Tor is stopped. New client registration is synchronized with the shutdown flag, preventing a just-accepted connection from slipping past the final socket sweep. Blocking SOCKS connects and direct-route DNS resolution run in daemon workers while the HTTP handler polls the shutdown event; the handler can therefore exit promptly even when Windows does not interrupt a blocking Winsock operation immediately. The handler's socket is closed by the server, and any resolver/connect worker left behind is daemonized and holds no live proxy socket. The application retains service references if an actual handler still fails to leave within the bounded shutdown window.

@@ -550,6 +550,26 @@ def test_http_proxy_runner_respects_disabled_preference_and_can_start_live(monke
 
 
 
+
+
+def test_bridge_usage_shutdown_publish_does_not_query_closing_control_ports(monkeypatch, tmp_path):
+    runner, _config = _runner(monkeypatch, tmp_path, BRIDGES[0])
+    runner.bridge = True
+    calls = []
+    backend = _ready_fake_backend(19468)
+    backend.get_active_bridge_fingerprints = lambda: calls.append("control-query") or ()
+    runner._backend_managers = [backend]
+    runner._backend_statuses = {0: "READY"}
+    runner._backend_health = {
+        0: {"healthy": True, "latency_ms": 70.0, "consecutive_failures": 0}
+    }
+    runner._stopping.set()
+
+    runner._publish_bridge_usage()
+
+    assert calls == []
+
+
 def test_primary_pool_health_snapshot_exposes_gateway_active_load_and_capacity(monkeypatch, tmp_path):
     runner, _config = _runner(monkeypatch, tmp_path, "")
     backend = _ready_fake_backend(19466)
