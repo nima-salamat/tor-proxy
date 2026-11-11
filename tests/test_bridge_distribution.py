@@ -130,7 +130,7 @@ def test_bridge_shards_balance_record_count_when_fingerprints_have_multiple_line
     ]
     independent = [_bridge(index) for index in (20, 21, 22)]
 
-    result = distribute_bridge_records("\\n".join(variants + independent), 2)
+    result = distribute_bridge_records("\n".join(variants + independent), 2)
 
     assert result.unique_groups == 4
     assert result.shared_groups == 0

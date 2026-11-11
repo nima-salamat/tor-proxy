@@ -522,7 +522,8 @@ class SocksFailoverGateway:
             active_sessions = sum(1 for worker in self._session_threads if worker.is_alive())
         if active_sessions:
             raise SocksGatewayError(
-                f"The primary Tor SOCKS gateway still has {active_sessions} active session(s)."
+                "The primary Tor SOCKS gateway cannot stop while previous client sessions are "
+                f"still active ({active_sessions})."
             )
         with self._lock:
             self._thread = None
