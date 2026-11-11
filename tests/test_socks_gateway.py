@@ -58,6 +58,37 @@ def _free_port() -> int:
         return int(probe.getsockname()[1])
 
 
+@pytest.mark.parametrize(
+    ("request", "expected_host"),
+    [
+        (b"\x05\x01\x00\x03\x0fblocked.example\x01\xbb", "blocked.example"),
+        (b"\x05\x01\x00\x01\x7f\x00\x00\x02\x01\xbb", "127.0.0.2"),
+    ],
+)
+def test_gateway_rejects_blocked_socks_connect_before_backend_selection(request, expected_host):
+    seen_hosts = []
+    gateway_port = _free_port()
+    gateway = SocksFailoverGateway(
+        gateway_port,
+        lambda: [],
+        host_blocker=lambda host: seen_hosts.append(host) or host == expected_host,
+    )
+    gateway.start()
+    try:
+        with socket.create_connection(("127.0.0.1", gateway_port), timeout=2) as client:
+            client.settimeout(2)
+            client.sendall(b"\x05\x01\x00")
+            assert _recv_exact(client, 2) == b"\x05\x00"
+            client.sendall(request)
+            assert _recv_exact(client, 10) == (
+                b"\x05\x02\x00\x01\x00\x00\x00\x00\x00\x00"
+            )
+    finally:
+        gateway.stop()
+
+    assert seen_hosts == [expected_host]
+
+
 def test_gateway_fails_over_to_next_ready_backend_before_connect_reply():
     # Reserve then release a local port so the first backend is guaranteed to
     # refuse the connection; the second backend is a tiny SOCKS5 test server.
