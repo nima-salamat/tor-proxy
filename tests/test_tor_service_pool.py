@@ -340,3 +340,139 @@ def test_isolated_service_health_monitor_can_be_closed_without_stopping_service_
     assert not thread.is_alive()
     assert pool.status("work")["state"] == "ready"
     pool.stop_service("work")
+
+
+
+def test_stop_service_cancels_a_start_that_is_still_bootstrapping(tmp_path):
+    entered_start = threading.Event()
+    cancellation_observed = threading.Event()
+
+    class CancellableManager(FakeManager):
+        def start(self):
+            self.state = "starting"
+            entered_start.set()
+            assert self._start_cancel_event.wait(timeout=3), "Stop did not signal startup cancellation"
+            cancellation_observed.set()
+            self.state = "stopped"
+            raise RuntimeError("startup cancelled")
+
+        def stop(self):
+            self._start_cancel_event.set()
+            self.state = "stopped"
+
+    pool = _pool(tmp_path, manager_factory=CancellableManager)
+    manager = pool.register("interruptible", _settings(tmp_path, 27050, 27051))
+    start_errors = []
+
+    def start_service():
+        try:
+            pool.start_service("interruptible")
+        except Exception as exc:
+            start_errors.append(exc)
+
+    starter = threading.Thread(target=start_service)
+    starter.start()
+    assert entered_start.wait(timeout=2)
+
+    # Stop must run concurrently with start(), signal it and then reconcile
+    # under the entry's start lock before returning.
+    pool.stop_service("interruptible")
+    starter.join(timeout=3)
+
+    assert not starter.is_alive()
+    assert cancellation_observed.is_set()
+    assert start_errors
+    assert manager.state == "stopped"
+    assert pool.status("interruptible")["state"] == "stopped"
+    assert pool._services["interruptible"].stopping is False
+    pool.close()
+
+
+def test_force_stop_escalates_an_in_progress_graceful_stop(tmp_path):
+    graceful_stop_entered = threading.Event()
+    force_stop_requested = threading.Event()
+
+    class EscalatableManager(FakeManager):
+        def stop(self):
+            if self.state != "stopped":
+                graceful_stop_entered.set()
+                if not force_stop_requested.wait(timeout=3):
+                    raise RuntimeError("graceful stop did not finish")
+            self.state = "stopped"
+
+        def force_stop(self):
+            force_stop_requested.set()
+            self.state = "stopped"
+
+    pool = _pool(tmp_path, manager_factory=EscalatableManager)
+    manager = pool.register("escalatable", _settings(tmp_path, 27150, 27151))
+    manager.state = "ready"
+    stop_errors = []
+
+    def stop_service():
+        try:
+            pool.stop_service("escalatable")
+        except Exception as exc:
+            stop_errors.append(exc)
+
+    stopper = threading.Thread(target=stop_service)
+    stopper.start()
+    assert graceful_stop_entered.wait(timeout=2)
+
+    pool.force_stop_service("escalatable")
+    stopper.join(timeout=3)
+
+    assert not stopper.is_alive()
+    assert not stop_errors
+    assert force_stop_requested.is_set()
+    assert manager.state == "stopped"
+    entry = pool._services["escalatable"]
+    assert entry.stop_calls == 0
+    assert entry.stopping is False
+    assert entry.active_calls == 0
+    pool.close()
+
+
+def test_stop_all_escalates_a_service_already_being_stopped(tmp_path):
+    graceful_stop_entered = threading.Event()
+    force_stop_requested = threading.Event()
+
+    class EscalatableManager(FakeManager):
+        def stop(self):
+            if self.state != "stopped":
+                graceful_stop_entered.set()
+                if not force_stop_requested.wait(timeout=3):
+                    raise RuntimeError("graceful stop did not finish")
+            self.state = "stopped"
+
+        def force_stop(self):
+            force_stop_requested.set()
+            self.state = "stopped"
+
+    pool = _pool(tmp_path, manager_factory=EscalatableManager)
+    manager = pool.register("exit-race", _settings(tmp_path, 27250, 27251))
+    manager.state = "ready"
+    stop_errors = []
+
+    def stop_service():
+        try:
+            pool.stop_service("exit-race")
+        except Exception as exc:
+            stop_errors.append(exc)
+
+    stopper = threading.Thread(target=stop_service)
+    stopper.start()
+    assert graceful_stop_entered.wait(timeout=2)
+
+    result = pool.stop_all()
+    stopper.join(timeout=3)
+
+    assert result == {"exit-race": None}
+    assert not stopper.is_alive()
+    assert not stop_errors
+    assert force_stop_requested.is_set()
+    assert pool.status("exit-race")["state"] == "stopped"
+    entry = pool._services["exit-race"]
+    assert entry.stopping is False
+    assert entry.active_calls == 0
+    pool.close()
