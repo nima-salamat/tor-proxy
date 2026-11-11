@@ -13,7 +13,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import QEvent, Qt, QTimer, QThreadPool, QPropertyAnimation, QEasingCurve
 from pathlib import Path
 
-from torproxy.ports import PortAllocationError, resolve_listener_ports
+from torproxy.ports import PortAllocationError, resolve_listener_ports, ephemeral_loopback_port
+from torproxy.onion_hosting import OnionHostingManager
 from torproxy.service_pool import TorServicePool
 from torproxy.tor_manager import TorManagerError, TorSettings
 from set_proxy import has_proxy_snapshot, manage_proxy
@@ -194,6 +195,12 @@ class ProxyWindow(QWidget):
         self.btn_custom_tor.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_custom_tor.setToolTip("Create and manage independent Tor services")
         self.btn_custom_tor.clicked.connect(self.open_custom_tor_page)
+        self.btn_developer_tor = QPushButton("Developer Tor", self.home_content)
+        self.btn_developer_tor.setObjectName("customTorLink")
+        self.btn_developer_tor.setFlat(True)
+        self.btn_developer_tor.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_developer_tor.setToolTip("Host local applications as independent v3 Onion Services")
+        self.btn_developer_tor.clicked.connect(self.open_developer_tor_page)
         metrics.addStretch(1)
         metrics.addWidget(self.lbl_percent)
         separator = QFrame(self.home_content)
@@ -203,6 +210,7 @@ class ProxyWindow(QWidget):
         metrics.addWidget(self.lbl_data_usage)
         metrics.addWidget(self.btn_statistics)
         metrics.addWidget(self.btn_custom_tor)
+        metrics.addWidget(self.btn_developer_tor)
         metrics.addStretch(1)
         self.home_layout.addLayout(metrics)
         self.data.valueChanged.connect(self.dataValueChanged)
@@ -459,6 +467,46 @@ class ProxyWindow(QWidget):
         show_custom_tor = getattr(owner, "_show_custom_tor", None)
         if callable(show_custom_tor):
             show_custom_tor()
+
+    def open_developer_tor_page(self):
+        owner = self._parent
+        show_page = getattr(owner, "_show_developer_tor", None)
+        if callable(show_page):
+            show_page()
+
+    def _build_developer_tor_settings(self) -> TorSettings:
+        """Build the isolated Onion Hosting runtime without inheriting Main Tor settings."""
+        if not self.tor.path_set or not self.tor.tor_path:
+            self.tor.update_path(CONFIG["tor_path"])
+        if not self.tor.path_set or not self.tor.tor_path:
+            raise TorManagerError(
+                "Install or select a compatible Tor Expert Bundle before starting Developer Tor."
+            )
+        directories = user_directories()
+        return TorSettings(
+            executable=Path(self.tor.tor_path),
+            socks_port=0,
+            control_port=ephemeral_loopback_port(),
+            dns_port=None,
+            data_directory=directories.data / "developer-tor",
+            geoip_path=Path(self.tor.geoip_path) if self.tor.geoip_path else None,
+            geoip6_path=Path(self.tor.geoip6_path) if self.tor.geoip6_path else None,
+            bridges_enabled=False,
+            bridges="",
+            max_circuit_dirtiness_seconds=600,
+            new_circuit_period_seconds=60,
+            startup_timeout_seconds=180.0,
+            shutdown_timeout_seconds=5.0,
+            log_path=directories.logs / "developer-tor" / "tor.log",
+        )
+
+    def _ensure_onion_hosting_manager(self) -> OnionHostingManager:
+        """Keep Developer Tor owned by Home so hiding the window never stops hosting."""
+        manager = getattr(self, "onion_hosting_manager", None)
+        if manager is None:
+            manager = OnionHostingManager(self._build_developer_tor_settings)
+            self.onion_hosting_manager = manager
+        return manager
 
     def open_browser_dialog(self):
         """Open the browser chooser only after Tor and the local HTTP listener are ready."""
@@ -1258,6 +1306,18 @@ class ProxyWindow(QWidget):
             except Exception as exc:
                 logger.exception("Error stopping Tor.")
                 stop_errors.append(f"Tor shutdown failed: {exc}")
+
+        # Developer Tor is independent while the window is hidden or Main Tor disconnects.
+        # Only an explicit application exit owns and stops this separate hosting runtime.
+        if getattr(self._parent, "_closing", False):
+            onion_manager = getattr(self, "onion_hosting_manager", None)
+            if onion_manager is not None:
+                try:
+                    onion_manager.stop_runtime()
+                    messages.append("Developer Tor and its Onion Services stopped.")
+                except Exception as exc:
+                    logger.exception("Error stopping Developer Tor during application exit.")
+                    stop_errors.append(f"Developer Tor shutdown failed: {exc}")
 
         # Additional Tor profiles are independent while the UI remains open.
         # An explicit application exit, however, owns and must stop every child.
