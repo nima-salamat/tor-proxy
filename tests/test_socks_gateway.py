@@ -71,7 +71,7 @@ def test_gateway_rejects_blocked_socks_connect_before_backend_selection(raw_requ
     gateway = SocksFailoverGateway(
         gateway_port,
         lambda: [],
-        host_blocker=lambda host: seen_hosts.append(host) or host == expected_host,
+        host_router=lambda host: (seen_hosts.append(host), "blocked" if host == expected_host else "tor")[1],
     )
     gateway.start()
     try:
@@ -87,6 +87,67 @@ def test_gateway_rejects_blocked_socks_connect_before_backend_selection(raw_requ
         gateway.stop()
 
     assert seen_hosts == [expected_host]
+
+
+def test_gateway_routes_excluded_socks_domain_directly_without_using_tor_backends():
+    target = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    target.bind(("127.0.0.1", 0))
+    target.listen()
+    target_port = int(target.getsockname()[1])
+    target_received = []
+    target_finished = threading.Event()
+
+    def serve_target():
+        try:
+            connection, _address = target.accept()
+            with connection:
+                payload = _recv_exact(connection, 5)
+                target_received.append(payload)
+                connection.sendall(payload)
+        finally:
+            target.close()
+            target_finished.set()
+
+    target_thread = threading.Thread(target=serve_target, daemon=True)
+    target_thread.start()
+    gateway_port = _free_port()
+    backend_provider_called = []
+    routed_hosts = []
+    gateway = SocksFailoverGateway(
+        gateway_port,
+        lambda: backend_provider_called.append(True) or [],
+        host_router=lambda host: routed_hosts.append(host) or ("direct" if host == "localhost" else "tor"),
+        connect_timeout=2,
+        handshake_timeout=2,
+        idle_timeout=5,
+    )
+    gateway.start()
+    try:
+        with socket.create_connection(("127.0.0.1", gateway_port), timeout=2) as client:
+            client.settimeout(2)
+            client.sendall(b"\\x05\\x01\\x00")
+            assert _recv_exact(client, 2) == b"\\x05\\x00"
+            encoded_host = b"localhost"
+            request = (
+                b"\\x05\\x01\\x00\\x03"
+                + bytes((len(encoded_host),))
+                + encoded_host
+                + target_port.to_bytes(2, "big")
+            )
+            client.sendall(request)
+            response = _recv_exact(client, 10)
+            assert response[:4] == b"\\x05\\x00\\x00\\x01"
+            client.sendall(b"hello")
+            assert _recv_exact(client, 5) == b"hello"
+    finally:
+        gateway.stop()
+        target_thread.join(timeout=2)
+
+    assert routed_hosts == ["localhost"]
+    assert backend_provider_called == []
+    assert target_received == [b"hello"]
+    assert target_finished.is_set()
+    assert not target_thread.is_alive()
 
 
 def test_gateway_fails_over_to_next_ready_backend_before_connect_reply():
