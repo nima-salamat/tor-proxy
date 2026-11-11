@@ -45,7 +45,7 @@ class TorState(str, Enum):
 @dataclass(frozen=True)
 class TorSettings:
     executable: Path
-    socks_port: int = 9050
+    socks_port: int | None = 9050
     control_port: int = 9051
     dns_port: int | None = None
     data_directory: Path | None = None
@@ -63,6 +63,10 @@ class TorSettings:
     cgroup_callback: Callable[[int | None, int | None], None] | None = None
 
     def __post_init__(self) -> None:
+        if self.socks_port is not None and type(self.socks_port) is not int:
+            raise TorManagerError("SOCKS port must be 0 (disabled), null, or an integer between 1 and 65535.")
+        if self.socks_port not in (None, 0) and not 1 <= self.socks_port <= 65535:
+            raise TorManagerError("SOCKS port must be 0 (disabled), null, or an integer between 1 and 65535.")
         socks_disabled = self.socks_port in (None, 0)
         ports = [self.control_port]
         if not socks_disabled:
@@ -961,7 +965,11 @@ class TorManager:
             try:
                 return self._controller.msg(command)
             except Exception as exc:
-                raise TorManagerError(f"Tor ControlPort command failed: {exc}") from exc
+                # Stem may include the submitted command in protocol diagnostics.
+                # ADD_ONION commands can carry private keys, so expose only the error type.
+                raise TorManagerError(
+                    f"Tor ControlPort command failed ({type(exc).__name__})."
+                ) from exc
 
     def request_new_identity(self) -> float:
         with self._lock:
