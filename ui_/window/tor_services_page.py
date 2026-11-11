@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QTextEdit,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -28,26 +29,170 @@ from config import CONFIG
 from torproxy.bridges import parse_bridge_text
 from torproxy.service_pool import TorServicePoolError
 from ui_.worker.worker import Worker
-from ui_.window.dialogs import QMessageBox
+from ui_.window.dialogs import QMessageBox, _FramelessDialog
+from ui_.window.tor_log_dialog import TorLogDialog
+from torproxy.paths import user_directories
 
 logger = logging.getLogger(__name__)
 _SERVICE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
 
-class TorServiceEditorDialog(QDialog):
+class TorServicesSettingsPage(QWidget):
+    """Persistent configuration controls for the Custom Tor manager."""
+
+    def __init__(self, parent=None, *, app_window=None):
+        super().__init__(parent)
+        self._app_window = app_window
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        title = QLabel("Custom Tor configuration")
+        title.setObjectName("settingsSectionTitle")
+        layout.addWidget(title)
+        description = QLabel(
+            "Configure how the primary Tor connection and custom Tor services use system resources. "
+            "Service profiles, listener ports, bridges and start/stop controls are managed on the separate Custom Tor page."
+        )
+        description.setObjectName("settingsDescription")
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        self._spins: dict[str, QSpinBox] = {}
+        self._status = QLabel("Settings are saved automatically when changed.")
+        self._status.setObjectName("settingsDescription")
+        self._status.setWordWrap(True)
+
+        self._add_setting(layout, "Main Tor instances", "Number of isolated Tor workers behind the primary SOCKS endpoint.", "primary_tor_instances", 1, 4, " instances", 2)
+        self._add_setting(layout, "Concurrent bridge probes", "Maximum number of parallel bridge preflight checks (CPU/memory use increases with this value).", "bridge_probe_workers", 1, 8, " workers", 8)
+        self._add_setting(layout, "Concurrent service operations", "Maximum number of independent custom Tor services started or stopped together.", "tor_service_workers", 1, 8, " workers", 4)
+
+        health_title = QLabel("Primary connection health")
+        health_title.setObjectName("settingsSectionTitle")
+        layout.addWidget(health_title)
+        self.primary_health = QLabel("Primary Tor pool is not running.")
+        self.primary_health.setObjectName("settingsDescription")
+        self.primary_health.setWordWrap(True)
+        layout.addWidget(self.primary_health)
+
+        management = QFrame(self)
+        management.setObjectName("settingsRowCard")
+        management_layout = QHBoxLayout(management)
+        management_layout.setContentsMargins(14, 10, 14, 10)
+        management_layout.setSpacing(12)
+        copy = QVBoxLayout()
+        copy.setSpacing(3)
+        management_title = QLabel("Manage custom Tor services")
+        management_title.setObjectName("settingsFieldLabel")
+        management_description = QLabel("Create profiles, assign listener ports, start or stop Tor processes and inspect live logs from the Custom Tor page.")
+        management_description.setObjectName("settingsDescription")
+        management_description.setWordWrap(True)
+        copy.addWidget(management_title)
+        copy.addWidget(management_description)
+        management_layout.addLayout(copy, 1)
+        self.open_manager_button = QPushButton("Open Custom Tor", management)
+        self.open_manager_button.setObjectName("settingsActionButton")
+        self.open_manager_button.setIcon(qta.icon("fa6s.arrow-up-right-from-square"))
+        self.open_manager_button.clicked.connect(self._open_manager)
+        management_layout.addWidget(self.open_manager_button)
+        layout.addWidget(management)
+        layout.addWidget(self._status)
+        layout.addStretch(1)
+
+        proxy = getattr(app_window, "proxyWidget", None)
+        primary_tor = getattr(proxy, "tor", None)
+        signal = getattr(primary_tor, "bridge_usage_changed", None)
+        connect = getattr(signal, "connect", None)
+        if callable(connect):
+            connect(self._update_primary_health)
+        snapshot = getattr(primary_tor, "pool_health_snapshot", None)
+        if isinstance(snapshot, dict):
+            self._update_primary_health(snapshot)
+
+    def _add_setting(self, layout, title, description, key, minimum, maximum, suffix, fallback):
+        row = QFrame(self)
+        row.setObjectName("settingsRowCard")
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(14, 10, 14, 10)
+        row_layout.setSpacing(12)
+        copy = QVBoxLayout()
+        copy.setSpacing(3)
+        label = QLabel(title)
+        label.setObjectName("settingsFieldLabel")
+        detail = QLabel(description)
+        detail.setObjectName("settingsDescription")
+        detail.setWordWrap(True)
+        copy.addWidget(label)
+        copy.addWidget(detail)
+        row_layout.addLayout(copy, 1)
+        spin = QSpinBox(row)
+        spin.setRange(minimum, maximum)
+        spin.setSuffix(suffix)
+        spin.setValue(int(CONFIG[key] or fallback))
+        spin.valueChanged.connect(lambda value, setting=key, control=spin: self._save_setting(setting, value, control))
+        row_layout.addWidget(spin)
+        self._spins[key] = spin
+        layout.addWidget(row)
+
+    def _save_setting(self, key: str, value: int, control: QSpinBox) -> None:
+        previous = int(CONFIG[key] or control.minimum())
+        try:
+            if key == "tor_service_workers":
+                proxy = getattr(self._app_window, "proxyWidget", None)
+                pool = getattr(proxy, "tor_service_pool", None)
+                if pool is not None:
+                    pool.set_max_workers(int(value))
+            CONFIG[key] = int(value)
+            self._status.setText(f"Saved {key.replace('_', ' ')}: {value}.")
+        except Exception as exc:
+            blocked = control.blockSignals(True)
+            control.setValue(previous)
+            control.blockSignals(blocked)
+            self._status.setText(f"Could not save {key.replace('_', ' ')}: {exc}")
+            QMessageBox.warning(self, "Settings could not be saved", str(exc))
+
+    def _update_primary_health(self, health) -> None:
+        if not isinstance(health, dict):
+            return
+        ready = max(0, int(health.get("ready_instances", 0) or 0))
+        total = max(0, int(health.get("total_instances", 0) or 0))
+        if total <= 0:
+            self.primary_health.setText("Primary Tor pool is not running.")
+            return
+        details = []
+        for item in health.get("instances", []):
+            if not isinstance(item, dict):
+                continue
+            try:
+                index = int(item.get("index", len(details) + 1) or len(details) + 1)
+                latency = float(item["latency_ms"]) if item.get("latency_ms") is not None else None
+            except (TypeError, ValueError):
+                index, latency = len(details) + 1, None
+            state = f"Healthy · {latency:.0f} ms" if item.get("healthy") and latency is not None else ("Healthy" if item.get("healthy") else str(item.get("state", "starting")).replace("-", " ").title())
+            details.append(f"Instance {index}: {state}")
+        self.primary_health.setText(f"{ready}/{total} primary Tor instance(s) verified healthy\\n" + "  |  ".join(details))
+
+    def _open_manager(self) -> None:
+        show = getattr(self._app_window, "_show_custom_tor", None)
+        if callable(show):
+            show()
+
+
+class TorServiceEditorDialog(_FramelessDialog):
     """Create or edit one persisted, independently isolated Tor profile."""
 
     def __init__(self, profile: dict | None = None, parent=None):
-        super().__init__(parent)
+        editing = profile is not None
+        super().__init__(
+            parent,
+            "Edit custom Tor service" if editing else "Create custom Tor service",
+            "fa6s.server",
+            "#287db5",
+            width=560,
+        )
         self._source_profile = dict(profile or {})
         self.profile: dict | None = None
-        editing = profile is not None
-        self.setWindowTitle("Edit Tor service" if editing else "Add Tor service")
-        self.setMinimumWidth(520)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 18, 20, 16)
-        layout.setSpacing(12)
+        layout = self.body_layout
         intro = QLabel(
             "Each profile runs its own Tor process with a separate DataDirectory, "
             "ControlPort cookie, log file and listener ports."
@@ -139,13 +284,19 @@ class TorServiceEditorDialog(QDialog):
         self.lbl_error.setWordWrap(True)
         layout.addWidget(self.lbl_error)
 
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel,
-            parent=self,
-        )
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        self.add_footer_spacer()
+        self.add_button("Cancel", primary=False, callback=self.reject)
+        self.add_button("Save changes" if editing else "Create service", primary=True, callback=self.accept)
+        self.resize(620, 680)
+        self._remember_preferred_size()
+        self.setStyleSheet(self.styleSheet() + f"""
+            QLineEdit, QTextEdit, QSpinBox {{
+                background: {self._colors['panel']}; color: {self._colors['text']};
+                border: 1px solid {self._colors['border']}; border-radius: 7px; padding: 7px 9px;
+            }}
+            QLineEdit:focus, QTextEdit:focus, QSpinBox:focus {{ border-color: {self._accent}; }}
+            QCheckBox {{ color: {self._colors['text']}; spacing: 7px; }}
+        """)
 
         self.chk_use_primary_bridges.toggled.connect(self._sync_bridge_controls)
         self.chk_bridges_enabled.toggled.connect(self._sync_bridge_controls)
@@ -260,42 +411,73 @@ class TorServiceEditorDialog(QDialog):
 
 
 class TorServicesPage(QWidget):
-    """Settings page for concurrent bridge probes and isolated Tor profiles."""
+    """Dedicated Custom Tor page for creating and managing isolated profiles."""
 
-    def __init__(self, parent=None, *, app_window=None):
+    def __init__(self, parent=None, *, app_window=None, management_only: bool = False):
         super().__init__(parent)
         self._app_window = app_window
+        self._management_only = bool(management_only)
         self._proxy = getattr(app_window, "proxyWidget", None)
         self._primary_tor = getattr(self._proxy, "tor", None)
         self._thread_pool = QThreadPool(self)
         self._workers: dict[str, Worker] = {}
         self._busy_services: set[str] = set()
+        self._stop_workers: dict[str, Worker] = {}
+        self._pending_stops: set[str] = set()
         self._busy_all = False
         self._service_cards_layout: QVBoxLayout | None = None
         self._service_state_labels: dict[str, QLabel] = {}
         self._service_health_labels: dict[str, QLabel] = {}
         self._service_start_buttons: dict[str, QPushButton] = {}
         self._service_stop_buttons: dict[str, QPushButton] = {}
+        self._service_force_stop_buttons: dict[str, QPushButton] = {}
+        self._service_logs_buttons: dict[str, QPushButton] = {}
         self._health_refresh_timer = QTimer(self)
         self._health_refresh_timer.setInterval(5000)
         self._health_refresh_timer.timeout.connect(self._refresh_live_service_health)
         self._health_refresh_timer.start()
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(20, 14, 20, 14)
+        root_layout.setSpacing(10)
+        if self._management_only:
+            header = QHBoxLayout()
+            header.setSpacing(12)
+            self.btn_back_home = QPushButton("Back to Home", self)
+            self.btn_back_home.setObjectName("customTorBackButton")
+            self.btn_back_home.setIcon(qta.icon("fa6s.arrow-left"))
+            self.btn_back_home.clicked.connect(self._go_home)
+            header.addWidget(self.btn_back_home)
+            page_title = QLabel("Custom Tor")
+            page_title.setObjectName("customTorPageTitle")
+            header.addWidget(page_title, 1)
+            root_layout.addLayout(header)
 
-        layout.addWidget(self._section_title("Tor services"))
+        scroll = QScrollArea(self)
+        scroll.setObjectName("customTorScrollArea")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        content = QWidget(scroll)
+        content.setObjectName("customTorContent")
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(2, 2, 12, 4)
+        layout.setSpacing(12)
+        scroll.setWidget(content)
+        root_layout.addWidget(scroll, 1)
+
+        self.page_heading = self._section_title("Custom Tor" if self._management_only else "Tor services")
+        layout.addWidget(self.page_heading)
         description = QLabel(
-            "Create independent Tor processes for separate applications or identities. "
-            "Profiles keep their own SOCKS, ControlPort, optional DNSPort, state directory, "
-            "control cookie and log. They can run alongside the primary Tor connection."
+            "Create and manage independent Tor processes for separate applications or identities. "
+            "Each profile has its own SOCKS, ControlPort, optional DNSPort, DataDirectory, control cookie and live log."
         )
         description.setObjectName("settingsDescription")
         description.setWordWrap(True)
         layout.addWidget(description)
 
-        layout.addWidget(self._section_title("Primary connection redundancy"))
+        self.primary_settings_heading = self._section_title("Primary connection redundancy")
+        layout.addWidget(self.primary_settings_heading)
         primary_pool_card = QFrame(self)
         primary_pool_card.setObjectName("settingsRowCard")
         primary_pool_layout = QHBoxLayout(primary_pool_card)
@@ -322,11 +504,13 @@ class TorServicesPage(QWidget):
         self.spin_primary_instances.setToolTip("Number of Tor workers backing the primary connection. Allowed range: 1–4.")
         self.spin_primary_instances.valueChanged.connect(self._save_primary_tor_instances)
         primary_pool_layout.addWidget(self.spin_primary_instances)
+        self.primary_settings_card = primary_pool_card
         layout.addWidget(primary_pool_card)
         self.lbl_primary_pool_health = QLabel("Primary Tor pool is not running.")
         self.lbl_primary_pool_health.setObjectName("settingsDescription")
         self.lbl_primary_pool_health.setWordWrap(True)
         layout.addWidget(self.lbl_primary_pool_health)
+        self.primary_health_label = self.lbl_primary_pool_health
         if self._primary_tor is not None:
             health_signal = getattr(self._primary_tor, "bridge_usage_changed", None)
             connect_health = getattr(health_signal, "connect", None)
@@ -336,7 +520,8 @@ class TorServicesPage(QWidget):
             if isinstance(snapshot, dict):
                 self._update_primary_pool_health(snapshot)
 
-        layout.addWidget(self._section_title("Parallel bridge checks"))
+        self.bridge_settings_heading = self._section_title("Parallel bridge checks")
+        layout.addWidget(self.bridge_settings_heading)
         bridge_card = QFrame(self)
         bridge_card.setObjectName("settingsRowCard")
         bridge_layout = QHBoxLayout(bridge_card)
@@ -363,9 +548,11 @@ class TorServicesPage(QWidget):
         self.spin_bridge_workers.setToolTip("Maximum parallel bridge checks. Allowed range: 1–8.")
         self.spin_bridge_workers.valueChanged.connect(self._save_bridge_workers)
         bridge_layout.addWidget(self.spin_bridge_workers)
+        self.bridge_settings_card = bridge_card
         layout.addWidget(bridge_card)
 
-        layout.addWidget(self._section_title("Service operations"))
+        self.service_settings_heading = self._section_title("Service operations")
+        layout.addWidget(self.service_settings_heading)
         service_workers_card = QFrame(self)
         service_workers_card.setObjectName("settingsRowCard")
         worker_layout = QHBoxLayout(service_workers_card)
@@ -388,11 +575,12 @@ class TorServicesPage(QWidget):
         self.spin_service_workers.setValue(int(CONFIG["tor_service_workers"] or 4))
         self.spin_service_workers.valueChanged.connect(self._save_service_workers)
         worker_layout.addWidget(self.spin_service_workers)
+        self.service_settings_card = service_workers_card
         layout.addWidget(service_workers_card)
 
         actions = QHBoxLayout()
         actions.setSpacing(8)
-        self.btn_add = QPushButton("Add Tor service", self)
+        self.btn_add = QPushButton("Create custom Tor service", self)
         self.btn_add.setObjectName("settingsActionButton")
         self.btn_add.setIcon(qta.icon("fa6s.plus"))
         self.btn_add.clicked.connect(self.add_service)
@@ -426,7 +614,56 @@ class TorServicesPage(QWidget):
         self._service_cards_layout.setSpacing(8)
         layout.addWidget(self.service_cards)
         layout.addStretch(1)
+        if self._management_only:
+            for widget in (
+                self.primary_settings_heading, self.primary_settings_card, self.primary_health_label,
+                self.bridge_settings_heading, self.bridge_settings_card,
+                self.service_settings_heading, self.service_settings_card,
+            ):
+                widget.hide()
+        self.apply_theme(CONFIG["mode"])
         self.refresh_services()
+
+    def _go_home(self) -> None:
+        show = getattr(self._app_window, "_show_home", None)
+        if callable(show):
+            show()
+
+    def apply_theme(self, mode: str) -> None:
+        dark = str(mode).lower() == "dark"
+        border = "#3b4552" if dark else "#d9e0e8"
+        accent = "#47a3f2" if dark else "#1876bf"
+        panel = "#202630" if dark else "#ffffff"
+        field = "#171c23" if dark else "#f8fafc"
+        text = "#e8edf3" if dark else "#253041"
+        muted = "#aab5c4" if dark else "#667487"
+        hover = "rgba(71, 163, 242, 0.14)" if dark else "rgba(24, 118, 191, 0.08)"
+        self.setStyleSheet(f\"\"\"
+            QWidget#customTorContent {{ background: transparent; }}
+            QLabel#customTorPageTitle {{ color: {text}; background: transparent; font-size: 15px; font-weight: 800; }}
+            QLabel#settingsSectionTitle {{ color: {text}; background: transparent; font-size: 14px; font-weight: 750; }}
+            QLabel#settingsDescription {{ color: {muted}; background: transparent; font-size: 11px; }}
+            QLabel#settingsFieldLabel {{ color: {text}; background: transparent; font-weight: 650; }}
+            QFrame#settingsRowCard, QFrame#torServiceCard {{ background: {panel}; border: 1px solid {border}; border-radius: 9px; }}
+            QFrame#torServiceCard:hover {{ border-color: {accent}; }}
+            QLabel#torServiceStatus {{ color: {muted}; background: {field}; border: 1px solid {border}; border-radius: 6px; padding: 3px 7px; font-size: 8px; font-weight: 800; }}
+            QLabel#torServiceStatus[serviceState=\"ready\"] {{ color: #31b981; border-color: rgba(49,185,129,0.35); }}
+            QLabel#torServiceStatus[serviceState=\"failed\"] {{ color: #e36b75; border-color: rgba(227,107,117,0.35); }}
+            QPushButton#settingsActionButton {{ min-height: 32px; padding: 0 11px; border: 1px solid {border}; border-radius: 7px; background: transparent; color: {text}; font-weight: 650; }}
+            QPushButton#settingsActionButton:hover, QPushButton#customTorBackButton:hover {{ background: {hover}; border-color: {accent}; }}
+            QPushButton#settingsActionButton:disabled {{ color: {muted}; }}
+            QPushButton#customTorBackButton {{ min-height: 34px; padding: 0 12px; border: 1px solid {border}; border-radius: 8px; background: {panel}; color: {text}; font-weight: 650; }}
+        \"\"\")
+        if hasattr(self, "btn_back_home"):
+            self.btn_back_home.setIcon(qta.icon("fa6s.arrow-left", color=text))
+        for button, name in (
+            (getattr(self, "btn_add", None), "fa6s.plus"),
+            (getattr(self, "btn_start_all", None), "fa6s.play"),
+            (getattr(self, "btn_stop_all", None), "fa6s.stop"),
+            (getattr(self, "btn_refresh", None), "fa6s.rotate"),
+        ):
+            if button is not None:
+                button.setIcon(qta.icon(name, color=text))
 
     @staticmethod
     def _section_title(title: str) -> QLabel:
@@ -640,7 +877,7 @@ class TorServicesPage(QWidget):
                 updated.append(dict(profile))
             elif not any(item.get("id") == service_id for item in profiles):
                 updated.append(dict(profile))
-            CONFIG["tor_services"] = updated
+            CONFIG.update_many({"tor_services": updated})
         except Exception as exc:
             if new_registered and pool is not None and service_id in pool.service_ids:
                 try:
@@ -694,7 +931,7 @@ class TorServicesPage(QWidget):
                 return
         updated = [item for item in self._profiles() if item.get("id") != service_id]
         try:
-            CONFIG["tor_services"] = updated
+            CONFIG.update_many({"tor_services": updated})
         except Exception as exc:
             QMessageBox.warning(self, "Profile could not be removed", str(exc))
             return
@@ -746,24 +983,89 @@ class TorServicesPage(QWidget):
 
     def _update_global_actions(self) -> None:
         busy = self._busy_all or bool(self._workers)
-        self.btn_add.setEnabled(not busy)
-        self.btn_start_all.setEnabled(not busy)
-        self.btn_stop_all.setEnabled(not busy)
-        self.btn_refresh.setEnabled(not busy)
+        pool = self._pool()
+        self.btn_add.setEnabled(not busy and not self._pending_stops)
+        self.btn_start_all.setEnabled(not busy and not self._pending_stops)
+        self.btn_stop_all.setEnabled(bool(pool and pool.service_ids) and not self._pending_stops)
+        self.btn_refresh.setEnabled(not busy and not self._pending_stops)
 
     def _service_operation(self, service_id: str, operation: str) -> None:
+        if operation in {"stop", "force_stop"}:
+            self._request_service_stop(service_id, force=operation == "force_stop")
+            return
         try:
             pool = self._pool(create=True)
             profile = next((item for item in self._profiles() if item.get("id") == service_id), None)
             if profile is None:
                 raise TorServicePoolError(f"Unknown saved Tor service '{service_id}'.")
             self._register_profile(profile, pool)
-            method = pool.start_service if operation == "start" else pool.stop_service
-            self._run_operation(service_id, method, service_id)
+            if service_id in self._pending_stops:
+                return
+            self._run_operation(service_id, pool.start_service, service_id)
         except Exception as exc:
             self.lbl_runtime_status.setText(str(exc))
             QMessageBox.warning(self, "Tor service", str(exc))
             self.refresh_services()
+
+    def _request_service_stop(self, service_id: str, *, force: bool = False) -> None:
+        \"\"\"Stop independently of an in-flight start worker so startup is cancellable.\"\"\"
+        if service_id in self._stop_workers:
+            return
+        try:
+            pool = self._pool(create=False)
+            if pool is None:
+                raise TorServicePoolError(\"Custom Tor services are not registered; install a Tor bundle first.\")
+            if service_id not in pool.service_ids:
+                profile = next((item for item in self._profiles() if item.get(\"id\") == service_id), None)
+                if profile is None:
+                    raise TorServicePoolError(f\"Unknown saved Tor service '{service_id}'.\")
+                self._register_profile(profile, pool)
+            method = pool.force_stop_service if force else pool.stop_service
+            worker = Worker(method, service_id)
+            worker.signals.finished.connect(
+                lambda result, key=service_id, forced=force: self._on_stop_finished(key, forced, result)
+            )
+            worker.signals.error.connect(
+                lambda error, key=service_id: self._on_stop_failed(key, error)
+            )
+            self._stop_workers[service_id] = worker
+            self._pending_stops.add(service_id)
+            self.lbl_runtime_status.setText(
+                f\"{'Force-stopping' if force else 'Stopping'} '{service_id}'…\"
+            )
+            self.refresh_services()
+            self._thread_pool.start(worker)
+        except Exception as exc:
+            self.lbl_runtime_status.setText(str(exc))
+            QMessageBox.warning(self, \"Tor service stop\", str(exc))
+            self.refresh_services()
+
+    def _on_stop_finished(self, service_id: str, force: bool, result: str) -> None:
+        self._stop_workers.pop(service_id, None)
+        self._pending_stops.discard(service_id)
+        self.lbl_runtime_status.setText(
+            f\"{'Force-stopped' if force else 'Stopped'} '{service_id}'.\"
+        )
+        self.refresh_services()
+
+    def _on_stop_failed(self, service_id: str, error: str) -> None:
+        self._stop_workers.pop(service_id, None)
+        self._pending_stops.discard(service_id)
+        self.lbl_runtime_status.setText(error)
+        self.refresh_services()
+        QMessageBox.warning(self, \"Tor service stop failed\", error)
+
+    def open_service_logs(self, service_id: str) -> None:
+        \"\"\"Open the real per-profile Tor log, including while startup is in progress.\"\"\"
+        manager = None
+        pool = self._pool(create=False)
+        if pool is not None and service_id in pool.service_ids:
+            try:
+                manager = pool.get(service_id)
+            except Exception:
+                logger.exception(\"Could not obtain the manager for Tor profile '%s'.\", service_id)
+        path = getattr(manager, \"log_path\", None) or (user_directories().logs / \"tor-services\" / service_id / \"tor.log\")
+        TorLogDialog(self, path, manager=manager).exec()
 
     def start_all(self) -> None:
         try:
@@ -793,18 +1095,8 @@ class TorServicesPage(QWidget):
         pool = self._pool(create=False)
         if pool is None:
             return
-
-        def stop_registered():
-            results = pool.stop_all()
-            failures = {key: value for key, value in results.items() if value}
-            if failures:
-                raise RuntimeError(
-                    "Some services could not stop: "
-                    + "; ".join(f"{key}: {value}" for key, value in failures.items())
-                )
-            return f"Stopped {len(results)} isolated Tor service(s)."
-
-        self._run_operation("__all__", stop_registered)
+        for service_id in pool.service_ids:
+            self._request_service_stop(service_id)
 
     def refresh_services(self) -> None:
         if self._primary_tor is not None:
@@ -833,6 +1125,8 @@ class TorServicesPage(QWidget):
         self._service_health_labels.clear()
         self._service_start_buttons.clear()
         self._service_stop_buttons.clear()
+        self._service_force_stop_buttons.clear()
+        self._service_logs_buttons.clear()
         restore_errors = getattr(self._proxy, "tor_service_profile_errors", {}) if self._proxy else {}
         self.lbl_runtime_status.setText(
             pool_error or (
@@ -885,7 +1179,7 @@ class TorServicesPage(QWidget):
 
     def _refresh_live_service_health(self) -> None:
         """Refresh health labels without rebuilding cards or disturbing scroll position."""
-        if not self.isVisible() or self._busy_all or self._busy_services:
+        if not self.isVisible():
             return
         if self._primary_tor is not None:
             snapshot = getattr(self._primary_tor, "pool_health_snapshot", None)
@@ -912,12 +1206,13 @@ class TorServicesPage(QWidget):
             stop_button = self._service_stop_buttons.get(service_id)
             if start_button is not None:
                 start_button.setEnabled(bool(pool) and manager_state == "stopped" and not is_busy)
+            can_stop = manager_state not in {"stopped", "bundle unavailable", "not registered"}
+            pending_stop = service_id in self._pending_stops
             if stop_button is not None:
-                stop_button.setEnabled(
-                    bool(pool)
-                    and manager_state not in {"stopped", "bundle unavailable", "not registered"}
-                    and not is_busy
-                )
+                stop_button.setEnabled(bool(pool) and can_stop and not pending_stop)
+            force_button = self._service_force_stop_buttons.get(service_id)
+            if force_button is not None:
+                force_button.setEnabled(bool(pool) and can_stop and not pending_stop)
             if manager_state == "ready" and health_state == "healthy":
                 state_label.setText("TOR VERIFIED")
                 service_state = "ready"
@@ -1024,7 +1319,7 @@ class TorServicesPage(QWidget):
         start_button = QPushButton("Start", card)
         start_button.setObjectName("settingsActionButton")
         start_button.setIcon(qta.icon("fa6s.play"))
-        start_button.setEnabled(bool(pool) and can_start and not self._busy_all)
+        start_button.setEnabled(bool(pool) and can_start and not self._busy_all and service_id not in self._pending_stops)
         self._service_start_buttons[service_id] = start_button
         start_button.clicked.connect(lambda _checked=False, key=service_id: self._service_operation(key, "start"))
         actions.addWidget(start_button)
@@ -1032,10 +1327,28 @@ class TorServicesPage(QWidget):
         stop_button = QPushButton("Stop", card)
         stop_button.setObjectName("settingsActionButton")
         stop_button.setIcon(qta.icon("fa6s.stop"))
-        stop_button.setEnabled(bool(pool) and can_stop and not is_busy)
+        stop_button.setEnabled(bool(pool) and can_stop and service_id not in self._pending_stops)
+        stop_button.setToolTip("Stop this service, including cancelling an ongoing startup.")
         self._service_stop_buttons[service_id] = stop_button
         stop_button.clicked.connect(lambda _checked=False, key=service_id: self._service_operation(key, "stop"))
         actions.addWidget(stop_button)
+
+        force_button = QPushButton("Force stop", card)
+        force_button.setObjectName("settingsActionButton")
+        force_button.setIcon(qta.icon("fa6s.bolt"))
+        force_button.setToolTip("Immediately terminate the managed Tor process. Use if normal Stop does not complete.")
+        force_button.setEnabled(bool(pool) and can_stop and service_id not in self._pending_stops)
+        self._service_force_stop_buttons[service_id] = force_button
+        force_button.clicked.connect(lambda _checked=False, key=service_id: self._service_operation(key, "force_stop"))
+        actions.addWidget(force_button)
+
+        logs_button = QPushButton("Logs", card)
+        logs_button.setObjectName("settingsActionButton")
+        logs_button.setIcon(qta.icon("fa6s.file-lines"))
+        logs_button.setToolTip("View this service's live Tor log, including startup output.")
+        self._service_logs_buttons[service_id] = logs_button
+        logs_button.clicked.connect(lambda _checked=False, key=service_id: self.open_service_logs(key))
+        actions.addWidget(logs_button)
 
         edit_button = QPushButton("Edit", card)
         edit_button.setObjectName("settingsActionButton")
