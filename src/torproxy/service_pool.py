@@ -37,6 +37,7 @@ class _ServiceEntry:
     manager: TorManager
     start_lock: threading.Lock
     start_cancel_event: threading.Event = field(default_factory=threading.Event)
+    stop_calls: int = 0
     active_calls: int = 0
     stopping: bool = False
     network_healthy: bool = False
@@ -499,6 +500,7 @@ class TorServicePool:
             if entry.stopping:
                 raise TorServicePoolError(f"Tor service '{service_id}' is already stopping.")
             entry.stopping = True
+            entry.stop_calls += 1
             entry.start_cancel_event.set()
             entry.active_calls += 1
 
@@ -538,7 +540,8 @@ class TorServicePool:
                     "stopped" if self._state_value(entry.manager) == "stopped" else "not_ready"
                 )
                 entry.last_health_error = ""
-                entry.stopping = False
+                entry.stop_calls = max(0, entry.stop_calls - 1)
+                entry.stopping = entry.stop_calls > 0
                 entry.active_calls -= 1
 
     def force_stop_service(self, service_id: str) -> None:
@@ -547,9 +550,11 @@ class TorServicePool:
             entry = self._services.get(service_id)
             if entry is None:
                 raise TorServicePoolError(f"Unknown Tor service '{service_id}'.")
-            if entry.stopping:
-                raise TorServicePoolError(f"Tor service '{service_id}' is already stopping.")
+            # Force-stop may intentionally join an in-progress graceful stop.
+            # Count both operations so one completion cannot clear the other's
+            # stopping state while the process is still being reconciled.
             entry.stopping = True
+            entry.stop_calls += 1
             entry.start_cancel_event.set()
             entry.active_calls += 1
 
@@ -584,7 +589,8 @@ class TorServicePool:
                     "stopped" if self._state_value(entry.manager) == "stopped" else "not_ready"
                 )
                 entry.last_health_error = ""
-                entry.stopping = False
+                entry.stop_calls = max(0, entry.stop_calls - 1)
+                entry.stopping = entry.stop_calls > 0
                 entry.active_calls -= 1
 
     def _run_many(self, service_ids: Iterable[str], operation: str) -> dict[str, str | None]:
