@@ -40,7 +40,7 @@ from ui_.window.dialogs import QMessageBox
 from ui_.worker.worker import Worker
 from ui_.window.qrcode_widget import QrCodeFloatingWindow
 from ui_.window.theme import resolve_system_theme
-from ui_.window.tor_services_page import TorServicesPage
+from ui_.window.tor_services_page import TorServicesSettingsPage
 from ui_.emojis import WRONG, CORRECT
 
 class _BridgeTextEdit(QTextEdit):
@@ -169,7 +169,9 @@ class SettingWindow(QWidget):
             button.setChecked(page_index == index)
         self._sync_settings_nav_icons()
         if index == 3 and hasattr(self, "tor_services_panel"):
-            self.tor_services_panel.refresh_services()
+            refresh = getattr(self.tor_services_panel, "refresh_health", None)
+            if callable(refresh):
+                refresh()
 
     def _sync_settings_nav_icons(self, mode=None):
         """Keep every Settings navigation icon in sync with its label state."""
@@ -1023,8 +1025,8 @@ class SettingWindow(QWidget):
         self._finish_http_connect_test()
 
     def initialize_tor_services_page(self):
-        """Attach the persistent multi-instance Tor manager to Settings."""
-        self.tor_services_panel = TorServicesPage(self, app_window=self._parent)
+        """Expose only the persistent resource/concurrency preferences in Settings."""
+        self.tor_services_panel = TorServicesSettingsPage(self, app_window=self._parent)
         self.services_page_layout.addWidget(self.tor_services_panel)
         self.services_page_layout.addStretch(1)
 
