@@ -248,3 +248,37 @@ def test_edit_refuses_persistent_service_with_missing_identity_key(hosting):
 
     with pytest.raises(OnionHostingError, match="cannot be safely edited"):
         manager.update_service(profile_id, display_name="Renamed app")
+
+
+def test_private_service_without_client_private_key_is_not_published(hosting):
+    manager, _config, tor = hosting
+    profile_id = manager.create_service(
+        display_name="Private app",
+        local_host="127.0.0.1",
+        local_port=9020,
+        persistent=True,
+        access_mode="private",
+    )
+    manager._key_path(profile_id).unlink()
+
+    with pytest.raises(OnionHostingError, match="client authorization material is missing"):
+        manager.start_service(profile_id)
+    assert not any(command.startswith("ADD_ONION") for command in tor.commands)
+
+
+def test_mismatched_private_client_key_is_not_published(hosting):
+    manager, _config, tor = hosting
+    profile_id = manager.create_service(
+        display_name="Private app",
+        local_host="127.0.0.1",
+        local_port=9021,
+        persistent=True,
+        access_mode="private",
+    )
+    material = manager._read_key_material(profile_id)
+    material["client_private_key"] = "a" * 52
+    manager._write_key_material(profile_id, material)
+
+    with pytest.raises(OnionHostingError, match="do not match"):
+        manager.start_service(profile_id)
+    assert not any(command.startswith("ADD_ONION") for command in tor.commands)
