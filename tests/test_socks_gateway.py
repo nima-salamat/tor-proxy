@@ -59,13 +59,13 @@ def _free_port() -> int:
 
 
 @pytest.mark.parametrize(
-    ("request", "expected_host"),
+    ("raw_request", "expected_host"),
     [
         (b"\x05\x01\x00\x03\x0fblocked.example\x01\xbb", "blocked.example"),
         (b"\x05\x01\x00\x01\x7f\x00\x00\x02\x01\xbb", "127.0.0.2"),
     ],
 )
-def test_gateway_rejects_blocked_socks_connect_before_backend_selection(request, expected_host):
+def test_gateway_rejects_blocked_socks_connect_before_backend_selection(raw_request, expected_host):
     seen_hosts = []
     gateway_port = _free_port()
     gateway = SocksFailoverGateway(
@@ -79,7 +79,7 @@ def test_gateway_rejects_blocked_socks_connect_before_backend_selection(request,
             client.settimeout(2)
             client.sendall(b"\x05\x01\x00")
             assert _recv_exact(client, 2) == b"\x05\x00"
-            client.sendall(request)
+            client.sendall(raw_request)
             assert _recv_exact(client, 10) == (
                 b"\x05\x02\x00\x01\x00\x00\x00\x00\x00\x00"
             )
