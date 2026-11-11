@@ -218,7 +218,7 @@ class OnionHostingManager:
             raise OnionHostingError("Developer Tor is not running.")
         try:
             return manager.send_control_command(command)
-        except (TorManagerError, Exception) as exc:
+        except Exception as exc:
             # Never include a command in the exception: it can contain private keys.
             raise OnionHostingError(f"Tor ControlPort rejected the Onion Service operation: {exc}") from exc
 
@@ -227,6 +227,20 @@ class OnionHostingManager:
             manager = self._manager
             started_at = self._started_at
             message = self._last_status_message
+            process = getattr(manager, "process", None) if manager is not None else None
+            if process is not None and process.poll() is not None:
+                # A child may exit after READY. Reconcile the dashboard so it
+                # never displays stale active Onion Services or a false READY.
+                try:
+                    manager.state = TorState.FAILED
+                    manager.last_error = "Developer Tor exited unexpectedly."
+                except Exception:
+                    pass
+                self._last_status_message = "Developer Tor exited unexpectedly. Restart the runtime to restore persistent services."
+                message = self._last_status_message
+                for profile_id in self._active_services:
+                    self._service_errors[profile_id] = "Developer Tor exited; this Onion Service is no longer published."
+                self._active_services.clear()
         if manager is None:
             return {
                 "state": "stopped", "progress": None, "message": "Developer Tor is stopped.",
@@ -264,11 +278,24 @@ class OnionHostingManager:
             raise OnionHostingError("Developer Tor is already starting.")
         try:
             with self._lock:
-                if self._manager is not None and getattr(self._manager.state, "value", "") == "ready":
-                    return
-                if self._manager is not None and getattr(self._manager, "process", None) is not None:
-                    if self._manager.process.poll() is None:
+                previous = self._manager
+                if previous is not None and getattr(previous.state, "value", "") == "ready":
+                    process = getattr(previous, "process", None)
+                    if process is not None and process.poll() is None:
+                        return
+                if previous is not None:
+                    process = getattr(previous, "process", None)
+                    if process is not None and process.poll() is None:
                         raise OnionHostingError("Developer Tor is already starting or stopping.")
+                    # Reap the previous manager object to release its exclusive
+                    # DataDirectory lock before a replacement process is created.
+                    try:
+                        previous.stop()
+                    except Exception as exc:
+                        raise OnionHostingError(
+                            f"Could not release the previous Developer Tor runtime: {exc}"
+                        ) from exc
+                    self._manager = None
                 manager = self._manager_factory(self._settings_factory())
                 self._manager = manager
                 self._started_at = time.monotonic()
