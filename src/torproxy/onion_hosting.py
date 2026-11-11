@@ -160,6 +160,14 @@ class OnionHostingManager:
                 pass
             raise OnionHostingError(f"Could not securely store Onion Service key material: {exc}") from exc
 
+    @staticmethod
+    def _validate_tor_private_key(value: str) -> str:
+        if not isinstance(value, str) or not re.fullmatch(
+            r"ED25519-V3:[A-Za-z0-9+/]+={0,2}", value
+        ):
+            raise OnionHostingError("The stored Tor v3 identity key has an invalid format.")
+        return value
+
     def _read_key_material(self, service_id: str) -> dict[str, str]:
         path = self._key_path(service_id)
         try:
@@ -175,7 +183,12 @@ class OnionHostingManager:
             ) from exc
         if not isinstance(value, dict):
             raise OnionHostingError(f"Persistent key material for '{service_id}' is invalid.")
-        return {str(key): str(item) for key, item in value.items()}
+        result = {str(key): str(item) for key, item in value.items()}
+        if "tor_private_key" in result:
+            self._validate_tor_private_key(result["tor_private_key"])
+        if "client_private_key" in result and not _CLIENT_KEY_RE.fullmatch(result["client_private_key"]):
+            raise OnionHostingError("The stored private client authorization key has an invalid format.")
+        return result
 
     def _remove_key_material(self, service_id: str) -> None:
         try:
@@ -436,6 +449,15 @@ class OnionHostingManager:
         merged["display_name"] = str(merged["display_name"]).strip()
         if not merged["display_name"] or len(merged["display_name"]) > 80:
             raise OnionHostingError("Service name is required and must contain at most 80 characters.")
+        for other in self._all_services():
+            if other["id"] == service_id:
+                continue
+            if (
+                other["local_host"] == host
+                and int(other["local_port"]) == port
+                and int(other["onion_port"]) == int(merged["onion_port"])
+            ):
+                raise OnionHostingError("Another Onion Service already uses this local target and Onion port.")
         if type(merged["onion_port"]) is not int or not 1 <= merged["onion_port"] <= 65535:
             raise OnionHostingError("The Onion port must be between 1 and 65535.")
         if type(merged["persistent"]) is not bool or type(merged["auto_start"]) is not bool:
@@ -446,11 +468,16 @@ class OnionHostingManager:
         was_persistent = bool(current.get("persistent", True))
         now_persistent = bool(merged["persistent"])
         previous_access = current.get("access_mode", "public")
-        material = (
-            self._read_key_material(service_id)
-            if was_persistent and self._key_path(service_id).is_file()
-            else dict(self._temporary_keys.get(service_id, {}))
-        )
+        key_path = self._key_path(service_id)
+        if was_persistent:
+            material = self._read_key_material(service_id) if key_path.is_file() else {}
+            if current.get("service_id") and not material.get("tor_private_key"):
+                raise OnionHostingError(
+                    f"Persistent identity for '{service_id}' is missing its Tor private key; "
+                    "its address cannot be safely edited or changed."
+                )
+        else:
+            material = dict(self._temporary_keys.get(service_id, {}))
         if previous_access != merged["access_mode"]:
             if merged["access_mode"] == "private":
                 public_key, private_key = _new_client_keypair()
@@ -551,7 +578,7 @@ class OnionHostingManager:
                     "The service will not be recreated with a different Onion address."
                 )
             if stored_key:
-                command_key = stored_key
+                command_key = self._validate_tor_private_key(stored_key)
         else:
             key_material = dict(self._temporary_keys.get(profile_id, {}))
             if key_material.get("tor_private_key"):
@@ -568,14 +595,16 @@ class OnionHostingManager:
             raise OnionHostingError("Tor did not return a valid v3 Onion Service address.")
         private_key = fields.get("PrivateKey", "")
         if not key_material.get("tor_private_key"):
-            if not private_key.startswith("ED25519-V3:"):
+            try:
+                private_key = self._validate_tor_private_key(private_key)
+            except OnionHostingError:
                 try:
                     self._control(f"DEL_ONION {onion_id}")
                 except Exception:
                     pass
                 if service.get("persistent"):
-                    raise OnionHostingError("Tor did not return the private key needed to preserve this Onion address.")
-                raise OnionHostingError("Tor did not return the temporary service identity.")
+                    raise OnionHostingError("Tor did not return a valid private key needed to preserve this Onion address.")
+                raise OnionHostingError("Tor did not return a valid temporary service identity.")
             key_material["tor_private_key"] = private_key
         try:
             if service.get("persistent"):
