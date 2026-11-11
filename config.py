@@ -187,14 +187,15 @@ class Config:
         developer_bridges = developer_settings.get("bridges", "")
         if not isinstance(developer_bridges, str) or len(developer_bridges) > 65536:
             raise ConfigError("Developer Tor bridges must be text of at most 65536 characters.")
-        parsed_developer_bridges = parse_bridge_text(developer_bridges)
-        if parsed_developer_bridges.invalid_records:
-            raise ConfigError(
-                "Developer Tor contains invalid Bridge records: "
-                + " ".join(parsed_developer_bridges.errors[:3])
-            )
-        if bridge_mode == "custom" and not parsed_developer_bridges.records:
-            raise ConfigError("Custom Bridge mode requires at least one valid Bridge record.")
+        if bridge_mode == "custom":
+            parsed_developer_bridges = parse_bridge_text(developer_bridges)
+            if parsed_developer_bridges.invalid_records:
+                raise ConfigError(
+                    "Developer Tor contains invalid Bridge records: "
+                    + " ".join(parsed_developer_bridges.errors[:3])
+                )
+            if not parsed_developer_bridges.records:
+                raise ConfigError("Custom Bridge mode requires at least one valid Bridge record.")
         try:
             developer_settings["webtunnel_sni_imitation"] = normalize_sni_hostname(
                 developer_settings.get("webtunnel_sni_imitation", "") or ""

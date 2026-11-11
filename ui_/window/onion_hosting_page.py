@@ -332,8 +332,8 @@ class DeveloperTorSettingsDialog(_FramelessDialog):
     def _accept_form(self):
         mode = str(self.bridge_mode.currentData())
         raw_bridges = self.bridge_editor.toPlainText()
-        parsed = parse_bridge_text(raw_bridges)
-        if parsed.invalid_records:
+        parsed = parse_bridge_text(raw_bridges) if mode == "custom" else None
+        if parsed is not None and parsed.invalid_records:
             QMessageBox.warning(
                 self,
                 "Invalid Bridge records",
@@ -370,7 +370,7 @@ class DeveloperTorSettingsDialog(_FramelessDialog):
             return
         self._values = {
             "bridge_mode": mode,
-            "bridges": "\n".join(parsed.records) if parsed.records else raw_bridges.strip(),
+            "bridges": "\n".join(parsed.records) if parsed and parsed.records else raw_bridges.strip(),
             "webtunnel_sni_imitation": sni,
             "max_circuit_dirtiness_seconds": int(self.max_dirtiness.value()),
             "new_circuit_period_seconds": int(self.circuit_period.value()),
