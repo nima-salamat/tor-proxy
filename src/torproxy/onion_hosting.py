@@ -166,9 +166,9 @@ class OnionHostingManager:
             directory.chmod(0o700)
         fd, temporary = tempfile.mkstemp(prefix=".network-proxy-", suffix=".tmp", dir=directory)
         try:
-            with os.fdopen(fd, "w", encoding="utf-8", newline="\\n") as handle:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
                 json.dump({"username": username, "password": password}, handle, sort_keys=True)
-                handle.write("\\n")
+                handle.write("\n")
                 handle.flush()
                 os.fsync(handle.fileno())
             if os.name != "nt":
@@ -463,7 +463,7 @@ class OnionHostingManager:
                 fingerprints = {
                     match.group(0).upper()
                     for _transport, record in records
-                    for match in [re.search(r"\\b[0-9A-Fa-f]{40}\\b", record)]
+                    for match in [re.search(r"\b[0-9A-Fa-f]{40}\b", record)]
                     if match
                 }
                 if fingerprints:

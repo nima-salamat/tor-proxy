@@ -195,7 +195,7 @@ class DeveloperTorSettingsDialog(_FramelessDialog):
         self.bridge_editor.setObjectName("developerBridgeEditor")
         self.bridge_editor.setAcceptRichText(False)
         self.bridge_editor.setPlaceholderText(
-            "Paste complete Bridge records, one per line…\\n"
+            "Paste complete Bridge records, one per line…\n"
             "Example: obfs4 192.0.2.10:443 0123456789ABCDEF0123456789ABCDEF01234567 cert=… iat-mode=0"
         )
         self.bridge_editor.setPlainText(str(values.get("bridges", "")))
@@ -370,7 +370,7 @@ class DeveloperTorSettingsDialog(_FramelessDialog):
             return
         self._values = {
             "bridge_mode": mode,
-            "bridges": "\\n".join(parsed.records) if parsed.records else raw_bridges.strip(),
+            "bridges": "\n".join(parsed.records) if parsed.records else raw_bridges.strip(),
             "webtunnel_sni_imitation": sni,
             "max_circuit_dirtiness_seconds": int(self.max_dirtiness.value()),
             "new_circuit_period_seconds": int(self.circuit_period.value()),

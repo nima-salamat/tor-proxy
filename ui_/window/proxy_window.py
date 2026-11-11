@@ -504,7 +504,7 @@ class ProxyWindow(QWidget):
             if parsed.invalid_records or not parsed.records:
                 details = " ".join(parsed.errors[:3]) or "No valid bridge records were found."
                 raise TorManagerError("Developer Tor Bridge configuration is invalid: " + details)
-            bridges = "\\n".join(parsed.records)
+            bridges = "\n".join(parsed.records)
 
         # Credentials are read from a separate, permission-restricted file;
         # they are never persisted in config.json or included in routine logs.
