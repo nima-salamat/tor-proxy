@@ -143,16 +143,25 @@ class TorServicesSettingsPage(QWidget):
                 pool = getattr(proxy, "tor_service_pool", None)
                 if pool is not None:
                     pool.set_max_workers(int(value))
+                dashboard = getattr(self._app_window, "customTorWidget", None)
+                set_stop_limit = getattr(dashboard, "set_stop_worker_limit", None)
+                if callable(set_stop_limit):
+                    set_stop_limit(int(value))
             CONFIG[key] = int(value)
             self._status.setText(f"Saved {key.replace('_', ' ')}: {value}.")
         except Exception as exc:
             # The runtime pool and the on-disk preference are one logical setting.
             # If config persistence fails after the pool changes, restore both.
-            if key == "tor_service_workers" and pool is not None:
-                try:
-                    pool.set_max_workers(previous)
-                except Exception:
-                    logger.exception("Could not roll back the custom Tor worker limit.")
+            if key == "tor_service_workers":
+                if pool is not None:
+                    try:
+                        pool.set_max_workers(previous)
+                    except Exception:
+                        logger.exception("Could not roll back the custom Tor pool worker limit.")
+                dashboard = getattr(self._app_window, "customTorWidget", None)
+                set_stop_limit = getattr(dashboard, "set_stop_worker_limit", None)
+                if callable(set_stop_limit):
+                    set_stop_limit(previous)
             blocked = control.blockSignals(True)
             control.setValue(previous)
             control.blockSignals(blocked)
