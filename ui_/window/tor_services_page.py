@@ -172,6 +172,13 @@ class TorServicesSettingsPage(QWidget):
             details.append(f"Instance {index}: {state}")
         self.primary_health.setText(f"{ready}/{total} primary Tor instance(s) verified healthy\n" + "  |  ".join(details))
 
+    def refresh_health(self) -> None:
+        proxy = getattr(self._app_window, "proxyWidget", None)
+        primary_tor = getattr(proxy, "tor", None)
+        snapshot = getattr(primary_tor, "pool_health_snapshot", None)
+        if isinstance(snapshot, dict):
+            self._update_primary_health(snapshot)
+
     def _open_manager(self) -> None:
         show = getattr(self._app_window, "_show_custom_tor", None)
         if callable(show):
@@ -423,7 +430,9 @@ class TorServicesPage(QWidget):
         self._workers: dict[str, Worker] = {}
         self._busy_services: set[str] = set()
         self._stop_workers: dict[str, Worker] = {}
+        self._force_stop_workers: dict[str, Worker] = {}
         self._pending_stops: set[str] = set()
+        self._pending_force_stops: set[str] = set()
         self._busy_all = False
         self._service_cards_layout: QVBoxLayout | None = None
         self._service_state_labels: dict[str, QLabel] = {}
@@ -615,6 +624,7 @@ class TorServicesPage(QWidget):
         layout.addWidget(self.service_cards)
         layout.addStretch(1)
         if self._management_only:
+            self.page_heading.hide()
             for widget in (
                 self.primary_settings_heading, self.primary_settings_card, self.primary_health_label,
                 self.bridge_settings_heading, self.bridge_settings_card,
@@ -983,11 +993,12 @@ class TorServicesPage(QWidget):
 
     def _update_global_actions(self) -> None:
         busy = self._busy_all or bool(self._workers)
+        stopping = bool(self._pending_stops or self._pending_force_stops)
         pool = self._pool()
-        self.btn_add.setEnabled(not busy and not self._pending_stops)
-        self.btn_start_all.setEnabled(not busy and not self._pending_stops)
-        self.btn_stop_all.setEnabled(bool(pool and pool.service_ids) and not self._pending_stops)
-        self.btn_refresh.setEnabled(not busy and not self._pending_stops)
+        self.btn_add.setEnabled(not busy and not stopping)
+        self.btn_start_all.setEnabled(not busy and not stopping)
+        self.btn_stop_all.setEnabled(bool(pool and pool.service_ids) and not stopping)
+        self.btn_refresh.setEnabled(not busy and not stopping)
 
     def _service_operation(self, service_id: str, operation: str) -> None:
         if operation in {"stop", "force_stop"}:
@@ -1008,8 +1019,11 @@ class TorServicesPage(QWidget):
             self.refresh_services()
 
     def _request_service_stop(self, service_id: str, *, force: bool = False) -> None:
-        """Stop independently of an in-flight start worker so startup is cancellable."""
-        if service_id in self._stop_workers:
+        """Stop independently of an in-flight start; Force Stop can escalate a graceful Stop."""
+        workers = self._force_stop_workers if force else self._stop_workers
+        if service_id in workers:
+            return
+        if not force and service_id in self._pending_force_stops:
             return
         try:
             pool = self._pool(create=False)
@@ -1026,10 +1040,10 @@ class TorServicesPage(QWidget):
                 lambda result, key=service_id, forced=force: self._on_stop_finished(key, forced, result)
             )
             worker.signals.error.connect(
-                lambda error, key=service_id: self._on_stop_failed(key, error)
+                lambda error, key=service_id, forced=force: self._on_stop_failed(key, forced, error)
             )
-            self._stop_workers[service_id] = worker
-            self._pending_stops.add(service_id)
+            workers[service_id] = worker
+            (self._pending_force_stops if force else self._pending_stops).add(service_id)
             self.lbl_runtime_status.setText(
                 f"{'Force-stopping' if force else 'Stopping'} '{service_id}'…"
             )
@@ -1041,19 +1055,21 @@ class TorServicesPage(QWidget):
             self.refresh_services()
 
     def _on_stop_finished(self, service_id: str, force: bool, result: str) -> None:
-        self._stop_workers.pop(service_id, None)
-        self._pending_stops.discard(service_id)
+        workers = self._force_stop_workers if force else self._stop_workers
+        workers.pop(service_id, None)
+        (self._pending_force_stops if force else self._pending_stops).discard(service_id)
         self.lbl_runtime_status.setText(
             f"{'Force-stopped' if force else 'Stopped'} '{service_id}'."
         )
         self.refresh_services()
 
-    def _on_stop_failed(self, service_id: str, error: str) -> None:
-        self._stop_workers.pop(service_id, None)
-        self._pending_stops.discard(service_id)
+    def _on_stop_failed(self, service_id: str, force: bool, error: str) -> None:
+        workers = self._force_stop_workers if force else self._stop_workers
+        workers.pop(service_id, None)
+        (self._pending_force_stops if force else self._pending_stops).discard(service_id)
         self.lbl_runtime_status.setText(error)
         self.refresh_services()
-        QMessageBox.warning(self, "Tor service stop failed", error)
+        QMessageBox.warning(self, "Tor service force-stop failed" if force else "Tor service stop failed", error)
 
     def open_service_logs(self, service_id: str) -> None:
         """Open the real per-profile Tor log, including while startup is in progress."""
@@ -1064,7 +1080,9 @@ class TorServicesPage(QWidget):
                 manager = pool.get(service_id)
             except Exception:
                 logger.exception("Could not obtain the manager for Tor profile '%s'.", service_id)
-        path = getattr(manager, "log_path", None) or (user_directories().logs / "tor-services" / service_id / "tor.log")
+        path = getattr(manager, "log_path", None) or (
+            user_directories().logs / "tor-services" / service_id / "tor.log"
+        )
         TorLogDialog(self, path, manager=manager).exec()
 
     def start_all(self) -> None:
@@ -1208,11 +1226,12 @@ class TorServicesPage(QWidget):
                 start_button.setEnabled(bool(pool) and manager_state == "stopped" and not is_busy)
             can_stop = manager_state not in {"stopped", "bundle unavailable", "not registered"}
             pending_stop = service_id in self._pending_stops
+            pending_force = service_id in self._pending_force_stops
             if stop_button is not None:
-                stop_button.setEnabled(bool(pool) and can_stop and not pending_stop)
+                stop_button.setEnabled(bool(pool) and can_stop and not pending_stop and not pending_force)
             force_button = self._service_force_stop_buttons.get(service_id)
             if force_button is not None:
-                force_button.setEnabled(bool(pool) and can_stop and not pending_stop)
+                force_button.setEnabled(bool(pool) and can_stop and not pending_force)
             if manager_state == "ready" and health_state == "healthy":
                 state_label.setText("TOR VERIFIED")
                 service_state = "ready"
@@ -1318,7 +1337,7 @@ class TorServicesPage(QWidget):
         start_button = QPushButton("Start", card)
         start_button.setObjectName("settingsActionButton")
         start_button.setIcon(qta.icon("fa6s.play"))
-        start_button.setEnabled(bool(pool) and can_start and not self._busy_all and service_id not in self._pending_stops)
+        start_button.setEnabled(bool(pool) and can_start and not self._busy_all and service_id not in self._pending_stops and service_id not in self._pending_force_stops)
         self._service_start_buttons[service_id] = start_button
         start_button.clicked.connect(lambda _checked=False, key=service_id: self._service_operation(key, "start"))
         actions.addWidget(start_button)
@@ -1326,7 +1345,7 @@ class TorServicesPage(QWidget):
         stop_button = QPushButton("Stop", card)
         stop_button.setObjectName("settingsActionButton")
         stop_button.setIcon(qta.icon("fa6s.stop"))
-        stop_button.setEnabled(bool(pool) and can_stop and service_id not in self._pending_stops)
+        stop_button.setEnabled(bool(pool) and can_stop and service_id not in self._pending_stops and service_id not in self._pending_force_stops)
         stop_button.setToolTip("Stop this service, including cancelling an ongoing startup.")
         self._service_stop_buttons[service_id] = stop_button
         stop_button.clicked.connect(lambda _checked=False, key=service_id: self._service_operation(key, "stop"))
@@ -1336,7 +1355,7 @@ class TorServicesPage(QWidget):
         force_button.setObjectName("settingsActionButton")
         force_button.setIcon(qta.icon("fa6s.bolt"))
         force_button.setToolTip("Immediately terminate the managed Tor process. Use if normal Stop does not complete.")
-        force_button.setEnabled(bool(pool) and can_stop and service_id not in self._pending_stops)
+        force_button.setEnabled(bool(pool) and can_stop and service_id not in self._pending_force_stops)
         self._service_force_stop_buttons[service_id] = force_button
         force_button.clicked.connect(lambda _checked=False, key=service_id: self._service_operation(key, "force_stop"))
         actions.addWidget(force_button)
