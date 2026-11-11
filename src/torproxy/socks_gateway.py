@@ -34,7 +34,7 @@ class SocksFailoverGateway:
         handshake_timeout: float = 12.0,
         idle_timeout: float = 120.0,
         max_sessions: int = 256,
-        host_blocker: Callable[[str], bool] | None = None,
+        host_router: Callable[[str], str] | None = None,
     ) -> None:
         if host not in {"127.0.0.1", "::1", "localhost"}:
             raise ValueError("The Tor SOCKS gateway must bind to loopback.")
@@ -43,7 +43,7 @@ class SocksFailoverGateway:
         self.host = host
         self.port = port
         self._backend_provider = backend_provider
-        self._host_blocker = host_blocker
+        self._host_router = host_router
         self._connect_timeout = max(0.5, float(connect_timeout))
         self._handshake_timeout = max(1.0, float(handshake_timeout))
         self._idle_timeout = max(5.0, float(idle_timeout))
@@ -218,8 +218,8 @@ class SocksFailoverGateway:
         return header + address + cls._recv_exact(client, 2)
 
     @staticmethod
-    def _request_destination_host(request: bytes) -> str:
-        """Decode and normalize the destination carried by a SOCKS5 CONNECT."""
+    def _request_destination(request: bytes) -> tuple[str, int]:
+        """Decode and normalize the host and port carried by SOCKS5 CONNECT."""
         if len(request) < 7 or request[0] != 5:
             raise ValueError("The SOCKS5 destination request is incomplete.")
         atyp = request[3]
@@ -228,11 +228,13 @@ class SocksFailoverGateway:
             if len(packed) != 4:
                 raise ValueError("The SOCKS5 IPv4 destination is incomplete.")
             hostname = socket.inet_ntop(socket.AF_INET, packed)
+            port_offset = 8
         elif atyp == 4:
             packed = request[4:20]
             if len(packed) != 16:
                 raise ValueError("The SOCKS5 IPv6 destination is incomplete.")
             hostname = socket.inet_ntop(socket.AF_INET6, packed)
+            port_offset = 20
         elif atyp == 3:
             if len(request) < 5:
                 raise ValueError("The SOCKS5 domain destination is incomplete.")
@@ -244,13 +246,58 @@ class SocksFailoverGateway:
                 hostname = encoded.decode("ascii")
             except UnicodeDecodeError as exc:
                 raise ValueError("SOCKS5 domain names must use ASCII/IDNA encoding.") from exc
+            port_offset = 5 + size
         else:
             raise ValueError("Unsupported SOCKS5 address type.")
 
+        if len(request) != port_offset + 2:
+            raise ValueError("The SOCKS5 destination port is incomplete.")
+        port = int.from_bytes(request[port_offset:port_offset + 2], "big")
+        if not 1 <= port <= 65535:
+            raise ValueError("The SOCKS5 destination port is invalid.")
         try:
-            return normalize_hostname(hostname)
+            return normalize_hostname(hostname), port
         except HostRuleError as exc:
             raise ValueError("The SOCKS5 destination hostname is invalid.") from exc
+
+    @staticmethod
+    def _success_reply(upstream: socket.socket) -> bytes:
+        """Build a SOCKS5 success reply using the direct socket's local endpoint."""
+        try:
+            local = upstream.getsockname()
+            if upstream.family == socket.AF_INET6:
+                address = socket.inet_pton(socket.AF_INET6, local[0])
+                return b"\\x05\\x00\\x00\\x04" + address + int(local[1]).to_bytes(2, "big")
+            address = socket.inet_pton(socket.AF_INET, local[0])
+            return b"\\x05\\x00\\x00\\x01" + address + int(local[1]).to_bytes(2, "big")
+        except (AttributeError, OSError, TypeError, ValueError, IndexError):
+            return b"\\x05\\x00\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00"
+
+    def _connect_direct(self, hostname: str, port: int) -> socket.socket:
+        """Connect explicitly excluded hosts outside Tor, tracking sockets for shutdown."""
+        addresses = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+        last_error: OSError | None = None
+        for family, socktype, proto, _canonname, sockaddr in addresses:
+            if self._stop.is_set():
+                raise OSError("SOCKS gateway is stopping.")
+            candidate = socket.socket(family, socktype, proto)
+            candidate.settimeout(self._connect_timeout)
+            if not self._track(candidate, True):
+                candidate.close()
+                raise OSError("SOCKS gateway is stopping.")
+            try:
+                candidate.connect(sockaddr)
+                return candidate
+            except OSError as exc:
+                last_error = exc
+                self._track(candidate, False)
+                try:
+                    candidate.close()
+                except OSError:
+                    pass
+        if last_error is not None:
+            raise last_error
+        raise OSError("No usable network address was returned for the excluded destination.")
 
     @classmethod
     def _read_reply(cls, upstream: socket.socket) -> bytes:
@@ -454,13 +501,41 @@ class SocksFailoverGateway:
             # restricted and does not forward arbitrary client credentials to Tor.
             client.sendall(b"\x05\x00")
             request = self._read_request(client)
-            if self._host_blocker is not None:
-                destination_host = self._request_destination_host(request)
-                if self._host_blocker(destination_host):
-                    LOGGER.debug("Rejected SOCKS CONNECT because the destination matches a blocked-host rule.")
-                    # RFC 1928 reply code 0x02: connection not allowed by ruleset.
-                    client.sendall(self._failure_reply(2))
-                    return
+            destination_host, destination_port = self._request_destination(request)
+            try:
+                destination_route = (
+                    self._host_router(destination_host)
+                    if self._host_router is not None else "tor"
+                )
+            except Exception:
+                LOGGER.exception("Could not evaluate SOCKS destination host policy; rejecting the connection.")
+                client.sendall(self._failure_reply(1))
+                return
+
+            if destination_route == "blocked":
+                LOGGER.debug("Rejected SOCKS CONNECT because the destination matches a blocked-host rule.")
+                # RFC 1928 reply code 0x02: connection not allowed by ruleset.
+                client.sendall(self._failure_reply(2))
+                return
+            if destination_route == "direct":
+                try:
+                    upstream = self._connect_direct(destination_host, destination_port)
+                    upstream.settimeout(None)
+                    client.sendall(self._success_reply(upstream))
+                    client.settimeout(None)
+                    self._relay(client, upstream, self._idle_timeout)
+                except (OSError, TimeoutError, ValueError):
+                    LOGGER.debug("An explicitly excluded SOCKS destination could not be reached directly.", exc_info=True)
+                    try:
+                        client.sendall(self._failure_reply(5))
+                    except OSError:
+                        pass
+                return
+            if destination_route != "tor":
+                LOGGER.error("Unknown SOCKS destination route %r; rejecting connection.", destination_route)
+                client.sendall(self._failure_reply(2))
+                return
+
             last_reply: bytes | None = None
 
             for endpoint in self._ordered_backends():
