@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import threading
 
+import pytest
+
 import torproxy.bridge_health as bridge_health_module
 from torproxy.bridge_health import BridgeProbeOutcome, check_bridges
 from torproxy.tor_manager import TorSettings

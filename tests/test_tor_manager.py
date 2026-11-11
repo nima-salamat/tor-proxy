@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 import torproxy.tor_manager as tor_manager_module
