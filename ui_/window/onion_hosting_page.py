@@ -296,6 +296,9 @@ class OnionHostingPage(QWidget):
         self._timer.start()
         self.refresh_dashboard()
 
+    def apply_theme(self, mode):
+        self._apply_theme(mode)
+
     def _manager(self):
         return self._proxy._ensure_onion_hosting_manager()
 
