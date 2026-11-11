@@ -855,6 +855,9 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
                 pass
 
     def process_request(self, request, client_address):
+        if self.shutdown_event.is_set():
+            self.shutdown_request(request)
+            return
         if not self._client_slots.acquire(blocking=False):
             with self._client_lock:
                 self._rejected_clients += 1
