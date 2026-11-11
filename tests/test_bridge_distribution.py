@@ -120,3 +120,19 @@ def test_sufficient_verified_groups_are_not_shared():
 
     assert result.shared_groups == 0
     assert all(records[index] in worker for index, worker in enumerate(result.assignments))
+
+
+def test_bridge_shards_balance_record_count_when_fingerprints_have_multiple_lines():
+    fingerprint = "ABCDEF0123456789ABCDEF0123456789ABCDEF01"
+    variants = [
+        f"obfs4 192.0.2.{index}:443 {fingerprint}"
+        for index in (10, 11, 12)
+    ]
+    independent = [_bridge(index) for index in (20, 21, 22)]
+
+    result = distribute_bridge_records("\\n".join(variants + independent), 2)
+
+    assert result.unique_groups == 4
+    assert result.shared_groups == 0
+    assert result.instance_record_counts == (3, 3)
+    assert set(result.assignments[0]).isdisjoint(result.assignments[1])

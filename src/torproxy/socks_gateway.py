@@ -65,6 +65,14 @@ class SocksFailoverGateway:
         with self._lock:
             if self.running:
                 return
+            stale_sessions = tuple(
+                worker for worker in self._session_threads if worker.is_alive()
+            )
+            if stale_sessions:
+                raise SocksGatewayError(
+                    "The primary Tor SOCKS gateway cannot restart while previous client sessions are still active."
+                )
+            self._session_threads.clear()
             family = socket.AF_INET6 if self.host == "::1" else socket.AF_INET
             listener = socket.socket(family, socket.SOCK_STREAM)
             try:
@@ -82,7 +90,14 @@ class SocksFailoverGateway:
                 name="torproxy-socks-failover",
                 daemon=True,
             )
-            self._thread.start()
+            try:
+                self._thread.start()
+            except Exception:
+                self._stop.set()
+                self._listener = None
+                self._thread = None
+                listener.close()
+                raise
         LOGGER.info("Primary Tor SOCKS failover gateway listening on %s:%s.", self.host, self.port)
 
     def _track(self, sock: socket.socket, add: bool) -> bool:

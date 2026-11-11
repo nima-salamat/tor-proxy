@@ -4,7 +4,9 @@ import socket
 import threading
 import time
 
-from torproxy.socks_gateway import SocksFailoverGateway
+import pytest
+
+from torproxy.socks_gateway import SocksFailoverGateway, SocksGatewayError
 
 
 def _recv_exact(sock: socket.socket, size: int) -> bytes:
@@ -214,3 +216,35 @@ def test_gateway_rejects_invalid_session_limits():
         assert "between 1 and 4096" in str(exc)
     else:
         raise AssertionError("A zero-sized gateway must not be accepted")
+
+
+def test_gateway_refuses_restart_while_a_previous_session_thread_is_alive():
+    gateway_port = _free_port()
+    entered = threading.Event()
+    release = threading.Event()
+    gateway = SocksFailoverGateway(gateway_port, lambda: [], max_sessions=1)
+
+    def blocked_handler(_client):
+        entered.set()
+        release.wait(timeout=3)
+
+    gateway._handle_client = blocked_handler
+    gateway.start()
+    client = socket.create_connection(("127.0.0.1", gateway_port), timeout=2)
+    try:
+        assert entered.wait(timeout=2)
+        with pytest.raises(SocksGatewayError, match="previous client sessions"):
+            gateway.stop(timeout=1.0)
+        with pytest.raises(SocksGatewayError, match="cannot restart"):
+            gateway.start()
+    finally:
+        release.set()
+        client.close()
+
+    deadline = time.monotonic() + 2
+    while gateway.session_metrics["active_sessions"] and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert gateway.session_metrics["active_sessions"] == 0
+
+    gateway.start()
+    gateway.stop(timeout=2)

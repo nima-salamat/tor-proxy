@@ -110,6 +110,20 @@ class TorServicePool:
         state = getattr(manager, "state", TorState.STOPPED)
         return str(getattr(state, "value", state)).lower().split(".")[-1]
 
+    @classmethod
+    def _reported_state(cls, manager: TorManager) -> str:
+        """Expose an exited Tor child immediately, before monitor reconciliation."""
+        state = cls._state_value(manager)
+        process = getattr(manager, "process", None)
+        if state == "ready" and process is not None:
+            try:
+                if process.poll() is not None:
+                    return "failed"
+            except Exception:
+                # An uninspectable child must never be advertised as healthy.
+                return "failed"
+        return state
+
     @staticmethod
     def _process_is_alive(manager: TorManager) -> bool:
         process = getattr(manager, "process", None)
@@ -246,23 +260,27 @@ class TorServicePool:
             )
             if service_id is not None and not entries:
                 raise TorServicePoolError(f"Unknown Tor service '{service_id}'.")
-            result = {
-                entry.service_id: {
-                    "state": self._state_value(entry.manager),
+            result = {}
+            for entry in entries:
+                state = self._reported_state(entry.manager)
+                process_exited = state == "failed" and self._state_value(entry.manager) == "ready"
+                result[entry.service_id] = {
+                    "state": state,
                     "socks_port": entry.settings.socks_port,
                     "control_port": entry.settings.control_port,
                     "dns_port": entry.settings.dns_port,
                     "data_directory": str(entry.settings.data_directory),
                     "pid": getattr(getattr(entry.manager, "process", None), "pid", None),
-                    "network_healthy": bool(entry.network_healthy),
-                    "network_health": entry.network_health,
-                    "latency_ms": entry.health_latency_ms,
+                    "network_healthy": bool(entry.network_healthy and not process_exited),
+                    "network_health": "unhealthy" if process_exited else entry.network_health,
+                    "latency_ms": None if process_exited else entry.health_latency_ms,
                     "consecutive_health_failures": entry.consecutive_health_failures,
                     "last_health_check": entry.last_health_check,
-                    "last_health_error": entry.last_health_error,
+                    "last_health_error": (
+                        "Tor process exited unexpectedly; cleanup is pending."
+                        if process_exited else entry.last_health_error
+                    ),
                 }
-                for entry in entries
-            }
         return result[service_id] if service_id is not None else result
 
     def _run_health_probe(self, port: int) -> TorProbeResult:
@@ -284,12 +302,21 @@ class TorServicePool:
             if self._services.get(service_id) is not entry or entry.stopping:
                 return
             manager_state = self._state_value(entry.manager)
-            if manager_state != "ready":
+            reported_state = self._reported_state(entry.manager)
+            if manager_state != "ready" or reported_state != "ready":
                 entry.network_healthy = False
-                entry.network_health = "stopped" if manager_state == "stopped" else "not_ready"
+                entry.network_health = (
+                    "unhealthy" if reported_state == "failed"
+                    else "stopped" if manager_state == "stopped"
+                    else "not_ready"
+                )
                 entry.health_latency_ms = None
                 entry.consecutive_health_failures = 0
-                entry.last_health_error = "The Tor process is not in READY state."
+                entry.last_health_error = (
+                    "Tor process exited unexpectedly; cleanup is pending."
+                    if reported_state == "failed"
+                    else "The Tor process is not in READY state."
+                )
             elif result.healthy:
                 sample = max(0.0, float(result.latency_ms or 0.0))
                 previous = entry.health_latency_ms
@@ -306,12 +333,71 @@ class TorServicePool:
                 entry.last_health_error = result.detail or "Tor egress check failed."
             entry.last_health_check = time.time()
 
+    def _reconcile_exited_services(self) -> None:
+        """Reap exited Tor children without racing start/stop operations."""
+        with self._lock:
+            candidates = list(self._services.items())
+
+        for service_id, entry in candidates:
+            # start_service holds this lock across process start and its first
+            # egress check. Never stop that manager concurrently.
+            if not entry.start_lock.acquire(blocking=False):
+                continue
+            try:
+                with self._lock:
+                    if self._services.get(service_id) is not entry or entry.stopping:
+                        continue
+                    if self._state_value(entry.manager) != "ready":
+                        continue
+                    process = getattr(entry.manager, "process", None)
+                if process is None:
+                    continue
+                try:
+                    exit_code = process.poll()
+                except Exception:
+                    # An uninspectable child is not safe to treat as dead.
+                    continue
+                if exit_code is None:
+                    continue
+
+                detail = f"Tor process exited unexpectedly (exit code {exit_code})."
+                try:
+                    # TorManager.stop() closes the stale Stem controller and
+                    # releases the per-profile DataDirectory lock after exit.
+                    entry.manager.stop()
+                except Exception as exc:
+                    with self._lock:
+                        if self._services.get(service_id) is entry:
+                            entry.network_healthy = False
+                            entry.network_health = "unhealthy"
+                            entry.health_latency_ms = None
+                            entry.last_health_error = (
+                                f"{detail} Cleanup failed: {type(exc).__name__}: {exc}"
+                            )
+                    LOGGER.exception(
+                        "Could not reconcile an exited isolated Tor process for '%s'.",
+                        service_id,
+                    )
+                    continue
+
+                with self._lock:
+                    if self._services.get(service_id) is entry:
+                        entry.network_healthy = False
+                        entry.network_health = "stopped"
+                        entry.health_latency_ms = None
+                        entry.consecutive_health_failures = 0
+                        entry.last_health_error = detail
+                        entry.last_health_check = time.time()
+            finally:
+                entry.start_lock.release()
+
     def _probe_running_services(self) -> None:
+        self._reconcile_exited_services()
         with self._lock:
             candidates = [
                 (service_id, entry, entry.settings.socks_port)
                 for service_id, entry in self._services.items()
-                if not entry.stopping and self._state_value(entry.manager) == "ready"
+                if not entry.stopping and self._reported_state(entry.manager) == "ready"
             ]
         if not candidates:
             return

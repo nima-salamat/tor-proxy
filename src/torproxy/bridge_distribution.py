@@ -86,7 +86,7 @@ def distribute_bridge_records(
 
     groups = list(grouped.values())
     assignments: list[list[str]] = [[] for _ in range(instance_count)]
-    group_loads = [0] * instance_count
+    record_loads = [0] * instance_count
     preferred = {str(record).casefold() for record in preferred_records if str(record).strip()}
     preferred_indices = [
         index
@@ -101,7 +101,7 @@ def distribute_bridge_records(
         for worker_index in range(instance_count):
             group_index = preferred_indices[worker_index % len(preferred_indices)]
             assignments[worker_index].extend(groups[group_index])
-            group_loads[worker_index] += 1
+            record_loads[worker_index] += 1
 
         preferred_set = set(preferred_indices)
         remaining_indices = [
@@ -110,25 +110,25 @@ def distribute_bridge_records(
         for group_index in remaining_indices:
             worker_index = min(
                 range(instance_count),
-                key=lambda index: (group_loads[index], index),
+                key=lambda index: (record_loads[index], index),
             )
             assignments[worker_index].extend(groups[group_index])
-            group_loads[worker_index] += 1
+            record_loads[worker_index] += 1
     elif len(groups) < instance_count:
         # A small bridge pool must not leave workers with an empty Bridge list.
         for worker_index in range(instance_count):
             group_index = worker_index % len(groups)
             assignments[worker_index].extend(groups[group_index])
-            group_loads[worker_index] += 1
+            record_loads[worker_index] += 1
     else:
         # Spread the whole input pool evenly without cross-worker overlap.
         for group in groups:
             worker_index = min(
                 range(instance_count),
-                key=lambda index: (group_loads[index], index),
+                key=lambda index: (record_loads[index], index),
             )
             assignments[worker_index].extend(group)
-            group_loads[worker_index] += 1
+            record_loads[worker_index] += 1
 
     group_usage = [0] * len(groups)
     for worker in assignments:

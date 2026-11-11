@@ -266,6 +266,15 @@ def test_exited_tor_process_is_reported_and_reconciled_before_health_recheck(tmp
     # State alone can still say READY, but status must not call a dead child ready.
     assert pool.status("crashable")["state"] == "failed"
 
+    entry = pool._services["crashable"]
+    assert entry.start_lock.acquire(blocking=False)
+    try:
+        pool._reconcile_exited_services()
+        assert manager.stop_calls == 0
+        assert pool.status("crashable")["state"] == "failed"
+    finally:
+        entry.start_lock.release()
+
     pool._probe_running_services()
     status = pool.status("crashable")
     assert status["state"] == "stopped"
