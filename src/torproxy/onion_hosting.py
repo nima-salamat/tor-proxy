@@ -305,20 +305,25 @@ class OnionHostingManager:
             else:
                 with self._lock:
                     self._active_services.pop(profile_id, None)
+        runtime_stopped = False
         try:
             manager.force_stop() if force else manager.stop()
+            runtime_stopped = True
         except Exception as exc:
             errors.append(f"Tor runtime: {exc}")
+        if runtime_stopped:
+            # Once the child process is gone, no detached service can remain
+            # published. Temporary profiles and volatile key material expire.
+            with self._lock:
+                self._manager = None
+                self._started_at = None
+                self._last_status_message = "Developer Tor stopped."
+                self._temporary_services.clear()
+                self._temporary_keys.clear()
+                self._active_services.clear()
+                self._service_errors.clear()
         if errors:
             raise OnionHostingError("; ".join(errors))
-        with self._lock:
-            self._manager = None
-            self._started_at = None
-            self._last_status_message = "Developer Tor stopped."
-            self._temporary_services.clear()
-            self._temporary_keys.clear()
-            self._active_services.clear()
-            self._service_errors.clear()
 
     def create_service(
         self,
@@ -397,43 +402,74 @@ class OnionHostingManager:
             raise OnionHostingError("Persistent and Auto Start must be true or false.")
         if merged["access_mode"] not in {"public", "private"}:
             raise OnionHostingError("Access mode must be Public or Private.")
+
+        was_persistent = bool(current.get("persistent", True))
+        now_persistent = bool(merged["persistent"])
         previous_access = current.get("access_mode", "public")
+        material = (
+            self._read_key_material(service_id)
+            if was_persistent and self._key_path(service_id).is_file()
+            else dict(self._temporary_keys.get(service_id, {}))
+        )
         if previous_access != merged["access_mode"]:
-            merged.pop("client_public_key", None)
-            self._temporary_keys.pop(service_id, None)
             if merged["access_mode"] == "private":
                 public_key, private_key = _new_client_keypair()
                 merged["client_public_key"] = public_key
-                self._temporary_keys[service_id] = {"client_private_key": private_key}
-        was_persistent = bool(current.get("persistent", True))
-        now_persistent = merged["persistent"]
-        if now_persistent and not was_persistent:
-            merged["service_id"] = ""
-            self._temporary_services.pop(service_id, None)
-            key_material = self._temporary_keys.pop(service_id, {})
+                material["client_private_key"] = private_key
+            else:
+                merged.pop("client_public_key", None)
+                material.pop("client_private_key", None)
+        if not now_persistent:
+            # Temporary services keep their key material only in this process.
+            # Carry the existing Ed25519 identity across a lifetime toggle rather
+            # than silently changing its address during the current app session.
+            merged["persistent"] = False
+            if was_persistent:
+                saved = [item for item in self._saved_services() if item["id"] != service_id]
+                self._persist_services(saved)
+                self._remove_key_material(service_id)
+            with self._lock:
+                self._temporary_services[service_id] = merged
+                self._temporary_keys[service_id] = material
+            return
+
+        merged["persistent"] = True
+        if was_persistent:
+            old_material = (
+                self._read_key_material(service_id)
+                if self._key_path(service_id).is_file()
+                else {}
+            )
+            if material:
+                self._write_key_material(service_id, material)
             saved = self._saved_services()
-            self._write_key_material(service_id, key_material) if key_material else None
+            try:
+                self._persist_services([merged if item["id"] == service_id else item for item in saved])
+            except Exception:
+                if old_material:
+                    self._write_key_material(service_id, old_material)
+                else:
+                    self._remove_key_material(service_id)
+                raise
+            with self._lock:
+                self._temporary_keys.pop(service_id, None)
+                self._temporary_services.pop(service_id, None)
+            return
+
+        # Temporary -> persistent: write the protected secrets before publishing
+        # the profile in config.json. Roll back the key file if config persistence
+        # fails so the conversion is all-or-nothing from the user's perspective.
+        if material:
+            self._write_key_material(service_id, material)
+        saved = self._saved_services()
+        try:
             self._persist_services(saved + [merged])
-        elif was_persistent and not now_persistent:
-            saved = [item for item in self._saved_services() if item["id"] != service_id]
-            self._persist_services(saved)
+        except Exception:
             self._remove_key_material(service_id)
-            merged["service_id"] = ""
-            self._temporary_services[service_id] = merged
-            self._temporary_keys[service_id] = self._read_key_material(service_id) if False else {}
-        elif now_persistent:
-            saved = self._saved_services()
-            self._persist_services([merged if item["id"] == service_id else item for item in saved])
-            if previous_access != merged["access_mode"] and merged["access_mode"] == "private":
-                self._write_key_material(service_id, self._temporary_keys.pop(service_id, {}))
-            elif merged["access_mode"] == "public":
-                material_path = self._key_path(service_id)
-                if material_path.exists():
-                    material = self._read_key_material(service_id)
-                    material.pop("client_private_key", None)
-                    self._write_key_material(service_id, material)
-        else:
-            self._temporary_services[service_id] = merged
+            raise
+        with self._lock:
+            self._temporary_services.pop(service_id, None)
+            self._temporary_keys.pop(service_id, None)
 
     def _check_local_target(self, service: dict[str, Any]) -> None:
         host, port = validate_loopback_target(service["local_host"], int(service["local_port"]))
