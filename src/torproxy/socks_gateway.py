@@ -520,16 +520,17 @@ class SocksFailoverGateway:
             if destination_route == "direct":
                 try:
                     upstream = self._connect_direct(destination_host, destination_port)
-                    upstream.settimeout(None)
-                    client.sendall(self._success_reply(upstream))
-                    client.settimeout(None)
-                    self._relay(client, upstream, self._idle_timeout)
                 except (OSError, TimeoutError, ValueError):
                     LOGGER.debug("An explicitly excluded SOCKS destination could not be reached directly.", exc_info=True)
                     try:
                         client.sendall(self._failure_reply(5))
                     except OSError:
                         pass
+                    return
+                upstream.settimeout(None)
+                client.sendall(self._success_reply(upstream))
+                client.settimeout(None)
+                self._relay(client, upstream, self._idle_timeout)
                 return
             if destination_route != "tor":
                 LOGGER.error("Unknown SOCKS destination route %r; rejecting connection.", destination_route)
