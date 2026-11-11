@@ -970,6 +970,7 @@ class TorManager:
                         if not alive():
                             controller.close()
                             controller = None
+                            self._controller = None
                     except Exception:
                         try:
                             controller.close()
