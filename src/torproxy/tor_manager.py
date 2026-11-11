@@ -63,13 +63,16 @@ class TorSettings:
     cgroup_callback: Callable[[int | None, int | None], None] | None = None
 
     def __post_init__(self) -> None:
-        ports = [self.socks_port, self.control_port]
+        socks_disabled = self.socks_port in (None, 0)
+        ports = [self.control_port]
+        if not socks_disabled:
+            ports.append(self.socks_port)
         if self.dns_port is not None:
             ports.append(self.dns_port)
         if any(type(port) is not int or not 1 <= port <= 65535 for port in ports):
-            raise TorManagerError("Configured listener ports must be valid integers in the range 1..65535.")
+            raise TorManagerError("Enabled listener ports must be valid integers in the range 1..65535.")
         if len(set(ports)) != len(ports):
-            raise TorManagerError("SOCKS, ControlPort, and DNSPort must use distinct ports.")
+            raise TorManagerError("Enabled SOCKS, ControlPort, and DNSPort listeners must use distinct ports.")
         if not 10 <= self.max_circuit_dirtiness_seconds <= 86400:
             raise TorManagerError("MaxCircuitDirtiness must be between 10 and 86400 seconds.")
         if not 10 <= self.new_circuit_period_seconds <= 86400:
@@ -383,7 +386,7 @@ class TorManager:
             self.data_directory.chmod(0o700)
         lines = [
             f"DataDirectory {self._torrc_quote(self.data_directory)}",
-            f"SocksPort 127.0.0.1:{settings.socks_port}",
+            ("SocksPort 0" if settings.socks_port in (None, 0) else f"SocksPort 127.0.0.1:{settings.socks_port}"),
             f"ControlPort 127.0.0.1:{settings.control_port}",
             "CookieAuthentication 1",
             "CookieAuthFile " + self._torrc_quote(self.data_directory / "control_auth_cookie"),
@@ -888,8 +891,17 @@ class TorManager:
                     match = re.search(r"PROGRESS=(\d+)", phase)
                     progress = int(match.group(1)) if match else None
                     last_detail = phase[:240] if phase else "Tor is responding on the authenticated ControlPort."
-                    if progress is not None and progress >= 100 and self._port_ready(self.settings.socks_port):
-                        self._emit(on_status, TorState.READY, 100, "Tor bootstrap completed; SOCKS listener is accepting connections.")
+                    socks_ready = (
+                        self.settings.socks_port in (None, 0)
+                        or self._port_ready(self.settings.socks_port)
+                    )
+                    if progress is not None and progress >= 100 and socks_ready:
+                        detail = (
+                            "Tor bootstrap completed; no SOCKS listener is configured."
+                            if self.settings.socks_port in (None, 0)
+                            else "Tor bootstrap completed; SOCKS listener is accepting connections."
+                        )
+                        self._emit(on_status, TorState.READY, 100, detail)
                         return
                     self._emit(on_status, TorState.BOOTSTRAPPING, progress, last_detail)
                 except TorManagerError:
@@ -935,6 +947,21 @@ class TorManager:
             raise TorManagerError(str(exc)) from exc
         finally:
             self._start_lock.release()
+
+    def send_control_command(self, command: str):
+        """Send one control-protocol command through the authenticated private controller.
+
+        Callers must never log the command: ADD_ONION may contain private keys.
+        """
+        if not isinstance(command, str) or not command.strip() or any(ch in command for ch in "\r\n\0"):
+            raise TorManagerError("A single valid Tor ControlPort command is required.")
+        with self._lock:
+            if self.state is not TorState.READY or self._controller is None:
+                raise TorManagerError("Tor is not ready; ControlPort commands are unavailable.")
+            try:
+                return self._controller.msg(command)
+            except Exception as exc:
+                raise TorManagerError(f"Tor ControlPort command failed: {exc}") from exc
 
     def request_new_identity(self) -> float:
         with self._lock:
