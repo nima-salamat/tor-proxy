@@ -13,7 +13,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Signal
 
 from config import BUNDLE_DIR, CONFIG, IS_WINDOWS
-from proxy import ProxyHandler, ThreadedHTTPServer, is_host_blocked, worker_data_usage_tracker
+from proxy import ProxyHandler, ThreadedHTTPServer, route_host, worker_data_usage_tracker
 from torproxy.bridge_distribution import BridgeDistribution, distribute_bridge_records
 from torproxy.bridge_health import DEFAULT_MAX_WORKERS
 from torproxy.health import TorProbeResult, probe_tor_socks
@@ -574,7 +574,7 @@ class TorRunner(QObject):
             self._gateway = SocksFailoverGateway(
                 int(self.socks_port),
                 self._ready_backend_endpoints,
-                host_blocker=is_host_blocked,
+                host_router=route_host,
             )
             self._gateway.start()
         except Exception as exc:
