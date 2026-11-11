@@ -194,7 +194,7 @@ Blocked-host and excluded-host lists share the same validated hostname-rule engi
 
 A `*` wildcard inside a label matches zero or more characters but never crosses a dot. Label-glob patterns match the same number of hostname labels; the special `*.domain` form matches subdomains across any depth. This is **glob syntax, not regex syntax**. Arbitrary regular expressions, `?`, and character classes are not accepted. Hostnames are case-insensitive and Unicode labels are normalized using IDNA. Wildcards embedded within an internationalized label must use its ASCII/IDNA form.
 
-Excluded hosts intentionally connect directly rather than through Tor in HTTP-proxy mode. In System Tunnel, matching TCP connections use sing-box's direct outbound; DNS for TUN clients remains handled by the configured FakeIP/Tor-routed resolver. Direct destination connections can expose the origin IP and destination metadata to the local network or ISP. Leave exclusions empty unless that bypass is intentional. Block rules take precedence over exclusions. System Tunnel is TCP-only; unsupported UDP is rejected.
+Excluded hosts intentionally connect directly rather than through Tor in HTTP-proxy and SOCKS5 mode. The primary SOCKS5 gateway checks the same saved host policy before dialing a Tor worker. In System Tunnel, matching TCP connections use sing-box's direct outbound; DNS for TUN clients remains handled by the configured FakeIP/Tor-routed resolver. Direct destination connections can expose the origin IP and destination metadata to the local network or ISP. Leave exclusions empty unless that bypass is intentional. Block rules take precedence over exclusions. System Tunnel is TCP-only; unsupported UDP is rejected.
 
 ## System proxy settings
 
