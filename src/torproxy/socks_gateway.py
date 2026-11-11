@@ -273,9 +273,38 @@ class SocksFailoverGateway:
         except (AttributeError, OSError, TypeError, ValueError, IndexError):
             return b"\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00"
 
+    def _resolve_direct_addresses(self, hostname: str, port: int):
+        """Resolve excluded hosts without pinning a gateway session during shutdown."""
+        finished = threading.Event()
+        results = []
+        errors: list[Exception] = []
+
+        def resolve() -> None:
+            try:
+                results.extend(socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM))
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                finished.set()
+
+        worker = threading.Thread(
+            target=resolve,
+            name="torproxy-socks-direct-dns",
+            daemon=True,
+        )
+        worker.start()
+        while not finished.wait(0.1):
+            if self._stop.is_set():
+                raise OSError("SOCKS gateway is stopping.")
+        if self._stop.is_set():
+            raise OSError("SOCKS gateway is stopping.")
+        if errors:
+            raise errors[0]
+        return results
+
     def _connect_direct(self, hostname: str, port: int) -> socket.socket:
         """Connect explicitly excluded hosts outside Tor, tracking sockets for shutdown."""
-        addresses = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+        addresses = self._resolve_direct_addresses(hostname, port)
         last_error: OSError | None = None
         for family, socktype, proto, _canonname, sockaddr in addresses:
             if self._stop.is_set():
