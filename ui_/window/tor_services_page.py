@@ -435,6 +435,9 @@ class TorServicesPage(QWidget):
         self._proxy = getattr(app_window, "proxyWidget", None)
         self._primary_tor = getattr(self._proxy, "tor", None)
         self._thread_pool = QThreadPool(self)
+        # Stop/Force Stop must never queue behind a long-running Start worker.
+        self._stop_thread_pool = QThreadPool(self)
+        self._stop_thread_pool.setMaxThreadCount(max(1, min(8, int(CONFIG["tor_service_workers"] or 4))))
         self._workers: dict[str, Worker] = {}
         self._busy_services: set[str] = set()
         self._stop_workers: dict[str, Worker] = {}
@@ -641,6 +644,9 @@ class TorServicesPage(QWidget):
                 widget.hide()
         self.apply_theme(CONFIG["mode"])
         self.refresh_services()
+
+    def set_stop_worker_limit(self, value: int) -> None:
+        self._stop_thread_pool.setMaxThreadCount(max(1, min(8, int(value))))
 
     def _go_home(self) -> None:
         show = getattr(self._app_window, "_show_home", None)
@@ -1056,7 +1062,7 @@ class TorServicesPage(QWidget):
                 f"{'Force-stopping' if force else 'Stopping'} '{service_id}'…"
             )
             self.refresh_services()
-            self._thread_pool.start(worker)
+            self._stop_thread_pool.start(worker)
         except Exception as exc:
             self.lbl_runtime_status.setText(str(exc))
             QMessageBox.warning(self, "Tor service stop", str(exc))
