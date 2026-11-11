@@ -21,6 +21,7 @@ dependencies = [
   "pyzbar>=0.1.9,<1",
   "keyboard>=0.13,<1",
   "psutil>=5.9,<8",
+  "cryptography>=41,<47",
   "portalocker>=2.8,<4",
   "beautifulsoup4>=4.12,<5",
   "requests>=2.31,<3",
