@@ -19,7 +19,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
 from .paths import user_directories
-from .tor_manager import TorManager, TorManagerError, TorSettings, TorState
+from .tor_manager import TorManager, TorSettings, TorState
 
 LOGGER = logging.getLogger(__name__)
 _SERVICE_ID_RE = re.compile(r"^[a-z2-7]{56}$")
