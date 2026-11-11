@@ -8,6 +8,8 @@ import threading
 import time
 from collections.abc import Callable, Iterable
 
+from torproxy.host_rules import HostRuleError, normalize_hostname
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -32,6 +34,7 @@ class SocksFailoverGateway:
         handshake_timeout: float = 12.0,
         idle_timeout: float = 120.0,
         max_sessions: int = 256,
+        host_blocker: Callable[[str], bool] | None = None,
     ) -> None:
         if host not in {"127.0.0.1", "::1", "localhost"}:
             raise ValueError("The Tor SOCKS gateway must bind to loopback.")
@@ -40,6 +43,7 @@ class SocksFailoverGateway:
         self.host = host
         self.port = port
         self._backend_provider = backend_provider
+        self._host_blocker = host_blocker
         self._connect_timeout = max(0.5, float(connect_timeout))
         self._handshake_timeout = max(1.0, float(handshake_timeout))
         self._idle_timeout = max(5.0, float(idle_timeout))
@@ -212,6 +216,41 @@ class SocksFailoverGateway:
         else:
             raise ValueError("Unsupported SOCKS address type.")
         return header + address + cls._recv_exact(client, 2)
+
+    @staticmethod
+    def _request_destination_host(request: bytes) -> str:
+        """Decode and normalize the destination carried by a SOCKS5 CONNECT."""
+        if len(request) < 7 or request[0] != 5:
+            raise ValueError("The SOCKS5 destination request is incomplete.")
+        atyp = request[3]
+        if atyp == 1:
+            packed = request[4:8]
+            if len(packed) != 4:
+                raise ValueError("The SOCKS5 IPv4 destination is incomplete.")
+            hostname = socket.inet_ntop(socket.AF_INET, packed)
+        elif atyp == 4:
+            packed = request[4:20]
+            if len(packed) != 16:
+                raise ValueError("The SOCKS5 IPv6 destination is incomplete.")
+            hostname = socket.inet_ntop(socket.AF_INET6, packed)
+        elif atyp == 3:
+            if len(request) < 5:
+                raise ValueError("The SOCKS5 domain destination is incomplete.")
+            size = request[4]
+            encoded = request[5:5 + size]
+            if size == 0 or len(encoded) != size:
+                raise ValueError("The SOCKS5 domain destination is incomplete.")
+            try:
+                hostname = encoded.decode("ascii")
+            except UnicodeDecodeError as exc:
+                raise ValueError("SOCKS5 domain names must use ASCII/IDNA encoding.") from exc
+        else:
+            raise ValueError("Unsupported SOCKS5 address type.")
+
+        try:
+            return normalize_hostname(hostname)
+        except HostRuleError as exc:
+            raise ValueError("The SOCKS5 destination hostname is invalid.") from exc
 
     @classmethod
     def _read_reply(cls, upstream: socket.socket) -> bytes:
@@ -415,6 +454,13 @@ class SocksFailoverGateway:
             # restricted and does not forward arbitrary client credentials to Tor.
             client.sendall(b"\x05\x00")
             request = self._read_request(client)
+            if self._host_blocker is not None:
+                destination_host = self._request_destination_host(request)
+                if self._host_blocker(destination_host):
+                    LOGGER.debug("Rejected SOCKS CONNECT because the destination matches a blocked-host rule.")
+                    # RFC 1928 reply code 0x02: connection not allowed by ruleset.
+                    client.sendall(self._failure_reply(2))
+                    return
             last_reply: bytes | None = None
 
             for endpoint in self._ordered_backends():
