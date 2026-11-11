@@ -4,6 +4,9 @@ All notable changes are recorded here. Dates and release numbers are added only 
 
 ## Unreleased
 
+- Added a dedicated Home → **Custom Tor** management page with Back to Home navigation, while keeping Tor resource/concurrency preferences under Settings. Profile creation/editing now uses the app's custom-framed dialogs, and each service card opens its own live Tor log.
+- Profile-list changes use the configuration store's atomic update API. Stop can now cancel an in-progress startup; Force stop can escalate an already-running graceful stop, and explicit application exit joins/escalates existing stops before closing the isolated service pool.
+- Clarified lifecycle semantics: closing the window with X hides TorProxy to the system tray (services continue), while Exit TorProxy stops registered custom services.
 - Added continuous Tor Check health monitoring for isolated Tor profiles, with per-profile RTT, degraded/unhealthy hysteresis, automatic health recovery, dead-process reconciliation, stale ControlPort cleanup and live Start/Stop state updates. Independent profiles remain isolated and are not load-balanced with one another.
 - Bounded the primary SOCKS gateway to 256 concurrent sessions and the local HTTP proxy to 128 concurrent clients by default; added active/rejected session and per-backend connection metrics, pruned stale backend metrics, and made shutdown close active sockets and wait for client handlers.
 - Fixed Windows HTTP proxy shutdown: active relays now receive an explicit cancellation event, outbound sockets are registered before Tor/DNS connect begins, and Tor is kept alive if an HTTP client handler has not yet released its upstream tunnel.

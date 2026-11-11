@@ -634,3 +634,46 @@ def test_failed_forced_shutdown_keeps_process_owned_and_data_directory_locked(tm
     assert manager.process is process
     assert manager.state is TorState.FAILED
     assert release_calls == []
+
+
+
+def test_force_stop_kills_the_managed_tor_child_without_graceful_wait(tmp_path):
+    executable = tmp_path / "tor.exe"
+    executable.write_text("fake", encoding="utf-8")
+    manager = TorManager(TorSettings(
+        executable=executable,
+        socks_port=19750,
+        control_port=19751,
+        data_directory=tmp_path / "state" / "force-stop",
+    ))
+
+    class KillableProcess:
+        pid = 54321
+
+        def __init__(self):
+            self.returncode = None
+            self.killed = False
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            raise AssertionError("Force stop must not wait for graceful termination")
+
+        def kill(self):
+            self.killed = True
+            self.returncode = -9
+
+        def wait(self, timeout=None):
+            assert timeout == 2
+            return self.returncode
+
+    child = KillableProcess()
+    manager.process = child
+    manager.state = TorState.READY
+
+    manager.force_stop()
+
+    assert child.killed is True
+    assert manager.process is None
+    assert manager.state is TorState.STOPPED

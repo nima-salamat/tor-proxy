@@ -13,7 +13,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .health import TorProbeResult, probe_tor_socks
@@ -36,6 +36,8 @@ class _ServiceEntry:
     settings: TorSettings
     manager: TorManager
     start_lock: threading.Lock
+    start_cancel_event: threading.Event = field(default_factory=threading.Event)
+    stop_calls: int = 0
     active_calls: int = 0
     stopping: bool = False
     network_healthy: bool = False
@@ -205,12 +207,14 @@ class TorServicePool:
             prepared = self._prepare_settings(service_id, settings)
             self._validate_resources(service_id, prepared)
             manager = self._manager_factory(prepared)
-            self._services[service_id] = _ServiceEntry(
+            entry = _ServiceEntry(
                 service_id=service_id,
                 settings=prepared,
                 manager=manager,
                 start_lock=threading.Lock(),
             )
+            manager._start_cancel_event = entry.start_cancel_event
+            self._services[service_id] = entry
             return manager
 
     def get(self, service_id: str) -> TorManager:
@@ -459,6 +463,7 @@ class TorServicePool:
                 raise TorServicePoolError(f"Unknown Tor service '{service_id}'.")
             if entry.stopping:
                 raise TorServicePoolError(f"Tor service '{service_id}' is stopping.")
+            entry.start_cancel_event.clear()
             entry.active_calls += 1
             acquired = entry.start_lock.acquire(blocking=False)
             if not acquired:
@@ -495,6 +500,8 @@ class TorServicePool:
             if entry.stopping:
                 raise TorServicePoolError(f"Tor service '{service_id}' is already stopping.")
             entry.stopping = True
+            entry.stop_calls += 1
+            entry.start_cancel_event.set()
             entry.active_calls += 1
 
         error = None
@@ -533,7 +540,57 @@ class TorServicePool:
                     "stopped" if self._state_value(entry.manager) == "stopped" else "not_ready"
                 )
                 entry.last_health_error = ""
-                entry.stopping = False
+                entry.stop_calls = max(0, entry.stop_calls - 1)
+                entry.stopping = entry.stop_calls > 0
+                entry.active_calls -= 1
+
+    def force_stop_service(self, service_id: str) -> None:
+        """Cancel startup and kill the owned Tor process immediately."""
+        with self._lock:
+            entry = self._services.get(service_id)
+            if entry is None:
+                raise TorServicePoolError(f"Unknown Tor service '{service_id}'.")
+            # Force-stop may intentionally join an in-progress graceful stop.
+            # Count both operations so one completion cannot clear the other's
+            # stopping state while the process is still being reconciled.
+            entry.stopping = True
+            entry.stop_calls += 1
+            entry.start_cancel_event.set()
+            entry.active_calls += 1
+
+        error = None
+        try:
+            force_stop = getattr(entry.manager, "force_stop", None)
+            try:
+                force_stop() if callable(force_stop) else entry.manager.stop()
+            except Exception as exc:
+                error = exc
+
+            # Reconcile after any concurrent start() has observed cancellation.
+            with entry.start_lock:
+                force_stop = getattr(entry.manager, "force_stop", None)
+                try:
+                    force_stop() if callable(force_stop) else entry.manager.stop()
+                except Exception as exc:
+                    error = exc
+                else:
+                    error = None
+
+            if error is not None:
+                raise TorServicePoolError(
+                    f"Tor service '{service_id}' could not be force-stopped: {error}"
+                ) from error
+        finally:
+            with self._lock:
+                entry.network_healthy = False
+                entry.health_latency_ms = None
+                entry.consecutive_health_failures = 0
+                entry.network_health = (
+                    "stopped" if self._state_value(entry.manager) == "stopped" else "not_ready"
+                )
+                entry.last_health_error = ""
+                entry.stop_calls = max(0, entry.stop_calls - 1)
+                entry.stopping = entry.stop_calls > 0
                 entry.active_calls -= 1
 
     def _run_many(self, service_ids: Iterable[str], operation: str) -> dict[str, str | None]:
@@ -566,10 +623,41 @@ class TorServicePool:
         return self._run_many(selected, "start")
 
     def stop_all(self, service_ids: Iterable[str] | None = None) -> dict[str, str | None]:
-        """Stop registered services concurrently; failures are isolated per service."""
+        """Stop every selected service, joining/escalating any stop already in progress."""
         with self._lock:
             selected = tuple(self._services) if service_ids is None else tuple(service_ids)
-        return self._run_many(selected, "stop")
+            unknown = [service_id for service_id in selected if service_id not in self._services]
+        if unknown:
+            raise TorServicePoolError("Unknown Tor service(s): " + ", ".join(unknown))
+        if not selected:
+            return {}
+
+        def stop_one(service_id: str) -> None:
+            try:
+                self.stop_service(service_id)
+                return
+            except TorServicePoolError:
+                # An explicit application exit must not fail just because the
+                # user started a graceful Stop from the Custom Tor page first.
+                with self._lock:
+                    entry = self._services.get(service_id)
+                    already_stopping = bool(entry and entry.stopping)
+                if not already_stopping:
+                    raise
+                self.force_stop_service(service_id)
+
+        results: dict[str, str | None] = {}
+        worker_count = min(self._max_workers, len(selected))
+        with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="torproxy-stop-all") as executor:
+            futures = {executor.submit(stop_one, service_id): service_id for service_id in selected}
+            for future in as_completed(futures):
+                service_id = futures[future]
+                try:
+                    future.result()
+                    results[service_id] = None
+                except Exception as exc:
+                    results[service_id] = f"{type(exc).__name__}: {exc}"
+        return {service_id: results[service_id] for service_id in selected}
 
     def unregister(self, service_id: str) -> None:
         """Forget a stopped service; never detach a running or starting process."""

@@ -294,7 +294,7 @@ def test_settings_and_bundle_pages_use_available_height_without_duplicate_subtit
     settings_source = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
     updater_source = (repository / "ui_/window/updater_window.py").read_text(encoding="utf-8")
     proxy_source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
-    assert '("General", "Bridges", "Ports", "Tor Services", "Advanced"), self.settings_nav_icon_names' in settings_source
+    assert '("General", "Bridges", "Ports", "Custom Tor", "Advanced"), self.settings_nav_icon_names' in settings_source
     assert "verify_tor_signatures" in settings_source
     assert "QScrollArea" in settings_source and "setWidgetResizable(True)" in settings_source
     assert "lbl_page_number" not in settings_source
@@ -2486,8 +2486,8 @@ def test_settings_exposes_isolated_tor_profiles_and_parallel_bridge_workers():
     proxy_source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
     tor_source = (repository / "tor.py").read_text(encoding="utf-8")
 
-    assert '"Tor Services"' in settings_source
-    assert "TorServicesPage(self, app_window=self._parent)" in settings_source
+    assert '"Custom Tor"' in settings_source
+    assert "TorServicesSettingsPage(self, app_window=self._parent)" in settings_source
     assert '"Concurrent bridge probes"' in services_source
     assert '"Concurrent service operations"' in services_source
     assert 'def add_service(self)' in services_source
@@ -2538,3 +2538,52 @@ def test_disconnect_shutdown_keeps_tor_alive_when_http_listener_is_still_owned()
     assert "http_proxy_blocks_tor_shutdown = False" in source
     assert "if self.tor and not http_proxy_blocks_tor_shutdown:" in source
     assert "Tor was deliberately kept running" in source
+
+
+
+def test_custom_tor_has_a_home_shortcut_and_its_own_back_navigable_page():
+    repository = Path(__file__).resolve().parents[1]
+    ui_source = (repository / "ui.py").read_text(encoding="utf-8")
+    home_source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+    page_source = (repository / "ui_/window/tor_services_page.py").read_text(encoding="utf-8")
+    settings_source = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
+
+    assert 'QPushButton("Custom Tor"' in home_source
+    assert "open_custom_tor_page" in home_source
+    assert "TorServicesPage(self, app_window=self, management_only=True)" in ui_source
+    assert "def _show_custom_tor(self)" in ui_source
+    assert "Back to Home" in page_source
+    assert "TorServicesSettingsPage(self, app_window=self._parent)" in settings_source
+    assert "def refresh_health(self)" in page_source
+
+
+def test_custom_tor_supports_startup_cancellation_force_stop_and_live_logs():
+    repository = Path(__file__).resolve().parents[1]
+    page = (repository / "ui_/window/tor_services_page.py").read_text(encoding="utf-8")
+    pool = (repository / "src/torproxy/service_pool.py").read_text(encoding="utf-8")
+    manager = (repository / "src/torproxy/tor_manager.py").read_text(encoding="utf-8")
+
+    assert "stop_button.setEnabled(bool(pool) and can_stop" in page
+    assert 'QPushButton("Force stop"' in page
+    assert "_service_force_stop_buttons" in page
+    assert "self._stop_thread_pool = QThreadPool(self)" in page
+    assert "self._stop_thread_pool.start(worker)" in page
+    assert "TorLogDialog(self, path, manager=manager).exec()" in page
+    assert "manager._start_cancel_event = entry.start_cancel_event" in pool
+    assert "entry.start_cancel_event.set()" in pool
+    assert "def force_stop_service(self, service_id: str)" in pool
+    assert "def force_stop(self) -> None:" in manager
+    assert "process.kill()" in manager
+
+
+def test_custom_tor_profile_updates_are_persisted_atomically_and_exit_stops_services():
+    repository = Path(__file__).resolve().parents[1]
+    page = (repository / "ui_/window/tor_services_page.py").read_text(encoding="utf-8")
+    proxy = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+    pool = (repository / "src/torproxy/service_pool.py").read_text(encoding="utf-8")
+
+    assert 'CONFIG.update_many({"tor_services": updated})' in page
+    assert 'getattr(self._parent, "_closing", False)' in proxy
+    assert "self.tor_service_pool.stop_all()" in proxy
+    assert "def stop_all(self, service_ids" in pool
+    assert "already_stopping" in pool
