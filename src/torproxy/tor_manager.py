@@ -960,13 +960,61 @@ class TorManager:
         if not isinstance(command, str) or not command.strip() or any(ch in command for ch in "\r\n\0"):
             raise TorManagerError("A single valid Tor ControlPort command is required.")
         with self._lock:
-            if self.state is not TorState.READY or self._controller is None:
+            if self.state is not TorState.READY:
                 raise TorManagerError("Tor is not ready; ControlPort commands are unavailable.")
+            controller = self._controller
+            if controller is not None:
+                alive = getattr(controller, "is_alive", None)
+                if callable(alive):
+                    try:
+                        if not alive():
+                            controller.close()
+                            controller = None
+                    except Exception:
+                        try:
+                            controller.close()
+                        except Exception:
+                            pass
+                        controller = None
+            if controller is None:
+                if not self._port_ready(self.settings.control_port):
+                    raise TorManagerError("The authenticated Tor ControlPort is not accepting connections.")
+                try:
+                    controller = self._connect_controller()
+                    process = self.process
+                    expected_pid = self._tor_pid if self.settings.isolate_in_cgroup else (
+                        process.pid if process is not None else None
+                    )
+                    reported_pid = controller.get_info("process/pid", None)
+                    if (
+                        expected_pid is None
+                        or reported_pid is None
+                        or not str(reported_pid).isdecimal()
+                        or int(reported_pid) != int(expected_pid)
+                    ):
+                        controller.close()
+                        raise TorManagerError(
+                            "The reconnected ControlPort did not identify the Tor process owned by this runtime."
+                        )
+                    self._controller = controller
+                except TorManagerError:
+                    raise
+                except Exception as exc:
+                    raise TorManagerError(
+                        f"Could not re-authenticate to the Developer Tor ControlPort ({type(exc).__name__})."
+                    ) from exc
             try:
-                return self._controller.msg(command)
+                return controller.msg(command)
             except Exception as exc:
-                # Stem may include the submitted command in protocol diagnostics.
-                # ADD_ONION commands can carry private keys, so expose only the error type.
+                # Do not retry commands after a transmission failure: the daemon may
+                # have processed an ADD_ONION before the reply was lost. Callers can
+                # reconnect on their next explicit action without creating duplicates.
+                if not bool(getattr(controller, "is_alive", lambda: True)()):
+                    try:
+                        controller.close()
+                    except Exception:
+                        pass
+                    self._controller = None
                 raise TorManagerError(
                     f"Tor ControlPort command failed ({type(exc).__name__})."
                 ) from exc
