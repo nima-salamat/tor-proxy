@@ -52,7 +52,7 @@ Browser-only profiles are stored under the per-user data directory in `browser_p
 
 ## Host-rule files
 
-Blocked hosts and direct exclusions are maintained separately in per-user configuration storage. Both lists use the same host-rule parser and matcher in the HTTP proxy, the primary Tor SOCKS5 failover gateway, and System Tunnel. New HTTP proxy and SOCKS5 connections use saved changes immediately; the SOCKS5 gateway checks the requested domain or IP before forwarding CONNECT to a Tor worker. System Tunnel reads the files when it starts, so stop and start the tunnel after editing a rule. TUN host rules apply to supported TCP connections only; domain rules rely on FakeIP reverse mapping or HTTP/TLS hostname sniffing, while IP-literal rules match destination IPs. TUN DNS continues to use its configured FakeIP and Tor-routed DoH resolver.
+Blocked hosts and direct exclusions are maintained separately in per-user configuration storage. Both lists use the same host-rule parser and matcher in the HTTP proxy, the primary Tor SOCKS5 failover gateway, and System Tunnel. New HTTP proxy and SOCKS5 connections use saved changes immediately. The SOCKS5 gateway rejects blocked destinations, connects excluded destinations directly outside Tor, and forwards only ordinary destinations to a Tor worker. System Tunnel reads the files when it starts, so stop and start the tunnel after editing a rule. TUN host rules apply to supported TCP connections only; domain rules rely on FakeIP reverse mapping or HTTP/TLS hostname sniffing, while IP-literal rules match destination IPs. TUN DNS continues to use its configured FakeIP and Tor-routed DoH resolver.
 
 - `example.org` — the hostname and all subdomains.
 - `=example.org` — exactly that hostname, not its subdomains.
