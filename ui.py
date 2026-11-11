@@ -50,9 +50,9 @@ from ui_.window.updater_window import UpdaterWindow
 from ui_.window.tunnel_window import TunnelManagerWindow
 from ui_.window.dialogs import QMessageBox, ExitConfirmDialog
 from ui_.window.shortcuts_window import ShortcutsWindow
+from ui_.window.onion_hosting_page import OnionHostingPage
 from ui_.window.statistics_window import StatisticsWindow
 from ui_.window.tor_services_page import TorServicesPage
-from ui_.window.onion_hosting_page import OnionHostingPage
 logger = logging.getLogger(__name__)
 
 _THEME_STYLESHEET_CACHE = {}
