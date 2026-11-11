@@ -89,13 +89,24 @@ def test_gateway_rejects_blocked_socks_connect_before_backend_selection(raw_requ
     assert seen_hosts == [expected_host]
 
 
-def test_gateway_routes_excluded_socks_domain_directly_without_using_tor_backends():
+def test_gateway_routes_excluded_socks_domain_directly_without_using_tor_backends(monkeypatch):
     target = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     target.bind(("127.0.0.1", 0))
     target.listen()
+    target.settimeout(2)
     target_port = int(target.getsockname()[1])
     target_received = []
     target_finished = threading.Event()
+
+    original_getaddrinfo = socket.getaddrinfo
+
+    def resolve_test_domain(host, port, *args, **kwargs):
+        # Keep the test independent of hosts-file/DNS differences across OSes.
+        if host == "excluded.example":
+            host = "127.0.0.1"
+        return original_getaddrinfo(host, port, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolve_test_domain)
 
     def serve_target():
         try:
@@ -104,6 +115,8 @@ def test_gateway_routes_excluded_socks_domain_directly_without_using_tor_backend
                 payload = _recv_exact(connection, 5)
                 target_received.append(payload)
                 connection.sendall(payload)
+        except TimeoutError:
+            pass
         finally:
             target.close()
             target_finished.set()
@@ -116,7 +129,7 @@ def test_gateway_routes_excluded_socks_domain_directly_without_using_tor_backend
     gateway = SocksFailoverGateway(
         gateway_port,
         lambda: backend_provider_called.append(True) or [],
-        host_router=lambda host: routed_hosts.append(host) or ("direct" if host == "localhost" else "tor"),
+        host_router=lambda host: routed_hosts.append(host) or ("direct" if host == "excluded.example" else "tor"),
         connect_timeout=2,
         handshake_timeout=2,
         idle_timeout=5,
@@ -124,10 +137,10 @@ def test_gateway_routes_excluded_socks_domain_directly_without_using_tor_backend
     gateway.start()
     try:
         with socket.create_connection(("127.0.0.1", gateway_port), timeout=2) as client:
-            client.settimeout(2)
+            client.settimeout(3)
             client.sendall(b"\x05\x01\x00")
             assert _recv_exact(client, 2) == b"\x05\x00"
-            encoded_host = b"localhost"
+            encoded_host = b"excluded.example"
             request = (
                 b"\x05\x01\x00\x03"
                 + bytes((len(encoded_host),))
@@ -141,9 +154,10 @@ def test_gateway_routes_excluded_socks_domain_directly_without_using_tor_backend
             assert _recv_exact(client, 5) == b"hello"
     finally:
         gateway.stop()
-        target_thread.join(timeout=2)
+        target.close()
+        target_thread.join(timeout=3)
 
-    assert routed_hosts == ["localhost"]
+    assert routed_hosts == ["excluded.example"]
     assert backend_provider_called == []
     assert target_received == [b"hello"]
     assert target_finished.is_set()
