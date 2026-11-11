@@ -429,6 +429,11 @@ def _route_for_host(host: str) -> str:
     return "tor"
 
 
+def route_host(host: str) -> str:
+    """Return the shared block/direct/Tor route for a destination hostname."""
+    return _route_for_host(host)
+
+
 def is_host_blocked(host: str) -> bool:
     """Return whether a normalized destination matches the shared block policy."""
     normalized = normalize_hostname(host)
