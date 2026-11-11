@@ -169,6 +169,33 @@ class OnionHostingManager:
             raise OnionHostingError("The stored Tor v3 identity key has an invalid format.")
         return value
 
+    @staticmethod
+    def _validate_client_authorization(service: dict[str, Any], material: dict[str, str]) -> str:
+        public_key = str(service.get("client_public_key") or "")
+        private_key = str(material.get("client_private_key") or "")
+        if not _CLIENT_KEY_RE.fullmatch(public_key) or not _CLIENT_KEY_RE.fullmatch(private_key):
+            raise OnionHostingError(
+                "Private client authorization material is missing or invalid. "
+                "TorProxy will not publish a private service without a usable client key."
+            )
+        try:
+            padding = "=" * ((8 - len(private_key) % 8) % 8)
+            private_raw = base64.b32decode(private_key.upper() + padding)
+            derived_public = _b32(
+                X25519PrivateKey.from_private_bytes(private_raw).public_key().public_bytes(
+                    encoding=serialization.Encoding.Raw,
+                    format=serialization.PublicFormat.Raw,
+                )
+            )
+        except (ValueError, TypeError) as exc:
+            raise OnionHostingError("The private client authorization key is damaged.") from exc
+        if derived_public != public_key:
+            raise OnionHostingError(
+                "The stored public and private client authorization keys do not match. "
+                "The Onion Service was not published."
+            )
+        return private_key
+
     def _read_key_material(self, service_id: str) -> dict[str, str]:
         path = self._key_path(service_id)
         try:
@@ -584,6 +611,8 @@ class OnionHostingManager:
             key_material = dict(self._temporary_keys.get(profile_id, {}))
             if key_material.get("tor_private_key"):
                 command_key = key_material["tor_private_key"]
+        if access_mode == "private":
+            self._validate_client_authorization(service, key_material)
         target_host = service["local_host"]
         target = f"[{target_host}]:{service['local_port']}" if ":" in target_host else f"{target_host}:{service['local_port']}"
         command = f"ADD_ONION {command_key} Flags={','.join(flags)} Port={service['onion_port']},{target}"
@@ -663,9 +692,7 @@ class OnionHostingManager:
             material = self._read_key_material(profile_id)
         else:
             material = self._temporary_keys.get(profile_id, {})
-        private_key = str(material.get("client_private_key") or "")
-        if not _CLIENT_KEY_RE.fullmatch(private_key):
-            raise OnionHostingError("The client authorization private key is unavailable.")
+        private_key = self._validate_client_authorization(service, material)
         return f"{onion_id}:descriptor:x25519:{private_key.upper()}"
 
     def services_snapshot(self) -> list[dict[str, Any]]:
