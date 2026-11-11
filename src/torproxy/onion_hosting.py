@@ -542,8 +542,14 @@ class OnionHostingManager:
             flags.append("V3Auth")
         key_material: dict[str, str] = {}
         if service.get("persistent"):
-            key_material = self._read_key_material(profile_id) if self._key_path(profile_id).exists() else {}
+            key_path = self._key_path(profile_id)
+            key_material = self._read_key_material(profile_id) if key_path.exists() else {}
             stored_key = key_material.get("tor_private_key", "")
+            if service.get("service_id") and not stored_key:
+                raise OnionHostingError(
+                    f"Persistent identity for '{profile_id}' is missing its Tor private key. "
+                    "The service will not be recreated with a different Onion address."
+                )
             if stored_key:
                 command_key = stored_key
         else:
