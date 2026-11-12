@@ -23,6 +23,7 @@ class TorProxyConfig:
     proxy_allow_remote: bool = False
     proxy_port: int = 8888
     socks_host: str = "127.0.0.1"
+    socks_allow_remote: bool = False
     socks_port: int = 9050
     control_host: str = "127.0.0.1"
     control_port: int = 9051
@@ -51,9 +52,17 @@ class TorProxyConfig:
             raise ConfigurationError(
                 "proxy_host must be a loopback address unless proxy_allow_remote explicitly enables 0.0.0.0."
             )
-        for name in ("socks_host", "control_host"):
-            if getattr(self, name) not in {"127.0.0.1", "::1", "localhost"}:
-                raise ConfigurationError(f"{name} must be a loopback address.")
+        if type(self.socks_allow_remote) is not bool:
+            raise ConfigurationError("socks_allow_remote must be true or false.")
+        allowed_socks_hosts = {"127.0.0.1", "::1", "localhost"}
+        if self.socks_allow_remote:
+            allowed_socks_hosts.add("0.0.0.0")
+        if self.socks_host not in allowed_socks_hosts:
+            raise ConfigurationError(
+                "socks_host must be a loopback address unless socks_allow_remote explicitly enables 0.0.0.0."
+            )
+        if self.control_host not in {"127.0.0.1", "::1", "localhost"}:
+            raise ConfigurationError("control_host must be a loopback address.")
         ports = [self.proxy_port, self.socks_port, self.control_port]
         if any(type(port) is not int or not 1 <= port <= 65535 for port in ports):
             raise ConfigurationError("Ports must be integers in the range 1..65535.")
@@ -87,6 +96,7 @@ def migrate_legacy_config(raw: dict[str, Any]) -> dict[str, Any]:
         "kill_switch_enabled": "kill_switch_enabled",
         "http_proxy_enabled": "http_proxy_enabled",
         "http_proxy_bind_all_interfaces": "proxy_allow_remote",
+        "tor_socks_bind_all_interfaces": "socks_allow_remote",
         "bridges": "bridges",
         "proxy_port": "proxy_port",
         "tor_port": "socks_port",
@@ -105,6 +115,8 @@ def migrate_legacy_config(raw: dict[str, Any]) -> dict[str, Any]:
             migrated[new] = value
     if migrated.get("proxy_allow_remote") is True:
         migrated["proxy_host"] = "0.0.0.0"
+    if migrated.get("socks_allow_remote") is True:
+        migrated["socks_host"] = "0.0.0.0"
     if "data_usage" in raw and isinstance(raw["data_usage"], int) and raw["data_usage"] >= 0:
         migrated["data_usage_bytes"] = raw["data_usage"]
     if isinstance(raw.get("blocked_hosts"), list):
