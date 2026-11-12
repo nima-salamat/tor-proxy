@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 
 import qtawesome as qta
-from PySide6.QtCore import Qt, QThreadPool, QTimer, Signal, QUrl
+from PySide6.QtCore import Qt, QThreadPool, QTimer, Signal, QUrl, QObject, Slot
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
@@ -31,6 +31,34 @@ from ui_.window.dialogs import QMessageBox, StandardButton, _FramelessDialog
 from ui_.window.tor_log_dialog import TorLogDialog
 
 logger = logging.getLogger(__name__)
+
+
+class _WorkerResultRelay(QObject):
+    """Marshal QRunnable results onto the GUI thread with a real QObject receiver."""
+
+    finished = Signal(str, str, object)
+    error = Signal(str, str)
+    cancelled = Signal(str, str)
+
+    def __init__(self, parent, operation: str, completion_callback=None):
+        super().__init__(parent)
+        self._operation = operation
+        self._completion_callback = completion_callback
+        self.finished.connect(parent._on_worker_finished)
+        self.error.connect(parent._on_worker_error)
+        self.cancelled.connect(parent._on_worker_cancelled)
+
+    @Slot(str)
+    def on_finished(self, result: str):
+        self.finished.emit(self._operation, result, self._completion_callback)
+
+    @Slot(str)
+    def on_error(self, error: str):
+        self.error.emit(self._operation, error)
+
+    @Slot(str)
+    def on_cancelled(self, detail: str):
+        self.cancelled.emit(self._operation, detail)
 
 
 class OnionServiceDialog(_FramelessDialog):
@@ -410,6 +438,8 @@ class OnionHostingPage(QWidget):
         self._proxy = proxy
         self._app_window = app_window
         self._workers: dict[str, Worker] = {}
+        self._worker_relays: dict[str, _WorkerResultRelay] = {}
+        self._service_card_widgets: list[QWidget] = []
         self._last_snapshot = None
         self._last_services = None
         self._thread_pool = QThreadPool(self)
@@ -628,18 +658,24 @@ class OnionHostingPage(QWidget):
         if key in self._workers:
             return
         worker = Worker(callback, *args)
-        worker.signals.finished.connect(
-            lambda result, op=key, done=finished: self._on_worker_finished(op, result, done)
-        )
-        worker.signals.error.connect(
-            lambda error, op=key: self._on_worker_error(op, error)
-        )
+        relay = _WorkerResultRelay(self, key, finished)
+        worker.signals.finished.connect(relay.on_finished)
+        worker.signals.error.connect(relay.on_error)
+        worker.signals.cancelled.connect(relay.on_cancelled)
         self._workers[key] = worker
+        self._worker_relays[key] = relay
         self._update_action_states()
         self._thread_pool.start(worker)
 
-    def _on_worker_finished(self, key: str, result: str, callback=None):
+    def _release_worker(self, key: str):
         self._workers.pop(key, None)
+        relay = self._worker_relays.pop(key, None)
+        if relay is not None:
+            relay.deleteLater()
+
+    @Slot(str, str, object)
+    def _on_worker_finished(self, key: str, result: str, callback=None):
+        self._release_worker(key)
         if callback is not None:
             try:
                 callback(result)
@@ -648,14 +684,23 @@ class OnionHostingPage(QWidget):
         self.refresh_dashboard()
         self._update_action_states()
 
+    @Slot(str, str)
     def _on_worker_error(self, key: str, error: str):
-        self._workers.pop(key, None)
+        self._release_worker(key)
         self.status_label.setText(error)
         logger.warning("Developer Tor operation '%s' failed: %s", key, error)
         self.refresh_dashboard()
         self._update_action_states()
         QMessageBox.warning(self, "Developer Tor", error)
 
+    @Slot(str, str)
+    def _on_worker_cancelled(self, key: str, detail: str):
+        self._release_worker(key)
+        self.status_label.setText(detail or "Developer Tor operation cancelled.")
+        self.refresh_dashboard()
+        self._update_action_states()
+
+    @Slot(object)
     def _on_runtime_progress(self, update):
         state, progress, message = update
         text = str(message or state.title())
@@ -846,17 +891,21 @@ class OnionHostingPage(QWidget):
         self.restart_runtime_button.setEnabled(state != "stopped" and "runtime" not in self._workers)
 
     def _rebuild_service_cards(self, services: list[dict]):
-        while self.services_layout.count() > 1:
-            item = self.services_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
+        # The empty-state label is permanent. Only remove cards created by the
+        # previous snapshot; deleting the placeholder left a live Python wrapper
+        # around an already-destroyed QLabel and crashed the next refresh.
+        for card in self._service_card_widgets:
+            self.services_layout.removeWidget(card)
+            card.hide()
+            card.deleteLater()
+        self._service_card_widgets.clear()
+
         self.empty_label.setVisible(not services)
-        if not services:
-            self.services_layout.insertWidget(0, self.empty_label)
-            return
         for service in services:
-            self.services_layout.insertWidget(self.services_layout.count() - 1, self._service_card(service))
+            card = self._service_card(service)
+            self._service_card_widgets.append(card)
+            # Keep the placeholder at index 0 and the stretch at the end.
+            self.services_layout.insertWidget(self.services_layout.count() - 1, card)
 
     def _service_card(self, service: dict) -> QWidget:
         card = QFrame(self.services_host)
