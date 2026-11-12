@@ -8,15 +8,19 @@ from PySide6.QtCore import Qt, QThreadPool, QTimer, Signal, QUrl, QObject, Slot
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QFormLayout,
+    QHeaderView,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
     QScrollArea,
+    QTableWidget,
+    QTableWidgetItem,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -32,6 +36,131 @@ from ui_.window.dialogs import QMessageBox, StandardButton, _FramelessDialog
 from ui_.window.tor_log_dialog import TorLogDialog
 
 logger = logging.getLogger(__name__)
+
+
+def _format_bytes(value: int | float) -> str:
+    amount = max(0.0, float(value or 0))
+    units = ("B", "KiB", "MiB", "GiB", "TiB")
+    for unit in units:
+        if amount < 1024 or unit == units[-1]:
+            return f"{amount:.0f} {unit}" if unit == "B" else f"{amount:.1f} {unit}"
+        amount /= 1024
+    return f"{amount:.1f} TiB"
+
+
+class OnionServiceActivityDialog(_FramelessDialog):
+    """Live, service-scoped access and connection history (never the Tor runtime log)."""
+
+    def __init__(self, parent, manager, service: dict):
+        super().__init__(
+            parent,
+            f"Activity · {service.get('display_name', 'Onion Service')}",
+            "fa6s.list-ul",
+            "#287db5",
+            width=940,
+        )
+        self._manager = manager
+        self._service_id = str(service["id"])
+        self._last_events = None
+
+        intro = QLabel(
+            "Requests and connection activity for this Onion Service only. "
+            "The Tor runtime log is available once in the Developer Tor runtime panel.",
+            self.body_host,
+        )
+        intro.setObjectName("dialogMessage")
+        intro.setWordWrap(True)
+        self.body_layout.addWidget(intro)
+
+        self.summary = QLabel("", self.body_host)
+        self.summary.setObjectName("onionActivitySummary")
+        self.body_layout.addWidget(self.summary)
+
+        privacy = QLabel(
+            "Privacy: visitor IPs, headers, request bodies and query strings are not stored. "
+            "HTTPS paths stay encrypted; HTTPS entries show connection and traffic details only. "
+            "For plaintext HTTP, the first request line on each TCP connection may be displayed.",
+            self.body_host,
+        )
+        privacy.setObjectName("dialogHint")
+        privacy.setWordWrap(True)
+        self.body_layout.addWidget(privacy)
+
+        self.table = QTableWidget(0, 7, self.body_host)
+        self.table.setObjectName("onionActivityTable")
+        self.table.setHorizontalHeaderLabels(
+            ["Time (UTC)", "Protocol", "Request / connection", "Status", "In", "Out", "Duration"]
+        )
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setVisible(False)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        for column in (4, 5, 6):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
+        self.body_layout.addWidget(self.table, 1)
+
+        self.add_footer_spacer()
+        self.add_button("Refresh", primary=False, callback=self.refresh)
+        self.add_button("Close", primary=True, callback=self.accept)
+        self.resize(960, 650)
+        self._remember_preferred_size()
+
+        self._timer = QTimer(self)
+        self._timer.setInterval(1500)
+        self._timer.timeout.connect(self.refresh)
+        self._timer.start()
+        self.refresh()
+
+    def refresh(self):
+        try:
+            stats = self._manager.traffic_snapshot(self._service_id)
+            events = self._manager.traffic_events(self._service_id, limit=250)
+        except Exception as exc:
+            self.summary.setText(f"Could not load service activity: {exc}")
+            return
+
+        self.summary.setText(
+            f"IN  {_format_bytes(stats['incoming_bytes'])}     "
+            f"OUT  {_format_bytes(stats['outgoing_bytes'])}     "
+            f"HTTP requests  {stats['http_requests']:,}     "
+            f"Connections  {stats['connections']:,}     "
+            f"Active  {stats['active_connections']:,}"
+        )
+        if events == self._last_events:
+            return
+        self._last_events = events
+        self.table.setRowCount(len(events))
+        for row, event in enumerate(events):
+            method = str(event.get("method") or "")
+            path = str(event.get("path") or "")
+            request = f"{method} {path}".strip() if method else f"{event.get('protocol', 'TCP')} connection"
+            if event.get("error"):
+                request = f"{request}  ·  {event['error']}"
+            values = (
+                str(event.get("occurred_at", "")).replace("T", " ").replace("+00:00", ""),
+                str(event.get("protocol") or "TCP"),
+                request,
+                str(event.get("status_code") or "—"),
+                _format_bytes(event.get("incoming_bytes", 0)),
+                _format_bytes(event.get("outgoing_bytes", 0)),
+                f"{int(event.get('duration_ms') or 0):,} ms",
+            )
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if column in {3, 4, 5, 6}:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                if column == 3:
+                    code = event.get("status_code")
+                    if code is not None and int(code) >= 400:
+                        item.setForeground(Qt.GlobalColor.red)
+                self.table.setItem(row, column, item)
+        self.table.scrollToTop()
 
 
 class _WorkerResultRelay(QObject):
