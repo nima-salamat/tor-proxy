@@ -30,6 +30,12 @@ from functools import partial
 logger = logging.getLogger(__name__)
 
 from config import CONFIG
+from torproxy.socks_gateway_credentials import (
+    SocksGatewayCredentialError,
+    read_socks_gateway_credentials,
+    write_socks_gateway_credentials,
+    generate_socks_gateway_credentials,
+)
 from torproxy.bridges import (
     SUPPORTED_BRIDGE_TRANSPORTS,
     bridge_identity_fingerprint,
@@ -850,7 +856,7 @@ class SettingWindow(QWidget):
         self.second_page_layout.addWidget(description)
         ports = ["tor_port", "proxy_port", "dns_port", "control_port"]
         port_labels = {
-            "tor_port": "SOCKS listener",
+            "tor_port": "Main SOCKS gateway",
             "proxy_port": "HTTP proxy",
             "dns_port": "DNS listener",
             "control_port": "Control interface",
@@ -870,8 +876,8 @@ class SettingWindow(QWidget):
             inp_port.setPlaceholderText("Port 1–65535")
             inp_port.setMaximumWidth(220)
             inp_port.setToolTip(
-                "Current loopback port. Leave automatic mode selected to reuse TorProxy's saved value, "
-                "or pin this value as a manual port."
+                "Main SOCKS is a TorProxy failover gateway; each Tor worker has a separate randomly allocated private SOCKS port. "
+                "Leave automatic mode selected to reuse the saved gateway port, or pin it manually."
             )
 
             # populate input with existing value if present (avoid "None" string)
@@ -908,6 +914,83 @@ class SettingWindow(QWidget):
             self._listener_port_status_labels[port] = lbl_status
             self.second_page_layout.addWidget(row)
 
+        self.second_page_layout.addSpacing(12)
+        self.second_page_layout.addWidget(self._section_title("Main Tor SOCKS Gateway"))
+        self.second_page_layout.addWidget(
+            self._description(
+                "This stable port belongs to TorProxy's failover gateway, not to a Tor process. Each Main Tor worker has its own randomly allocated private SOCKS port. "
+                "LAN mode binds the gateway to 0.0.0.0 and requires SOCKS5 username/password authentication for non-local clients."
+            )
+        )
+        self.chk_tor_socks_lan_access = QCheckBox(
+            "Allow Main SOCKS connections from the local network (0.0.0.0)", self
+        )
+        self.chk_tor_socks_lan_access.setObjectName("mainSocksLanAccessPreference")
+        self.chk_tor_socks_lan_access.setToolTip(
+            "Remote clients must authenticate with SOCKS5 username/password. Loopback clients retain no-auth access."
+        )
+        self.chk_tor_socks_lan_access.setChecked(bool(CONFIG.get("tor_socks_bind_all_interfaces", False)))
+        self.chk_tor_socks_lan_access.toggled.connect(self.tor_socks_lan_access_changed)
+        self.second_page_layout.addWidget(self.chk_tor_socks_lan_access)
+
+        self.socks_credentials_row = QFrame(self)
+        self.socks_credentials_row.setObjectName("settingsRowCard")
+        socks_credentials_layout = QVBoxLayout(self.socks_credentials_row)
+        socks_credentials_layout.setContentsMargins(14, 10, 14, 10)
+        socks_credentials_layout.setSpacing(7)
+        socks_username_row = QHBoxLayout()
+        socks_username_label = QLabel("SOCKS username")
+        socks_username_label.setObjectName("settingsFieldLabel")
+        self.inp_tor_socks_username = QLineEdit(self.socks_credentials_row)
+        self.inp_tor_socks_username.setObjectName("mainSocksUsername")
+        self.inp_tor_socks_username.setPlaceholderText("Generated when LAN access is enabled")
+        socks_username_row.addWidget(socks_username_label)
+        socks_username_row.addWidget(self.inp_tor_socks_username, 1)
+        socks_credentials_layout.addLayout(socks_username_row)
+
+        socks_password_row = QHBoxLayout()
+        socks_password_label = QLabel("SOCKS password")
+        socks_password_label.setObjectName("settingsFieldLabel")
+        self.inp_tor_socks_password = QLineEdit(self.socks_credentials_row)
+        self.inp_tor_socks_password.setObjectName("mainSocksPassword")
+        self.inp_tor_socks_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.inp_tor_socks_password.setPlaceholderText("Stored outside config.json")
+        self.chk_show_tor_socks_password = QCheckBox("Show")
+        self.chk_show_tor_socks_password.toggled.connect(
+            lambda visible: self.inp_tor_socks_password.setEchoMode(
+                QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password
+            )
+        )
+        socks_password_row.addWidget(socks_password_label)
+        socks_password_row.addWidget(self.inp_tor_socks_password, 1)
+        socks_password_row.addWidget(self.chk_show_tor_socks_password)
+        socks_credentials_layout.addLayout(socks_password_row)
+
+        socks_actions_row = QHBoxLayout()
+        self.btn_generate_tor_socks_credentials = QPushButton("Generate new credentials")
+        self.btn_generate_tor_socks_credentials.setObjectName("settingsActionButton")
+        self.btn_generate_tor_socks_credentials.clicked.connect(self.generate_tor_socks_credentials)
+        self.btn_save_tor_socks_credentials = QPushButton("Save credentials")
+        self.btn_save_tor_socks_credentials.setObjectName("settingsActionButton")
+        self.btn_save_tor_socks_credentials.clicked.connect(self.save_tor_socks_credentials)
+        socks_actions_row.addStretch(1)
+        socks_actions_row.addWidget(self.btn_generate_tor_socks_credentials)
+        socks_actions_row.addWidget(self.btn_save_tor_socks_credentials)
+        socks_credentials_layout.addLayout(socks_actions_row)
+        self.second_page_layout.addWidget(self.socks_credentials_row)
+
+        self.lbl_tor_socks_status = self._description("Main SOCKS gateway is restricted to this device by default.")
+        self.lbl_tor_socks_status.setWordWrap(True)
+        self.second_page_layout.addWidget(self.lbl_tor_socks_status)
+        self.lbl_tor_socks_security = self._description(
+            "Security: SOCKS5 username/password authentication is not encrypted. Use only on a trusted private network, "
+            "restrict source devices with the operating-system firewall, and never forward this port from your router to the public Internet."
+        )
+        self.lbl_tor_socks_security.setWordWrap(True)
+        self.second_page_layout.addWidget(self.lbl_tor_socks_security)
+        self._load_tor_socks_credentials()
+        self._refresh_tor_socks_status()
+
     def sync_listener_ports(self, ports: dict[str, int]) -> None:
         """Refresh automatically reassigned port values without changing pin preferences."""
         for port, value in ports.items():
@@ -922,6 +1005,101 @@ class SettingWindow(QWidget):
             status = self._listener_port_status_labels.get(port)
             if status is not None:
                 status.setText("AUTO")
+
+    def _load_tor_socks_credentials(self) -> None:
+        self._socks_credentials_load_error = ""
+        try:
+            credentials = read_socks_gateway_credentials()
+        except SocksGatewayCredentialError as exc:
+            credentials = {"username": "", "password": ""}
+            self._socks_credentials_load_error = str(exc)
+        self.inp_tor_socks_username.setText(credentials["username"])
+        self.inp_tor_socks_password.setText(credentials["password"])
+
+    def _refresh_tor_socks_status(self, detail: str | None = None) -> None:
+        if not hasattr(self, "lbl_tor_socks_status"):
+            return
+        enabled = bool(CONFIG.get("tor_socks_bind_all_interfaces", False))
+        host = "0.0.0.0" if enabled else "127.0.0.1"
+        proxy_widget = getattr(self._parent, "proxyWidget", None)
+        tor_runner = getattr(proxy_widget, "tor", None)
+        gateway = getattr(tor_runner, "_gateway", None)
+        port = int(getattr(tor_runner, "socks_port", CONFIG.get("tor_port") or 0) or 0)
+        if gateway is not None and bool(getattr(gateway, "running", False)):
+            status = f"Ready · {host}:{port}"
+        elif bool(getattr(proxy_widget, "running", False)):
+            status = f"Configured · {host}:{port} · the listener will apply this on the next Main Tor start."
+        else:
+            status = f"Not connected · next Main Tor start will bind {host}:{port}."
+        if enabled:
+            status += " · remote clients require SOCKS5 username/password."
+        if self._socks_credentials_load_error:
+            status = "Saved credentials could not be loaded; remote access is blocked. " + self._socks_credentials_load_error
+        if detail:
+            status = str(detail)
+        self.lbl_tor_socks_status.setText(status)
+        self.socks_credentials_row.setVisible(enabled)
+        self.lbl_tor_socks_security.setVisible(enabled)
+
+    def _apply_tor_socks_access_setting(self) -> str:
+        proxy_widget = getattr(self._parent, "proxyWidget", None)
+        tor_runner = getattr(proxy_widget, "tor", None)
+        apply = getattr(tor_runner, "reconfigure_socks_gateway", None)
+        if callable(apply):
+            return str(apply())
+        return "Saved. The new Main SOCKS access policy will apply on the next connection."
+
+    def tor_socks_lan_access_changed(self, checked: bool) -> None:
+        enabled = bool(checked)
+        previous = bool(CONFIG.get("tor_socks_bind_all_interfaces", False))
+        if enabled == previous:
+            self._refresh_tor_socks_status()
+            return
+
+        try:
+            if enabled:
+                username = self.inp_tor_socks_username.text().strip()
+                password = self.inp_tor_socks_password.text()
+                if not username or not password:
+                    generated = generate_socks_gateway_credentials()
+                    username, password = generated["username"], generated["password"]
+                    self.inp_tor_socks_username.setText(username)
+                    self.inp_tor_socks_password.setText(password)
+                write_socks_gateway_credentials(username, password)
+            CONFIG["tor_socks_bind_all_interfaces"] = enabled
+            result = self._apply_tor_socks_access_setting()
+        except Exception as exc:
+            try:
+                CONFIG["tor_socks_bind_all_interfaces"] = previous
+            except Exception:
+                logger.exception("Could not restore the Main SOCKS LAN access preference.")
+            self.chk_tor_socks_lan_access.blockSignals(True)
+            self.chk_tor_socks_lan_access.setChecked(previous)
+            self.chk_tor_socks_lan_access.blockSignals(False)
+            QMessageBox.warning(self, "Main SOCKS gateway", str(exc))
+            self._refresh_tor_socks_status()
+            return
+        self._refresh_tor_socks_status(result)
+
+    def save_tor_socks_credentials(self) -> None:
+        username = self.inp_tor_socks_username.text().strip()
+        password = self.inp_tor_socks_password.text()
+        try:
+            write_socks_gateway_credentials(username, password)
+            if bool(CONFIG.get("tor_socks_bind_all_interfaces", False)):
+                result = self._apply_tor_socks_access_setting()
+            else:
+                result = "SOCKS credentials saved securely. Enable LAN access to apply them."
+        except Exception as exc:
+            QMessageBox.warning(self, "Main SOCKS credentials", str(exc))
+            return
+        self._refresh_tor_socks_status(result)
+
+    def generate_tor_socks_credentials(self) -> None:
+        generated = generate_socks_gateway_credentials()
+        self.inp_tor_socks_username.setText(generated["username"])
+        self.inp_tor_socks_password.setText(generated["password"])
+        self.save_tor_socks_credentials()
 
     def _refresh_http_proxy_status(self) -> None:
         """Keep Settings truthful about listener availability and Tor readiness."""
