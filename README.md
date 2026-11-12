@@ -19,6 +19,11 @@
   </p>
 </div>
 
+<div align="center">
+  <img src="screenshots/torproxy_home.png" alt="TorProxy application overview showing the main dashboard" width="920" />
+  <p><em>TorProxy at a glance — the main dashboard and its controls.</em></p>
+</div>
+
 ---
 
 ## 🧅 What is TorProxy?
@@ -87,13 +92,12 @@ Beyond the main connection, TorProxy includes independent Tor profiles, v3 Onion
 
 <details>
   <summary>More screenshots</summary>
-  <p align="center"><strong>Home dashboard</strong></p>
+  <p align="center"><strong>Connection & traffic details</strong></p>
   <p align="center">
-    <img src="screenshots/torproxy_home.png" alt="Home dashboard" width="48%" />
     <img src="screenshots/torproxy_home_connecting.png" alt="Tor connection starting" width="48%" />
+    <img src="screenshots/torproxy_home_statistics.png" alt="Traffic statistics" width="48%" />
   </p>
   <p align="center">
-    <img src="screenshots/torproxy_home_statistics.png" alt="Traffic statistics" width="48%" />
     <img src="screenshots/torproxy_help.png" alt="Help page" width="48%" />
   </p>
 </details>
