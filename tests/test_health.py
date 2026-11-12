@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 from torproxy.health import MAX_TOR_CHECK_RESPONSE_BYTES, probe_tor_socks
 
@@ -66,7 +67,7 @@ def test_probe_uses_remote_dns_bypasses_environment_proxies_and_requires_tor(mon
     url, kwargs, trust_env = session.calls[0]
     assert url == "https://check.torproject.org/api/ip"
     assert kwargs["proxies"]["https"] == "socks5h://127.0.0.1:19155"
-    assert kwargs["timeout"] == (3.0, 3.0)
+    assert kwargs["timeout"] == (3.0, 1.0)
     assert kwargs["allow_redirects"] is False
     assert kwargs["stream"] is True
     assert trust_env is False
@@ -228,3 +229,50 @@ def test_probe_rejects_when_all_independent_fallback_targets_fail(monkeypatch):
     assert result.successful_targets == ()
     assert result.failed_targets == ("cloudflare_trace", "google_204")
     assert "0/2" in result.detail
+
+
+def test_probe_enforces_total_deadline_against_slow_trickle_response(monkeypatch):
+    import time
+    from torproxy.health import TOR_CHECK_URL
+
+    class SlowTrickleResponse(FakeResponse):
+        def iter_content(self, chunk_size=4096):
+            for chunk in (b'{"IsTor":', b" true", b"}"):
+                time.sleep(0.4)
+                yield chunk
+
+    response = SlowTrickleResponse({})
+    session = FakeSession(response=response)
+    _install_session(monkeypatch, session)
+
+    started = time.monotonic()
+    result = probe_tor_socks(19162, timeout=1.0)
+    elapsed = time.monotonic() - started
+
+    assert result.healthy is False
+    assert result.verified_tor is False
+    assert "0/2" in result.detail
+    assert elapsed < 1.8
+    assert [call[0] for call in session.calls] == [TOR_CHECK_URL]
+    assert response.closed is True
+    assert session.closed is True
+
+
+def test_probe_latency_includes_streamed_response_body(monkeypatch):
+    import time
+
+    class DelayedBodyResponse(FakeResponse):
+        def iter_content(self, chunk_size=4096):
+            time.sleep(0.04)
+            yield b'{"IsTor": true}'
+
+    response = DelayedBodyResponse({})
+    session = FakeSession(response=response)
+    _install_session(monkeypatch, session)
+
+    result = probe_tor_socks(19163, timeout=1.0)
+
+    assert result.healthy is True
+    assert result.verified_tor is True
+    assert result.latency_ms is not None
+    assert result.latency_ms >= 30.0
