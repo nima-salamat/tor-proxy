@@ -93,13 +93,9 @@ class ConnectionStatusPill(QWidget):
         # Clear any rectangular background supplied by the platform/application
         # style first. The unpainted corners then reveal the Home canvas below.
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setCompositionMode(
-            QPainter.CompositionMode.CompositionMode_Source
-        )
+        painter.setCompositionMode(QPainter.CompositionMode_Source)
         painter.fillRect(self.rect(), QColor(0, 0, 0, 0))
-        painter.setCompositionMode(
-            QPainter.CompositionMode.CompositionMode_SourceOver
-        )
+        painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
 
         if self._state == "connected":
             background = QColor(46, 174, 105, 26)
