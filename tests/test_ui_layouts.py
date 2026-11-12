@@ -3185,13 +3185,13 @@ def test_connection_status_pill_renders_over_its_parent_background(qt_app):
         # the transparent QSS surface must not replace it with a palette fill.
         assert image.pixelColor(10, 10) == parent_color
         assert image.pixelColor(11, 11) == parent_color
-        assert pill.testAttribute(
+        assert not pill.testAttribute(
             Qt.WidgetAttribute.WA_StyledBackground
         )
-        assert not pill.testAttribute(
+        assert pill.testAttribute(
             Qt.WidgetAttribute.WA_TranslucentBackground
         )
-        assert not pill.testAttribute(
+        assert pill.testAttribute(
             Qt.WidgetAttribute.WA_NoSystemBackground
         )
     finally:

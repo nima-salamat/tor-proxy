@@ -70,8 +70,8 @@ class ConnectionStatusPill(QWidget):
         # Override app-wide QWidget surfaces for this custom-painted child.
         # The explicit transparent background keeps only the antialiased pill
         # visible; the uncovered corners reveal the actual Home parent surface.
-        self.setStyleSheet("background: transparent; border: none;")
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
         self.setAutoFillBackground(False)
         self.set_theme_mode(CONFIG.get("mode", "dark"))
 
