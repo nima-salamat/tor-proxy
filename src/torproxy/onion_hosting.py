@@ -20,6 +20,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
 from .paths import user_directories
+from .onion_traffic import OnionServiceRelay, OnionTrafficStore
 from .tor_manager import TorManager, TorSettings, TorState
 
 LOGGER = logging.getLogger(__name__)
@@ -147,6 +148,8 @@ class OnionHostingManager:
         self._active_services: dict[str, str] = {}
         self._service_errors: dict[str, str] = {}
         self._temporary_keys: dict[str, dict[str, str]] = {}
+        self._traffic_store = OnionTrafficStore(self._directories.data)
+        self._traffic_relays: dict[str, OnionServiceRelay] = {}
         self._last_status_message = ""
 
     @property
@@ -438,6 +441,7 @@ class OnionHostingManager:
             raise OnionHostingError(f"Tor ControlPort rejected the Onion Service operation: {exc}") from exc
 
     def runtime_snapshot(self) -> dict[str, Any]:
+        stale_relays = []
         with self._lock:
             manager = self._manager
             started_at = self._started_at
@@ -456,6 +460,10 @@ class OnionHostingManager:
                 for profile_id in self._active_services:
                     self._service_errors[profile_id] = "Developer Tor exited; this Onion Service is no longer published."
                 self._active_services.clear()
+                stale_relays = list(self._traffic_relays.values())
+                self._traffic_relays.clear()
+        for relay in stale_relays:
+            relay.close()
         if manager is None:
             return {
                 "state": "stopped", "progress": None, "message": "Developer Tor is stopped.",
@@ -642,8 +650,10 @@ class OnionHostingManager:
             with self._lock:
                 manager = self._manager
             if manager is None:
-                if shutdown:
-                    with self._lock:
+                with self._lock:
+                    relays = list(self._traffic_relays.values())
+                    self._traffic_relays.clear()
+                    if shutdown:
                         self._started_at = None
                         self._last_status_message = "Developer Tor stopped."
                         self._temporary_services.clear()
@@ -651,6 +661,8 @@ class OnionHostingManager:
                         self._active_services.clear()
                         self._service_errors.clear()
                         self._runtime_cancel_event = None
+                for relay in relays:
+                    relay.close()
                 return
 
             stop_error = None
@@ -695,6 +707,10 @@ class OnionHostingManager:
                 self._active_services.clear()
                 self._service_errors.clear()
                 self._runtime_cancel_event = None
+                relays = list(self._traffic_relays.values())
+                self._traffic_relays.clear()
+            for relay in relays:
+                relay.close()
         finally:
             self._runtime_start_lock.release()
 
@@ -986,56 +1002,60 @@ class OnionHostingManager:
                 command_key = key_material["tor_private_key"]
         if access_mode == "private":
             self._validate_client_authorization(service, key_material)
-        port_arguments = []
-        for mapping in self._service_port_mappings(service):
-            target_host = mapping["local_host"]
-            target = (
-                f"[{target_host}]:{mapping['local_port']}"
-                if ":" in target_host
-                else f"{target_host}:{mapping['local_port']}"
-            )
-            port_arguments.append(f"Port={mapping['onion_port']},{target}")
-        command = f"ADD_ONION {command_key} Flags={','.join(flags)} " + " ".join(port_arguments)
-        if client_public:
-            command += f" ClientAuthV3={client_public.upper()}"
-        response = self._control(command)
-        fields = self._parse_control_response(response)
-        onion_id = fields.get("ServiceID", "")
-        if not _SERVICE_ID_RE.fullmatch(onion_id):
-            raise OnionHostingError("Tor did not return a valid v3 Onion Service address.")
-        private_key = fields.get("PrivateKey", "")
-        if not key_material.get("tor_private_key"):
+        mappings = self._service_port_mappings(service)
+        relay = OnionServiceRelay(profile_id, mappings, self._traffic_store)
+        try:
+            relay_mappings = relay.start()
+            port_arguments = []
+            for mapping in relay_mappings:
+                port_arguments.append(
+                    f"Port={mapping['onion_port']},127.0.0.1:{mapping['local_port']}"
+                )
+            command = f"ADD_ONION {command_key} Flags={','.join(flags)} " + " ".join(port_arguments)
+            if client_public:
+                command += f" ClientAuthV3={client_public.upper()}"
+            response = self._control(command)
+            fields = self._parse_control_response(response)
+            onion_id = fields.get("ServiceID", "")
+            if not _SERVICE_ID_RE.fullmatch(onion_id):
+                raise OnionHostingError("Tor did not return a valid v3 Onion Service address.")
+            private_key = fields.get("PrivateKey", "")
+            if not key_material.get("tor_private_key"):
+                try:
+                    private_key = self._validate_tor_private_key(private_key)
+                except OnionHostingError:
+                    try:
+                        self._control(f"DEL_ONION {onion_id}")
+                    except Exception:
+                        pass
+                    if service.get("persistent"):
+                        raise OnionHostingError("Tor did not return a valid private key needed to preserve this Onion address.")
+                    raise OnionHostingError("Tor did not return a valid temporary service identity.")
+                key_material["tor_private_key"] = private_key
             try:
-                private_key = self._validate_tor_private_key(private_key)
-            except OnionHostingError:
+                if service.get("persistent"):
+                    self._write_key_material(profile_id, key_material)
+                    saved = self._saved_services()
+                    updated = []
+                    for item in saved:
+                        updated.append({**item, "service_id": onion_id} if item["id"] == profile_id else item)
+                    self._persist_services(updated)
+                else:
+                    with self._lock:
+                        self._temporary_keys[profile_id] = key_material
+                        self._temporary_services[profile_id]["service_id"] = onion_id
+            except Exception:
                 try:
                     self._control(f"DEL_ONION {onion_id}")
                 except Exception:
-                    pass
-                if service.get("persistent"):
-                    raise OnionHostingError("Tor did not return a valid private key needed to preserve this Onion address.")
-                raise OnionHostingError("Tor did not return a valid temporary service identity.")
-            key_material["tor_private_key"] = private_key
-        try:
-            if service.get("persistent"):
-                self._write_key_material(profile_id, key_material)
-                saved = self._saved_services()
-                updated = []
-                for item in saved:
-                    updated.append({**item, "service_id": onion_id} if item["id"] == profile_id else item)
-                self._persist_services(updated)
-            else:
-                with self._lock:
-                    self._temporary_keys[profile_id] = key_material
-                    self._temporary_services[profile_id]["service_id"] = onion_id
+                    LOGGER.exception("Could not roll back an Onion Service after key persistence failed.")
+                raise
         except Exception:
-            try:
-                self._control(f"DEL_ONION {onion_id}")
-            except Exception:
-                LOGGER.exception("Could not roll back an Onion Service after key persistence failed.")
+            relay.close()
             raise
         with self._lock:
             self._active_services[profile_id] = onion_id
+            self._traffic_relays[profile_id] = relay
             self._service_errors.pop(profile_id, None)
         return onion_id + ".onion"
 
@@ -1047,6 +1067,9 @@ class OnionHostingManager:
         self._control(f"DEL_ONION {onion_id}")
         with self._lock:
             self._active_services.pop(profile_id, None)
+            relay = self._traffic_relays.pop(profile_id, None)
+        if relay is not None:
+            relay.close()
 
     def delete_service(self, profile_id: str) -> None:
         self.stop_service(profile_id)
@@ -1060,6 +1083,54 @@ class OnionHostingManager:
             self._persist_services(saved)
             self._remove_key_material(profile_id)
         self._service_errors.pop(profile_id, None)
+
+    def rotate_service_identity(self, profile_id: str) -> None:
+        """Discard the stopped service's Ed25519 identity so its next start gets a new .onion address."""
+        with self._lock:
+            if profile_id in self._active_services:
+                raise OnionHostingError("Stop this Onion Service before generating a new .onion address.")
+        current = self._find_service(profile_id)
+        old_onion_id = str(current.get("service_id") or "")
+        if not _SERVICE_ID_RE.fullmatch(old_onion_id):
+            raise OnionHostingError("This Onion Service does not have an assigned address to rotate yet.")
+
+        persistent = bool(current.get("persistent", True))
+        if persistent:
+            key_path = self._key_path(profile_id)
+            if not key_path.is_file():
+                raise OnionHostingError(
+                    "The persistent identity key is missing; TorProxy will not silently replace it."
+                )
+            material = self._read_key_material(profile_id)
+            if not material.get("tor_private_key"):
+                raise OnionHostingError(
+                    "The persistent Tor identity key is missing; the existing Onion address cannot be safely rotated."
+                )
+            previous_material = dict(material)
+            material.pop("tor_private_key", None)
+            self._write_key_material(profile_id, material)
+            saved = self._saved_services()
+            updated = [
+                {**item, "service_id": ""} if item["id"] == profile_id else item
+                for item in saved
+            ]
+            try:
+                self._persist_services(updated)
+            except Exception:
+                self._write_key_material(profile_id, previous_material)
+                raise
+        else:
+            with self._lock:
+                material = dict(self._temporary_keys.get(profile_id, {}))
+                material.pop("tor_private_key", None)
+                self._temporary_keys[profile_id] = material
+                self._temporary_services[profile_id]["service_id"] = ""
+
+    def traffic_snapshot(self, service_id: str | None = None) -> dict[str, Any]:
+        return self._traffic_store.snapshot(service_id)
+
+    def traffic_events(self, service_id: str, limit: int = 250) -> list[dict[str, Any]]:
+        return self._traffic_store.events(service_id, limit=limit)
 
     def client_auth_private_file(self, profile_id: str) -> str:
         service = self._find_service(profile_id)
