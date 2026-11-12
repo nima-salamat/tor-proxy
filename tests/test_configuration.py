@@ -230,6 +230,19 @@ def test_primary_tor_instance_count_is_bounded_to_four():
             AppConfig._validate(data)
 
 
+def test_primary_backend_selection_mode_is_validated():
+    assert DEFAULT_DATA["tor_backend_selection_mode"] == "balanced"
+    for invalid in ("fastest", "", None, True, ["latency"]):
+        data = dict(DEFAULT_DATA)
+        data["tor_backend_selection_mode"] = invalid
+        with pytest.raises(AppConfigError, match="tor_backend_selection_mode"):
+            AppConfig._validate(data)
+
+    data = dict(DEFAULT_DATA)
+    data["tor_backend_selection_mode"] = "latency"
+    AppConfig._validate(data)
+
+
 def test_tor_service_profiles_reject_duplicate_ids_and_listener_ports():
     profile = {
         "id": "personal",

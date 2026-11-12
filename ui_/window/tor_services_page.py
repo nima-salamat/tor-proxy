@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt, QThreadPool, QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -64,6 +65,14 @@ class TorServicesSettingsPage(QWidget):
         self._status.setWordWrap(True)
 
         self._add_setting(layout, "Main Tor instances", "Number of isolated Tor workers behind the primary SOCKS endpoint.", "primary_tor_instances", 1, 4, " instances", 2)
+        self._add_choice_setting(
+            layout,
+            "Backend selection strategy",
+            "Balanced distributes new connections across healthy instances; Low latency prefers the lowest rolling end-to-end delay.",
+            "tor_backend_selection_mode",
+            (("Balanced", "balanced"), ("Low latency", "latency")),
+            "balanced",
+        )
         self._add_setting(layout, "Concurrent bridge probes", "Maximum number of parallel bridge preflight checks (CPU/memory use increases with this value).", "bridge_probe_workers", 1, 8, " workers", 8)
         self._add_setting(layout, "Concurrent service operations", "Maximum number of independent custom Tor services started or stopped together.", "tor_service_workers", 1, 8, " workers", 4)
 
@@ -134,6 +143,64 @@ class TorServicesSettingsPage(QWidget):
         self._spins[key] = spin
         layout.addWidget(row)
 
+    def _add_choice_setting(self, layout, title, description, key, choices, fallback):
+        row = QFrame(self)
+        row.setObjectName("settingsRowCard")
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(14, 10, 14, 10)
+        row_layout.setSpacing(12)
+        copy = QVBoxLayout()
+        copy.setSpacing(3)
+        label = QLabel(title)
+        label.setObjectName("settingsFieldLabel")
+        detail = QLabel(description)
+        detail.setObjectName("settingsDescription")
+        detail.setWordWrap(True)
+        copy.addWidget(label)
+        copy.addWidget(detail)
+        row_layout.addLayout(copy, 1)
+        combo = QComboBox(row)
+        for label_text, value in choices:
+            combo.addItem(label_text, value)
+        current = str(CONFIG[key] or fallback)
+        index = combo.findData(current)
+        combo.setCurrentIndex(index if index >= 0 else 0)
+        combo.currentIndexChanged.connect(
+            lambda _index, setting=key, control=combo: self._save_choice_setting(
+                setting, control.currentData(), control
+            )
+        )
+        row_layout.addWidget(combo)
+        layout.addWidget(row)
+
+    def _save_choice_setting(self, key: str, value: str, control: QComboBox) -> None:
+        previous = str(CONFIG[key] or "balanced")
+        tor_runner = None
+        try:
+            proxy = getattr(self._app_window, "proxyWidget", None)
+            tor_runner = getattr(proxy, "tor", None)
+            setter = getattr(tor_runner, "set_backend_selection_mode", None)
+            if callable(setter):
+                setter(value)
+            CONFIG[key] = value
+            self._status.setText(
+                "Saved backend selection strategy. It applies immediately to new connections."
+            )
+        except Exception as exc:
+            setter = getattr(tor_runner, "set_backend_selection_mode", None)
+            if callable(setter):
+                try:
+                    setter(previous)
+                except Exception:
+                    logger.exception("Could not roll back the primary Tor backend selection strategy.")
+            blocked = control.blockSignals(True)
+            old_index = control.findData(previous)
+            if old_index >= 0:
+                control.setCurrentIndex(old_index)
+            control.blockSignals(blocked)
+            self._status.setText(f"Could not save {key.replace('_', ' ')}: {exc}")
+            QMessageBox.warning(self, "Settings could not be saved", str(exc))
+
     def _save_setting(self, key: str, value: int, control: QSpinBox) -> None:
         previous = int(CONFIG[key] or control.minimum())
         pool = None
@@ -182,12 +249,63 @@ class TorServicesSettingsPage(QWidget):
                 continue
             try:
                 index = int(item.get("index", len(details) + 1) or len(details) + 1)
-                latency = float(item["latency_ms"]) if item.get("latency_ms") is not None else None
+                latency_value = item.get("latency_p50_ms")
+                if latency_value is None:
+                    latency_value = item.get("latency_ms")
+                latency = float(latency_value) if latency_value is not None else None
             except (TypeError, ValueError):
                 index, latency = len(details) + 1, None
-            state = f"Healthy · {latency:.0f} ms" if item.get("healthy") and latency is not None else ("Healthy" if item.get("healthy") else str(item.get("state", "starting")).replace("-", " ").title())
+            if item.get("healthy"):
+                verification = "Tor Check verified" if item.get("verified_tor") else "reachable"
+                quality_parts = [verification]
+                if latency is not None:
+                    quality_parts.append(f"median {latency:.0f} ms")
+                for metric_key, label in (
+                    ("latency_p95_ms", "P95"),
+                    ("jitter_ms", "jitter"),
+                ):
+                    metric = item.get(metric_key)
+                    if metric is not None:
+                        try:
+                            quality_parts.append(f"{label} {float(metric):.0f} ms")
+                        except (TypeError, ValueError):
+                            pass
+                failure_ratio = item.get("probe_failure_ratio")
+                if failure_ratio is not None:
+                    try:
+                        quality_parts.append(f"probe failures {float(failure_ratio) * 100:.0f}%")
+                    except (TypeError, ValueError):
+                        pass
+                health_label = (
+                    "Degraded"
+                    if str(item.get("state", "")).lower() == "degraded"
+                    else "Healthy"
+                )
+                state = health_label + " · " + " · ".join(quality_parts)
+            else:
+                state = str(item.get("state", "starting")).replace("-", " ").title()
+            circuit = item.get("circuit_metrics") or {}
+            if isinstance(circuit, dict):
+                failed_circuits = int(circuit.get("circuits_failed", 0) or 0)
+                built_circuits = int(circuit.get("circuits_built", 0) or 0)
+                failed_streams = int(circuit.get("streams_failed", 0) or 0)
+                state += f" · circuits built {built_circuits} / failed {failed_circuits} · streams failed {failed_streams}"
+            circuit_failure = item.get("circuit_failure_ratio")
+            if circuit_failure is not None:
+                try:
+                    state += f" · recent circuit failures {float(circuit_failure) * 100:.0f}%"
+                except (TypeError, ValueError):
+                    pass
+            or_failure = item.get("or_connection_failure_ratio")
+            if or_failure is not None:
+                try:
+                    state += f" · recent OR connection failures {float(or_failure) * 100:.0f}%"
+                except (TypeError, ValueError):
+                    pass
             details.append(f"Instance {index}: {state}")
-        self.primary_health.setText(f"{ready}/{total} primary Tor instance(s) verified healthy\n" + "  |  ".join(details))
+        self.primary_health.setText(
+            f"{ready}/{total} usable primary Tor instance(s)\n" + "  |  ".join(details)
+        )
 
     def refresh_health(self) -> None:
         proxy = getattr(self._app_window, "proxyWidget", None)

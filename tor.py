@@ -16,7 +16,9 @@ from config import BUNDLE_DIR, CONFIG, IS_WINDOWS
 from proxy import ProxyHandler, ThreadedHTTPServer, route_host, worker_data_usage_tracker
 from torproxy.bridge_distribution import BridgeDistribution, distribute_bridge_records
 from torproxy.bridge_health import DEFAULT_MAX_WORKERS
+from torproxy.circuit_monitor import TorEventMonitor
 from torproxy.health import TorProbeResult, probe_tor_socks
+from torproxy.network_quality import NetworkQualityWindow
 from torproxy.paths import user_directories
 from torproxy.socks_gateway import SocksFailoverGateway
 from torproxy.tor_manager import TorManager, TorManagerError, TorSettings, TorState
@@ -180,6 +182,16 @@ class TorRunner(QObject):
         self._backend_statuses: dict[int, str] = {}
         self._backend_errors: dict[int, str] = {}
         self._backend_health: dict[int, dict[str, object]] = {}
+        self._backend_quality_windows: dict[int, NetworkQualityWindow] = {}
+        self._backend_event_monitors: dict[int, TorEventMonitor] = {}
+        try:
+            self._backend_selection_mode = str(
+                CONFIG.get("tor_backend_selection_mode", "balanced") or "balanced"
+            ).strip().lower()
+            if self._backend_selection_mode not in {"balanced", "latency"}:
+                self._backend_selection_mode = "balanced"
+        except Exception:
+            self._backend_selection_mode = "balanced"
         self._pool_ever_healthy = False
         self._backend_ever_ready: set[int] = set()
         self._backend_restart_attempts: dict[int, int] = {}
@@ -194,6 +206,62 @@ class TorRunner(QObject):
         self.state = "STOPPED"
         self.last_error: str | None = None
         self.update_path(CONFIG["tor_path"])
+
+    def set_backend_selection_mode(self, mode: str) -> None:
+        """Apply the primary-pool backend policy without restarting Tor workers."""
+        normalized = str(mode or "balanced").strip().lower()
+        if normalized not in {"balanced", "latency"}:
+            raise ValueError("Backend selection mode must be 'balanced' or 'latency'.")
+        with self._backend_lock:
+            self._backend_selection_mode = normalized
+            gateway = self._gateway
+        if gateway is not None:
+            gateway.set_selection_mode(normalized)
+
+    def _start_backend_event_monitor(self, index: int, manager: TorManager) -> None:
+        """Attach aggregate ControlPort monitoring to the exact managed process."""
+        settings = getattr(manager, "settings", None)
+        process = getattr(manager, "process", None)
+        control_port = getattr(settings, "control_port", None)
+        pid = getattr(process, "pid", None)
+        if type(control_port) is not int or not 1 <= control_port <= 65535:
+            return
+        try:
+            monitor = TorEventMonitor(
+                control_port,
+                expected_pid=int(pid) if pid is not None else None,
+            )
+            monitor.start()
+        except Exception as exc:
+            logger.info(
+                "Tor event monitoring is unavailable for primary instance %s (%s).",
+                index + 1,
+                type(exc).__name__,
+            )
+            return
+        with self._backend_lock:
+            previous = self._backend_event_monitors.get(index)
+            if self._stopping.is_set():
+                install = False
+            else:
+                self._backend_event_monitors[index] = monitor
+                install = True
+        if previous is not None:
+            try:
+                previous.stop()
+            except Exception:
+                logger.debug("Could not stop the previous Tor event monitor.", exc_info=True)
+        if not install:
+            monitor.stop()
+
+    def _stop_backend_event_monitor(self, index: int) -> None:
+        with self._backend_lock:
+            monitor = self._backend_event_monitors.pop(index, None)
+        if monitor is not None:
+            try:
+                monitor.stop()
+            except Exception:
+                logger.debug("Could not stop Tor event monitoring for instance %s.", index + 1, exc_info=True)
 
     def update_path(self, base_path=None):
         executable, root = _find_executable(base_path)
@@ -308,30 +376,33 @@ class TorRunner(QObject):
         return ready
 
     def _healthy_managers(self) -> list[TorManager]:
-        """Return only workers confirmed by a real request through their SOCKS port."""
+        """Return usable workers ordered by their rolling end-to-end quality cost."""
         process_ready = self._process_ready_managers()
         if not process_ready:
             return []
         if not self._backend_managers:
-            # Preserve the small compatibility surface for tests/legacy callers
-            # that manually provide one already-READY manager.
             if str(self.state).upper() == "READY":
                 return [manager for _index, manager in process_ready]
             return []
         with self._backend_lock:
-            ranked = [
-                (
-                    float(self._backend_health.get(index, {}).get("latency_ms") or 750.0),
-                    manager,
-                )
-                for index, manager in process_ready
-                if bool(self._backend_health.get(index, {}).get("healthy", False))
-            ]
+            ranked = []
+            for index, manager in process_ready:
+                state = self._backend_health.get(index, {})
+                if not bool(state.get("healthy", False)):
+                    continue
+                cost = state.get("quality_cost_ms")
+                if cost is None:
+                    cost = state.get("latency_ms")
+                try:
+                    score = max(0.0, float(cost)) if cost is not None else 750.0
+                except (TypeError, ValueError, OverflowError):
+                    score = 750.0
+                ranked.append((score, manager))
         ranked.sort(key=lambda item: item[0])
-        return [manager for _latency, manager in ranked]
+        return [manager for _score, manager in ranked]
 
     def _ready_backend_endpoints(self) -> list[tuple[str, int, float | None]]:
-        """Prefer Tor-Check-verified workers, but never let the probe endpoint become a hard outage."""
+        """Expose usable Tor SOCKS workers with their rolling quality cost."""
         verified: list[tuple[str, int, float | None]] = []
         fallback: list[tuple[str, int, float | None]] = []
         for index, manager in self._process_ready_managers():
@@ -343,7 +414,14 @@ class TorRunner(QObject):
                 verified.append((
                     endpoint[0],
                     endpoint[1],
-                    float(health["latency_ms"]) if health.get("latency_ms") is not None else None,
+                    float(
+                        health.get("quality_cost_ms")
+                        if health.get("quality_cost_ms") is not None
+                        else health.get("latency_ms")
+                    ) if (
+                        health.get("quality_cost_ms") is not None
+                        or health.get("latency_ms") is not None
+                    ) else None,
                 ))
 
         # A READY Tor process has already passed its authenticated ControlPort,
@@ -367,7 +445,8 @@ class TorRunner(QObject):
             )
         elif verified and previous_fallback:
             logger.info(
-                "End-to-end Tor Check recovered; routing has returned to verified Tor SOCKS backend(s)."
+                "One or more primary Tor SOCKS workers became reachable again; "
+                "routing has returned to the usable backend pool."
             )
         elif not fallback and previous_fallback:
             logger.error(
@@ -456,7 +535,10 @@ class TorRunner(QObject):
                 if self._stopping.is_set():
                     return False
                 try:
-                    results[index] = future.result(timeout=10.0)
+                    # The multi-target probe performs the Tor Check request and,
+                    # only when that API is unavailable, two bounded fallback
+                    # requests. Keep the wait above the worst-case probe budget.
+                    results[index] = future.result(timeout=22.0)
                 except Exception as exc:
                     results[index] = TorProbeResult(
                         False,
@@ -474,29 +556,83 @@ class TorRunner(QObject):
                     continue
                 state = dict(self._backend_health.get(index, {}))
                 was_healthy = bool(state.get("healthy", False))
+                quality_window = self._backend_quality_windows.setdefault(
+                    index, NetworkQualityWindow()
+                )
+                quality = quality_window.record(result)
+                event_monitor = self._backend_event_monitors.get(index)
+                event_snapshot = event_monitor.snapshot() if event_monitor is not None else None
+                circuit_failure_ratio = (
+                    event_snapshot.recent_circuit_failure_ratio
+                    if event_snapshot is not None else None
+                )
+                or_connection_failure_ratio = (
+                    event_snapshot.recent_or_connection_failure_ratio
+                    if event_snapshot is not None else None
+                )
+                circuit_penalty_ms = 0.0
+                if circuit_failure_ratio is not None:
+                    circuit_penalty_ms += 250.0 * max(0.0, min(1.0, circuit_failure_ratio))
+                if or_connection_failure_ratio is not None:
+                    circuit_penalty_ms += 150.0 * max(
+                        0.0, min(1.0, or_connection_failure_ratio)
+                    )
+                quality_cost_ms = quality["quality_cost_ms"]
+                if quality_cost_ms is not None:
+                    quality_cost_ms += circuit_penalty_ms
                 if result.healthy:
+                    sample_latency = (
+                        max(0.0, float(result.latency_ms))
+                        if result.latency_ms is not None else None
+                    )
                     previous_latency = state.get("latency_ms")
-                    if previous_latency is None:
-                        latency = float(result.latency_ms or 0.0)
+                    if sample_latency is None:
+                        latency = previous_latency
+                    elif previous_latency is None:
+                        latency = sample_latency
                     else:
                         latency = (
                             float(previous_latency) * 0.65
-                            + float(result.latency_ms or 0.0) * 0.35
+                            + sample_latency * 0.35
                         )
                     state.update({
                         "healthy": True,
+                        "verified_tor": bool(result.verified_tor),
                         "latency_ms": latency,
+                        "quality_cost_ms": quality_cost_ms,
+                        "circuit_failure_ratio": circuit_failure_ratio,
+                        "or_connection_failure_ratio": or_connection_failure_ratio,
+                        "circuit_penalty_ms": circuit_penalty_ms,
+                        "latency_p50_ms": quality["latency_p50_ms"],
+                        "latency_p95_ms": quality["latency_p95_ms"],
+                        "jitter_ms": quality["jitter_ms"],
+                        "probe_failure_ratio": quality["failure_ratio"],
+                        "probe_sample_count": quality["sample_count"],
+                        "successful_targets": tuple(result.successful_targets),
+                        "failed_targets": tuple(result.failed_targets),
                         "consecutive_failures": 0,
-                        "last_error": "",
+                        "last_error": "" if result.verified_tor else result.detail,
                         "last_check": time.monotonic(),
                     })
                 else:
                     failures = int(state.get("consecutive_failures", 0)) + 1
-                    # Require two consecutive failures before withdrawing a
-                    # previously-working worker, avoiding a single probe flap.
+                    # Require two consecutive failed multi-target probe cycles
+                    # before withdrawing a previously usable worker.
                     healthy = was_healthy and failures < 2
                     state.update({
                         "healthy": healthy,
+                        "verified_tor": False,
+                        "quality_cost_ms": quality_cost_ms,
+                        "circuit_failure_ratio": circuit_failure_ratio,
+                        "or_connection_failure_ratio": or_connection_failure_ratio,
+                        "circuit_penalty_ms": circuit_penalty_ms,
+                        "latency_p50_ms": quality["latency_p50_ms"],
+                        "latency_p95_ms": quality["latency_p95_ms"],
+                        "jitter_ms": quality["jitter_ms"],
+                        "probe_failure_ratio": quality["failure_ratio"],
+                        "probe_sample_count": quality["sample_count"],
+                        "successful_targets": tuple(result.successful_targets),
+                        "failed_targets": tuple(result.failed_targets),
                         "consecutive_failures": failures,
                         "last_error": result.detail,
                         "last_check": time.monotonic(),
@@ -528,14 +664,19 @@ class TorRunner(QObject):
         for index, is_healthy, result in changed:
             if is_healthy:
                 latency = result.latency_ms or 0.0
+                verification = (
+                    "Tor Check verified"
+                    if result.verified_tor
+                    else "independent HTTPS probes succeeded; Tor Check is unavailable"
+                )
                 self.log_message.emit(
-                    f"Primary Tor instance {index + 1} passed Tor Check "
-                    f"({latency:.0f} ms); it is now available for new connections."
+                    f"Primary Tor instance {index + 1}: {verification} "
+                    f"({latency:.0f} ms); it is available for new connections."
                 )
             else:
                 self.log_message.emit(
-                    f"Primary Tor instance {index + 1} failed two consecutive Tor Check probes; "
-                    "new connections have been moved to the remaining healthy instances."
+                    f"Primary Tor instance {index + 1} failed two consecutive multi-target "
+                    "connectivity probes; new connections have been moved to remaining usable instances."
                 )
         self._publish_bridge_usage()
         return bool(healthy)
@@ -555,6 +696,8 @@ class TorRunner(QObject):
                         index, manager, state, progress, message
                     )
                 )
+                if not self._stopping.is_set():
+                    self._start_backend_event_monitor(index, manager)
             except Exception as exc:
                 with self._backend_lock:
                     self._backend_statuses[index] = "FAILED"
@@ -610,6 +753,7 @@ class TorRunner(QObject):
                 int(self.socks_port),
                 self._ready_backend_endpoints,
                 host_router=route_host,
+                selection_mode=self._backend_selection_mode,
             )
             self._gateway.start()
         except Exception as exc:
@@ -644,6 +788,7 @@ class TorRunner(QObject):
                 index: dict(value)
                 for index, value in self._backend_health.items()
             }
+            event_monitors = dict(self._backend_event_monitors)
             if not managers and self.manager is not None:
                 managers = [self.manager]
             instances = []
@@ -674,16 +819,30 @@ class TorRunner(QObject):
                     0.0,
                     float(backend.get("cooldown_until", 0.0) or 0.0) - time.monotonic(),
                 )
+                monitor = event_monitors.get(index)
+                circuit_metrics = (
+                    vars(monitor.snapshot()) if monitor is not None else {}
+                )
                 instances.append({
                     "index": index + 1,
                     "state": worker_state,
                     "healthy": healthy,
+                    "verified_tor": bool(state.get("verified_tor", False)),
                     "latency_ms": state.get("latency_ms"),
+                    "latency_p50_ms": state.get("latency_p50_ms"),
+                    "latency_p95_ms": state.get("latency_p95_ms"),
+                    "jitter_ms": state.get("jitter_ms"),
+                    "probe_failure_ratio": state.get("probe_failure_ratio"),
+                    "quality_cost_ms": state.get("quality_cost_ms"),
+                    "circuit_failure_ratio": state.get("circuit_failure_ratio"),
+                    "or_connection_failure_ratio": state.get("or_connection_failure_ratio"),
+                    "circuit_penalty_ms": state.get("circuit_penalty_ms"),
                     "consecutive_failures": failures,
                     "bridge_count": bridge_count,
                     "active_connections": int(backend.get("active", 0) or 0),
                     "gateway_failures": int(backend.get("failures", 0) or 0),
                     "cooldown_remaining_seconds": cooldown_remaining,
+                    "circuit_metrics": circuit_metrics,
                 })
             distribution = self._bridge_distribution
             bridge_summary = (
@@ -701,6 +860,7 @@ class TorRunner(QObject):
             "instances": instances,
             "bridge_distribution": bridge_summary,
             "gateway": gateway_sessions,
+            "selection_mode": self._backend_selection_mode,
         }
 
     def _publish_bridge_usage(self, manager: TorManager | None = None):
@@ -750,18 +910,38 @@ class TorRunner(QObject):
                 }
                 if distribution is not None else None
             )
-            health_items = tuple(
-                (
+            event_monitors = dict(self._backend_event_monitors)
+            health_items_list = []
+            instance_details = []
+            for index, state in sorted(self._backend_health.items()):
+                monitor = event_monitors.get(index)
+                circuit_metrics = vars(monitor.snapshot()) if monitor is not None else {}
+                circuit_signature = tuple(
+                    sorted(
+                        (key, value)
+                        for key, value in circuit_metrics.items()
+                        if key != "last_event_at"
+                    )
+                )
+                quality_signature = tuple(
+                    round(float(state[key]), 1) if state.get(key) is not None else None
+                    for key in (
+                        "latency_p50_ms", "latency_p95_ms", "jitter_ms",
+                        "probe_failure_ratio", "quality_cost_ms",
+                        "circuit_failure_ratio", "or_connection_failure_ratio",
+                    )
+                )
+                health_items_list.append((
                     index,
                     str(self._backend_statuses.get(index, "stopped")).lower(),
                     bool(state.get("healthy", False)),
+                    bool(state.get("verified_tor", False)),
                     int(state.get("consecutive_failures", 0) or 0),
                     bridge_counts[index] if index < len(bridge_counts) else 0,
-                )
-                for index, state in sorted(self._backend_health.items())
-            )
-            instance_details = [
-                {
+                    quality_signature,
+                    circuit_signature,
+                ))
+                instance_details.append({
                     "index": index + 1,
                     "state": (
                         "failed" if self._backend_statuses.get(index) == "FAILED" else
@@ -775,12 +955,21 @@ class TorRunner(QObject):
                     ),
                     "healthy": bool(state.get("healthy", False))
                     and self._backend_statuses.get(index) == "READY",
+                    "verified_tor": bool(state.get("verified_tor", False)),
                     "latency_ms": state.get("latency_ms"),
+                    "latency_p50_ms": state.get("latency_p50_ms"),
+                    "latency_p95_ms": state.get("latency_p95_ms"),
+                    "jitter_ms": state.get("jitter_ms"),
+                    "probe_failure_ratio": state.get("probe_failure_ratio"),
+                    "quality_cost_ms": state.get("quality_cost_ms"),
+                    "circuit_failure_ratio": state.get("circuit_failure_ratio"),
+                    "or_connection_failure_ratio": state.get("or_connection_failure_ratio"),
+                    "circuit_penalty_ms": state.get("circuit_penalty_ms"),
                     "consecutive_failures": int(state.get("consecutive_failures", 0) or 0),
                     "bridge_count": bridge_counts[index] if index < len(bridge_counts) else 0,
-                }
-                for index, state in sorted(self._backend_health.items())
-            ]
+                    "circuit_metrics": circuit_metrics,
+                })
+            health_items = tuple(health_items_list)
         report = (
             enabled, ready, ready_count, total_count,
             tuple(sorted(active)), health_items,
@@ -790,6 +979,7 @@ class TorRunner(QObject):
                 bridge_summary["shared_groups"],
                 bridge_summary["instance_record_counts"],
             ) if bridge_summary is not None else None,
+            self._backend_selection_mode,
         )
         if report == self._last_bridge_usage_report:
             return
@@ -802,6 +992,7 @@ class TorRunner(QObject):
             "total_instances": total_count,
             "instances": instance_details,
             "bridge_distribution": bridge_summary,
+            "selection_mode": self._backend_selection_mode,
         })
 
     def _on_status(self, state, progress, message):
@@ -1205,12 +1396,18 @@ class TorRunner(QObject):
                     self._backend_health = {
                         index: {
                             "healthy": False,
+                            "verified_tor": False,
                             "latency_ms": None,
+                            "quality_cost_ms": None,
                             "consecutive_failures": 0,
-                            "last_error": "Waiting for an end-to-end Tor connectivity check.",
+                            "last_error": "Waiting for multi-target Tor connectivity checks.",
                         }
                         for index in range(len(managers))
                     }
+                    self._backend_quality_windows = {
+                        index: NetworkQualityWindow() for index in range(len(managers))
+                    }
+                    self._backend_event_monitors = {}
                     self._pool_ever_healthy = False
                     self._backend_ever_ready = set()
                     self._backend_restart_attempts = {index: 0 for index in range(len(managers))}
@@ -1265,6 +1462,7 @@ class TorRunner(QObject):
                     process = getattr(current, "process", None)
                     if state_value == "ready" and (process is None or process.poll() is not None):
                         detail = "The managed Tor worker process exited unexpectedly."
+                        self._stop_backend_event_monitor(index)
                         try:
                             current._terminate_process()
                             current._release_data_directory_lock()
@@ -1319,6 +1517,7 @@ class TorRunner(QObject):
                             # A failed startup may have left a Tor child or its
                             # DataDirectory lock alive. Reconcile that exact
                             # manager before reusing its state path.
+                            self._stop_backend_event_monitor(index)
                             try:
                                 current.stop()
                             except Exception as cleanup_error:
@@ -1368,10 +1567,13 @@ class TorRunner(QObject):
                                     self._backend_statuses[index] = "STARTING"
                                     self._backend_health[index] = {
                                         "healthy": False,
+                                        "verified_tor": False,
                                         "latency_ms": None,
+                                        "quality_cost_ms": None,
                                         "consecutive_failures": 0,
-                                        "last_error": "Tor worker restarted; waiting for a fresh Tor Check probe.",
+                                        "last_error": "Tor worker restarted; waiting for fresh multi-target probes.",
                                     }
+                                    self._backend_quality_windows[index] = NetworkQualityWindow()
                                 retry_thread.start()
                                 self.log_message.emit(
                                     f"Restarting primary Tor instance {index + 1} "
@@ -1443,8 +1645,9 @@ class TorRunner(QObject):
                                     )
                                     details.append(f"instance {index + 1}: {detail}")
                                 message = (
-                                    "Tor bootstrapped, but none of the primary instances passed the "
-                                    "end-to-end Tor Check. The connection was not marked as connected. "
+                                    "Tor bootstrapped, but none of the primary instances passed "
+                                    "the multi-target SOCKS connectivity checks. The connection "
+                                    "was not marked as connected. "
                                     + " | ".join(details)
                                 )
                                 self.state = "FAILED"
@@ -1526,6 +1729,15 @@ class TorRunner(QObject):
             start_locks = tuple(self._backend_start_locks)
             if not managers and self.manager is not None:
                 managers = [self.manager]
+        with self._backend_lock:
+            event_monitors = tuple(self._backend_event_monitors.values())
+            self._backend_event_monitors.clear()
+        for monitor in event_monitors:
+            try:
+                monitor.stop()
+            except Exception:
+                logger.debug("Could not stop a primary Tor event monitor.", exc_info=True)
+
         for manager in managers:
             try:
                 manager.stop()
@@ -1604,6 +1816,9 @@ class TorRunner(QObject):
         self._backend_managers = []
         self._backend_statuses = {}
         self._backend_errors = {}
+        self._backend_health = {}
+        self._backend_quality_windows = {}
+        self._backend_event_monitors = {}
         self._backend_ever_ready = set()
         self._backend_restart_attempts = {}
         self._backend_restart_at = {}

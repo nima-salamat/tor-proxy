@@ -65,6 +65,7 @@ DEFAULT_DATA: dict[str, Any] = {
     "global_shortcut": "Ctrl+Alt+P",
     "bridge_probe_workers": 8,
     "primary_tor_instances": 2,
+    "tor_backend_selection_mode": "balanced",
     "tor_service_workers": 4,
     "tor_services": [],
     "onion_hosting_services": [],
@@ -258,6 +259,13 @@ class Config:
         primary_instances = data.get("primary_tor_instances", 2)
         if type(primary_instances) is not int or not 1 <= primary_instances <= 4:
             raise ConfigError("primary_tor_instances must be an integer between 1 and 4.")
+
+        backend_selection_mode = data.get("tor_backend_selection_mode", "balanced")
+        if (
+            not isinstance(backend_selection_mode, str)
+            or backend_selection_mode not in {"balanced", "latency"}
+        ):
+            raise ConfigError("tor_backend_selection_mode must be balanced or latency.")
 
         services = data.get("tor_services", [])
         if not isinstance(services, list) or len(services) > 32:

@@ -127,3 +127,72 @@ def test_probe_rejects_invalid_ports_without_network_access(monkeypatch):
 
     assert result.healthy is False
     assert "Invalid" in result.detail
+
+
+
+def test_probe_uses_two_independent_fallbacks_when_tor_check_is_unavailable(monkeypatch):
+    import requests
+    from torproxy.health import FALLBACK_PROBES, TOR_CHECK_URL
+
+    class RoutingSession(FakeSession):
+        def __init__(self, responses):
+            super().__init__()
+            self.responses = responses
+
+        def get(self, url, **kwargs):
+            self.calls.append((url, kwargs, self.trust_env))
+            response = self.responses[url]
+            if isinstance(response, Exception):
+                raise response
+            return response
+
+    session = RoutingSession({
+        TOR_CHECK_URL: requests.ConnectionError("private local detail"),
+        FALLBACK_PROBES[0][1]: FakeResponse({"trace": "ok"}, status_code=200),
+        FALLBACK_PROBES[1][1]: FakeResponse({}, status_code=204),
+    })
+    _install_session(monkeypatch, session)
+
+    result = probe_tor_socks(19159, timeout=6)
+
+    assert result.healthy is True
+    assert result.verified_tor is False
+    assert result.successful_targets == ("cloudflare_trace", "google_204")
+    assert len(result.latency_samples_ms) == 2
+    assert "private local detail" not in result.detail
+    assert session.closed is True
+    assert all(call[1]["proxies"]["https"] == "socks5h://127.0.0.1:19159" for call in session.calls)
+    assert all(call[1]["allow_redirects"] is False for call in session.calls)
+    assert all(call[2] is False for call in session.calls)
+
+
+def test_probe_requires_both_fallback_targets(monkeypatch):
+    import requests
+    from torproxy.health import FALLBACK_PROBES, TOR_CHECK_URL
+
+    class RoutingSession(FakeSession):
+        def __init__(self, responses):
+            super().__init__()
+            self.responses = responses
+
+        def get(self, url, **kwargs):
+            self.calls.append((url, kwargs, self.trust_env))
+            response = self.responses[url]
+            if isinstance(response, Exception):
+                raise response
+            return response
+
+    session = RoutingSession({
+        TOR_CHECK_URL: requests.Timeout("private detail"),
+        FALLBACK_PROBES[0][1]: FakeResponse({"trace": "ok"}, status_code=200),
+        FALLBACK_PROBES[1][1]: FakeResponse({}, status_code=503),
+    })
+    _install_session(monkeypatch, session)
+
+    result = probe_tor_socks(19160)
+
+    assert result.healthy is False
+    assert result.verified_tor is False
+    assert result.successful_targets == ("cloudflare_trace",)
+    assert result.failed_targets == ("google_204",)
+    assert "1/2" in result.detail

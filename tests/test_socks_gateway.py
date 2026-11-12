@@ -433,3 +433,28 @@ def test_gateway_refuses_restart_while_a_previous_session_thread_is_alive():
 
     gateway.start()
     gateway.stop(timeout=2)
+
+
+
+def test_latency_selection_mode_prioritizes_the_best_quality_backend():
+    first = ("127.0.0.1", 25301)
+    second = ("127.0.0.1", 25302)
+    gateway = SocksFailoverGateway(
+        25303,
+        lambda: [
+            ("127.0.0.1", 25301, 300.0),
+            ("127.0.0.1", 25302, 90.0),
+        ],
+        selection_mode="latency",
+    )
+
+    assert gateway.selection_mode == "latency"
+    assert gateway._ordered_backends()[0] == second
+
+    gateway.set_selection_mode("balanced")
+    assert gateway.selection_mode == "balanced"
+
+
+def test_gateway_rejects_unknown_backend_selection_mode():
+    with pytest.raises(ValueError, match="balanced.*latency"):
+        SocksFailoverGateway(25304, lambda: [], selection_mode="fastest")

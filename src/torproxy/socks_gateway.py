@@ -53,6 +53,7 @@ class SocksFailoverGateway:
         idle_timeout: float = 120.0,
         max_sessions: int = 256,
         host_router: Callable[[str], str] | None = None,
+        selection_mode: str = "balanced",
     ) -> None:
         if host not in {"127.0.0.1", "::1", "localhost"}:
             raise ValueError("The Tor SOCKS gateway must bind to loopback.")
@@ -62,6 +63,7 @@ class SocksFailoverGateway:
         self.port = port
         self._backend_provider = backend_provider
         self._host_router = host_router
+        self._selection_mode = self._validate_selection_mode(selection_mode)
         self._connect_timeout = max(0.5, float(connect_timeout))
         self._handshake_timeout = max(1.0, float(handshake_timeout))
         self._idle_timeout = max(5.0, float(idle_timeout))
@@ -78,6 +80,23 @@ class SocksFailoverGateway:
         self._clients: set[socket.socket] = set()
         self._cursor = 0
         self._backend_stats: dict[tuple[str, int], dict[str, float | int]] = {}
+
+    @staticmethod
+    def _validate_selection_mode(mode: str) -> str:
+        normalized = str(mode or "balanced").strip().lower()
+        if normalized not in {"balanced", "latency"}:
+            raise ValueError("Backend selection mode must be 'balanced' or 'latency'.")
+        return normalized
+
+    @property
+    def selection_mode(self) -> str:
+        with self._lock:
+            return self._selection_mode
+
+    def set_selection_mode(self, mode: str) -> None:
+        normalized = self._validate_selection_mode(mode)
+        with self._lock:
+            self._selection_mode = normalized
 
     @property
     def running(self) -> bool:
@@ -426,13 +445,29 @@ class SocksFailoverGateway:
                     float(stats["health_latency_ms"]) * 0.65
                     + float(stats["latency_ms"]) * 0.35
                 )
-                return (
+                cooldown_score = (
                     1 if cooldown_until > now else 0,
                     cooldown_until if cooldown_until > now else 0.0,
+                )
+                if self._selection_mode == "latency":
+                    # Prefer consistently fast backends, while retaining a
+                    # small concurrency and failure penalty to avoid overload.
+                    latency_cost = (
+                        latency
+                        + active * max(5.0, latency * 0.06)
+                        + int(stats["failures"]) * 25.0
+                    )
+                    return (
+                        *cooldown_score,
+                        latency_cost,
+                        active,
+                        tie_order[endpoint],
+                    )
+                return (
+                    *cooldown_score,
                     active * max(1.0, latency),
                     active,
-                    # With no active streams, rotate evenly rather than
-                    # sending every short-lived connection to one fast node.
+                    # Balanced mode rotates evenly when load is equal.
                     tie_order[endpoint] if active == 0 else 0,
                     latency,
                     int(stats["failures"]),
