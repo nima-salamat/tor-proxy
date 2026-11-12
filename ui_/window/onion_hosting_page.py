@@ -1188,6 +1188,53 @@ class OnionHostingPage(QWidget):
     def stop_service(self, service_id: str):
         self._run(f"service:{service_id}", self._manager().stop_service, service_id)
 
+    def rotate_service_address(self, service: dict):
+        if service.get("running"):
+            QMessageBox.information(
+                self,
+                "Stop before generating a new address",
+                "Stop this Onion Service before rotating its cryptographic identity.",
+            )
+            return
+        choice = QMessageBox.question(
+            self,
+            "Generate a new Onion address",
+            "This replaces the service's Tor identity. The current .onion address will stop working "
+            "and cannot be restored. The service's local target and private client authorization key "
+            "will be preserved. Continue?",
+            StandardButton.Yes | StandardButton.No,
+            StandardButton.No,
+        )
+        if choice != StandardButton.Yes:
+            return
+
+        manager = self._manager()
+        service_id = str(service["id"])
+
+        def rotate_and_restart():
+            manager.rotate_service_identity(service_id)
+            if manager.runtime_snapshot()["state"] == "ready":
+                return manager.start_service(service_id)
+            return ""
+
+        def completed(result):
+            address = str(result or "").strip().strip('"')
+            if address and address.endswith(".onion"):
+                self.status_label.setText(
+                    f"New Onion address created: {address}. Share the new address with visitors."
+                )
+            else:
+                self.status_label.setText(
+                    "The old identity was removed. Start the service to create its new Onion address."
+                )
+
+        self.status_label.setText("Rotating the Onion Service identity…")
+        self._run(f"service:{service_id}", rotate_and_restart, finished=completed)
+
+    def open_service_activity(self, service: dict):
+        manager = self._manager()
+        OnionServiceActivityDialog(self, manager, service).exec()
+
     def delete_service(self, service: dict):
         choice = QMessageBox.question(
             self, "Delete Onion Service",
@@ -1223,6 +1270,45 @@ class OnionHostingPage(QWidget):
         manager = self._manager()
         TorLogDialog(self, manager.log_path, manager=manager.manager).exec()
 
+    def _filtered_services(self, services: list[dict]) -> list[dict]:
+        query = self.service_search.text().strip().casefold()
+        selected_state = str(self.service_filter.currentData() or "all")
+        result = []
+        for service in services:
+            state = (
+                "error" if service.get("error")
+                else "running" if service.get("running")
+                else "stopped"
+            )
+            if selected_state != "all" and state != selected_state:
+                continue
+            searchable = " ".join((
+                str(service.get("display_name", "")),
+                str(service.get("address", "")),
+                str(service.get("id", "")),
+                str(service.get("local_host", "")),
+                str(service.get("local_port", "")),
+            )).casefold()
+            if query and query not in searchable:
+                continue
+            result.append(service)
+        return result
+
+    def _refresh_traffic_metrics(self, manager, services: list[dict]) -> None:
+        totals = manager.traffic_snapshot()
+        for key, label in self._global_traffic_labels.items():
+            value = totals.get(key, 0)
+            label.setText(_format_bytes(value) if key in {"incoming_bytes", "outgoing_bytes"} else f"{int(value):,}")
+        for service in services:
+            labels = self._service_traffic_widgets.get(str(service["id"]))
+            if not labels:
+                continue
+            snapshot = manager.traffic_snapshot(str(service["id"]))
+            labels["incoming_bytes"].setText(_format_bytes(snapshot["incoming_bytes"]))
+            labels["outgoing_bytes"].setText(_format_bytes(snapshot["outgoing_bytes"]))
+            labels["http_requests"].setText(f"{int(snapshot['http_requests']):,}")
+            labels["active_connections"].setText(f"{int(snapshot['active_connections']):,}")
+
     def refresh_dashboard(self):
         try:
             manager = self._manager()
@@ -1247,18 +1333,25 @@ class OnionHostingPage(QWidget):
             memory_text = f"{memory / (1024 * 1024):.1f} MiB" if memory else "—"
             uptime = int(runtime.get("uptime_seconds") or 0)
             self.runtime_metrics.setText(f"{version}  ·  {memory_text}  ·  {uptime // 3600:02d}:{(uptime % 3600) // 60:02d}:{uptime % 60:02d}")
+
+        total_count = len(services)
         self.services_count_label.setText(
-            f"{len(services)} service" + ("" if len(services) == 1 else "s")
+            f"{total_count} service" + ("" if total_count == 1 else "s")
         )
-        if services != self._last_services:
+        visible = self._filtered_services(services)
+        visible_ids = tuple(str(item["id"]) for item in visible)
+        if services != self._last_services or visible_ids != self._last_visible_service_ids:
             self._last_services = [dict(item) for item in services]
-            self._rebuild_service_cards(services)
+            self._last_visible_service_ids = visible_ids
+            self._rebuild_service_cards(visible, total_count=total_count)
+
+        self._refresh_traffic_metrics(manager, services)
         state = str(runtime["state"]).lower()
         self.start_runtime_button.setEnabled(state in {"stopped", "failed"} and "runtime" not in self._workers)
         self.stop_runtime_button.setEnabled(state not in {"stopped"} and "runtime" not in self._workers)
         self.restart_runtime_button.setEnabled(state != "stopped" and "runtime" not in self._workers)
 
-    def _rebuild_service_cards(self, services: list[dict]):
+    def _rebuild_service_cards(self, services: list[dict], *, total_count: int = 0):
         # The empty-state label is permanent. Only remove cards created by the
         # previous snapshot; deleting the placeholder left a live Python wrapper
         # around an already-destroyed QLabel and crashed the next refresh.
@@ -1267,7 +1360,12 @@ class OnionHostingPage(QWidget):
             card.hide()
             card.deleteLater()
         self._service_card_widgets.clear()
+        self._service_traffic_widgets.clear()
 
+        self.empty_label.setText(
+            "No Onion Services yet. Create one to publish a local web application."
+            if total_count == 0 else "No services match the current search or state filter."
+        )
         self.empty_label.setVisible(not services)
         for service in services:
             card = self._service_card(service)
@@ -1319,6 +1417,33 @@ class OnionHostingPage(QWidget):
         )
         detail.setObjectName("onionServiceDetail")
         layout.addWidget(detail)
+
+        traffic_row = QHBoxLayout()
+        traffic_row.setContentsMargins(0, 0, 0, 0)
+        traffic_row.setSpacing(14)
+        traffic_labels = {}
+        for key, caption in (
+            ("incoming_bytes", "IN"),
+            ("outgoing_bytes", "OUT"),
+            ("http_requests", "REQUESTS"),
+            ("active_connections", "ACTIVE"),
+        ):
+            metric = QHBoxLayout()
+            metric.setContentsMargins(0, 0, 0, 0)
+            metric.setSpacing(5)
+            title = QLabel(caption, card)
+            title.setObjectName("onionTrafficCaption")
+            value = QLabel("0", card)
+            value.setObjectName("onionServiceTraffic")
+            value.setToolTip(caption.title())
+            metric.addWidget(title)
+            metric.addWidget(value)
+            traffic_row.addLayout(metric)
+            traffic_labels[key] = value
+        traffic_row.addStretch(1)
+        layout.addLayout(traffic_row)
+        self._service_traffic_widgets[str(service["id"])] = traffic_labels
+
         if service.get("error"):
             error = QLabel(str(service["error"]), card)
             error.setObjectName("onionServiceDetail")
@@ -1361,11 +1486,26 @@ class OnionHostingPage(QWidget):
         open_button.clicked.connect(lambda _checked=False, value=service.get("address", ""): self.open_address(value))
         actions.addWidget(open_button)
 
-        logs = QPushButton("Logs", card)
-        logs.setObjectName("onionActionButton")
-        logs.setIcon(qta.icon("fa6s.file-lines"))
-        logs.clicked.connect(self.open_runtime_logs)
-        actions.addWidget(logs)
+        activity = QPushButton("Activity", card)
+        activity.setObjectName("onionActionButton")
+        activity.setIcon(qta.icon("fa6s.chart-line"))
+        activity.setToolTip("Open request and traffic history for this Onion Service")
+        activity.clicked.connect(
+            lambda _checked=False, data=dict(service): self.open_service_activity(data)
+        )
+        actions.addWidget(activity)
+
+        new_address = QPushButton("New address", card)
+        new_address.setObjectName("onionActionButton")
+        new_address.setIcon(qta.icon("fa6s.arrows-rotate"))
+        new_address.setToolTip(
+            "Rotate the service identity and generate a new cryptographic .onion address"
+        )
+        new_address.setEnabled(bool(service.get("address")) and not service.get("running"))
+        new_address.clicked.connect(
+            lambda _checked=False, data=dict(service): self.rotate_service_address(data)
+        )
+        actions.addWidget(new_address)
 
         edit = QPushButton("Edit", card)
         edit.setObjectName("onionActionButton")
