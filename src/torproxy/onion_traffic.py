@@ -514,11 +514,19 @@ class _TcpPortRelay:
                 endpoint.close()
             except OSError:
                 pass
+        deadline = time.monotonic() + 6.0
         if self._accept_thread.is_alive():
-            self._accept_thread.join(timeout=1.5)
+            self._accept_thread.join(timeout=min(0.75, max(0.0, deadline - time.monotonic())))
+        # All client sockets are shut down together above. Join the bounded
+        # worker set against one shared deadline instead of waiting one second
+        # per client (which could multiply into minutes during a busy shutdown).
         for thread in threads:
-            if thread.is_alive():
-                thread.join(timeout=1.0)
+            if not thread.is_alive():
+                continue
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            thread.join(timeout=remaining)
 
 
 class OnionServiceRelay:
