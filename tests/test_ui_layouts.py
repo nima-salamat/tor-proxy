@@ -355,7 +355,7 @@ def test_settings_and_bundle_pages_use_available_height_without_duplicate_subtit
     assert "self.list_tor_versions.setMinimumHeight(250)" in updater_source
     pulse_source = (repository / "ui_/btn/pulse_button.py").read_text(encoding="utf-8")
     assert "connectPulseButton" in proxy_source
-    assert "setFixedSize(264, 264)" in pulse_source
+    assert "self.setFixedSize(self._diameter, self._diameter)" in pulse_source
     assert "homeActionCard" not in proxy_source
 
 
@@ -373,7 +373,7 @@ def test_home_uses_circular_animation_proxy_policies_and_left_log_drawer():
     assert 'CONFIG["system_proxy_mode"] = mode' in home_source
     assert "self._apply_system_proxy_mode()" in home_source
     assert 'CONFIG["system_proxy_mode"] == "set"' in home_source
-    assert "setFixedSize(264, 264)" in pulse_source
+    assert "self.setFixedSize(self._diameter, self._diameter)" in pulse_source
     assert 'QPropertyAnimation(self, b"pulseRadius"' in pulse_source
     assert "drawEllipse(center" in pulse_source
     assert "toggle_state" not in pulse_source
