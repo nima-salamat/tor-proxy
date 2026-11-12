@@ -1083,6 +1083,7 @@ class OnionHostingManager:
             self._persist_services(saved)
             self._remove_key_material(profile_id)
         self._service_errors.pop(profile_id, None)
+        self._traffic_store.delete_service(profile_id)
 
     def rotate_service_identity(self, profile_id: str) -> None:
         """Discard the stopped service's Ed25519 identity so its next start gets a new .onion address."""
