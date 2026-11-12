@@ -30,7 +30,7 @@ def _valid_custom_bridge_settings():
     data = deepcopy(DEFAULT_DATA)
     data["developer_tor_settings"].update({
         "bridge_mode": "custom",
-        "bridges": "8.8.8.8:443 0123456789ABCDEF0123456789ABCDEF01234567",
+        "bridges": "192.0.2.4:443 0123456789ABCDEF0123456789ABCDEF01234567",
     })
     return data
 
@@ -104,7 +104,7 @@ def test_torrc_renders_isolated_bridge_ip_family_and_upstream_proxy_options(tmp_
         control_port=19051,
         data_directory=tmp_path / "developer-tor",
         bridges_enabled=True,
-        bridges="8.8.8.8:443 0123456789ABCDEF0123456789ABCDEF01234567",
+        bridges="192.0.2.4:443 0123456789ABCDEF0123456789ABCDEF01234567",
         bridge_source="custom",
         client_use_ipv4=False,
         client_use_ipv6=True,
@@ -118,7 +118,7 @@ def test_torrc_renders_isolated_bridge_ip_family_and_upstream_proxy_options(tmp_
 
     assert "SocksPort 0" in torrc
     assert "UseBridges 1" in torrc
-    assert "Bridge 8.8.8.8:443 0123456789ABCDEF0123456789ABCDEF01234567" in torrc
+    assert "Bridge 192.0.2.4:443 0123456789ABCDEF0123456789ABCDEF01234567" in torrc
     assert "ClientUseIPv4 0" in torrc
     assert "ClientUseIPv6 1" in torrc
     assert 'Socks5Proxy "127.0.0.1:1080"' in torrc

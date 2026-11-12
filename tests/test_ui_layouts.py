@@ -747,7 +747,13 @@ def test_close_event_hides_to_tray_unless_exit_was_explicitly_authorized():
     assert "_shutdown_in_progress" in close_event
     home_source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
     assert "onion_manager.shutdown_runtime()" in home_source
-    assert "resume_after_cancelled_shutdown()" in source
+    assert '"resume_after_cancelled_shutdown"' in source
+    page_source = (repository / "ui_/window/onion_hosting_page.py").read_text(encoding="utf-8")
+    rebuild = page_source[page_source.index("    def _rebuild_service_cards("):page_source.index("    def _service_card(")]
+    assert "self.empty_label.setVisible(not services)" in rebuild
+    assert "self.empty_label.deleteLater()" not in rebuild
+    assert "worker.signals.finished.connect(relay.on_finished)" in page_source
+    assert "worker.signals.error.connect(relay.on_error)" in page_source
 
 
 def test_dialog_recalculates_size_and_styles_after_screen_change():

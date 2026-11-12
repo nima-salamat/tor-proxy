@@ -150,7 +150,10 @@ class UpdaterWindow(QWidget):
         self.search_versions.textChanged.connect(self._filter_versions)
         available_layout.addWidget(self.search_versions)
         self.chk_prereleases = QCheckBox("Include alpha prereleases")
-        self.chk_prereleases.setChecked(True)
+        self.chk_prereleases.setChecked(False)
+        self.chk_prereleases.setToolTip(
+            "Alpha prereleases are hidden by default. Enable this only when you intentionally want to test an unreleased Tor channel."
+        )
         self.chk_prereleases.toggled.connect(self._filter_versions)
         available_layout.addWidget(self.chk_prereleases)
         self.updates_list = QListWidget()

@@ -6,7 +6,7 @@ import pytest
 
 import torproxy.bridge_health as bridge_health_module
 from torproxy.bridge_health import BridgeProbeOutcome, check_bridges
-from torproxy.tor_manager import TorSettings
+from torproxy.tor_manager import TorManager, TorSettings
 
 BRIDGES = (
     "obfs4 192.0.2.10:443 1111111111111111111111111111111111111111",
@@ -191,6 +191,9 @@ def test_peer_handshake_errors_are_inconclusive_and_preserve_bridge(
 ):
     outcome = _probe_with_fake_tor_log(monkeypatch, tmp_path, diagnostic)
     assert outcome == BridgeProbeOutcome(None, issue)
+    # The probe helper patches the manager class to fake a Tor log. Restore the
+    # real class before check_bridges parses the configured bridge list.
+    monkeypatch.setattr(bridge_health_module, "TorManager", TorManager)
     result = check_bridges(
         _settings(tmp_path),
         probe=lambda *_args: outcome,
