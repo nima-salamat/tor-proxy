@@ -2981,7 +2981,7 @@ def test_home_endpoint_cards_have_clear_copy_targets_and_consistent_exit_ip_summ
     assert 'connection_hero_layout = QVBoxLayout()' in source
     assert 'connect_row.addLayout(connection_hero_layout)' in source
     assert 'connectionHero' not in source
-    assert 'QLabel("BOOTSTRAP", self.home_content)' in source
+    assert 'QLabel("BOOTSTRAP", metrics_panel)' in source
     assert 'QLabel#homeMetricCaption' in source
     assert '"connecting": "Connecting to Tor…\\nProxy becomes available after bootstrap."' in source
     assert '"connected": "Tor connection verified.\\nYour proxy listeners are ready."' in source
@@ -3135,7 +3135,7 @@ def test_home_keeps_status_at_top_with_a_minimum_gap_and_polishes_bottom_actions
         'self.home_layout.addWidget(self.btn_status, 0, Qt.AlignmentFlag.AlignHCenter)'
     )
     connect_row_index = source.index("self.home_layout.addLayout(connect_row)", status_index)
-    metrics_index = source.index("self.home_layout.addLayout(metrics)", connect_row_index)
+    metrics_index = source.index("self.home_layout.addWidget(metrics_panel)", connect_row_index)
     assert status_index < connect_row_index < metrics_index
     status_setup = source[source.index('self.btn_status = QLabel'):status_index]
     assert "self.home_layout.addStretch(1)" not in status_setup
