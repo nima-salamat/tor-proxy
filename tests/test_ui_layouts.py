@@ -2963,6 +2963,9 @@ def test_home_endpoint_cards_have_clear_copy_targets_and_consistent_exit_ip_summ
     assert 'QFrame#homeEndpointCard, QFrame#homeExitIpCard' in source
     assert 'QFrame#systemProxyControls {{ background: {surface}; border: 1px solid {border}; border-radius: 12px; }}' in source
     assert 'QLabel#connectionHint' in source
+    assert 'connection_hero_layout = QVBoxLayout()' in source
+    assert 'connect_row.addLayout(connection_hero_layout)' in source
+    assert 'connectionHero' not in source
     assert 'QLabel("BOOTSTRAP", self.home_content)' in source
     assert 'QLabel#homeMetricCaption' in source
     assert 'self.connection_hint.setText(hints.get(stmt, hints["disconnected"]))' in source
