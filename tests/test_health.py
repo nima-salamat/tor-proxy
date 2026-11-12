@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import time
 
 from torproxy.health import MAX_TOR_CHECK_RESPONSE_BYTES, probe_tor_socks
 
