@@ -20,6 +20,7 @@ class TorProxyConfig:
     schema_version: int = 1
     mode: str = "dark"
     proxy_host: str = "127.0.0.1"
+    proxy_allow_remote: bool = False
     proxy_port: int = 8888
     socks_host: str = "127.0.0.1"
     socks_port: int = 9050
@@ -41,7 +42,16 @@ class TorProxyConfig:
             raise ConfigurationError(f"Unsupported configuration schema: {self.schema_version}")
         if self.mode not in {"dark", "light"}:
             raise ConfigurationError("mode must be 'dark' or 'light'.")
-        for name in ("proxy_host", "socks_host", "control_host"):
+        if type(self.proxy_allow_remote) is not bool:
+            raise ConfigurationError("proxy_allow_remote must be true or false.")
+        allowed_proxy_hosts = {"127.0.0.1", "::1", "localhost"}
+        if self.proxy_allow_remote:
+            allowed_proxy_hosts.add("0.0.0.0")
+        if self.proxy_host not in allowed_proxy_hosts:
+            raise ConfigurationError(
+                "proxy_host must be a loopback address unless proxy_allow_remote explicitly enables 0.0.0.0."
+            )
+        for name in ("socks_host", "control_host"):
             if getattr(self, name) not in {"127.0.0.1", "::1", "localhost"}:
                 raise ConfigurationError(f"{name} must be a loopback address.")
         ports = [self.proxy_port, self.socks_port, self.control_port]
@@ -76,6 +86,7 @@ def migrate_legacy_config(raw: dict[str, Any]) -> dict[str, Any]:
         "bridge": "bridge_enabled",
         "kill_switch_enabled": "kill_switch_enabled",
         "http_proxy_enabled": "http_proxy_enabled",
+        "http_proxy_bind_all_interfaces": "proxy_allow_remote",
         "bridges": "bridges",
         "proxy_port": "proxy_port",
         "tor_port": "socks_port",
