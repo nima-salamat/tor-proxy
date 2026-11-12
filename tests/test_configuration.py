@@ -38,6 +38,17 @@ def test_non_loopback_proxy_is_rejected():
         TorProxyConfig(proxy_host="0.0.0.0")
 
 
+def test_typed_configuration_requires_explicit_opt_in_for_wildcard_proxy_host():
+    from torproxy.configuration import TorProxyConfig, ConfigurationError
+
+    with pytest.raises(ConfigurationError, match="proxy_host"):
+        TorProxyConfig(proxy_host="0.0.0.0")
+    config = TorProxyConfig(proxy_host="0.0.0.0", proxy_allow_remote=True)
+    assert config.proxy_allow_remote is True
+    with pytest.raises(ConfigurationError, match="proxy_allow_remote"):
+        TorProxyConfig(proxy_allow_remote=1)
+
+
 def test_duplicate_ports_are_rejected():
     with pytest.raises(ConfigurationError, match="distinct"):
         TorProxyConfig(proxy_port=9050, socks_port=9050)
