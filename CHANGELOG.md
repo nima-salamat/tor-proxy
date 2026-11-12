@@ -3,6 +3,7 @@
 All notable changes are recorded here. Dates and release numbers are added only when a release is actually published.
 
 ## Unreleased
+- Added per-worker diagnostics for failed Tor SOCKS CONNECT replies. When a destination (including an Onion Service) is unreachable, logs now expose the selected backend port, RFC 1928 reply code/reason, and whether all healthy workers rejected the destination; the gateway still preserves the SOCKS reply and does not mark a responsive worker unhealthy solely because one destination failed.
 - Force `.onion` destinations through the Tor route even when a broad Exclude rule matches them; explicit Block rules remain authoritative. Added routing regression coverage and clarified the Main Tor versus Developer Tor path for onion browsing.
 - Improved HTTP proxy 502 diagnostics: event logs now identify the destination, Tor SOCKS versus explicit direct route, local SOCKS endpoint, and bounded socket/SOCKS failure reason without recording request paths or query strings. Documented the separate Main Tor visitor-side route versus Developer Tor's inbound-only Onion Service forwarding.
 
