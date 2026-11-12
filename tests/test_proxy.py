@@ -383,7 +383,7 @@ def test_http_upstream_failure_logs_tor_hop_and_cause_without_request_path(monke
         assert b"Upstream connection failed" in response
         assert "destination=hidden-service.example:80" in caplog.text
         assert "route=tor" in caplog.text
-        assert "Tor SOCKS endpoint 127.0.0.1:9050" in caplog.text
+        assert "Main Tor SOCKS gateway 127.0.0.1:9050" in caplog.text
         assert "GeneralProxyError" in caplog.text
         assert "host unreachable" in caplog.text
         assert "/private/path" not in caplog.text
