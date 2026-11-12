@@ -135,8 +135,8 @@ class PulseButton(QPushButton):
         # During startup the outer rings move faster and use a cool blue color.
         scale = min(self.width(), self.height()) / 264.0
         for radius, alpha, width, low, high in (
-            (self._halo_radius, 36, 2.0, 108.0, 127.0),
-            (self._pulse_radius, 78, 2.4, 101.0, 124.0),
+            (self._halo_radius, 20, 1.5, 108.0, 127.0),
+            (self._pulse_radius, 44, 1.8, 101.0, 124.0),
         ):
             ring_color = QColor(base_color)
             progress = min(1.0, max(0.0, (radius - low) / (high - low)))
@@ -159,10 +159,10 @@ class PulseButton(QPushButton):
         painter.drawEllipse(center, int(main_radius), int(main_radius))
 
         outline = QColor("#ffffff")
-        outline.setAlpha(45)
+        outline.setAlpha(34)
         painter.setPen(QPen(outline, 1.2 * scale))
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        inner_radius = 78 * scale
+        inner_radius = 74 * scale
         painter.drawEllipse(center, int(inner_radius), int(inner_radius))
 
         painter.setPen(QColor("#ffffff"))
