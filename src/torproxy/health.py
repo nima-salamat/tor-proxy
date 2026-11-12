@@ -52,8 +52,8 @@ def _request_timeout(
     if remaining <= 0:
         raise requests.Timeout("Tor connectivity probe exceeded its total deadline.")
     return (
-        max(0.001, min(float(connect_timeout), remaining)),
-        max(0.001, min(float(read_timeout), remaining, MAX_RESPONSE_IDLE_SECONDS)),
+        min(float(connect_timeout), remaining),
+        min(float(read_timeout), remaining, MAX_RESPONSE_IDLE_SECONDS),
     )
 
 
@@ -80,8 +80,8 @@ def probe_tor_socks(socks_port: int, *, timeout: float = 8.0) -> TorProbeResult:
 
     The primary probe proves that the managed SOCKS endpoint exits through
     Tor. If that verification service is unavailable (but does not explicitly
-    say IsTor=false), two independent HTTPS endpoints are checked through the
-    same SOCKS5H route. A fallback result is marked reachable but unverified;
+    say IsTor=false), up to two independent HTTPS endpoints are checked through
+    the same SOCKS5H route. A fallback result is marked reachable but unverified;
     it is never described as a positive Tor Check result.
 
     Redirects and oversized bodies are rejected, TLS verification remains
