@@ -653,6 +653,7 @@ class OnionHostingManager:
                 with self._lock:
                     relays = list(self._traffic_relays.values())
                     self._traffic_relays.clear()
+                    temporary_ids = tuple(self._temporary_services) if shutdown else ()
                     if shutdown:
                         self._started_at = None
                         self._last_status_message = "Developer Tor stopped."
@@ -663,6 +664,8 @@ class OnionHostingManager:
                         self._runtime_cancel_event = None
                 for relay in relays:
                     relay.close()
+                for profile_id in temporary_ids:
+                    self._traffic_store.delete_service(profile_id)
                 return
 
             stop_error = None
@@ -702,6 +705,7 @@ class OnionHostingManager:
                 self._last_status_message = "Developer Tor stopped."
                 # Tor process exit removes all detached Onion Services. Only
                 # after that is confirmed may temporary credentials be erased.
+                temporary_ids = tuple(self._temporary_services)
                 self._temporary_services.clear()
                 self._temporary_keys.clear()
                 self._active_services.clear()
@@ -711,6 +715,8 @@ class OnionHostingManager:
                 self._traffic_relays.clear()
             for relay in relays:
                 relay.close()
+            for profile_id in temporary_ids:
+                self._traffic_store.delete_service(profile_id)
         finally:
             self._runtime_start_lock.release()
 
