@@ -272,7 +272,7 @@ def test_gateway_logs_each_tor_destination_failure_and_preserves_socks_reply(cap
     assert f"backend=127.0.0.1:{second_port}" in caplog.text
     assert "reply=0x01 (general SOCKS server failure)" in caplog.text
     assert "reply=0x04 (host unreachable)" in caplog.text
-    assert "All 2 available Tor SOCKS backend(s) rejected" in caplog.text
+    assert "After trying 2 available Tor SOCKS backend(s), no connection was established" in caplog.text
 
 
 def test_gateway_rejects_clients_that_do_not_offer_no_auth():
