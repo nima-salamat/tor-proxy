@@ -1414,7 +1414,7 @@ class ProxyWindow(QWidget):
                 font-size: 9px; font-weight: 800; letter-spacing: 0.9px;
             }}
             QFrame#homeMetricSeparator {{
-                color: {border}; background: {border}; max-width: 1px;
+                color: {border}; background: {border};
             }}
             QComboBox#systemProxyMode {{
                 min-height: 32px; padding: 0 8px; border: 1px solid {border};
