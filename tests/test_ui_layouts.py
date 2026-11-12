@@ -3123,18 +3123,24 @@ def test_pulse_button_can_shrink_without_losing_its_animation_geometry(qt_app):
 
 
 
-def test_home_moves_connect_whitespace_above_status_and_polishes_bottom_actions():
+def test_home_keeps_status_at_top_with_a_minimum_gap_and_polishes_bottom_actions():
     repository = Path(__file__).resolve().parents[1]
     source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
 
     status_index = source.index(
         'self.home_layout.addWidget(self.btn_status, 0, Qt.AlignmentFlag.AlignHCenter)'
     )
-    top_gap_index = source.index("self.home_layout.addStretch(1)", status_index - 500)
     connect_row_index = source.index("self.home_layout.addLayout(connect_row)", status_index)
     metrics_index = source.index("self.home_layout.addLayout(metrics)", connect_row_index)
-    assert top_gap_index < status_index < connect_row_index < metrics_index
-    assert "self.home_layout.addLayout(connect_row, 1)" not in source
+    assert status_index < connect_row_index < metrics_index
+    status_setup = source[source.index('self.btn_status = QLabel'):status_index]
+    assert "self.home_layout.addStretch(1)" not in status_setup
+    assert "Keep the connection status anchored at the top of Home." in status_setup
+
+    assert 'margins, spacing, diameter = (20, 10, 20, 1), 2, 172' in source
+    assert 'margins, spacing, diameter = (20, 10, 20, 2), 3, 188' in source
+    assert 'margins, spacing, diameter = (20, 10, 20, 4), 4, 204' in source
+    assert 'margins, spacing, diameter = (20, 12, 20, 7), 6, 220' in source
 
     assert 'utility_row.addWidget(self.btn_change_identity, 1)' in source
     assert 'utility_row.addWidget(self.btn_log, 1)' in source
