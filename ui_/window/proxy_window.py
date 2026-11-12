@@ -484,10 +484,17 @@ class ProxyWindow(QWidget):
         stacked_actions = width < 620
         stacked_proxy_mode = width < 440
         stacked_endpoint_values = width < 300
+        height_band = (
+            0 if height < 490 else
+            1 if height < 530 else
+            2 if height < 570 else
+            3 if height < 630 else
+            4 if height < 700 else 5
+        )
         mode = (
-            very_compact, compact, stacked_service_controls, stacked_endpoints,
-            stacked_metrics, stacked_actions, stacked_proxy_mode,
-            stacked_endpoint_values,
+            height_band, very_compact, compact, stacked_service_controls,
+            stacked_endpoints, stacked_metrics, stacked_actions,
+            stacked_proxy_mode, stacked_endpoint_values,
         )
         if mode == self._home_responsive_mode:
             return
