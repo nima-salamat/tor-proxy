@@ -9,6 +9,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QComboBox,
     QSizePolicy,
+    QScrollArea,
+    QBoxLayout,
 )
 
 
@@ -157,12 +159,26 @@ class ProxyWindow(QWidget):
         self.logs_widget.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         self.main_layout.addWidget(self.logs_widget, 0)
 
-        self.home_content = QWidget(self)
+        self.home_scroll = QScrollArea(self)
+        self.home_scroll.setObjectName("homeScrollArea")
+        self.home_scroll.setWidgetResizable(True)
+        self.home_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.home_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.home_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.home_scroll.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+
+        self.home_content = QWidget()
         self.home_content.setObjectName("homeContent")
-        self.home_layout = QVBoxLayout(self.home_content)
-        self.home_layout.setContentsMargins(24, 18, 24, 16)
-        self.home_layout.setSpacing(12)
-        self.main_layout.addWidget(self.home_content, 1)
+        self.home_content.setMinimumWidth(0)
+        self.home_content.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
+        )
+        self.home_scroll.setWidget(self.home_content)
+        self.main_layout.addWidget(self.home_scroll, 1)
+
+        self._home_responsive_mode = None
 
         self.btn_status = QLabel("NOT CONNECTED")
         self.btn_status.setObjectName("connectionStatus")
@@ -213,6 +229,7 @@ class ProxyWindow(QWidget):
         metrics = QHBoxLayout()
         metrics.setContentsMargins(0, 0, 0, 0)
         metrics.setSpacing(0)
+        self._home_metrics_layout = metrics
 
         self.lbl_percent = QLabel("0%")
         self.lbl_percent.setObjectName("bootstrapPercent")
@@ -303,7 +320,11 @@ class ProxyWindow(QWidget):
         tunnel_hint_layout.setSpacing(10)
         self.system_tunnel_hint_label = QLabel("System tunnel is not installed · Manage it in Updates")
         self.system_tunnel_hint_label.setObjectName("systemTunnelHintLabel")
-        self.system_tunnel_hint_label.setWordWrap(False)
+        self.system_tunnel_hint_label.setWordWrap(True)
+        self.system_tunnel_hint_label.setMinimumWidth(0)
+        self.system_tunnel_hint_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
         tunnel_hint_layout.addWidget(self.system_tunnel_hint_label, 1)
         self.btn_system_tunnel_action = SystemTunnelActionButton("Start", self.system_tunnel_hint)
         self.btn_system_tunnel_action.setObjectName("systemTunnelAction")
@@ -323,6 +344,8 @@ class ProxyWindow(QWidget):
         service_controls_row = QHBoxLayout()
         service_controls_row.setContentsMargins(0, 0, 0, 0)
         service_controls_row.setSpacing(12)
+        self._home_service_controls_layout = service_controls_row
+        self._home_proxy_controls = proxy_controls
         service_controls_row.addWidget(proxy_controls, 1)
         service_controls_row.addWidget(self.system_tunnel_hint, 1)
         self.home_layout.addLayout(service_controls_row)
@@ -333,9 +356,13 @@ class ProxyWindow(QWidget):
         endpoint_row = QHBoxLayout()
         endpoint_row.setContentsMargins(0, 0, 0, 0)
         endpoint_row.setSpacing(12)
+        self._home_endpoint_row = endpoint_row
         endpoint_panel = QWidget(self.home_content)
         endpoint_panel.setObjectName("homeEndpointPanel")
+        endpoint_panel.setMinimumWidth(0)
+        self._home_endpoint_panel = endpoint_panel
         endpoint_layout = QHBoxLayout(endpoint_panel)
+        self._home_endpoint_layout = endpoint_layout
         endpoint_layout.setContentsMargins(0, 0, 0, 0)
         endpoint_layout.setSpacing(8)
         endpoint_layout.addWidget(self._build_home_endpoint_card("SOCKS5", "socks"), 1)
@@ -344,7 +371,10 @@ class ProxyWindow(QWidget):
 
         self.exit_ip_card = QFrame(self.home_content)
         self.exit_ip_card.setObjectName("homeExitIpCard")
-        self.exit_ip_card.setMinimumWidth(180)
+        self.exit_ip_card.setMinimumWidth(0)
+        self.exit_ip_card.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
         exit_ip_layout = QVBoxLayout(self.exit_ip_card)
         exit_ip_layout.setContentsMargins(12, 9, 12, 9)
         exit_ip_layout.setSpacing(5)
@@ -358,7 +388,7 @@ class ProxyWindow(QWidget):
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
         )
         self.tor_ip_label.setWordWrap(True)
-        self.tor_ip_label.setMinimumWidth(140)
+        self.tor_ip_label.setMinimumWidth(0)
         self.exit_ip_card.setToolTip(
             "Exit address observed through Tor using the local HTTP proxy."
         )
@@ -368,6 +398,7 @@ class ProxyWindow(QWidget):
 
         utility_row = QHBoxLayout()
         utility_row.setSpacing(8)
+        self._home_utility_layout = utility_row
         self.btn_change_identity = QPushButton(qta.icon("fa6s.arrows-rotate"), "  New Identity")
         self.btn_change_identity.setObjectName("secondaryAction")
         self.btn_change_identity.clicked.connect(self.change_identity_)
@@ -410,11 +441,16 @@ class ProxyWindow(QWidget):
         self.timer_data_usage = QTimer()
         self.timer_data_usage.setInterval(1000)
         self.timer_data_usage.timeout.connect(self.change_data_usage)
+        self._update_home_responsive_layout()
+        QTimer.singleShot(0, self._update_home_responsive_layout)
 
     def _build_home_endpoint_card(self, title: str, key: str) -> QFrame:
         card = QFrame(self.home_content)
         card.setObjectName("homeEndpointCard")
-        card.setMinimumWidth(210)
+        card.setMinimumWidth(0)
+        card.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
         layout = QVBoxLayout(card)
         layout.setContentsMargins(12, 9, 10, 9)
         layout.setSpacing(5)
