@@ -552,6 +552,34 @@ def _connect_with_shutdown(remote: socket.socket, address, server=None) -> None:
     )
 
 
+def _log_upstream_failure(
+    protocol: str,
+    host: str,
+    port: int | None,
+    route: str,
+    tor_socks_port: int,
+    error: Exception,
+) -> None:
+    """Log the failed outbound hop without exposing request paths or query strings."""
+    if route == "tor":
+        upstream = f"Tor SOCKS endpoint 127.0.0.1:{tor_socks_port}"
+    elif route == "direct":
+        upstream = "direct network socket (host exclusion)"
+    else:
+        upstream = "unknown upstream route"
+    detail = " ".join(str(error).split())[:240] or "no exception detail"
+    logger.warning(
+        "%s upstream connection failed: destination=%s:%s route=%s upstream=%s cause=%s: %s",
+        protocol,
+        host or "<invalid>",
+        port if port is not None else "<unknown>",
+        route,
+        upstream,
+        type(error).__name__,
+        detail,
+    )
+
+
 def _connect_upstream(
     host: str,
     port: int,
@@ -658,8 +686,15 @@ class ProxyHandler(BaseHTTPRequestHandler):
             )
         except (ValueError, HostRuleError):
             self.send_error(400, "Malformed CONNECT authority")
-        except (OSError, socks.ProxyError, socks.GeneralProxyError):
-            logger.warning("CONNECT upstream failed for host=%s", locals().get("host", "<invalid>"))
+        except (OSError, socks.ProxyError, socks.GeneralProxyError) as exc:
+            _log_upstream_failure(
+                "CONNECT",
+                locals().get("host", "<invalid>"),
+                locals().get("port"),
+                locals().get("route", "unknown"),
+                self.server.tor_socks_port,
+                exc,
+            )
             if not self.wfile.closed:
                 self.send_error(502, "Upstream connection failed")
         finally:
@@ -782,8 +817,15 @@ class ProxyHandler(BaseHTTPRequestHandler):
         except (ValueError, HostRuleError):
             if not self.wfile.closed:
                 self.send_error(400, "Malformed HTTP proxy request")
-        except (OSError, socks.ProxyError, socks.GeneralProxyError):
-            logger.warning("HTTP upstream failed for host=%s", locals().get("host", "<invalid>"))
+        except (OSError, socks.ProxyError, socks.GeneralProxyError) as exc:
+            _log_upstream_failure(
+                "HTTP",
+                locals().get("host", "<invalid>"),
+                locals().get("port"),
+                locals().get("route", "unknown"),
+                self.server.tor_socks_port,
+                exc,
+            )
             if not self.wfile.closed:
                 self.send_error(502, "Upstream connection failed")
         finally:
