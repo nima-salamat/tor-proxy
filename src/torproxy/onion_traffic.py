@@ -355,7 +355,7 @@ class _TcpPortRelay:
         while not self._stop.is_set():
             try:
                 client, _peer = self.listener.accept()
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except OSError:
                 break
