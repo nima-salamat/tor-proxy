@@ -188,9 +188,9 @@ class ProxyWindow(QWidget):
         self.btn_status.setWordWrap(True)
         self.btn_status.setMaximumWidth(640)
         self.set_btn_status_style("disconnected")
-        # Move the flexible vertical gap above the status chip, not between the
-        # status chip and Connect. The lower Home controls stay visually grouped.
-        self.home_layout.addStretch(1)
+        # Keep the connection status anchored at the top of Home.
+        # The responsive top margin below provides a visible gap from the
+        # navigation/header above without tying this label to the Connect row.
         self.home_layout.addWidget(self.btn_status, 0, Qt.AlignmentFlag.AlignHCenter)
 
         self.connect_btn = PulseButton("Connect")
@@ -535,17 +535,17 @@ class ProxyWindow(QWidget):
         # Preserve horizontal breathing room; reclaim vertical pixels first.
         # This lets the Connect control stay substantially larger in short windows.
         if height < 490:
-            margins, spacing, diameter = (20, 1, 20, 1), 2, 172
+            margins, spacing, diameter = (20, 10, 20, 1), 2, 172
         elif height < 530:
-            margins, spacing, diameter = (20, 2, 20, 2), 3, 188
+            margins, spacing, diameter = (20, 10, 20, 2), 3, 188
         elif height < 570:
-            margins, spacing, diameter = (20, 4, 20, 4), 4, 204
+            margins, spacing, diameter = (20, 10, 20, 4), 4, 204
         elif height < 630:
-            margins, spacing, diameter = (20, 7, 20, 7), 6, 220
+            margins, spacing, diameter = (20, 12, 20, 7), 6, 220
         elif height < 700:
-            margins, spacing, diameter = (20, 10, 20, 10), 8, 240
+            margins, spacing, diameter = (20, 14, 20, 10), 8, 240
         else:
-            margins, spacing, diameter = (20, 14, 20, 12), 10, 256
+            margins, spacing, diameter = (20, 16, 20, 12), 10, 256
 
         self.home_layout.setContentsMargins(*margins)
         self.home_layout.setSpacing(spacing)
