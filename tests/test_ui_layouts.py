@@ -3116,14 +3116,15 @@ def test_home_page_uses_adaptive_compact_layout_without_scrollbars():
 
 
 def test_connection_status_pill_renders_over_its_parent_background(qt_app):
-    from PySide6.QtGui import QColor
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QColor, QPalette
     from PySide6.QtWidgets import QWidget
     from ui_.window.proxy_window import ConnectionStatusPill
 
     parent = QWidget()
     parent_color = QColor("#314159")
     palette = parent.palette()
-    palette.setColor(palette.ColorRole.Window, parent_color)
+    palette.setColor(QPalette.ColorRole.Window, parent_color)
     parent.setPalette(palette)
     parent.setAutoFillBackground(True)
 
@@ -3143,10 +3144,10 @@ def test_connection_status_pill_renders_over_its_parent_background(qt_app):
         assert image.pixelColor(10, 10) == parent_color
         assert image.pixelColor(11, 11) == parent_color
         assert not pill.testAttribute(
-            pill.WidgetAttribute.WA_TranslucentBackground
+            Qt.WidgetAttribute.WA_TranslucentBackground
         )
         assert not pill.testAttribute(
-            pill.WidgetAttribute.WA_NoSystemBackground
+            Qt.WidgetAttribute.WA_NoSystemBackground
         )
     finally:
         parent.close()
