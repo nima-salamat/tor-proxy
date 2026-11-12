@@ -3065,34 +3065,53 @@ def test_developer_tor_activity_exposes_per_port_events_and_error_counters():
 
 
 
-def test_home_page_reflows_without_horizontal_overflow_when_window_is_narrow():
+def test_home_page_uses_adaptive_compact_layout_without_scrollbars():
     repository = Path(__file__).resolve().parents[1]
     source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+    pulse = (repository / "ui_/btn/pulse_button.py").read_text(encoding="utf-8")
 
-    assert "QScrollArea," in source
-    assert 'self.home_scroll.setObjectName("homeScrollArea")' in source
-    assert "self.home_scroll.setWidgetResizable(True)" in source
-    assert "Qt.ScrollBarPolicy.ScrollBarAlwaysOff" in source
-    assert "Qt.ScrollBarPolicy.ScrollBarAsNeeded" in source
-    assert "self.home_scroll.setWidget(self.home_content)" in source
-    assert "self.home_content.setMinimumWidth(0)" in source
-    assert "def _update_home_responsive_layout(self)" in source
+    assert "QScrollArea" not in source
+    assert "home_scroll" not in source
+    assert "self.home_content = QWidget(self)" in source
+    assert "self.home_content.setSizePolicy(" in source
+    assert "def _update_home_responsive_layout(self) -> None:" in source
     assert "def resizeEvent(self, event) -> None:" in source
-    assert "QBoxLayout.Direction.TopToBottom" in source
-    assert "QBoxLayout.Direction.LeftToRight" in source
+    assert "height < 490" in source
+    assert "height < 530" in source
+    assert "height < 570" in source
+    assert "self.connect_btn.set_diameter(diameter)" in source
+    assert "self._home_connection_hero_layout.setSpacing(" in source
     assert "self._home_service_controls_layout.setDirection(" in source
     assert "self._home_endpoint_row.setDirection(" in source
     assert "self._home_endpoint_layout.setDirection(" in source
     assert "self._home_utility_layout.setDirection(" in source
     assert "self._home_metrics_layout.setDirection(" in source
     assert "self._home_metric_separator.setFrameShape(QFrame.Shape.HLine)" in source
-    assert "self.system_tunnel_hint_label.setWordWrap(True)" in source
+    assert 'QPushButton#secondaryAction[compact="true"]' in source
+    assert 'QToolButton#homeEndpointCopy[compact="true"]' in source
+    assert "self.system_tunnel_hint_label.setWordWrap(compact)" in source
     assert "card.setMinimumWidth(210)" not in source
     assert "self.exit_ip_card.setMinimumWidth(180)" not in source
     assert "self.tor_ip_label.setMinimumWidth(140)" not in source
-    assert "def _logs_drawer_width(self) -> int:" in source
-    assert "target_width = self._logs_drawer_width() if opening else 0" in source
-    assert "QAbstractAnimation.State.Running" in source
     assert "self.btn_status.setWordWrap(True)" in source
-    assert "stacked_endpoint_values = width < 300" in source
-    assert "self.home_layout = QVBoxLayout(self.home_content)" in source
+    assert "def set_diameter(self, diameter: int) -> None:" in pulse
+    assert "diameter = max(128, min(264, int(diameter)))" in pulse
+    assert "scale = min(self.width(), self.height()) / 264.0" in pulse
+
+
+def test_pulse_button_can_shrink_without_losing_its_animation_geometry(qt_app):
+    from ui_.btn.pulse_button import PulseButton
+
+    button = PulseButton()
+    try:
+        assert button.size().width() == 264
+        button.set_diameter(144)
+        assert button.size().width() == 144
+        assert button.size().height() == 144
+        assert button.diameter == 144
+        button.set_diameter(400)
+        assert button.diameter == 264
+    finally:
+        button.close()
+        button.deleteLater()
+        qt_app.processEvents()
