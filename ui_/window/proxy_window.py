@@ -311,6 +311,10 @@ class ProxyWindow(QWidget):
 
         proxy_controls = QFrame(self.home_content)
         proxy_controls.setObjectName("systemProxyControls")
+        proxy_controls.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        proxy_controls.setMaximumHeight(92)
         proxy_controls_layout = QVBoxLayout(proxy_controls)
         proxy_controls_layout.setContentsMargins(12, 7, 12, 7)
         proxy_controls_layout.setSpacing(3)
@@ -605,6 +609,9 @@ class ProxyWindow(QWidget):
             button.setMaximumHeight(42 if compact else 48)
         self.btn_status.setProperty("compact", "true" if compact else "false")
         self.connection_hint.setProperty("compact", "true" if compact else "false")
+        for widget in (self.btn_status, self.connection_hint):
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
 
         self._home_service_controls_layout.setDirection(
             vertical if stacked_service_controls else horizontal
