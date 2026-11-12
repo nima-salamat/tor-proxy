@@ -208,9 +208,12 @@ class ProxyWindow(QWidget):
         connect_row.addStretch(1)
         self.home_layout.addLayout(connect_row, 1)
 
+        # Split the metric strip into equal-width halves so the divider stays
+        # on the exact center line regardless of changing percentage/traffic text.
         metrics = QHBoxLayout()
         metrics.setContentsMargins(0, 0, 0, 0)
-        metrics.setSpacing(14)
+        metrics.setSpacing(0)
+
         self.lbl_percent = QLabel("0%")
         self.lbl_percent.setObjectName("bootstrapPercent")
         self.lbl_data_usage = QLabel(
@@ -223,19 +226,42 @@ class ProxyWindow(QWidget):
         self.btn_statistics.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_statistics.setToolTip("Open live proxy traffic statistics and charts")
         self.btn_statistics.clicked.connect(self.open_statistics_page)
-        metrics.addStretch(1)
+
         bootstrap_caption = QLabel("BOOTSTRAP", self.home_content)
         bootstrap_caption.setObjectName("homeMetricCaption")
         self.lbl_percent.setToolTip("Tor bootstrap progress")
-        metrics.addWidget(bootstrap_caption)
-        metrics.addWidget(self.lbl_percent)
+
+        left_metrics = QWidget(self.home_content)
+        left_metrics.setObjectName("homeMetricsLeft")
+        left_metrics_layout = QHBoxLayout(left_metrics)
+        left_metrics_layout.setContentsMargins(0, 0, 14, 0)
+        left_metrics_layout.setSpacing(10)
+        left_metrics_layout.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        left_metrics_layout.addWidget(bootstrap_caption)
+        left_metrics_layout.addWidget(self.lbl_percent)
+
         separator = QFrame(self.home_content)
         separator.setObjectName("homeMetricSeparator")
         separator.setFrameShape(QFrame.Shape.VLine)
-        metrics.addWidget(separator)
-        metrics.addWidget(self.lbl_data_usage)
-        metrics.addWidget(self.btn_statistics)
-        metrics.addStretch(1)
+        separator.setFixedWidth(1)
+        separator.setFixedHeight(36)
+
+        right_metrics = QWidget(self.home_content)
+        right_metrics.setObjectName("homeMetricsRight")
+        right_metrics_layout = QHBoxLayout(right_metrics)
+        right_metrics_layout.setContentsMargins(14, 0, 0, 0)
+        right_metrics_layout.setSpacing(10)
+        right_metrics_layout.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+        right_metrics_layout.addWidget(self.lbl_data_usage)
+        right_metrics_layout.addWidget(self.btn_statistics)
+
+        metrics.addWidget(left_metrics, 1)
+        metrics.addWidget(separator, 0, Qt.AlignmentFlag.AlignCenter)
+        metrics.addWidget(right_metrics, 1)
         self.home_layout.addLayout(metrics)
         self.data.valueChanged.connect(self.dataValueChanged)
 
