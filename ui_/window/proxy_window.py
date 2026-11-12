@@ -186,14 +186,20 @@ class ProxyWindow(QWidget):
         self.btn_status.setObjectName("connectionStatus")
         self.btn_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.btn_status.setWordWrap(True)
+        self.btn_status.setMinimumWidth(0)
         self.btn_status.setMaximumWidth(640)
+        self.btn_status.setMinimumHeight(32)
+        self.btn_status.setMaximumHeight(42)
+        self.btn_status.setSizePolicy(
+            QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed
+        )
         self.set_btn_status_style("disconnected")
         # Keep the connection status anchored at the top of Home.
         # The responsive top margin below provides a visible gap from the
         # navigation/header above without tying this label to the Connect row.
         self.home_layout.addWidget(self.btn_status, 0, Qt.AlignmentFlag.AlignHCenter)
 
-        self.connect_btn = PulseButton("Connect")
+        self.connect_btn = PulseButton("CONNECT")
         self.connect_btn.setObjectName("connectPulseButton")
         self.connect_btn.clicked.connect(self._toggle)
 
@@ -218,8 +224,9 @@ class ProxyWindow(QWidget):
         self.connection_hint.setSizePolicy(
             QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
         )
-        self.connection_hint.setMinimumHeight(24)
-        self.connection_hint.setMaximumWidth(440)
+        self.connection_hint.setMinimumHeight(22)
+        self.connection_hint.setMaximumHeight(42)
+        self.connection_hint.setMaximumWidth(460)
         self.connection_hint.setProperty("connectionState", "disconnected")
         connection_hero_layout.addWidget(
             self.connection_hint, 0, Qt.AlignmentFlag.AlignHCenter
@@ -235,8 +242,16 @@ class ProxyWindow(QWidget):
 
         # Split the metric strip into equal-width halves so the divider stays
         # on the exact center line regardless of changing percentage/traffic text.
-        metrics = QHBoxLayout()
-        metrics.setContentsMargins(0, 0, 0, 0)
+        metrics_panel = QFrame(self.home_content)
+        metrics_panel.setObjectName("homeMetricsPanel")
+        metrics_panel.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        metrics_panel.setMinimumHeight(62)
+        metrics_panel.setMaximumHeight(84)
+        self._home_metrics_panel = metrics_panel
+        metrics = QHBoxLayout(metrics_panel)
+        metrics.setContentsMargins(14, 7, 14, 7)
         metrics.setSpacing(0)
         self._home_metrics_layout = metrics
 
@@ -246,18 +261,18 @@ class ProxyWindow(QWidget):
             f"Proxy traffic  ·  {CONFIG['data_usage'] / 1024**2:.2f} MiB"
         )
         self.lbl_data_usage.setObjectName("trafficUsage")
-        self.btn_statistics = QPushButton("Statistics", self.home_content)
+        self.btn_statistics = QPushButton("Statistics", metrics_panel)
         self.btn_statistics.setObjectName("statisticsLink")
         self.btn_statistics.setFlat(True)
         self.btn_statistics.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_statistics.setToolTip("Open live proxy traffic statistics and charts")
         self.btn_statistics.clicked.connect(self.open_statistics_page)
 
-        bootstrap_caption = QLabel("BOOTSTRAP", self.home_content)
+        bootstrap_caption = QLabel("BOOTSTRAP", metrics_panel)
         bootstrap_caption.setObjectName("homeMetricCaption")
         self.lbl_percent.setToolTip("Tor bootstrap progress")
 
-        left_metrics = QWidget(self.home_content)
+        left_metrics = QWidget(metrics_panel)
         left_metrics.setObjectName("homeMetricsLeft")
         left_metrics_layout = QHBoxLayout(left_metrics)
         left_metrics_layout.setContentsMargins(0, 0, 14, 0)
@@ -269,14 +284,14 @@ class ProxyWindow(QWidget):
         left_metrics_layout.addWidget(bootstrap_caption)
         left_metrics_layout.addWidget(self.lbl_percent)
 
-        separator = QFrame(self.home_content)
+        separator = QFrame(metrics_panel)
         separator.setObjectName("homeMetricSeparator")
         separator.setFrameShape(QFrame.Shape.VLine)
         separator.setFixedWidth(1)
         separator.setFixedHeight(36)
         self._home_metric_separator = separator
 
-        right_metrics = QWidget(self.home_content)
+        right_metrics = QWidget(metrics_panel)
         right_metrics.setObjectName("homeMetricsRight")
         right_metrics_layout = QHBoxLayout(right_metrics)
         right_metrics_layout.setContentsMargins(14, 0, 0, 0)
@@ -291,7 +306,7 @@ class ProxyWindow(QWidget):
         metrics.addWidget(left_metrics, 1)
         metrics.addWidget(separator, 0, Qt.AlignmentFlag.AlignCenter)
         metrics.addWidget(right_metrics, 1)
-        self.home_layout.addLayout(metrics)
+        self.home_layout.addWidget(metrics_panel)
         self.data.valueChanged.connect(self.dataValueChanged)
 
         proxy_controls = QFrame(self.home_content)
@@ -299,6 +314,7 @@ class ProxyWindow(QWidget):
         proxy_controls_layout = QVBoxLayout(proxy_controls)
         proxy_controls_layout.setContentsMargins(12, 7, 12, 7)
         proxy_controls_layout.setSpacing(3)
+        self._home_proxy_controls_layout = proxy_controls_layout
 
         proxy_row = QHBoxLayout()
         proxy_row.setContentsMargins(0, 0, 0, 0)
@@ -327,7 +343,9 @@ class ProxyWindow(QWidget):
 
         self.system_tunnel_hint = QFrame(self.home_content)
         self.system_tunnel_hint.setObjectName("systemTunnelHint")
-        self.system_tunnel_hint.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.system_tunnel_hint.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
         tunnel_hint_layout = QHBoxLayout(self.system_tunnel_hint)
         self._home_tunnel_hint_layout = tunnel_hint_layout
         tunnel_hint_layout.setContentsMargins(10, 5, 10, 5)
@@ -389,7 +407,7 @@ class ProxyWindow(QWidget):
         self.exit_ip_card.setObjectName("homeExitIpCard")
         self.exit_ip_card.setMinimumWidth(0)
         self.exit_ip_card.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
         exit_ip_layout = QVBoxLayout(self.exit_ip_card)
         exit_ip_layout.setContentsMargins(12, 9, 12, 9)
@@ -460,6 +478,8 @@ class ProxyWindow(QWidget):
         for button in self._home_utility_buttons:
             button.setIconSize(QSize(16, 16))
             button.setMinimumWidth(0)
+            button.setMinimumHeight(42)
+            button.setMaximumHeight(48)
         self.home_layout.addLayout(utility_row)
 
         self.thread_pool = QThreadPool(self)
@@ -535,17 +555,17 @@ class ProxyWindow(QWidget):
         # Preserve horizontal breathing room; reclaim vertical pixels first.
         # This lets the Connect control stay substantially larger in short windows.
         if height < 490:
-            margins, spacing, diameter = (20, 10, 20, 1), 2, 172
+            margins, spacing, diameter = (18, 8, 18, 8), 7, 128
         elif height < 530:
-            margins, spacing, diameter = (20, 10, 20, 2), 3, 188
+            margins, spacing, diameter = (18, 10, 18, 10), 8, 148
         elif height < 570:
-            margins, spacing, diameter = (20, 10, 20, 4), 4, 204
+            margins, spacing, diameter = (20, 12, 20, 12), 9, 164
         elif height < 630:
-            margins, spacing, diameter = (20, 12, 20, 7), 6, 220
+            margins, spacing, diameter = (22, 14, 22, 14), 10, 182
         elif height < 700:
-            margins, spacing, diameter = (20, 14, 20, 10), 8, 240
+            margins, spacing, diameter = (24, 16, 24, 14), 11, 198
         else:
-            margins, spacing, diameter = (20, 16, 20, 12), 10, 256
+            margins, spacing, diameter = (26, 18, 26, 16), 12, 216
 
         self.home_layout.setContentsMargins(*margins)
         self.home_layout.setSpacing(spacing)
@@ -554,9 +574,35 @@ class ProxyWindow(QWidget):
         )
         self.connect_btn.set_diameter(diameter)
         self.connection_hint.setMinimumHeight(
-            16 if very_compact else 20 if compact else 28
+            16 if very_compact else 20 if compact else 24
         )
-        self.connection_hint.setMaximumWidth(400 if compact else 440)
+        self.connection_hint.setMaximumWidth(400 if compact else 460)
+        self._home_metrics_panel.setFixedHeight(
+            58 if very_compact and not stacked_metrics else
+            70 if very_compact else
+            72 if compact and not stacked_metrics else
+            82 if compact else 76
+        )
+        self._home_proxy_controls_layout.setContentsMargins(
+            8 if compact else 12, 5 if compact else 7,
+            8 if compact else 12, 5 if compact else 7
+        )
+        self._home_tunnel_hint_layout.setContentsMargins(
+            8 if compact else 10, 4 if compact else 5,
+            8 if compact else 10, 4 if compact else 5
+        )
+        for card_layout in self._home_endpoint_card_layouts.values():
+            card = card_layout.parentWidget()
+            if card is not None:
+                card.setMinimumHeight(
+                    66 if very_compact else 78 if compact else 92
+                )
+        self.exit_ip_card.setMinimumHeight(
+            58 if very_compact else 68 if compact else 82
+        )
+        for button in self._home_utility_buttons:
+            button.setMinimumHeight(36 if compact else 42)
+            button.setMaximumHeight(42 if compact else 48)
         self.btn_status.setProperty("compact", "true" if compact else "false")
         self.connection_hint.setProperty("compact", "true" if compact else "false")
 
@@ -659,8 +705,9 @@ class ProxyWindow(QWidget):
         card.setObjectName("homeEndpointCard")
         card.setMinimumWidth(0)
         card.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
+        card.setMinimumHeight(0)
         layout = QVBoxLayout(card)
         layout.setContentsMargins(10, 7, 9, 7)
         layout.setSpacing(4)
@@ -1251,12 +1298,19 @@ class ProxyWindow(QWidget):
         text = "#e8edf3" if dark else "#253041"
         self.home_content.setStyleSheet(f"""
             QWidget#homeContent {{ background: transparent; }}
-            QPushButton#connectPulseButton {{ background: transparent; border: none; padding: 0; margin: 0; }}
-            QPushButton#connectPulseButton:hover, QPushButton#connectPulseButton:pressed, QPushButton#connectPulseButton:focus {{ background: transparent; border: none; }}
+            QPushButton#connectPulseButton {{
+                background: transparent; border: none; padding: 0; margin: 0;
+            }}
+            QPushButton#connectPulseButton:hover,
+            QPushButton#connectPulseButton:pressed,
+            QPushButton#connectPulseButton:focus {{
+                background: transparent; border: none;
+            }}
             QLabel#connectionStatus {{
-                color: {muted}; background: {surface}; border: 1px solid {border};
-                border-radius: 12px; padding: 6px 14px; font-size: 11px;
-                font-weight: 750; letter-spacing: 0.6px;
+                color: {muted}; background: {surface};
+                border: 1px solid {border}; border-radius: 15px;
+                padding: 3px 13px; min-height: 20px;
+                font-size: 10px; font-weight: 750; letter-spacing: 0.7px;
             }}
             QLabel#connectionStatus[connectionState="connected"] {{
                 color: #45c98b; background: rgba(46, 174, 105, 0.10);
@@ -1269,24 +1323,43 @@ class ProxyWindow(QWidget):
             QLabel#connectionStatus[connectionState="disconnected"] {{
                 color: {muted}; background: {surface}; border-color: {border};
             }}
+            QLabel#connectionStatus[compact="true"] {{
+                font-size: 9px; padding: 2px 10px; border-radius: 12px;
+            }}
             QLabel#connectionHint {{
                 color: {muted}; background: transparent; border: none;
-                font-size: 11px; font-weight: 550;
-                padding: 2px 12px; min-height: 38px;
+                font-size: 10px; font-weight: 550; padding: 0 12px;
+                min-height: 22px; max-height: 42px;
             }}
             QLabel#connectionHint[connectionState="connecting"] {{ color: {accent}; }}
             QLabel#connectionHint[connectionState="connected"] {{ color: #45c98b; }}
             QLabel#connectionHint[connectionState="disconnected"] {{ color: {muted}; }}
-            QLabel#connectionHint[compact="true"] {{ font-size: 9px; padding: 0 6px; min-height: 20px; }}
-            QLabel#connectionStatus[compact="true"] {{ font-size: 9px; padding: 3px 9px; border-radius: 8px; }}
-            QLabel#homeMetricCaption {{ color: {muted}; background: transparent; border: none; font-size: 8px; font-weight: 800; letter-spacing: 0.8px; }}
-            QLabel#bootstrapPercent {{ color: {accent}; background: transparent; border: none; font-size: 16px; font-weight: 750; padding: 3px; }}
-            QLabel#trafficUsage, QLabel#proxyStatusLabel {{ color: {muted}; background: transparent; border: none; font-size: 11px; padding: 2px; }}
-            QWidget#homeEndpointPanel, QWidget#homeMetricsLeft, QWidget#homeMetricsRight {{
+            QLabel#connectionHint[compact="true"] {{
+                font-size: 9px; padding: 0 6px; min-height: 18px;
+            }}
+            QLabel#homeMetricCaption {{
+                color: {muted}; background: transparent; border: none;
+                font-size: 9px; font-weight: 800; letter-spacing: 0.9px;
+            }}
+            QLabel#bootstrapPercent {{
+                color: {accent}; background: transparent; border: none;
+                font-size: 18px; font-weight: 780; padding: 2px 3px;
+            }}
+            QLabel#trafficUsage, QLabel#proxyStatusLabel {{
+                color: {muted}; background: transparent; border: none;
+                font-size: 11px; padding: 2px;
+            }}
+            QWidget#homeEndpointPanel, QWidget#homeMetricsLeft,
+            QWidget#homeMetricsRight {{
                 background: transparent; border: none;
             }}
+            QFrame#homeMetricsPanel {{
+                background: {surface}; border: 1px solid {border};
+                border-radius: 13px;
+            }}
             QFrame#homeEndpointCard, QFrame#homeExitIpCard {{
-                background: {surface}; border: 1px solid {border}; border-radius: 12px;
+                background: {surface}; border: 1px solid {border};
+                border-radius: 12px;
             }}
             QLabel#homeEndpointTitle, QLabel#homeExitIpTitle {{
                 color: {muted}; background: transparent; border: none;
@@ -1298,39 +1371,73 @@ class ProxyWindow(QWidget):
             }}
             QToolButton#homeEndpointPart {{
                 color: {text}; background: transparent; border: none;
-                padding: 0; font-size: 12px; font-weight: 700; text-align: left;
+                padding: 0; font-size: 12px; font-weight: 720; text-align: left;
             }}
             QToolButton#homeEndpointPart:hover {{ color: {accent}; }}
             QToolButton#homeEndpointPart:disabled {{ color: {muted}; }}
             QToolButton#homeEndpointCopy {{
-                min-width: 84px; min-height: 32px; color: {text}; background: {hover};
-                border: 1px solid {border}; border-radius: 8px; padding: 0 7px;
+                min-width: 84px; min-height: 32px; color: {text};
+                background: {hover}; border: 1px solid {border};
+                border-radius: 8px; padding: 0 7px;
                 font-size: 10px; font-weight: 750;
             }}
-            QToolButton#homeEndpointCopy[compact="true"] {{ min-width: 72px; min-height: 29px; padding: 0 4px; font-size: 9px; }}
-            QToolButton#homeEndpointCopy:hover {{ background: rgba(71, 163, 242, 0.12); border-color: {accent}; }}
-            QToolButton#homeEndpointCopy:disabled {{ color: {muted}; background: transparent; border-color: {border}; }}
+            QToolButton#homeEndpointCopy[compact="true"] {{
+                min-width: 72px; min-height: 29px; padding: 0 4px; font-size: 9px;
+            }}
+            QToolButton#homeEndpointCopy:hover {{
+                background: rgba(71, 163, 242, 0.12); border-color: {accent};
+            }}
+            QToolButton#homeEndpointCopy:disabled {{
+                color: {muted}; background: transparent; border-color: {border};
+            }}
             QLabel#exitIpLabel {{
                 color: {text}; background: transparent; border: none;
-                font-size: 12px; font-weight: 650; padding: 0;
+                font-size: 13px; font-weight: 680; padding: 0;
             }}
-            QPushButton#statisticsLink {{ color: {accent}; background: transparent; border: none; padding: 2px 4px; font-size: 11px; font-weight: 700; }}
-            QPushButton#statisticsLink:hover {{ color: {text}; border-bottom: 1px solid {accent}; }}
-            QLabel#systemProxyTitle {{ color: {muted}; background: transparent; border: none; font-size: 9px; font-weight: 800; letter-spacing: 0.9px; }}
-            QFrame#homeMetricSeparator {{ color: {border}; background: {border}; max-width: 1px; }}
-            QComboBox#systemProxyMode {{ min-height: 32px; padding: 0 8px; border: 1px solid {border}; border-radius: 9px; background: transparent; color: {text}; }}
-            QComboBox#systemProxyMode[compact="true"] {{ min-height: 28px; padding: 0 6px; font-size: 9px; }}
+            QPushButton#statisticsLink {{
+                color: {accent}; background: transparent; border: none;
+                border-radius: 7px; padding: 5px 8px;
+                font-size: 11px; font-weight: 750;
+            }}
+            QPushButton#statisticsLink:hover {{
+                color: {text}; background: {hover};
+            }}
+            QLabel#systemProxyTitle {{
+                color: {muted}; background: transparent; border: none;
+                font-size: 9px; font-weight: 800; letter-spacing: 0.9px;
+            }}
+            QFrame#homeMetricSeparator {{
+                color: {border}; background: {border}; max-width: 1px;
+            }}
+            QComboBox#systemProxyMode {{
+                min-height: 32px; padding: 0 8px; border: 1px solid {border};
+                border-radius: 9px; background: transparent; color: {text};
+            }}
+            QComboBox#systemProxyMode[compact="true"] {{
+                min-height: 28px; padding: 0 6px; font-size: 9px;
+            }}
             QComboBox#systemProxyMode:hover {{ border-color: {accent}; }}
-            QComboBox#systemProxyMode QAbstractItemView {{ background: {surface}; color: {text}; selection-background-color: {accent}; selection-color: #ffffff; outline: none; border: 1px solid {border}; }}
-            QComboBox#systemProxyMode QAbstractItemView::item {{ background: {surface}; color: {text}; padding: 8px 10px; min-height: 22px; }}
-            QComboBox#systemProxyMode QAbstractItemView::item:selected {{ background: {accent}; color: #ffffff; }}
+            QComboBox#systemProxyMode QAbstractItemView {{
+                background: {surface}; color: {text};
+                selection-background-color: {accent}; selection-color: #ffffff;
+                outline: none; border: 1px solid {border};
+            }}
+            QComboBox#systemProxyMode QAbstractItemView::item {{
+                background: {surface}; color: {text};
+                padding: 8px 10px; min-height: 22px;
+            }}
+            QComboBox#systemProxyMode QAbstractItemView::item:selected {{
+                background: {accent}; color: #ffffff;
+            }}
             QPushButton#secondaryAction {{
-                min-height: 40px; padding: 0 12px; border-radius: 10px;
-                background: {surface}; color: {text}; border: 1px solid {border};
-                font-size: 10px; font-weight: 700; text-align: center;
+                min-height: 38px; max-height: 46px; padding: 0 11px;
+                border-radius: 10px; background: transparent; color: {text};
+                border: 1px solid {border}; font-size: 10px;
+                font-weight: 700; text-align: center;
             }}
             QPushButton#secondaryAction[compact="true"] {{
-                min-height: 36px; padding: 0 8px; font-size: 9px; border-radius: 8px;
+                min-height: 34px; max-height: 42px;
+                padding: 0 8px; font-size: 9px; border-radius: 8px;
             }}
             QPushButton#secondaryAction:hover {{
                 background: {hover}; border-color: {accent};
@@ -1339,19 +1446,40 @@ class ProxyWindow(QWidget):
                 background: rgba(71, 163, 242, 0.20); border-color: {accent};
             }}
             QPushButton#secondaryAction:checked {{
-                background: rgba(71, 163, 242, 0.14); border-color: {accent}; color: {accent};
+                background: rgba(71, 163, 242, 0.14);
+                border-color: {accent}; color: {accent};
             }}
             QPushButton#secondaryAction:disabled {{
                 background: {field}; color: {muted}; border-color: {border};
             }}
-            QFrame#systemProxyControls {{ background: {surface}; border: 1px solid {border}; border-radius: 12px; }}
-            QFrame#systemTunnelHint {{ background: {surface}; border: 1px solid {border}; border-radius: 12px; }}
-            QLabel#systemTunnelHintLabel {{ color: {muted}; background: transparent; border: none; font-size: 10px; }}
-            QPushButton#systemTunnelAction {{ min-height: 27px; padding: 0 11px; border-radius: 7px; background: {accent}; color: #ffffff; border: 1px solid {accent}; font-size: 10px; font-weight: 750; }}
-            QPushButton#systemTunnelAction:hover {{ background: {hover}; color: {text}; border-color: {accent}; }}
-            QPushButton#systemTunnelAction:disabled {{ background: {field}; color: {muted}; border-color: {border}; }}
-            QPushButton#systemTunnelManage {{ min-height: 27px; padding: 0 9px; border-radius: 7px; background: {field}; color: {text}; border: 1px solid {border}; font-size: 10px; font-weight: 700; }}
-            QPushButton#systemTunnelManage:hover {{ background: {hover}; border-color: {accent}; }}
+            QFrame#systemProxyControls {{
+                background: {surface}; border: 1px solid {border}; border-radius: 12px;
+            }}
+            QFrame#systemTunnelHint {{
+                background: {surface}; border: 1px solid {border}; border-radius: 12px;
+            }}
+            QLabel#systemTunnelHintLabel {{
+                color: {muted}; background: transparent; border: none; font-size: 10px;
+            }}
+            QPushButton#systemTunnelAction {{
+                min-height: 27px; padding: 0 11px; border-radius: 7px;
+                background: {accent}; color: #ffffff; border: 1px solid {accent};
+                font-size: 10px; font-weight: 750;
+            }}
+            QPushButton#systemTunnelAction:hover {{
+                background: {hover}; color: {text}; border-color: {accent};
+            }}
+            QPushButton#systemTunnelAction:disabled {{
+                background: {field}; color: {muted}; border-color: {border};
+            }}
+            QPushButton#systemTunnelManage {{
+                min-height: 27px; padding: 0 9px; border-radius: 7px;
+                background: {field}; color: {text}; border: 1px solid {border};
+                font-size: 10px; font-weight: 700;
+            }}
+            QPushButton#systemTunnelManage:hover {{
+                background: {hover}; border-color: {accent};
+            }}
         """)
         self.logs_widget.apply_theme(CONFIG["mode"])
         icon_color = "#eff1f4" if dark else "#202832"
