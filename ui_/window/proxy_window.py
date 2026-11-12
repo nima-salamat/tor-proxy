@@ -1575,6 +1575,7 @@ class ProxyWindow(QWidget):
         self.btn_statistics.setIcon(qta.icon("fa6s.chart-line", color=accent))
         for controls in getattr(self, "_home_endpoint_controls", {}).values():
             controls["copy"].setIcon(qta.icon("fa6s.copy", color=muted))
+        self._refresh_home_status_geometry()
 
     def _on_system_proxy_mode_changed(self, index):
         mode = self.system_proxy_mode.itemData(index)
