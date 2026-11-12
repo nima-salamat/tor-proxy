@@ -13,7 +13,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Signal
 
 from config import BUNDLE_DIR, CONFIG, IS_WINDOWS
-from proxy import ProxyHandler, ThreadedHTTPServer, route_host, worker_data_usage_tracker
+from proxy import ProxyHandler, ThreadedHTTPServer, route_host, worker_data_usage_tracker, _record_bytes as record_proxy_traffic
 from torproxy.bridge_distribution import BridgeDistribution, distribute_bridge_records
 from torproxy.bridge_health import DEFAULT_MAX_WORKERS
 from torproxy.circuit_monitor import TorEventMonitor
@@ -21,6 +21,7 @@ from torproxy.health import TorProbeResult, probe_tor_socks
 from torproxy.network_quality import NetworkQualityWindow
 from torproxy.paths import user_directories
 from torproxy.socks_gateway import SocksFailoverGateway
+from torproxy.socks_gateway_credentials import read_socks_gateway_credentials
 from torproxy.tor_manager import TorManager, TorManagerError, TorSettings, TorState
 from utils import resource_path
 
@@ -199,6 +200,8 @@ class TorRunner(QObject):
         self._backend_lock = threading.RLock()
         self._routing_fallback_active = False
         self._gateway: SocksFailoverGateway | None = None
+        self._gateway_reconfigure_lock = threading.RLock()
+        self._gateway_access_config: tuple[str, str, str] | None = None
         self._last_pool_ready_count = -1
         self._allocated_backend_ports: set[int] = set()
         self._bridge_distribution: BridgeDistribution | None = None
@@ -217,6 +220,104 @@ class TorRunner(QObject):
             gateway = self._gateway
         if gateway is not None:
             gateway.set_selection_mode(normalized)
+
+    def _desired_socks_gateway_access(self) -> tuple[str, str, str]:
+        """Resolve the Main SOCKS bind address and its separately stored LAN credentials."""
+        if not bool(CONFIG.get("tor_socks_bind_all_interfaces", False)):
+            return ("127.0.0.1", "", "")
+        try:
+            credentials = read_socks_gateway_credentials()
+        except Exception as exc:
+            raise TorManagerError(f"Could not load Main SOCKS gateway credentials: {exc}") from exc
+        username = str(credentials.get("username", "") or "")
+        password = str(credentials.get("password", "") or "")
+        if not username or not password:
+            raise TorManagerError(
+                "Main SOCKS LAN access is enabled but no credentials are saved. "
+                "Open Settings → Ports and generate or save a SOCKS username and password."
+            )
+        return ("0.0.0.0", username, password)
+
+    def _build_socks_gateway(self, access: tuple[str, str, str]) -> SocksFailoverGateway:
+        host, username, password = access
+        return SocksFailoverGateway(
+            int(self.socks_port),
+            self._ready_backend_endpoints,
+            host=host,
+            username=username,
+            password=password,
+            host_router=route_host,
+            selection_mode=self._backend_selection_mode,
+            traffic_recorder=record_proxy_traffic,
+        )
+
+    def reconfigure_socks_gateway(self) -> str:
+        """Apply the saved loopback/LAN SOCKS exposure policy without restarting Tor workers."""
+        with self._gateway_reconfigure_lock:
+            if self._stopping.is_set():
+                raise TorManagerError(
+                    "The Main Tor gateway is stopping; change its access settings after it stops."
+                )
+            target = self._desired_socks_gateway_access()
+            gateway = self._gateway
+            if gateway is None or not gateway.running:
+                self._gateway_access_config = target
+                host = target[0]
+                return (
+                    f"Main SOCKS gateway will listen on {host}:{self.socks_port} "
+                    "when the next Main Tor connection starts."
+                )
+            if target == self._gateway_access_config:
+                return "Main SOCKS gateway access settings are already applied."
+
+            previous = self._gateway_access_config or (str(gateway.host), "", "")
+            try:
+                gateway.stop()
+            except Exception as exc:
+                raise TorManagerError(
+                    "The current Main SOCKS gateway did not stop cleanly; its settings were not changed. "
+                    + str(exc)
+                ) from exc
+
+            try:
+                if self._stopping.is_set():
+                    raise TorManagerError("Main Tor is stopping; the SOCKS gateway change was cancelled.")
+                replacement = self._build_socks_gateway(target)
+                replacement.start()
+            except Exception as exc:
+                try:
+                    gateway.start()
+                    self._gateway = gateway
+                    self._gateway_access_config = previous
+                except Exception as restore_error:
+                    self._gateway = gateway
+                    detail = (
+                        "Could not apply the new SOCKS gateway binding, and the previous listener "
+                        f"could not be restored: {restore_error}"
+                    )
+                    self.state = "FAILED"
+                    self.last_error = detail
+                    raise TorManagerError(detail) from exc
+                raise TorManagerError(
+                    "Could not apply Main SOCKS gateway settings; the previous listener was restored: "
+                    + str(exc)
+                ) from exc
+
+            self._gateway = replacement
+            self._gateway_access_config = target
+            if target[0] == "0.0.0.0":
+                message = (
+                    f"Main SOCKS gateway is listening on 0.0.0.0:{self.socks_port}; "
+                    "remote clients must authenticate with the saved username and password. "
+                    "Existing SOCKS sessions were closed to apply the change."
+                )
+            else:
+                message = (
+                    f"Main SOCKS gateway is restricted to 127.0.0.1:{self.socks_port}. "
+                    "Existing SOCKS sessions were closed to apply the change."
+                )
+            self.log_message.emit(message)
+            return message
 
     def _start_backend_event_monitor(self, index: int, manager: TorManager) -> None:
         """Attach aggregate ControlPort monitoring to the exact managed process."""
@@ -757,27 +858,26 @@ class TorRunner(QObject):
         self.last_error = None
         try:
             self.manager = self._make_manager(0)
-            self._gateway = SocksFailoverGateway(
-                int(self.socks_port),
-                self._ready_backend_endpoints,
-                host_router=route_host,
-                selection_mode=self._backend_selection_mode,
-            )
-            self._gateway.start()
+            with self._gateway_reconfigure_lock:
+                self._gateway_access_config = self._desired_socks_gateway_access()
+                self._gateway = self._build_socks_gateway(self._gateway_access_config)
+                self._gateway.start()
         except Exception as exc:
             self.state = "FAILED"
             self.last_error = str(exc)
-            if self._gateway is not None:
-                try:
-                    self._gateway.stop()
-                except Exception:
-                    logger.exception("Could not clean up a failed SOCKS gateway startup.")
-                self._gateway = None
+            with self._gateway_reconfigure_lock:
+                if self._gateway is not None:
+                    try:
+                        self._gateway.stop()
+                    except Exception:
+                        logger.exception("Could not clean up a failed SOCKS gateway startup.")
+                    self._gateway = None
+                self._gateway_access_config = None
             raise
         self.state = "STARTING"
         self.thread = threading.Thread(target=self._run, name="torproxy-primary-tor-pool", daemon=True)
         self.thread.start()
-        logger.info("Primary Tor pool supervisor started on loopback SOCKS port %s.", self.socks_port)
+        logger.info("Primary Tor pool supervisor started behind the Main SOCKS gateway on port %s.", self.socks_port)
 
     @property
     def pool_health_snapshot(self) -> dict:
@@ -1724,12 +1824,13 @@ class TorRunner(QObject):
         self._publish_bridge_usage()
 
         gateway_error = None
-        gateway = self._gateway
-        if gateway is not None:
-            try:
-                gateway.stop()
-            except Exception as exc:
-                gateway_error = exc
+        with self._gateway_reconfigure_lock:
+            gateway = self._gateway
+            if gateway is not None:
+                try:
+                    gateway.stop()
+                except Exception as exc:
+                    gateway_error = exc
 
         with self._backend_lock:
             managers = list(self._backend_managers)
@@ -1831,6 +1932,7 @@ class TorRunner(QObject):
         self._backend_restart_attempts = {}
         self._backend_restart_at = {}
         self._gateway = None
+        self._gateway_access_config = None
         self.manager = None
         self.state = "STOPPED"
         self.last_error = None

@@ -690,6 +690,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 remote,
                 left_to_right_direction="upload",
                 stop_event=self.server.shutdown_event,
+                record_traffic=(route == "direct"),
             )
         except (ValueError, HostRuleError):
             self.send_error(400, "Malformed CONNECT authority")
@@ -804,15 +805,18 @@ class ProxyHandler(BaseHTTPRequestHandler):
             if body_length:
                 wire_headers += f"Content-Length: {body_length}\r\n"
             wire_headers += "\r\n"
-            remote.sendall(wire_headers.encode("iso-8859-1", errors="strict"))
-            _record_bytes(len(wire_headers.encode("iso-8859-1", errors="strict")), "upload")
+            encoded_headers = wire_headers.encode("iso-8859-1", errors="strict")
+            remote.sendall(encoded_headers)
+            if route == "direct":
+                _record_bytes(len(encoded_headers), "upload")
             remaining = body_length
             while remaining:
                 chunk = self.rfile.read(min(65536, remaining))
                 if not chunk:
                     raise OSError("Client disconnected during request body.")
                 remote.sendall(chunk)
-                _record_bytes(len(chunk), "upload")
+                if route == "direct":
+                    _record_bytes(len(chunk), "upload")
                 remaining -= len(chunk)
             self.connection.settimeout(RELAY_IDLE_TIMEOUT_SECONDS)
             self._relay(
@@ -820,6 +824,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 self.connection,
                 left_to_right_direction="download",
                 stop_event=self.server.shutdown_event,
+                record_traffic=(route == "direct"),
             )
         except (ValueError, HostRuleError):
             if not self.wfile.closed:
@@ -849,6 +854,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         right: socket.socket,
         left_to_right_direction: str = "upload",
         stop_event: threading.Event | None = None,
+        record_traffic: bool = True,
     ) -> None:
         active = {left, right}
         peers = {left: right, right: left}
@@ -896,7 +902,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
                         if source is left
                         else ("download" if left_to_right_direction == "upload" else "upload")
                     )
-                    _record_bytes(len(data), direction)
+                    if record_traffic:
+                        _record_bytes(len(data), direction)
                     last_activity = time.monotonic()
                     try:
                         destination.sendall(data)
