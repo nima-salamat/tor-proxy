@@ -756,6 +756,72 @@ def test_close_event_hides_to_tray_unless_exit_was_explicitly_authorized():
     assert "worker.signals.error.connect(relay.on_error)" in page_source
 
 
+def test_onion_service_dashboard_keeps_empty_label_alive_across_card_refreshes(qt_app):
+    from ui_.window.onion_hosting_page import OnionHostingPage
+
+    class FakeOnionManager:
+        def runtime_snapshot(self):
+            return {
+                "state": "stopped",
+                "progress": None,
+                "message": "Developer Tor is stopped.",
+                "network_summary": "Direct connection",
+                "version": "",
+                "memory_bytes": 0,
+                "uptime_seconds": 0,
+                "pid": None,
+            }
+
+        def services_snapshot(self):
+            return []
+
+    manager = FakeOnionManager()
+
+    class FakeProxy:
+        def _ensure_onion_hosting_manager(self):
+            return manager
+
+    page = OnionHostingPage(FakeProxy())
+    page._timer.stop()
+    qt_app.processEvents()
+
+    service = {
+        "id": "test-service",
+        "display_name": "Test service",
+        "local_host": "127.0.0.1",
+        "local_port": 8000,
+        "onion_port": 80,
+        "persistent": True,
+        "access_mode": "public",
+        "running": False,
+        "error": None,
+        "address": "",
+    }
+
+    # Initial empty refresh -> populated -> empty -> populated must never
+    # delete the persistent QLabel or leave a stale Python wrapper.
+    assert not page.empty_label.isHidden()
+    page._rebuild_service_cards([service])
+    qt_app.processEvents()
+    assert page.empty_label.isHidden()
+    assert len(page._service_card_widgets) == 1
+
+    page._rebuild_service_cards([])
+    qt_app.processEvents()
+    assert not page.empty_label.isHidden()
+    assert len(page._service_card_widgets) == 0
+
+    page._rebuild_service_cards([service, {**service, "id": "test-service-2"}])
+    qt_app.processEvents()
+    assert page.empty_label.isHidden()
+    assert len(page._service_card_widgets) == 2
+    assert page.empty_label.text().startswith("No Onion Services yet")
+
+    page._timer.stop()
+    page.deleteLater()
+    qt_app.processEvents()
+
+
 def test_dialog_recalculates_size_and_styles_after_screen_change():
     repository = Path(__file__).resolve().parents[1]
     source = (repository / "ui_/window/dialogs.py").read_text(encoding="utf-8")
