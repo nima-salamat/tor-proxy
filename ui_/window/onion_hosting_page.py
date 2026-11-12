@@ -468,40 +468,54 @@ class OnionHostingPage(QWidget):
         self.runtime_progress.connect(self._on_runtime_progress)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 18, 24, 16)
-        root.setSpacing(12)
+        root.setContentsMargins(26, 20, 26, 18)
+        root.setSpacing(14)
 
-        header = QHBoxLayout()
-        self.back_button = QPushButton("Back to Home", self)
-        self.back_button.setObjectName("onionBackButton")
-        self.back_button.setIcon(qta.icon("fa6s.arrow-left"))
-        self.back_button.clicked.connect(self._back_home)
-        header.addWidget(self.back_button)
-        header.addStretch(1)
-        self.page_title = QLabel("Developer Tor", self)
+        hero = QFrame(self)
+        hero.setObjectName("onionPageHero")
+        hero_layout = QHBoxLayout(hero)
+        hero_layout.setContentsMargins(18, 14, 16, 14)
+        hero_layout.setSpacing(14)
+
+        hero_icon = QLabel(hero)
+        hero_icon.setObjectName("onionHeroIcon")
+        hero_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hero_icon.setFixedSize(54, 54)
+        hero_icon.setPixmap(qta.icon("fa6s.code", color="#ffffff").pixmap(27, 27))
+        hero_layout.addWidget(hero_icon)
+
+        hero_copy = QVBoxLayout()
+        hero_copy.setContentsMargins(0, 0, 0, 0)
+        hero_copy.setSpacing(4)
+        eyebrow = QLabel("INDEPENDENT TOR RUNTIME", hero)
+        eyebrow.setObjectName("onionHeroEyebrow")
+        self.page_title = QLabel("Developer Tor", hero)
         self.page_title.setObjectName("onionPageTitle")
-        header.addWidget(self.page_title)
-        self.settings_button = QPushButton("Settings", self)
+        self.description = QLabel(
+            "Publish local applications as v3 Onion Services through a dedicated Tor process. "
+            "Main Tor and Custom Tor keep their own settings, bridges and lifecycles.",
+            hero,
+        )
+        self.description.setObjectName("onionHeroDescription")
+        self.description.setWordWrap(True)
+        hero_copy.addWidget(eyebrow)
+        hero_copy.addWidget(self.page_title)
+        hero_copy.addWidget(self.description)
+        hero_layout.addLayout(hero_copy, 1)
+
+        self.settings_button = QPushButton("Settings", hero)
         self.settings_button.setObjectName("onionActionButton")
         self.settings_button.setIcon(qta.icon("fa6s.sliders"))
+        self.settings_button.setMinimumHeight(38)
         self.settings_button.clicked.connect(self.open_settings)
-        header.addWidget(self.settings_button)
-        root.addLayout(header)
-
-        self.description = QLabel(
-            "Publish local applications as v3 Onion Services using a separate Tor process. "
-            "Main Tor and Custom Tor settings, bridges, ports, and lifecycles are not shared.",
-            self,
-        )
-        self.description.setObjectName("onionMuted")
-        self.description.setWordWrap(True)
-        root.addWidget(self.description)
+        hero_layout.addWidget(self.settings_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        root.addWidget(hero)
 
         runtime = QFrame(self)
         runtime.setObjectName("onionRuntimeCard")
         runtime_layout = QVBoxLayout(runtime)
-        runtime_layout.setContentsMargins(16, 13, 16, 13)
-        runtime_layout.setSpacing(8)
+        runtime_layout.setContentsMargins(18, 16, 18, 16)
+        runtime_layout.setSpacing(10)
         runtime_header = QHBoxLayout()
         runtime_title = QLabel("DEVELOPER TOR RUNTIME", runtime)
         runtime_title.setObjectName("onionSectionTitle")
@@ -518,7 +532,7 @@ class OnionHostingPage(QWidget):
         self.runtime_message.setWordWrap(True)
         details.addWidget(self.runtime_message, 1)
         self.runtime_metrics = QLabel("", runtime)
-        self.runtime_metrics.setObjectName("onionMuted")
+        self.runtime_metrics.setObjectName("onionRuntimeMetrics")
         self.runtime_metrics.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         details.addWidget(self.runtime_metrics)
         runtime_layout.addLayout(details)
@@ -559,6 +573,9 @@ class OnionHostingPage(QWidget):
         service_title = QLabel("Onion Services", self)
         service_title.setObjectName("onionSectionTitle")
         service_header.addWidget(service_title)
+        self.services_count_label = QLabel("0 services", self)
+        self.services_count_label.setObjectName("onionCountPill")
+        service_header.addWidget(self.services_count_label)
         service_header.addStretch(1)
         self.add_service_button = QPushButton("Create Onion Service", self)
         self.add_service_button.setObjectName("onionActionPrimary")
@@ -613,65 +630,87 @@ class OnionHostingPage(QWidget):
     def _manager(self):
         return self._proxy._ensure_onion_hosting_manager()
 
-    def _back_home(self):
-        callback = getattr(self._app_window, "_show_home", None)
-        if callable(callback):
-            callback()
-
     def _apply_theme(self, mode):
         dark = str(mode).lower() == "dark"
-        border = "#3b4552" if dark else "#d9e0e8"
-        panel = "#202630" if dark else "#ffffff"
-        text = "#e8edf3" if dark else "#253041"
-        muted = "#aab5c4" if dark else "#667487"
-        field = "#171c23" if dark else "#f5f7fa"
-        accent = "#2385c3"
-        hover = "rgba(71, 163, 242, 0.14)" if dark else "rgba(24, 118, 191, 0.08)"
+        border = "#344254" if dark else "#dbe4ef"
+        panel = "#202a38" if dark else "#ffffff"
+        text = "#edf3fa" if dark else "#243247"
+        muted = "#9eacbd" if dark else "#66778d"
+        field = "#182230" if dark else "#f5f8fc"
+        accent = "#4b9fe7" if dark else "#2878c8"
+        hover = "rgba(75, 159, 231, 0.15)" if dark else "rgba(40, 120, 200, 0.09)"
         self.settings_button.setIcon(qta.icon("fa6s.sliders", color=text))
         self.setStyleSheet(f"""
             QWidget {{ color: {text}; background: transparent; }}
-            QLabel#onionPageTitle {{ font-size: 16px; font-weight: 800; }}
-            QLabel#onionSectionTitle {{ font-size: 12px; font-weight: 800; letter-spacing: .5px; }}
+            QFrame#onionPageHero {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 {panel}, stop:1 {field});
+                border: 1px solid {border}; border-radius: 16px;
+            }}
+            QLabel#onionHeroIcon {{
+                background: {accent}; border: 1px solid {accent}; border-radius: 16px;
+            }}
+            QLabel#onionHeroEyebrow {{
+                color: {accent}; background: transparent; font-size: 8px;
+                font-weight: 850; letter-spacing: 1.3px;
+            }}
+            QLabel#onionPageTitle {{ color: {text}; font-size: 21px; font-weight: 850; }}
+            QLabel#onionHeroDescription {{ color: {muted}; font-size: 10px; }}
+            QLabel#onionSectionTitle {{ color: {text}; font-size: 14px; font-weight: 850; }}
             QLabel#onionMuted {{ color: {muted}; font-size: 10px; }}
             QFrame#onionRuntimeCard, QFrame#onionServiceCard {{
-                background: {panel}; border: 1px solid {border}; border-radius: 11px;
+                background: {panel}; border: 1px solid {border}; border-radius: 14px;
             }}
-            QLabel#onionRuntimeState {{
-                background: {field}; border: 1px solid {border}; border-radius: 7px;
-                padding: 4px 9px; font-size: 9px; font-weight: 800;
+            QFrame#onionRuntimeCard {{ border-left: 3px solid {accent}; }}
+            QFrame#onionServiceCard:hover {{ border-color: {accent}; }}
+            QLabel#onionRuntimeState, QLabel#onionCountPill {{
+                color: {muted}; background: {field}; border: 1px solid {border};
+                border-radius: 9px; padding: 5px 10px; font-size: 8px; font-weight: 850;
             }}
-            QLabel#onionRuntimeState[runtimeState="ready"] {{ color: #31b981; border-color: #31b981; }}
-            QLabel#onionRuntimeState[runtimeState="failed"] {{ color: #e36b75; border-color: #e36b75; }}
-            QLabel#onionRuntimeMessage {{ color: {text}; font-size: 10px; }}
-            QPushButton#onionBackButton, QPushButton#onionActionButton {{
-                min-height: 31px; padding: 0 11px; border: 1px solid {border};
-                border-radius: 7px; background: {panel}; color: {text}; font-weight: 650;
+            QLabel#onionRuntimeState[runtimeState="ready"] {{
+                color: #31b981; border-color: rgba(49,185,129,0.45); background: rgba(49,185,129,0.08);
             }}
-            QPushButton#onionBackButton:hover, QPushButton#onionActionButton:hover {{
+            QLabel#onionRuntimeState[runtimeState="failed"] {{
+                color: #e36b75; border-color: rgba(227,107,117,0.45); background: rgba(227,107,117,0.08);
+            }}
+            QLabel#onionRuntimeMessage {{ color: {text}; font-size: 11px; font-weight: 650; }}
+            QLabel#onionRuntimeMetrics {{
+                color: {accent}; background: {field}; border: 1px solid {border};
+                border-radius: 8px; padding: 6px 10px; font-size: 9px; font-weight: 700;
+            }}
+            QPushButton#onionActionButton {{
+                min-height: 34px; padding: 0 12px; border: 1px solid {border};
+                border-radius: 8px; background: {field}; color: {text}; font-weight: 700;
+            }}
+            QPushButton#onionActionButton:hover {{
                 border-color: {accent}; background: {hover};
             }}
             QPushButton#onionActionPrimary {{
-                min-height: 32px; padding: 0 12px; border: 1px solid {accent};
-                border-radius: 7px; background: {accent}; color: white; font-weight: 750;
+                min-height: 36px; padding: 0 14px; border: 1px solid {accent};
+                border-radius: 8px; background: {accent}; color: #ffffff; font-weight: 800;
             }}
             QPushButton#onionActionPrimary:hover {{ background: #176b9f; }}
             QPushButton#onionActionButton:disabled, QPushButton#onionActionPrimary:disabled {{
                 color: {muted}; background: {field}; border-color: {border};
             }}
-            QScrollArea#onionServicesScroll {{ background: transparent; }}
-            QLabel#onionServiceName {{ font-size: 12px; font-weight: 750; }}
+            QScrollArea#onionServicesScroll {{ background: transparent; border: none; }}
+            QLabel#onionServiceName {{ color: {text}; font-size: 13px; font-weight: 800; }}
             QLabel#onionServiceDetail {{ color: {muted}; font-size: 10px; }}
             QLabel#onionServiceAddress {{
                 color: {text}; background: {field}; border: 1px solid {border};
-                border-radius: 6px; padding: 7px; font-family: Consolas, monospace; font-size: 9px;
+                border-radius: 8px; padding: 9px 11px; font-family: Consolas, monospace;
+                font-size: 9px; selection-background-color: {accent};
             }}
             QLabel#onionStatusPill {{
                 color: {muted}; background: {field}; border: 1px solid {border};
-                border-radius: 6px; padding: 3px 7px; font-size: 8px; font-weight: 750;
+                border-radius: 8px; padding: 4px 9px; font-size: 8px; font-weight: 850;
             }}
             QLineEdit, QComboBox, QSpinBox, QTextEdit {{
-                min-height: 30px; padding: 2px 8px; border: 1px solid {border};
-                border-radius: 7px; background: {field}; color: {text};
+                min-height: 32px; padding: 3px 9px; border: 1px solid {border};
+                border-radius: 8px; background: {field}; color: {text};
+            }}
+            QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QTextEdit:focus {{
+                border-color: {accent};
             }}
         """)
 
@@ -903,6 +942,9 @@ class OnionHostingPage(QWidget):
             memory_text = f"{memory / (1024 * 1024):.1f} MiB" if memory else "—"
             uptime = int(runtime.get("uptime_seconds") or 0)
             self.runtime_metrics.setText(f"{version}  ·  {memory_text}  ·  {uptime // 3600:02d}:{(uptime % 3600) // 60:02d}:{uptime % 60:02d}")
+        self.services_count_label.setText(
+            f"{len(services)} service" + ("" if len(services) == 1 else "s")
+        )
         if services != self._last_services:
             self._last_services = [dict(item) for item in services]
             self._rebuild_service_cards(services)
@@ -932,8 +974,8 @@ class OnionHostingPage(QWidget):
         card = QFrame(self.services_host)
         card.setObjectName("onionServiceCard")
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(14, 11, 14, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(17, 14, 17, 15)
+        layout.setSpacing(10)
 
         header = QHBoxLayout()
         name = QLabel(str(service["display_name"]), card)

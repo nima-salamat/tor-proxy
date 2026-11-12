@@ -190,18 +190,6 @@ class ProxyWindow(QWidget):
         self.btn_statistics.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_statistics.setToolTip("Open live proxy traffic statistics and charts")
         self.btn_statistics.clicked.connect(self.open_statistics_page)
-        self.btn_custom_tor = QPushButton("Custom Tor", self.home_content)
-        self.btn_custom_tor.setObjectName("customTorLink")
-        self.btn_custom_tor.setFlat(True)
-        self.btn_custom_tor.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_custom_tor.setToolTip("Create and manage independent Tor services")
-        self.btn_custom_tor.clicked.connect(self.open_custom_tor_page)
-        self.btn_developer_tor = QPushButton("Developer Tor", self.home_content)
-        self.btn_developer_tor.setObjectName("customTorLink")
-        self.btn_developer_tor.setFlat(True)
-        self.btn_developer_tor.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_developer_tor.setToolTip("Host local applications as independent v3 Onion Services")
-        self.btn_developer_tor.clicked.connect(self.open_developer_tor_page)
         metrics.addStretch(1)
         metrics.addWidget(self.lbl_percent)
         separator = QFrame(self.home_content)
@@ -210,8 +198,6 @@ class ProxyWindow(QWidget):
         metrics.addWidget(separator)
         metrics.addWidget(self.lbl_data_usage)
         metrics.addWidget(self.btn_statistics)
-        metrics.addWidget(self.btn_custom_tor)
-        metrics.addWidget(self.btn_developer_tor)
         metrics.addStretch(1)
         self.home_layout.addLayout(metrics)
         self.data.valueChanged.connect(self.dataValueChanged)
@@ -678,8 +664,8 @@ class ProxyWindow(QWidget):
             QLabel#connectionStatus[connectionState="disconnected"] {{ color: {text}; }}
             QLabel#bootstrapPercent {{ color: {accent}; background: transparent; border: none; font-size: 14px; font-weight: 700; padding: 3px; }}
             QLabel#trafficUsage, QLabel#proxyStatusLabel, QLabel#exitIpLabel {{ color: {muted}; background: transparent; border: none; font-size: 11px; padding: 2px; }}
-            QPushButton#statisticsLink, QPushButton#customTorLink {{ color: {accent}; background: transparent; border: none; padding: 2px 4px; font-size: 11px; font-weight: 700; }}
-            QPushButton#statisticsLink:hover, QPushButton#customTorLink:hover {{ color: {text}; border-bottom: 1px solid {accent}; }}
+            QPushButton#statisticsLink {{ color: {accent}; background: transparent; border: none; padding: 2px 4px; font-size: 11px; font-weight: 700; }}
+            QPushButton#statisticsLink:hover {{ color: {text}; border-bottom: 1px solid {accent}; }}
             QLabel#systemProxyTitle {{ color: {muted}; background: transparent; border: none; font-size: 10px; font-weight: 750; letter-spacing: 1px; }}
             QFrame#homeMetricSeparator {{ color: {border}; background: {border}; max-width: 1px; }}
             QComboBox#systemProxyMode {{ min-height: 34px; padding: 0 12px; border: 1px solid {border}; border-radius: 8px; background: transparent; color: {text}; }}
@@ -708,7 +694,6 @@ class ProxyWindow(QWidget):
         self.btn_open_browser.setIcon(qta.icon("fa6s.globe", color=icon_color))
         self.btn_system_tunnel_action.set_theme_colors(text=text, muted=muted)
         self.btn_statistics.setIcon(qta.icon("fa6s.chart-line", color=accent))
-        self.btn_custom_tor.setIcon(qta.icon("fa6s.server", color=accent))
 
     def _on_system_proxy_mode_changed(self, index):
         mode = self.system_proxy_mode.itemData(index)

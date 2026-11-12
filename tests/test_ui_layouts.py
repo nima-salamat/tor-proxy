@@ -2648,20 +2648,31 @@ def test_disconnect_shutdown_keeps_tor_alive_when_http_listener_is_still_owned()
 
 
 
-def test_custom_tor_has_a_home_shortcut_and_its_own_back_navigable_page():
+def test_tor_tools_use_top_navigation_without_home_or_back_buttons():
     repository = Path(__file__).resolve().parents[1]
     ui_source = (repository / "ui.py").read_text(encoding="utf-8")
     home_source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
-    page_source = (repository / "ui_/window/tor_services_page.py").read_text(encoding="utf-8")
+    custom_page_source = (repository / "ui_/window/tor_services_page.py").read_text(encoding="utf-8")
+    developer_page_source = (repository / "ui_/window/onion_hosting_page.py").read_text(encoding="utf-8")
     settings_source = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
 
-    assert 'QPushButton("Custom Tor"' in home_source
-    assert "open_custom_tor_page" in home_source
-    assert "TorServicesPage(self, app_window=self, management_only=True)" in ui_source
+    assert "Developer Tor" in ui_source and "Custom Tor" in ui_source
     assert "def _show_custom_tor(self)" in ui_source
-    assert "Back to Home" in page_source
+    assert "def _show_developer_tor(self)" in ui_source
+    assert 'QPushButton("Custom Tor"' not in home_source
+    assert 'QPushButton("Developer Tor"' not in home_source
+    assert "self.btn_custom_tor" not in home_source
+    assert "self.btn_developer_tor" not in home_source
+    assert "Back to Home" not in custom_page_source
+    assert "Back to Home" not in developer_page_source
+    assert "def _go_home(" not in custom_page_source
+    assert "def _back_home(" not in developer_page_source
+    assert "TorServicesPage(self, app_window=self, management_only=True)" in ui_source
     assert "TorServicesSettingsPage(self, app_window=self._parent)" in settings_source
-    assert "def refresh_health(self)" in page_source
+    assert "def refresh_health(self)" in custom_page_source
+    assert "QFrame#customTorHero" in custom_page_source
+    assert "QFrame#onionPageHero" in developer_page_source
+    assert "def refresh_dashboard(self)" in developer_page_source
 
 
 def test_custom_tor_supports_startup_cancellation_force_stop_and_live_logs():
