@@ -1200,18 +1200,12 @@ class OnionHostingPage(QWidget):
         self._run(f"service:{service_id}", self._manager().stop_service, service_id)
 
     def rotate_service_address(self, service: dict):
-        if service.get("running"):
-            QMessageBox.information(
-                self,
-                "Stop before generating a new address",
-                "Stop this Onion Service before rotating its cryptographic identity.",
-            )
-            return
         choice = QMessageBox.question(
             self,
             "Generate a new Onion address",
             "This replaces the service's Tor identity. The current .onion address will stop working "
-            "and cannot be restored. The service's local target and private client authorization key "
+            "and cannot be restored. If the service is running, it will be stopped and republished "
+            "with a short interruption. The local target and private client authorization key "
             "will be preserved. Continue?",
             StandardButton.Yes | StandardButton.No,
             StandardButton.No,
@@ -1223,6 +1217,14 @@ class OnionHostingPage(QWidget):
         service_id = str(service["id"])
 
         def rotate_and_restart():
+            current = next(
+                (item for item in manager.services_snapshot() if str(item["id"]) == service_id),
+                None,
+            )
+            if current is None:
+                raise OnionHostingError("The selected Onion Service no longer exists.")
+            if current.get("running"):
+                manager.stop_service(service_id)
             manager.rotate_service_identity(service_id)
             if manager.runtime_snapshot()["state"] == "ready":
                 return manager.start_service(service_id)
@@ -1231,8 +1233,12 @@ class OnionHostingPage(QWidget):
         def completed(result):
             address = str(result or "").strip().strip('"')
             if address and address.endswith(".onion"):
+                extra = (
+                    " Export/share a fresh client authorization line."
+                    if service.get("access_mode") == "private" else ""
+                )
                 self.status_label.setText(
-                    f"New Onion address created: {address}. Share the new address with visitors."
+                    f"New Onion address created: {address}. Share the new address with visitors.{extra}"
                 )
             else:
                 self.status_label.setText(
@@ -1513,9 +1519,11 @@ class OnionHostingPage(QWidget):
         new_address.setObjectName("onionActionButton")
         new_address.setIcon(qta.icon("fa6s.arrows-rotate"))
         new_address.setToolTip(
-            "Rotate the service identity and generate a new cryptographic .onion address"
+            "Rotate the identity. A running service is stopped and republished with a short interruption."
         )
-        new_address.setEnabled(bool(service.get("address")) and not service.get("running"))
+        new_address.setEnabled(
+            bool(service.get("address")) and f"service:{service['id']}" not in self._workers
+        )
         new_address.clicked.connect(
             lambda _checked=False, data=dict(service): self.rotate_service_address(data)
         )
