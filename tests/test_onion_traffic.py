@@ -11,9 +11,9 @@ def test_http_probe_keeps_path_but_discards_query_and_fragment():
     probe = _HttpLineProbe()
     probe.observe(
         "request",
-        b"GET /docs/page?session=secret#section HTTP/1.1\\r\\nHost: local\\r\\n",
+        b"GET /docs/page?session=secret#section HTTP/1.1\r\nHost: local\r\n",
     )
-    probe.observe("response", b"HTTP/1.1 201 Created\\r\\nContent-Length: 0\\r\\n")
+    probe.observe("response", b"HTTP/1.1 201 Created\r\nContent-Length: 0\r\n")
 
     assert probe.protocol == "HTTP"
     assert probe.method == "GET"
@@ -24,8 +24,8 @@ def test_http_probe_keeps_path_but_discards_query_and_fragment():
 
 def test_tls_probe_never_attempts_to_decode_encrypted_application_data():
     probe = _HttpLineProbe()
-    probe.observe("request", b"\\x16\\x03")
-    probe.observe("request", b"\\x01\\x00\\x10encrypted")
+    probe.observe("request", b"\x16\x03")
+    probe.observe("request", b"\x01\x00\x10encrypted")
 
     assert probe.protocol == "TLS"
     assert probe.method == ""
@@ -42,14 +42,14 @@ def test_service_relay_forwards_http_and_records_directional_bytes_and_request_h
     application_port = int(application.getsockname()[1])
 
     request = (
-        b"GET /health?token=do-not-log HTTP/1.1\\r\\n"
-        b"Host: service.local\\r\\n"
-        b"Connection: close\\r\\n\\r\\n"
+        b"GET /health?token=do-not-log HTTP/1.1\r\n"
+        b"Host: service.local\r\n"
+        b"Connection: close\r\n\r\n"
     )
     response = (
-        b"HTTP/1.1 200 OK\\r\\n"
-        b"Content-Length: 2\\r\\n"
-        b"Connection: close\\r\\n\\r\\nOK"
+        b"HTTP/1.1 200 OK\r\n"
+        b"Content-Length: 2\r\n"
+        b"Connection: close\r\n\r\nOK"
     )
     application_errors = []
 
