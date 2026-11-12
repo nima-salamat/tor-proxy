@@ -44,8 +44,6 @@ from ui_.worker.worker import Worker
 from ui_.window.proxy_window import ProxyWindow
 from ui_.window.custom_titlebar import CustomTitleBar
 from ui_.window.setting_window import SettingWindow
-from ui_.window.block_host_window import BlcokHostsWindow
-from ui_.window.exclude_host_window import ExcludeHostsWindow
 from ui_.window.updater_window import UpdaterWindow
 from ui_.window.tunnel_window import TunnelManagerWindow
 from ui_.window.dialogs import QMessageBox, ExitConfirmDialog
@@ -241,10 +239,10 @@ class Window(QMainWindow):
         self.stack.addWidget(self.proxyWidget)
         self.settingWidget = SettingWindow(self)
         self.stack.addWidget(self.settingWidget)
-        self.block_host_window = BlcokHostsWindow(self)
-        self.stack.addWidget(self.block_host_window)
-        self.exclude_host_window = ExcludeHostsWindow(self)
-        self.stack.addWidget(self.exclude_host_window)
+        # Preserve the established controller attributes while hosting both
+        # editors inside the Settings page stack.
+        self.block_host_window = self.settingWidget.block_hosts_page
+        self.exclude_host_window = self.settingWidget.exclude_hosts_page
         self.updater_window = UpdaterWindow(self)
         self.stack.addWidget(self.updater_window)
         self.tunnel_window = TunnelManagerWindow(self)
@@ -820,11 +818,32 @@ class Window(QMainWindow):
         self.main_layout.addWidget(menu_bar)
 
         actions = [
-            ("Home", "Home", "Ctrl+H", "fa6s.house", self._show_home, 0),
-            ("Settings", "Settings", "Ctrl+S", "fa6s.gear", self._show_setting, 1),
-            ("Block Host", "Blocked host rules", "Ctrl+B", "fa6s.shield-halved", self._show_block_host, 2),
-            ("Exclude Host", "Bypass rules", "Ctrl+E", "fa6s.route", self._show_exclude_host, 3),
-            ("Help", "Keyboard shortcuts", "F1", "fa6s.circle-question", self._show_help, 6),
+            ("Home", "Home", "Ctrl+H", "fa6s.house", self._show_home, self.stack.indexOf(self.proxyWidget)),
+            ("Settings", "Settings", "Ctrl+S", "fa6s.gear", self._show_setting, self.stack.indexOf(self.settingWidget)),
+            (
+                "Developer Tor",
+                "Host Onion Services with an isolated Tor runtime",
+                "Ctrl+Alt+D",
+                "fa6s.code",
+                self._show_developer_tor,
+                self.stack.indexOf(self.developerTorWidget),
+            ),
+            (
+                "Custom Tor",
+                "Manage independent Tor services and profiles",
+                "Ctrl+Alt+T",
+                "fa6s.server",
+                self._show_custom_tor,
+                self.stack.indexOf(self.customTorWidget),
+            ),
+            (
+                "Help",
+                "Keyboard shortcuts",
+                "F1",
+                "fa6s.circle-question",
+                self._show_help,
+                self.stack.indexOf(self.shortcutsWidget),
+            ),
         ]
         self.page_action_group = QActionGroup(self)
         self.page_action_group.setExclusive(True)
@@ -866,6 +885,19 @@ class Window(QMainWindow):
             if label == "Help":
                 self.help_action = action
                 self.help_nav_button = button
+
+        # Preserve the host-rule keyboard shortcuts without taking up top-level
+        # navigation space. Both shortcuts now open the corresponding Settings tab.
+        self.block_hosts_shortcut_action = QAction("Blocked Hosts", self)
+        self.block_hosts_shortcut_action.setShortcut("Ctrl+B")
+        self.block_hosts_shortcut_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+        self.block_hosts_shortcut_action.triggered.connect(self._show_block_host)
+        self.addAction(self.block_hosts_shortcut_action)
+        self.exclude_hosts_shortcut_action = QAction("Excluded Hosts", self)
+        self.exclude_hosts_shortcut_action.setShortcut("Ctrl+E")
+        self.exclude_hosts_shortcut_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+        self.exclude_hosts_shortcut_action.triggered.connect(self._show_exclude_host)
+        self.addAction(self.exclude_hosts_shortcut_action)
 
         self.updates_nav_button = UpdatesMenuButton(menu_bar)
         self.updates_nav_button.setObjectName("updatesNavButton")
@@ -1121,7 +1153,10 @@ class Window(QMainWindow):
     def _sync_updates_nav_icon(self, mode=None):
         """Make the Updates text, cloud icon, and dropdown chevron share one state."""
         dark = (mode or CONFIG.get("mode", "dark")) == "dark"
-        selected = self.stack.currentIndex() in {4, 5}
+        selected = self.stack.currentWidget() in (
+            getattr(self, "updater_window", None),
+            getattr(self, "tunnel_window", None),
+        )
         self.updates_nav_button.setChecked(selected)
         color = "#ffffff" if selected else ("#eff1f4" if dark else "#202832")
         self.updates_nav_button.setIcon(qta.icon("fa6s.cloud-arrow-down", color=color))
@@ -1314,7 +1349,11 @@ class Window(QMainWindow):
                     action.setChecked(page_index == index)
                 self.page_action_group.setExclusive(True)
                 if hasattr(self, "updates_nav_button"):
-                    self.updates_nav_button.setChecked(index in {4, 5})
+                    updates_pages = {
+                        self.stack.indexOf(self.updater_window),
+                        self.stack.indexOf(self.tunnel_window),
+                    }
+                    self.updates_nav_button.setChecked(index in updates_pages)
                     self._sync_updates_nav_icon()
             if hasattr(self, "page_nav_buttons"):
                 neutral_icon = "#eff1f4" if CONFIG["mode"] == "dark" else "#202832"
@@ -1643,7 +1682,7 @@ class Window(QMainWindow):
             
     
     def _show_help(self):
-        self._show_page(6)
+        self._show_page(self.stack.indexOf(self.shortcutsWidget))
 
     def _show_statistics(self):
         self._show_page(self.stack.indexOf(self.statisticsWidget))
@@ -1666,16 +1705,18 @@ class Window(QMainWindow):
         self._show_page(1)
 
     def _show_block_host(self):
-        self._show_page(2)
+        self._show_setting()
+        self.settingWidget.show_blocked_hosts()
 
     def _show_exclude_host(self):
-        self._show_page(3)
+        self._show_setting()
+        self.settingWidget.show_excluded_hosts()
 
     def _show_updater(self):
-        self._show_page(4)
+        self._show_page(self.stack.indexOf(self.updater_window))
 
     def _show_tunnel_page(self):
-        self._show_page(5)
+        self._show_page(self.stack.indexOf(self.tunnel_window))
 
     def _notify(self, title, message):
         self.tray_icon.showMessage(title, message, QSystemTrayIcon.Information, 2000)

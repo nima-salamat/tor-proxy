@@ -187,6 +187,31 @@ def test_settings_and_main_window_construct_without_duplicate_layout_warning(qt_
     try:
         window = ui.Window()
         qt_app.processEvents()
+
+        # Host-rule editors are nested Settings pages, not top-level stack entries.
+        assert window.stack.indexOf(window.block_host_window) == -1
+        assert window.stack.indexOf(window.exclude_host_window) == -1
+        assert window.settingWidget.page_setting.indexOf(window.block_host_window) == 4
+        assert window.settingWidget.page_setting.indexOf(window.exclude_host_window) == 5
+
+        settings_labels = [
+            button.text() for button in window.settingWidget.settings_nav_buttons
+        ]
+        assert settings_labels == [
+            "General", "Bridges", "Ports", "Service Defaults",
+            "Blocked Hosts", "Excluded Hosts", "Advanced",
+        ]
+        top_labels = [button.text() for button in window.page_nav_buttons]
+        assert top_labels == ["Home", "Settings", "Developer Tor", "Custom Tor", "Help"]
+        assert "Block Host" not in top_labels
+        assert "Exclude Host" not in top_labels
+
+        window._show_block_host()
+        assert window.stack.currentWidget() is window.settingWidget
+        assert window.settingWidget.page_setting.currentIndex() == 4
+        window._show_exclude_host()
+        assert window.stack.currentWidget() is window.settingWidget
+        assert window.settingWidget.page_setting.currentIndex() == 5
     finally:
         install_handler(previous)
         if window is not None:
@@ -623,8 +648,8 @@ def test_menu_actions_use_fontawesome_and_window_restore_reactivates_layouts():
     for icon_name in (
         "fa6s.house",
         "fa6s.gear",
-        "fa6s.shield-halved",
-        "fa6s.route",
+        "fa6s.code",
+        "fa6s.server",
         "fa6s.boxes-stacked",
         "fa6s.circle-question",
         "fa6s.right-from-bracket",
@@ -672,9 +697,9 @@ def test_navigation_labels_frameless_pages_and_custom_shortcuts_dialog():
     assert "self.main_layout.addWidget(self.stack, 1)" in ui_source
     assert "QStackedWidget#pageStack {{ border: none; outline: none;" in ui_source
     assert "self.shortcutsWidget = ShortcutsWindow(self)" in ui_source
-    assert "self._show_page(6)" in ui_source
+    assert "self.stack.indexOf(self.shortcutsWidget)" in ui_source
     assert "def _show_tunnel_page(self)" in ui_source
-    assert "self._show_page(5)" in ui_source
+    assert "self.stack.indexOf(self.tunnel_window)" in ui_source
     assert "class ShortcutsWindow" in shortcuts_source
     assert 'QLabel#shortcutsKeycap' in shortcuts_source
     assert 'tuple(str(CONFIG["global_shortcut"]).split("+"))' in shortcuts_source

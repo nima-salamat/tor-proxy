@@ -41,6 +41,8 @@ from ui_.worker.worker import Worker
 from ui_.window.qrcode_widget import QrCodeFloatingWindow
 from ui_.window.theme import resolve_system_theme
 from ui_.window.tor_services_page import TorServicesSettingsPage
+from ui_.window.block_host_window import BlcokHostsWindow
+from ui_.window.exclude_host_window import ExcludeHostsWindow
 from ui_.emojis import WRONG, CORRECT
 
 class _BridgeTextEdit(QTextEdit):
@@ -58,6 +60,10 @@ class _BridgeTextEdit(QTextEdit):
 
 
 class SettingWindow(QWidget):
+    BLOCKED_HOSTS_PAGE_INDEX = 4
+    EXCLUDED_HOSTS_PAGE_INDEX = 5
+    ADVANCED_PAGE_INDEX = 6
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._parent = parent
@@ -86,9 +92,20 @@ class SettingWindow(QWidget):
             "fa6s.network-wired",
             "fa6s.server",
             "fa6s.shield-halved",
+            "fa6s.route",
+            "fa6s.shield",
         )
         for index, (title, icon_name) in enumerate(zip(
-            ("General", "Bridges", "Ports", "Custom Tor", "Advanced"), self.settings_nav_icon_names
+            (
+                "General",
+                "Bridges",
+                "Ports",
+                "Service Defaults",
+                "Blocked Hosts",
+                "Excluded Hosts",
+                "Advanced",
+            ),
+            self.settings_nav_icon_names,
         )):
             button = QPushButton(title, self)
             button.setObjectName("settingsNavButton")
@@ -110,6 +127,17 @@ class SettingWindow(QWidget):
         self.bridges_page, self.bridges_page_layout = self._create_scroll_page()
         self.second_page, self.second_page_layout = self._create_scroll_page()
         self.services_page, self.services_page_layout = self._create_scroll_page()
+
+        # Keep host-rule editors inside Settings instead of exposing them as
+        # separate top-level destinations. The existing widgets remain the
+        # source of truth for adding, searching and deleting rules.
+        self.block_hosts_page = BlcokHostsWindow(self)
+        self.block_hosts_page.setObjectName("settingsBlockedHostsPage")
+        self.page_setting.addWidget(self.block_hosts_page)
+        self.exclude_hosts_page = ExcludeHostsWindow(self)
+        self.exclude_hosts_page.setObjectName("settingsExcludedHostsPage")
+        self.page_setting.addWidget(self.exclude_hosts_page)
+
         self.advanced_page, self.advanced_page_layout = self._create_scroll_page()
         self.settings_nav_buttons[0].setChecked(True)
         initial_bridges = parse_bridge_text(str(CONFIG["bridges"] or ""))
@@ -172,6 +200,16 @@ class SettingWindow(QWidget):
             refresh = getattr(self.tor_services_panel, "refresh_health", None)
             if callable(refresh):
                 refresh()
+        elif index == self.BLOCKED_HOSTS_PAGE_INDEX:
+            self.block_hosts_page._update_hosts_list()
+        elif index == self.EXCLUDED_HOSTS_PAGE_INDEX:
+            self.exclude_hosts_page._update_hosts_list()
+
+    def show_blocked_hosts(self):
+        self._set_settings_page(self.BLOCKED_HOSTS_PAGE_INDEX)
+
+    def show_excluded_hosts(self):
+        self._set_settings_page(self.EXCLUDED_HOSTS_PAGE_INDEX)
 
     def _sync_settings_nav_icons(self, mode=None):
         """Keep every Settings navigation icon in sync with its label state."""
