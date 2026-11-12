@@ -59,7 +59,6 @@ _THEME_STYLESHEET_CACHE = {}
 # Native hit-test values used by custom Windows title bars and resize borders.
 _HTCLIENT = 1
 _HTCAPTION = 2
-_HTMAXBUTTON = 9
 _HTLEFT = 10
 _HTRIGHT = 11
 _HTTOP = 12
@@ -102,9 +101,12 @@ def _native_resize_hit_test(point, window_rect, border=8):
 
 
 def _native_titlebar_hit_test(point, titlebar_rect, maximize_rect, other_button_rects):
-    """Map custom title-bar areas to the native Windows hit-test contract."""
+    """Keep custom controls Qt-handled and expose only the title bar as draggable."""
     if maximize_rect.contains(point):
-        return _HTMAXBUTTON
+        # HTMAXBUTTON activates the Windows 11 Snap Layouts flyout on hover.
+        # This is a custom Qt button, so leave it in the client area and let
+        # QPushButton.clicked drive the app's explicit maximize/restore toggle.
+        return _HTCLIENT
     if any(rect.contains(point) for rect in other_button_rects):
         return _HTCLIENT
     if titlebar_rect.contains(point):

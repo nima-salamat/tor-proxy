@@ -2467,13 +2467,12 @@ def test_dropdown_header_copy_has_no_individual_background_or_border():
     ]
 
 
-def test_native_titlebar_hit_testing_exposes_windows_snap_regions(qt_app):
+def test_native_titlebar_hit_testing_keeps_custom_controls_in_client_area(qt_app):
     from PySide6.QtCore import QPoint, QRect
 
     from ui import (
         _HTCAPTION,
         _HTCLIENT,
-        _HTMAXBUTTON,
         _native_titlebar_hit_test,
     )
 
@@ -2482,12 +2481,15 @@ def test_native_titlebar_hit_testing_exposes_windows_snap_regions(qt_app):
     maximize = QRect(415, 5, 36, 30)
     close = QRect(456, 5, 36, 30)
 
+    # Empty title-bar space remains draggable through the native caption path.
     assert _native_titlebar_hit_test(
         QPoint(120, 20), titlebar, maximize, (minimize, close)
     ) == _HTCAPTION
+    # Custom Qt controls must not return HTMAXBUTTON: that opens the Windows
+    # 11 Snap Layouts flyout instead of delivering the click to QPushButton.
     assert _native_titlebar_hit_test(
         maximize.center(), titlebar, maximize, (minimize, close)
-    ) == _HTMAXBUTTON
+    ) == _HTCLIENT
     assert _native_titlebar_hit_test(
         minimize.center(), titlebar, maximize, (minimize, close)
     ) == _HTCLIENT
