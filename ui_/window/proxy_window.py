@@ -449,6 +449,11 @@ class ProxyWindow(QWidget):
         values.addWidget(copy_button, 0, Qt.AlignmentFlag.AlignBottom)
         layout.addLayout(values)
 
+        copy_feedback_timer = QTimer(card)
+        copy_feedback_timer.setSingleShot(True)
+        copy_feedback_timer.timeout.connect(
+            lambda endpoint=key: self._restore_home_endpoint_copy_button(endpoint)
+        )
         self._home_endpoint_controls[key] = {
             "title": title_label,
             "host_caption": host_caption,
@@ -456,6 +461,7 @@ class ProxyWindow(QWidget):
             "port_caption": port_caption,
             "port": port_button,
             "copy": copy_button,
+            "copy_timer": copy_feedback_timer,
         }
         return card
 
@@ -577,9 +583,9 @@ class ProxyWindow(QWidget):
         button.setText("Copied")
         button.setIcon(qta.icon("fa6s.check", color=success))
         button.setToolTip("Endpoint copied to the clipboard")
-        QTimer.singleShot(
-            1100, lambda endpoint=key: self._restore_home_endpoint_copy_button(endpoint)
-        )
+        timer = controls.get("copy_timer")
+        if timer is not None:
+            timer.start(1100)
 
     def _restore_home_endpoint_copy_button(self, key: str) -> None:
         controls = self._home_endpoint_controls.get(key, {})
