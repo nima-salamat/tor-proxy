@@ -34,6 +34,7 @@ import psutil
 import requests
 
 from .network import NetworkRouteError, create_session
+from .process import hidden_subprocess_kwargs
 from .paths import user_directories
 from .host_rules import HostRuleError, HostRules, MatchMode
 
@@ -628,6 +629,7 @@ class SystemTunnelManager:
                 [str(staged_executable), "version"], cwd=staged_dir,
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, timeout=10, check=False,
+                **hidden_subprocess_kwargs(),
             )
             version_text = (version.stdout or "").strip()
             if version.returncode != 0 or self.version not in version_text:
@@ -1005,6 +1007,7 @@ class SystemTunnelManager:
             text=True,
             timeout=20,
             check=False,
+            **hidden_subprocess_kwargs(),
         )
         if check.returncode != 0:
             detail = (check.stderr or check.stdout or "sing-box rejected the generated config").strip()
@@ -1273,6 +1276,7 @@ class SystemTunnelManager:
             completed = subprocess.run(
                 command, stdin=subprocess.DEVNULL, capture_output=True, text=True,
                 timeout=timeout, check=False,
+                **hidden_subprocess_kwargs(),
             )
             result = _read_json(result_path)
             if result is None:
@@ -1626,6 +1630,7 @@ def _helper_start(args: Any) -> dict[str, Any]:
     check = subprocess.run(
         [str(engine), "check", "-c", str(config_path)],
         stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=20, check=False,
+        **hidden_subprocess_kwargs(),
     )
     if check.returncode != 0:
         detail = (check.stderr or check.stdout or "sing-box rejected the tunnel configuration").strip()

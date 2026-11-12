@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 import requests
 
 from .network import NetworkRouteError, create_session, network_error_message
+from .process import hidden_subprocess_kwargs
 
 
 TOR_SIGNING_FINGERPRINT = "EF6E286DDA85EA2A4BA7DE684E2C6E8793298290"
@@ -213,6 +214,7 @@ def _find_gpg_executable() -> Path:
             checked = subprocess.run(
                 [str(resolved), "--version"], stdin=subprocess.DEVNULL,
                 capture_output=True, text=True, timeout=5, check=False,
+                **hidden_subprocess_kwargs(),
             )
             if checked.returncode == 0 and "gpg" in (checked.stdout + checked.stderr).lower():
                 return resolved
@@ -242,6 +244,7 @@ def _gpg_compatible_path(path: str | Path, gpg: Path) -> str:
                 text=True,
                 timeout=5,
                 check=False,
+                **hidden_subprocess_kwargs(),
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise BundleVerificationError(
@@ -298,6 +301,7 @@ def verify_tor_signature(
                 [str(gpg), "--batch", "--no-tty", "--import", _gpg_compatible_path(key_file, gpg)],
                 env=env, stdin=subprocess.DEVNULL, capture_output=True,
                 text=True, timeout=20, check=False,
+                **hidden_subprocess_kwargs(),
             )
             if imported.returncode != 0:
                 detail = (imported.stderr or imported.stdout or "").strip()
@@ -309,6 +313,7 @@ def verify_tor_signature(
                 [str(gpg), "--batch", "--with-colons", "--fingerprint", "--list-keys"],
                 env=env, stdin=subprocess.DEVNULL, capture_output=True,
                 text=True, timeout=20, check=False,
+                **hidden_subprocess_kwargs(),
             )
             fingerprints = {
                 line.split(":")[9].upper()
@@ -324,6 +329,7 @@ def verify_tor_signature(
                  "--verify", _gpg_compatible_path(signature, gpg), _gpg_compatible_path(artifact, gpg)],
                 env=env, stdin=subprocess.DEVNULL, capture_output=True,
                 text=True, timeout=30, check=False,
+                **hidden_subprocess_kwargs(),
             )
             valid_lines = [
                 line.split() for line in verified.stdout.splitlines()

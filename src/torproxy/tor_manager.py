@@ -19,6 +19,7 @@ from pathlib import Path
 import psutil
 
 from .paths import user_directories
+from .process import hidden_subprocess_kwargs
 from .bridges import SUPPORTED_BRIDGE_TRANSPORTS, normalize_sni_hostname, parse_bridge_text
 
 
@@ -842,6 +843,7 @@ class TorManager:
                     [str(executable), "-f", str(self.torrc_path), "--verify-config"],
                     stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     text=True, timeout=10, check=False,
+                    **hidden_subprocess_kwargs(),
                 )
             except subprocess.TimeoutExpired as exc:
                 raise TorManagerError("Tor configuration validation timed out.") from exc
