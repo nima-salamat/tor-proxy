@@ -296,7 +296,8 @@ class ProxyWindow(QWidget):
 
         proxy_row = QHBoxLayout()
         proxy_row.setContentsMargins(0, 0, 0, 0)
-        proxy_row.setSpacing(12)
+        proxy_row.setSpacing(8)
+        self._home_proxy_row = proxy_row
         proxy_title = QLabel("SYSTEM PROXY")
         proxy_title.setObjectName("systemProxyTitle")
         proxy_row.addWidget(proxy_title)
@@ -322,6 +323,7 @@ class ProxyWindow(QWidget):
         self.system_tunnel_hint.setObjectName("systemTunnelHint")
         self.system_tunnel_hint.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         tunnel_hint_layout = QHBoxLayout(self.system_tunnel_hint)
+        self._home_tunnel_hint_layout = tunnel_hint_layout
         tunnel_hint_layout.setContentsMargins(10, 5, 10, 5)
         tunnel_hint_layout.setSpacing(10)
         self.system_tunnel_hint_label = QLabel("System tunnel is not installed · Manage it in Updates")
@@ -359,6 +361,7 @@ class ProxyWindow(QWidget):
         # Compact copyable listener endpoints sit beside the observed exit IP.
         self._home_endpoint_controls = {}
         self._home_endpoint_values = {}
+        self._home_endpoint_value_layouts = {}
         endpoint_row = QHBoxLayout()
         endpoint_row.setContentsMargins(0, 0, 0, 0)
         endpoint_row.setSpacing(12)
@@ -458,6 +461,8 @@ class ProxyWindow(QWidget):
         """Reflow Home rows as the available viewport width changes."""
         required = (
             "_home_service_controls_layout",
+            "_home_proxy_row",
+            "_home_tunnel_hint_layout",
             "_home_endpoint_row",
             "_home_endpoint_layout",
             "_home_utility_layout",
@@ -471,11 +476,16 @@ class ProxyWindow(QWidget):
         width = viewport.viewport().width() if viewport is not None else self.width()
         if width <= 0:
             width = self.width()
-        compact = width < 760
-        stacked_endpoints = width < 760
+        compact = width < 820
+        stacked_endpoints = width < 820
         stacked_metrics = width < 560
         stacked_actions = width < 640
-        mode = (compact, stacked_endpoints, stacked_metrics, stacked_actions)
+        stacked_proxy_mode = width < 460
+        stacked_endpoint_values = width < 280
+        mode = (
+            compact, stacked_endpoints, stacked_metrics, stacked_actions,
+            stacked_proxy_mode, stacked_endpoint_values,
+        )
         if mode == self._home_responsive_mode:
             return
         self._home_responsive_mode = mode
@@ -491,8 +501,12 @@ class ProxyWindow(QWidget):
         self.home_layout.setSpacing(8 if compact else 12)
 
         self._home_service_controls_layout.setDirection(vertical if compact else horizontal)
+        self._home_proxy_row.setDirection(vertical if stacked_proxy_mode else horizontal)
+        self._home_tunnel_hint_layout.setDirection(vertical if stacked_proxy_mode else horizontal)
         self._home_endpoint_row.setDirection(vertical if compact else horizontal)
         self._home_endpoint_layout.setDirection(vertical if stacked_endpoints else horizontal)
+        for value_layout in self._home_endpoint_value_layouts.values():
+            value_layout.setDirection(vertical if stacked_endpoint_values else horizontal)
         self._home_utility_layout.setDirection(vertical if stacked_actions else horizontal)
         self._home_metrics_layout.setDirection(vertical if stacked_metrics else horizontal)
         self._home_metrics_layout.setSpacing(5 if stacked_metrics else 0)
@@ -533,6 +547,9 @@ class ProxyWindow(QWidget):
         self._home_endpoint_panel.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
         )
+        self.home_content.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
         self.exit_ip_card.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
         )
@@ -564,6 +581,7 @@ class ProxyWindow(QWidget):
         values = QHBoxLayout()
         values.setContentsMargins(0, 0, 0, 0)
         values.setSpacing(10)
+        self._home_endpoint_value_layouts[key] = values
 
         host_column = QVBoxLayout()
         host_column.setContentsMargins(0, 0, 0, 0)
