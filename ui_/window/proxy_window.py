@@ -14,7 +14,15 @@ from PySide6.QtWidgets import (
 )
 
 
-from PySide6.QtCore import QEvent, Qt, QTimer, QThreadPool, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import (
+    QAbstractAnimation,
+    QEasingCurve,
+    QEvent,
+    QPropertyAnimation,
+    QThreadPool,
+    QTimer,
+    Qt,
+)
 from pathlib import Path
 
 from torproxy.onion_hosting import OnionHostingManager
@@ -565,8 +573,13 @@ class ProxyWindow(QWidget):
         super().resizeEvent(event)
         self._update_home_responsive_layout()
         if getattr(self, "logs_open", False):
-            target_width = self._logs_drawer_width()
-            self.logs_widget.setMaximumWidth(target_width)
+            animation = getattr(self, "_logs_animation", None)
+            if (
+                animation is not None
+                and animation.state() == QAbstractAnimation.State.Running
+            ):
+                animation.stop()
+            self.logs_widget.setMaximumWidth(self._logs_drawer_width())
 
     def _build_home_endpoint_card(self, title: str, key: str) -> QFrame:
         card = QFrame(self.home_content)
