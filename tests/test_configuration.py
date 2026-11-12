@@ -302,6 +302,16 @@ def test_tor_service_profiles_cannot_reuse_primary_listener_ports():
 
 
 
+def test_http_proxy_lan_binding_defaults_off_and_requires_boolean():
+    assert DEFAULT_DATA["http_proxy_bind_all_interfaces"] is False
+    data = dict(DEFAULT_DATA)
+    data["http_proxy_bind_all_interfaces"] = True
+    AppConfig._validate(data)
+    data["http_proxy_bind_all_interfaces"] = 1
+    with pytest.raises(AppConfigError, match="http_proxy_bind_all_interfaces"):
+        AppConfig._validate(data)
+
+
 def test_http_proxy_preference_defaults_enabled_and_requires_a_boolean():
     assert DEFAULT_DATA["http_proxy_enabled"] is True
     assert TorProxyConfig().http_proxy_enabled is True
