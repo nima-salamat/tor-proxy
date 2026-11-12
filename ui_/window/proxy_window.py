@@ -590,7 +590,10 @@ class ProxyWindow(QWidget):
             card_layout.setSpacing(3 if compact else 4)
         for controls in self._home_endpoint_controls.values():
             copy_button = controls["copy"]
+            copy_button.setProperty("compact", "true" if compact else "false")
             copy_button.setFixedSize(72 if compact else 84, 29 if compact else 32)
+            copy_button.style().unpolish(copy_button)
+            copy_button.style().polish(copy_button)
 
         self.home_content.updateGeometry()
 
@@ -1259,6 +1262,7 @@ class ProxyWindow(QWidget):
                 border: 1px solid {border}; border-radius: 8px; padding: 0 7px;
                 font-size: 10px; font-weight: 750;
             }}
+            QToolButton#homeEndpointCopy[compact="true"] {{ min-width: 72px; min-height: 29px; padding: 0 4px; font-size: 9px; }}
             QToolButton#homeEndpointCopy:hover {{ background: rgba(71, 163, 242, 0.12); border-color: {accent}; }}
             QToolButton#homeEndpointCopy:disabled {{ color: {muted}; background: transparent; border-color: {border}; }}
             QLabel#exitIpLabel {{
