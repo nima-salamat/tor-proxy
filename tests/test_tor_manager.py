@@ -169,6 +169,11 @@ def test_webtunnel_handshake_errors_do_not_abort_other_bridge_attempts(tmp_path,
         transport.chmod(0o700)
 
     process = FakeProcess()
+    launched_kwargs = {}
+
+    def fake_popen(*_args, **kwargs):
+        launched_kwargs.update(kwargs)
+        return process
 
     def fake_run(*_args, **_kwargs):
         return SimpleNamespace(returncode=0, stdout="")
@@ -188,7 +193,7 @@ def test_webtunnel_handshake_errors_do_not_abort_other_bridge_attempts(tmp_path,
             data_directory=tmp_path / "developer-tor",
             startup_timeout_seconds=2,
         ),
-        popen_factory=lambda *_args, **_kwargs: process,
+        popen_factory=fake_popen,
         run_factory=fake_run,
     )
     manager._transport_exec_path = lambda path: str(path)
@@ -200,6 +205,8 @@ def test_webtunnel_handshake_errors_do_not_abort_other_bridge_attempts(tmp_path,
 
     assert manager.state is TorState.READY
     assert manager.bootstrap_progress == 100
+    child_environment = launched_kwargs["env"]
+    assert "tlssecpmlkem=0" in child_environment["GODEBUG"].split(",")
     manager.stop()
 
 
