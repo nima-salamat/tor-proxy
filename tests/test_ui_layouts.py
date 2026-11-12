@@ -2940,19 +2940,30 @@ def test_main_socks_gateway_settings_and_authentication_are_wired_safely():
 
 
 
-def test_home_shows_compact_copyable_socks_and_http_endpoints_beside_exit_ip():
+def test_home_endpoint_cards_have_clear_copy_targets_and_consistent_exit_ip_summary():
     repository = Path(__file__).resolve().parents[1]
     source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
 
     assert 'self._build_home_endpoint_card("SOCKS5", "socks")' in source
     assert 'self._build_home_endpoint_card("HTTP", "http")' in source
     assert 'endpoint_row.addWidget(endpoint_panel, 2)' in source
-    assert 'endpoint_row.addWidget(self.tor_ip_label, 1)' in source
+    assert 'endpoint_row.addWidget(self.exit_ip_card, 1)' in source
+    assert 'QLabel("ADDRESS", card)' in source
+    assert 'QLabel("PORT", card)' in source
+    assert 'copy_button.setText("Copy")' in source
+    assert 'copy_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)' in source
+    assert 'copy_button.setFixedSize(76, 32)' in source
+    assert 'self._show_home_endpoint_copy_feedback(key)' in source
+    assert '"copy_timer": copy_feedback_timer' in source
     assert 'controls["host"].clicked' not in source  # QToolButton.clicked is connected when the card is built.
     assert '_copy_home_endpoint_part(endpoint, "host")' in source
     assert '_copy_home_endpoint_part(endpoint, "port")' in source
     assert '_copy_home_endpoint_full(endpoint)' in source
     assert 'QApplication.clipboard().setText(f"{host}:{port}")' in source
+    assert 'QFrame#homeEndpointCard, QFrame#homeExitIpCard' in source
+    assert 'QFrame#systemProxyControls {{ background: {surface}; border: 1px solid {border}; border-radius: 12px; }}' in source
+    assert 'QLabel#connectionHint' in source
+    assert 'self.connection_hint.setText(hints.get(stmt, hints["disconnected"]))' in source
     assert 'http_proxy_bind_all_interfaces' in source
     assert 'tor_socks_bind_all_interfaces' in source
     assert 'LAN IP unavailable' in source
