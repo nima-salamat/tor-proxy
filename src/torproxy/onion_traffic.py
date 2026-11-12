@@ -8,7 +8,6 @@ inspected or logged.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import ipaddress
 import logging
 import os
 from pathlib import Path
