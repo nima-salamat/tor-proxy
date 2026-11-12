@@ -218,6 +218,10 @@ class ProxyWindow(QWidget):
         self.btn_statistics.setToolTip("Open live proxy traffic statistics and charts")
         self.btn_statistics.clicked.connect(self.open_statistics_page)
         metrics.addStretch(1)
+        bootstrap_caption = QLabel("BOOTSTRAP", self.home_content)
+        bootstrap_caption.setObjectName("homeMetricCaption")
+        self.lbl_percent.setToolTip("Tor bootstrap progress")
+        metrics.addWidget(bootstrap_caption)
         metrics.addWidget(self.lbl_percent)
         separator = QFrame(self.home_content)
         separator.setObjectName("homeMetricSeparator")
@@ -436,7 +440,7 @@ class ProxyWindow(QWidget):
         copy_button.setObjectName("homeEndpointCopy")
         copy_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         copy_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        copy_button.setFixedSize(76, 32)
+        copy_button.setFixedSize(84, 32)
         copy_button.setText("Copy")
         copy_button.setToolTip("Copy the complete host:port endpoint")
         copy_button.setIcon(qta.icon("fa6s.copy", color="#aab4c1"))
@@ -988,6 +992,7 @@ class ProxyWindow(QWidget):
                 color: {muted}; background: transparent; border: none;
                 font-size: 11px; padding: 0 12px;
             }}
+            QLabel#homeMetricCaption {{ color: {muted}; background: transparent; border: none; font-size: 8px; font-weight: 800; letter-spacing: 0.8px; }}
             QLabel#bootstrapPercent {{ color: {accent}; background: transparent; border: none; font-size: 16px; font-weight: 750; padding: 3px; }}
             QLabel#trafficUsage, QLabel#proxyStatusLabel {{ color: {muted}; background: transparent; border: none; font-size: 11px; padding: 2px; }}
             QWidget#homeEndpointPanel {{ background: transparent; border: none; }}
@@ -1009,7 +1014,7 @@ class ProxyWindow(QWidget):
             QToolButton#homeEndpointPart:hover {{ color: {accent}; }}
             QToolButton#homeEndpointPart:disabled {{ color: {muted}; }}
             QToolButton#homeEndpointCopy {{
-                min-width: 76px; min-height: 32px; color: {text}; background: {hover};
+                min-width: 84px; min-height: 32px; color: {text}; background: {hover};
                 border: 1px solid {border}; border-radius: 8px; padding: 0 7px;
                 font-size: 10px; font-weight: 750;
             }}
