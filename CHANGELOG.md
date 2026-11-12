@@ -4,6 +4,7 @@ All notable changes are recorded here. Dates and release numbers are added only 
 
 ## Unreleased
 
+- Bounded per-mapping Onion relay workers to 128 concurrent connections and shared a 512-connection process-wide ceiling; stopped temporary services now discard their temporary traffic totals and connection history.
 - Added per-service Developer Tor traffic accounting through transparent loopback TCP relays: incoming/outgoing byte totals, connection duration and bounded service-scoped Activity history. Plaintext HTTP/1 exposes only the first request line/status per TCP connection with query strings removed; TLS remains opaque and is not decrypted.
 - Split service Activity from the single global Tor runtime log, added aggregate and per-service traffic summaries plus service search/state filters, and added an explicit stopped-service identity rotation action for generating a new cryptographic v3 Onion address.
 - Deleting an Onion Service also deletes its own traffic counters and Activity history; address rotation preserves its private client authorization key and local forwarding configuration.
