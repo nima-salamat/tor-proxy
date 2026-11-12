@@ -1031,7 +1031,9 @@ class ProxyWindow(QWidget):
             QLabel#homeMetricCaption {{ color: {muted}; background: transparent; border: none; font-size: 8px; font-weight: 800; letter-spacing: 0.8px; }}
             QLabel#bootstrapPercent {{ color: {accent}; background: transparent; border: none; font-size: 16px; font-weight: 750; padding: 3px; }}
             QLabel#trafficUsage, QLabel#proxyStatusLabel {{ color: {muted}; background: transparent; border: none; font-size: 11px; padding: 2px; }}
-            QWidget#homeEndpointPanel {{ background: transparent; border: none; }}
+            QWidget#homeEndpointPanel, QWidget#homeMetricsLeft, QWidget#homeMetricsRight {{
+                background: transparent; border: none;
+            }}
             QFrame#homeEndpointCard, QFrame#homeExitIpCard {{
                 background: {surface}; border: 1px solid {border}; border-radius: 12px;
             }}
