@@ -1306,8 +1306,8 @@ class ProxyWindow(QWidget):
             }}
             QLabel#connectionStatus {{
                 color: {muted}; background: {surface};
-                border: 1px solid {border}; border-radius: 15px;
-                padding: 3px 13px; min-height: 20px;
+                border: 1px solid {border}; border-radius: 18px;
+                padding: 4px 14px; min-height: 22px;
                 font-size: 10px; font-weight: 750; letter-spacing: 0.7px;
             }}
             QLabel#connectionStatus[connectionState="connected"] {{
@@ -1322,7 +1322,7 @@ class ProxyWindow(QWidget):
                 color: {muted}; background: {surface}; border-color: {border};
             }}
             QLabel#connectionStatus[compact="true"] {{
-                font-size: 9px; padding: 2px 10px; border-radius: 12px;
+                font-size: 9px; padding: 3px 11px; border-radius: 18px;
             }}
             QLabel#homeMetricCaption {{
                 color: {muted}; background: transparent; border: none;
