@@ -547,3 +547,32 @@ def test_deleting_service_also_deletes_its_persisted_traffic_history(hosting):
     assert manager.traffic_snapshot(profile_id)["incoming_bytes"] == 0
     assert manager.traffic_events(profile_id) == []
     assert manager.traffic_snapshot()["outgoing_bytes"] == 0
+
+
+
+def test_temporary_service_traffic_totals_are_removed_when_runtime_stops(hosting):
+    manager, _config, _tor = hosting
+    profile_id = manager.create_service(
+        display_name="Ephemeral traffic",
+        local_host="127.0.0.1",
+        local_port=9102,
+        persistent=False,
+    )
+    manager._traffic_store.finish_connection(
+        profile_id,
+        onion_port=80,
+        local_port=9102,
+        protocol="TLS",
+        incoming_bytes=512,
+        outgoing_bytes=1024,
+        duration_ms=20,
+    )
+    assert manager.traffic_snapshot(profile_id)["incoming_bytes"] == 512
+    assert manager.traffic_snapshot()["outgoing_bytes"] == 1024
+
+    manager.stop_runtime()
+
+    assert manager.services_snapshot() == []
+    assert manager.traffic_snapshot(profile_id)["incoming_bytes"] == 0
+    assert manager.traffic_events(profile_id) == []
+    assert manager.traffic_snapshot()["outgoing_bytes"] == 0
