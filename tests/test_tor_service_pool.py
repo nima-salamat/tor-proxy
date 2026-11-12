@@ -311,6 +311,7 @@ def test_independent_service_requires_real_tor_egress_health_and_recovers_after_
     status = pool.status("personal")
     assert status["network_healthy"] is True
     assert status["network_health"] == "degraded"
+    assert status["verified_tor"] is False
     assert status["consecutive_health_failures"] == 1
 
     pool._probe_running_services()

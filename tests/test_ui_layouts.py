@@ -200,7 +200,7 @@ def test_settings_and_main_window_construct_without_duplicate_layout_warning(qt_
             button.text() for button in window.settingWidget.settings_nav_buttons
         ]
         assert settings_labels == [
-            "General", "Bridges", "Ports", "Service Defaults",
+            "General", "Bridges", "Ports", "Custom Tor",
             "Blocked Hosts", "Excluded Hosts", "Advanced",
         ]
         top_labels = [button.text() for button in window.page_nav_buttons]

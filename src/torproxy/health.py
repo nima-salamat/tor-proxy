@@ -157,18 +157,19 @@ def probe_tor_socks(socks_port: int, *, timeout: float = 8.0) -> TorProbeResult:
                 except requests.RequestException:
                     failed.append(target_name)
 
-            if len(successful) == len(FALLBACK_PROBES):
+            if successful:
                 latency = statistics.median(samples)
                 return TorProbeResult(
                     True,
                     latency_ms=latency,
                     detail=(
-                        "Tor Check was unavailable, but both independent HTTPS reachability "
-                        "probes succeeded through the managed SOCKS endpoint."
+                        f"Tor Check was unavailable; {len(successful)}/{len(FALLBACK_PROBES)} "
+                        "independent HTTPS reachability probes succeeded through the managed "
+                        "SOCKS endpoint. Tor use is reachable but not positively verified."
                     ),
                     verified_tor=False,
                     successful_targets=tuple(successful),
-                    failed_targets=(),
+                    failed_targets=tuple(failed),
                     latency_samples_ms=tuple(samples),
                 )
 

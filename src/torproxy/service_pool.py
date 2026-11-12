@@ -342,8 +342,7 @@ class TorServicePool:
                 entry.consecutive_health_failures = failures
                 entry.network_healthy = entry.network_healthy and failures < 2
                 entry.network_health = "degraded" if entry.network_healthy else "unhealthy"
-                if not entry.network_healthy:
-                    entry.verified_tor = False
+                entry.verified_tor = False
                 entry.last_health_error = result.detail or "Tor egress check failed."
             entry.last_health_check = time.time()
 

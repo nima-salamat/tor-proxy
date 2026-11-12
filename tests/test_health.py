@@ -166,7 +166,7 @@ def test_probe_uses_two_independent_fallbacks_when_tor_check_is_unavailable(monk
     assert all(call[2] is False for call in session.calls)
 
 
-def test_probe_requires_both_fallback_targets(monkeypatch):
+def test_probe_accepts_one_independent_fallback_when_the_other_is_unavailable(monkeypatch):
     import requests
     from torproxy.health import FALLBACK_PROBES, TOR_CHECK_URL
 
@@ -191,8 +191,40 @@ def test_probe_requires_both_fallback_targets(monkeypatch):
 
     result = probe_tor_socks(19160)
 
-    assert result.healthy is False
+    assert result.healthy is True
     assert result.verified_tor is False
     assert result.successful_targets == ("cloudflare_trace",)
     assert result.failed_targets == ("google_204",)
     assert "1/2" in result.detail
+
+
+def test_probe_rejects_when_all_independent_fallback_targets_fail(monkeypatch):
+    import requests
+    from torproxy.health import FALLBACK_PROBES, TOR_CHECK_URL
+
+    class RoutingSession(FakeSession):
+        def __init__(self, responses):
+            super().__init__()
+            self.responses = responses
+
+        def get(self, url, **kwargs):
+            self.calls.append((url, kwargs, self.trust_env))
+            response = self.responses[url]
+            if isinstance(response, Exception):
+                raise response
+            return response
+
+    session = RoutingSession({
+        TOR_CHECK_URL: requests.Timeout("private detail"),
+        FALLBACK_PROBES[0][1]: FakeResponse({}, status_code=503),
+        FALLBACK_PROBES[1][1]: FakeResponse({}, status_code=503),
+    })
+    _install_session(monkeypatch, session)
+
+    result = probe_tor_socks(19161)
+
+    assert result.healthy is False
+    assert result.verified_tor is False
+    assert result.successful_targets == ()
+    assert result.failed_targets == ("cloudflare_trace", "google_204")
+    assert "0/2" in result.detail
