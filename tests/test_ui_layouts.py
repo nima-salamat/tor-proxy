@@ -3087,6 +3087,11 @@ def test_home_page_uses_adaptive_compact_layout_without_scrollbars():
     assert 'self.btn_status.setWordWrap(False)' in source
     assert "status_frame_layout.setContentsMargins(20, 3, 20, 3)" in source
     assert "class ConnectionStatusPill(QWidget):" in source
+    assert "def set_status_text(self, label: QLabel, text: str, max_width: int)" in source
+    assert "metrics.elidedText(" in source
+    assert "self._set_home_status_text(" in source
+    assert "self._refresh_home_status_geometry()" in source
+    assert "self.btn_status.setText(" not in source
     assert "self.connection_status_frame.set_connection_state(stmt)" in source
     assert "self.connection_status_frame.set_theme_mode(CONFIG[\"mode\"])" in source
     assert "Qt.WidgetAttribute.WA_TranslucentBackground" not in source
@@ -3114,6 +3119,37 @@ def test_home_page_uses_adaptive_compact_layout_without_scrollbars():
     assert "def set_diameter(self, diameter: int) -> None:" in pulse
     assert "diameter = max(96, min(420, int(diameter)))" in pulse
     assert "scale = min(self.width(), self.height()) / 264.0" in pulse
+
+
+def test_connection_status_pill_resizes_for_dynamic_status_text(qt_app):
+    from PySide6.QtWidgets import QHBoxLayout, QLabel
+    from ui_.window.proxy_window import ConnectionStatusPill
+
+    pill = ConnectionStatusPill()
+    layout = QHBoxLayout(pill)
+    layout.setContentsMargins(20, 3, 20, 3)
+    label = QLabel(pill)
+    layout.addWidget(label)
+
+    try:
+        pill.set_status_text(label, "CONNECTED", 400)
+        short_width = pill.width()
+
+        pill.set_status_text(label, "CHECKING PORTS…", 400)
+        checking_width = pill.width()
+        assert checking_width > short_width
+        assert label.text() == "CHECKING PORTS…"
+        assert checking_width == label.width() + 42
+
+        long_status = "CONNECTED · 123/123 TOR INSTANCES READY"
+        pill.set_status_text(label, long_status, 140)
+        assert pill.width() <= 140
+        assert label.text() != long_status
+        assert label.toolTip() == long_status
+    finally:
+        pill.close()
+        pill.deleteLater()
+        qt_app.processEvents()
 
 
 def test_connection_status_pill_renders_over_its_parent_background(qt_app):
