@@ -248,7 +248,7 @@ class ProxyWindow(QWidget):
             QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed
         )
         status_frame_layout = QHBoxLayout(self.connection_status_frame)
-        status_frame_layout.setContentsMargins(14, 3, 14, 3)
+        status_frame_layout.setContentsMargins(20, 3, 20, 3)
         status_frame_layout.setSpacing(0)
 
         self.btn_status = QLabel("NOT CONNECTED", self.connection_status_frame)
