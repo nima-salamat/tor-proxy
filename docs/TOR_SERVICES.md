@@ -1,3 +1,7 @@
+# Tor services and independent runtimes
+
+This guide covers the primary Tor connection, its supervised worker pool, bridge distribution, and independent Custom Tor profiles. **Developer Tor** is documented separately in [Developer Tor & Onion Hosting](ONION_HOSTING.md); it publishes local applications as Onion Services rather than acting as an application proxy.
+
 ## Custom Tor dashboard and lifecycle
 
 The **Home → Custom Tor** shortcut opens the dedicated profile-management page. It has its own **Back to Home** action and contains profile creation/editing, service cards, Start/Stop controls, bulk actions and per-profile live Logs. The **Settings → Custom Tor** section is reserved for persistent resource preferences: primary Tor instance count, parallel bridge-probe workers and concurrent custom-service operations. Profile details (ID, display name, SOCKS/Control/DNS ports, bridge inheritance or custom bridges, DataDirectory and per-profile network policy) are edited in the same custom-framed dialog from the management page. Each isolated profile can select a direct route, SOCKS5 upstream proxy or HTTP CONNECT upstream proxy, choose IPv4 and/or IPv6, and tune maximum circuit dirtiness, new-circuit period, startup timeout and shutdown timeout. These are real TorSettings options, not arbitrary torrc text. Credentials are kept in a separate permission-restricted per-profile file and are not written to config.json; an old profile that does not have the new fields retains its previous Main Tor circuit-timing inheritance and TorManager timeout defaults. Changing these settings requires stopping and starting that profile. A profile can also pin its own Tor Expert Bundle version from the installed, integrity-checked and platform-compatible inventory; profiles without a pinned version continue to follow Main Tor's selected executable. The selected version's own GeoIP data and pluggable-transport files are used with that process.
@@ -8,7 +12,7 @@ A normal **Stop** request is available while a service is starting. It marks sta
 
 Closing the main window with **X** hides TorProxy to the system tray, so custom services intentionally continue running in the background with the application. Choosing **Exit TorProxy** performs application cleanup and stops all registered isolated Tor profiles before the process exits. If one of those services was already being stopped, the shutdown path joins/escalates that stop rather than reporting a spurious “already stopping” error.
 
-# Developer Tor and Onion Hosting
+## Developer Tor and Onion Hosting
 
 **Home → Developer Tor** owns a separate Tor process, DataDirectory, ControlPort and log. It does not borrow the Main Tor or Custom Tor process. Its network preferences support direct/custom/Main bridge sources, WebTunnel SNI and native-TLS compatibility, IPv4/IPv6 selection, SOCKS5 or HTTP CONNECT upstream proxies, circuit timing and bounded startup/shutdown timeouts. Upstream proxy credentials are stored outside config.json in a permission-restricted file.
 
