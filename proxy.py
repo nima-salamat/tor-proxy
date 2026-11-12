@@ -562,7 +562,7 @@ def _log_upstream_failure(
 ) -> None:
     """Log the failed outbound hop without exposing request paths or query strings."""
     if route == "tor":
-        upstream = f"Tor SOCKS endpoint 127.0.0.1:{tor_socks_port}"
+        upstream = f"Main Tor SOCKS gateway 127.0.0.1:{tor_socks_port}"
     elif route == "direct":
         upstream = "direct network socket (host exclusion)"
     else:
