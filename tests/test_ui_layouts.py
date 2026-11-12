@@ -11,6 +11,21 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
 
+def test_http_proxy_settings_expose_safe_opt_in_lan_binding():
+    repository = Path(__file__).resolve().parents[1]
+    settings = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
+    config = (repository / "config.py").read_text(encoding="utf-8")
+    runner = (repository / "tor.py").read_text(encoding="utf-8")
+
+    assert '"http_proxy_bind_all_interfaces": False' in config
+    assert 'httpProxyLanAccessPreference' in settings
+    assert 'http_proxy_lan_access_changed' in settings
+    assert '0.0.0.0' in settings
+    assert 'no username/password authentication' in settings
+    assert 'allow_remote=self.http_bind_all_interfaces' in runner
+    assert 'set_http_bind_all_interfaces' in runner
+
+
 def test_exit_button_icon_tracks_hover_foreground_and_theme(monkeypatch):
     import ui
 
