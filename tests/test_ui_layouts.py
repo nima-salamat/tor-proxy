@@ -3116,6 +3116,7 @@ def test_pulse_button_can_shrink_without_losing_its_animation_geometry(qt_app):
         assert button.size().width() == 144
         assert button.size().height() == 144
         assert button.diameter == 144
+        button.set_diameter(480)
         assert button.diameter == 420
         button.set_diameter(70)
         assert button.diameter == 96
