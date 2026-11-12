@@ -1741,6 +1741,40 @@ def test_bundle_source_tooltip_documents_official_archive_fallback():
     assert "same explicitly selected network route" in source
 
 
+def test_custom_tor_profile_editor_scrolls_advanced_options_without_growing_dialog(qt_app):
+    pytest.importorskip("qtawesome")
+
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QScrollArea
+    from ui_.window.tor_services_page import TorServiceEditorDialog
+
+    dialog = TorServiceEditorDialog()
+    try:
+        assert isinstance(dialog.scroll_area, QScrollArea)
+        assert dialog.scroll_area.widget() is dialog.scroll_content
+        assert dialog.body_layout.count() == 1
+        assert dialog.scroll_area.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        assert dialog.scroll_area.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
+
+        # Mimic a shorter laptop display and expand the advanced controls.
+        dialog.resize(620, 420)
+        dialog._remember_preferred_size()
+        dialog.show()
+        qt_app.processEvents()
+        dialog._toggle_network_options(True)
+        qt_app.processEvents()
+
+        assert dialog.height() == 420
+        assert dialog.network_options_container.isVisible()
+        assert dialog.scroll_area.verticalScrollBar().maximum() > 0
+        assert dialog.footer.isVisible()
+        assert dialog.footer.geometry().bottom() <= dialog.rect().bottom()
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        qt_app.processEvents()
+
+
 def test_open_browser_dialog_lists_installed_browsers_and_filters_search(qt_app, tmp_path):
     pytest.importorskip("qtawesome")
     from PySide6.QtWidgets import QLabel

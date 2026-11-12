@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QLayout,
     QPushButton,
     QSpinBox,
     QTextEdit,
@@ -343,10 +344,34 @@ class TorServiceEditorDialog(_FramelessDialog):
         primary_tor = getattr(parent, "_primary_tor", None)
         self._legacy_max_circuit_dirtiness = int(getattr(primary_tor, "MaxCircuitDirtiness", 600) or 600)
         self._legacy_new_circuit_period = int(getattr(primary_tor, "NewCircuitPeriod", 60) or 60)
-        layout = self.body_layout
+        # Keep the title bar and footer fixed while the complete form scrolls.
+        # Advanced options add enough controls to exceed shorter displays; growing
+        # the dialog with adjustSize() used to push the footer outside the screen.
+        self.scroll_area = QScrollArea(self.body_host)
+        self.scroll_area.setObjectName("dialogScroll")
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        self.scroll_content = QWidget(self.scroll_area)
+        self.scroll_content.setObjectName("torServiceEditorContent")
+        self.scroll_content.setMinimumWidth(0)
+        self.content_layout = QVBoxLayout(self.scroll_content)
+        self.content_layout.setContentsMargins(22, 18, 22, 16)
+        self.content_layout.setSpacing(12)
+        self.content_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinAndMaxSize)
+        self.scroll_area.setWidget(self.scroll_content)
+
+        self.body_layout.setContentsMargins(0, 0, 0, 0)
+        self.body_layout.setSpacing(0)
+        self.body_layout.addWidget(self.scroll_area, 1)
+        layout = self.content_layout
+
         intro = QLabel(
             "Each profile runs its own Tor process with a separate DataDirectory, "
-            "ControlPort cookie, log file and listener ports."
+            "ControlPort cookie, log file and listener ports.",
+            self.scroll_content,
         )
         intro.setWordWrap(True)
         intro.setObjectName("settingsDescription")
@@ -535,8 +560,6 @@ class TorServiceEditorDialog(_FramelessDialog):
         self.add_button("Cancel", primary=False, callback=self.reject)
         self.add_button("Save changes" if editing else "Create service", primary=True, callback=self.accept)
         self.resize(620, 680)
-        if self.btn_advanced_network.isChecked():
-            self.adjustSize()
         self._remember_preferred_size()
         self.setStyleSheet(self.styleSheet() + f"""
             QLineEdit, QTextEdit, QSpinBox {{
@@ -545,6 +568,35 @@ class TorServiceEditorDialog(_FramelessDialog):
             }}
             QLineEdit:focus, QTextEdit:focus, QSpinBox:focus {{ border-color: {self._accent}; }}
             QCheckBox {{ color: {self._colors['text']}; spacing: 7px; }}
+            QScrollArea#dialogScroll {{
+                background: transparent;
+                border: none;
+            }}
+            QScrollArea#dialogScroll QWidget#torServiceEditorContent {{
+                background: transparent;
+            }}
+            QScrollBar:vertical {{
+                background: {self._colors['panel']};
+                width: 8px;
+                margin: 3px 1px 3px 1px;
+                border: none;
+                border-radius: 4px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {self._colors['muted']};
+                min-height: 28px;
+                border-radius: 4px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: {self._accent};
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0;
+                border: none;
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                background: transparent;
+            }}
         """)
 
         self.chk_use_primary_bridges.toggled.connect(self._sync_bridge_controls)
@@ -558,8 +610,11 @@ class TorServiceEditorDialog(_FramelessDialog):
         self.btn_advanced_network.setText(
             "Hide advanced network options" if expanded else "Advanced network options"
         )
-        self.adjustSize()
-        self._remember_preferred_size()
+        # Do not resize the dialog to its full content height. The scroll area's
+        # layout constraint recalculates its scroll range when this section opens.
+        self.scroll_content.updateGeometry()
+        self.scroll_area.widget().updateGeometry()
+        self.scroll_area.updateGeometry()
 
     def _sync_network_controls(self, *_args) -> None:
         enabled = self.inp_upstream_proxy_type.currentData() != "none"
