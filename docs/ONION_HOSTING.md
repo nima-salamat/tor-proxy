@@ -41,7 +41,7 @@ TorProxy's separate local HTTP proxy can return the exact response `502 Upstream
 
 The proxy event log records the destination host and port, chosen route, upstream endpoint, exception class and a bounded exception summary for these failures. It intentionally omits the HTTP path and query string. Interpret it as follows:
 
-- `route=tor` with `Tor SOCKS endpoint 127.0.0.1:<port>` and a connection-refused error means the Main Tor SOCKS/gateway listener is unavailable or not accepting connections. Start Main Tor and wait for its verified READY state.
+- `route=tor` with `Main Tor SOCKS gateway 127.0.0.1:<port>` and a connection-refused error means the Main Tor SOCKS/gateway listener is unavailable or not accepting connections. Start Main Tor and wait for its verified READY state.
 - A SOCKS protocol error such as host/network unreachable means the Main Tor SOCKS listener answered but could not establish that destination. Inspect the Main Tor log, bridge/circuit state and destination availability.
 - `route=direct` means the destination matched an Exclude rule and bypassed Tor by design; test ordinary direct connectivity and review the Exclude entry.
 
