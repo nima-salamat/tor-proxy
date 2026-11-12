@@ -159,10 +159,10 @@ class OnionServiceActivityDialog(_FramelessDialog):
                 item = QTableWidgetItem(value)
                 if column in {1, 4, 5, 6, 7}:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                if column == 3:
+                if column == 4:
                     code = event.get("status_code")
                     if code is not None and int(code) >= 400:
-                        item.setForeground(Qt.GlobalColor.red)
+                        item.setForeground(QColor(Qt.GlobalColor.red))
                 self.table.setItem(row, column, item)
         self.table.scrollToTop()
 
