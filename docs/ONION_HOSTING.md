@@ -87,7 +87,7 @@ The current version manages one client authorization key per private Onion Servi
 5. Stop or delete an individual service without restarting other Onion Services.
 6. Restarting Developer Tor restores persistent services with their saved identities when Auto Start is enabled. Temporary services are discarded when the runtime stops.
 
-The **Tor runtime logs** action appears once in the Developer Tor runtime card. It is the Tor daemon's log, not an HTTP access log. Every service card has a separate **Activity** action that opens only that service's connection and access history.
+The **Tor runtime logs** action appears once in the Developer Tor runtime card. It is the Tor daemon's log, not an HTTP access log. Every service card has a separate **Request logs** action that opens only that service's connection and access history in the Request logs dialog.
 
 ## Per-service traffic and Activity
 
