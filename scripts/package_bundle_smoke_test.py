@@ -1,4 +1,4 @@
-"""Verify a frozen package discovers and can execute its bundled Tor binary."""
+"""Verify a frozen With-Tor package can execute bundled Tor and install pinned sing-box."""
 from __future__ import annotations
 
 import argparse
@@ -77,6 +77,47 @@ def main() -> int:
             "Tor executable returned successfully.",
         )
         print(f"Smoke test passed: auto-selected packaged Tor ({version_line}).")
+
+        from torproxy.system_tunnel import SystemTunnelManager
+
+        class PackageDirectories:
+            def __init__(self, root: Path):
+                self.data = root / "data"
+                self.state = root / "state"
+                self.logs = root / "logs"
+                self.config = root / "config"
+                self.cache = root / "cache"
+
+        engine_manager = SystemTunnelManager(
+            PackageDirectories(Path(temporary) / "sing-box-user-data")
+        )
+        if not engine_manager.is_installed():
+            print(
+                "Smoke test failed: packaged sing-box could not be imported and verified.",
+                file=sys.stderr,
+            )
+            return 3
+        try:
+            engine_result = subprocess.run(
+                [str(engine_manager.engine_path), "version"],
+                cwd=str(engine_manager.engine_dir),
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            print(f"Smoke test failed to execute bundled sing-box: {exc}", file=sys.stderr)
+            return 4
+        engine_output = (engine_result.stdout or "") + (engine_result.stderr or "")
+        if engine_result.returncode != 0 or engine_manager.version not in engine_output:
+            print(engine_output.strip(), file=sys.stderr)
+            print("Smoke test failed: bundled sing-box did not report its pinned version.", file=sys.stderr)
+            return 5
+        print(
+            f"Smoke test passed: imported and executed pinned sing-box "
+            f"({engine_manager.version})."
+        )
     return 0
 
 

@@ -18,7 +18,7 @@ The project is being modernized from a flat desktop utility into a testable Pyth
 - Explicit opt-in for system proxy changes, snapshot-based restoration, and protection against overwriting later external changes.
 - Home-page **Open Browser** launcher for detected Chromium and Firefox-family browsers, using isolated per-browser profiles and the existing TorProxy HTTP proxy.
 - Listener ports are allocated once, persisted in the per-user configuration, and reused on later launches; automatic ports are repaired only when a conflict is detected.
-- System-wide Tor tunnel on Windows x64 and glibc-based Linux x86_64, managed from **Updates → Tunnel**. It downloads a selected, SHA-256-pinned sing-box release and uses a dedicated TUN interface rather than changing each application's proxy settings.
+- System-wide Tor tunnel on Windows x64 and glibc-based Linux x86_64, managed from **Updates → Tunnel**. It uses a dedicated TUN interface rather than changing each application's proxy settings; the portable With-Tor packages include the pinned sing-box engine and install it into per-user storage on first use.
 - Tor Expert Bundle downloads use Tor's live SOCKS5H route whenever Tor is READY, are restricted to official distribution hosts, and are safely extracted. OpenPGP publisher-signature verification is optional and disabled by default; it can be enabled to check the pinned Tor signing-key fingerprint.
 - Versioned configuration, per-user writable data paths, atomic settings writes, tests, and CI.
 
@@ -73,7 +73,7 @@ Portable builds are published on the [GitHub Releases page](https://github.com/n
 - GnuPG is only needed when the optional OpenPGP publisher-signature check is enabled in Settings → Advanced. The ZBar decoder is optional because the built-in OpenCV QR decoder remains available.
 - Windows binaries are not Authenticode-signed by this workflow, so Windows SmartScreen may show an unrecognized-app warning.
 
-Pushing a version tag such as `v2.0.1` builds four portable packages (Windows/Linux, each with and without Tor) and publishes them with `SHA256SUMS.txt`. The release build discovers the current stable-first Tor version separately on each runner, chooses the first release that has that runner's exact x86_64 Expert Bundle and detached signature, and downloads only that one archive. Running **Build and release → Run workflow** from Actions builds and smoke-tests all package variants as workflow artifacts, without publishing a release.
+Pushing a version tag such as `v2.0.1` builds four portable packages (Windows/Linux, each with and without Tor) and publishes them with `SHA256SUMS.txt`. The two With-Tor packages additionally contain the exact pinned sing-box release archive for their platform; on first use of **Updates → Tunnel**, TorProxy verifies the archive digest and imports the engine into per-user storage without a second network download. The release build discovers the current stable-first Tor version separately on each runner, chooses the first release that has that runner's exact x86_64 Expert Bundle and detached signature, and downloads only that one Tor archive. Running **Build and release → Run workflow** from Actions builds and smoke-tests all package variants as workflow artifacts, without publishing a release.
 
 ## Install and run
 

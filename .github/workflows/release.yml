@@ -103,6 +103,9 @@ jobs:
       - name: Download and verify the newest supported Tor Expert Bundle
         run: python scripts/prepare_release_bundle.py --output-dir release-bundle
 
+      - name: Download and verify the pinned sing-box tunnel engine
+        run: python scripts/prepare_release_sing_box.py --output-dir release-sing-box
+
       - name: Build one-directory application
         run: python -m PyInstaller --noconfirm --clean packaging/torproxy.spec
 
@@ -188,6 +191,9 @@ jobs:
           Copy-Item -Path "dist/TorProxy" -Destination $stageRoot -Recurse
           New-Item -ItemType Directory -Path $bundleDestination -Force | Out-Null
           Copy-Item -Path "release-bundle/bundles/*" -Destination $bundleDestination -Recurse
+          $singBoxDestination = Join-Path $bundleDestination "sing-box"
+          New-Item -ItemType Directory -Path $singBoxDestination -Force | Out-Null
+          Copy-Item -Path "release-sing-box/*" -Destination $singBoxDestination -Recurse -Force
           python scripts/package_bundle_smoke_test.py (Join-Path $stageRoot "TorProxy\TorProxy.exe")
           Compress-Archive -Path (Join-Path $stageRoot "TorProxy") -DestinationPath "${{ matrix.bundle_archive }}" -CompressionLevel Optimal -Force
           Get-Item "${{ matrix.bundle_archive }}" | Select-Object Name, Length
@@ -201,6 +207,8 @@ jobs:
           mkdir -p "$stage_root/TorProxy/bundles"
           cp -a dist/TorProxy/. "$stage_root/TorProxy/"
           cp -a release-bundle/bundles/. "$stage_root/TorProxy/bundles/"
+          mkdir -p "$stage_root/TorProxy/bundles/sing-box"
+          cp -a release-sing-box/. "$stage_root/TorProxy/bundles/sing-box/"
           python scripts/package_bundle_smoke_test.py "$stage_root/TorProxy/TorProxy"
           tar -czf "${{ matrix.bundle_archive }}" -C "$stage_root" TorProxy
           ls -lh "${{ matrix.bundle_archive }}"
@@ -217,7 +225,7 @@ jobs:
 
   publish:
     name: Publish GitHub Release
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'push' && github.ref == 'refs/heads/main' && github.event.head_commit.message == 'Publish TorProxy v1.3.0 to GitHub Releases')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, 'Publish TorProxy v1.3.0 to GitHub Releases'))
     needs: build
     runs-on: ubuntu-latest
     permissions:

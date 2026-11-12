@@ -526,6 +526,56 @@ def test_supported_sing_box_versions_have_pinned_platform_assets(tmp_path):
         assert asset["executable"] in {"sing-box.exe", "sing-box"}
 
 
+def test_packaged_sing_box_is_imported_and_verified_on_first_install_check(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    manager_root = tmp_path / "portable"
+    app = manager_root / ("TorProxy.exe" if os.name == "nt" else "TorProxy")
+    app.parent.mkdir(parents=True)
+    app.write_bytes(b"frozen app")
+    packaged_dir = app.parent / "bundles" / "sing-box"
+    packaged_dir.mkdir(parents=True)
+    executable = "sing-box.exe" if os.name == "nt" else "sing-box"
+    archive_path = packaged_dir / (
+        f"sing-box-{system_tunnel.SING_BOX_LATEST_VERSION}-"
+        f"{system_tunnel.platform.system().lower()}.archive"
+    )
+    payload = b"test sing-box executable"
+    with zipfile.ZipFile(archive_path, "w") as bundle:
+        bundle.writestr(f"sing-box-release/{executable}", payload)
+    digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+    asset = {
+        "url": "https://github.com/SagerNet/sing-box/releases/download/v1.14.4/test.archive",
+        "sha256": digest,
+        "archive": "zip",
+        "executable": executable,
+    }
+    monkeypatch.setattr(
+        SystemTunnelManager,
+        "platform_asset",
+        property(lambda _self: asset),
+    )
+    monkeypatch.setattr(system_tunnel.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(system_tunnel.sys, "executable", str(app))
+
+    def fake_run(*_args, **_kwargs):
+        return SimpleNamespace(
+            returncode=0,
+            stdout=f"sing-box version {system_tunnel.SING_BOX_LATEST_VERSION}",
+        )
+
+    monkeypatch.setattr(system_tunnel.subprocess, "run", fake_run)
+    manager = _manager(tmp_path / "user-data")
+
+    assert manager.is_installed() is True
+    assert manager.installed_version == system_tunnel.SING_BOX_LATEST_VERSION
+    assert manager.engine_path.read_bytes() == payload
+    assert manager.install_manifest.is_file()
+    manifest = json.loads(manager.install_manifest.read_text(encoding="utf-8"))
+    assert manifest["verification_method"] == "torproxy-pinned-sha256"
+    assert manifest["archive_sha256"] == digest
+
+
 def test_upstream_release_can_be_selected_only_with_explicit_approval(tmp_path, monkeypatch):
     monkeypatch.setattr(system_tunnel.platform, "system", lambda: "Windows")
     monkeypatch.setattr(system_tunnel.platform, "machine", lambda: "AMD64")

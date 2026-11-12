@@ -369,6 +369,7 @@ class SystemTunnelManager:
         self.archive_path = self._archive_path_for(self.version)
         self._install_state_cache: tuple[tuple[str, int, int], ...] | None = None
         self._install_state_result = False
+        self._bundled_import_attempted = False
 
     def _archive_path_for(self, version: str) -> Path:
         if not SING_BOX_VERSION_PATTERN.fullmatch(str(version)):
@@ -485,6 +486,101 @@ class SystemTunnelManager:
     def interface_name(self) -> str:
         return TUN_INTERFACE_WINDOWS if os.name == "nt" else TUN_INTERFACE_LINUX
 
+    def _bundled_engine_archive_path(self) -> Path:
+        """Locate the release-only sing-box archive beside the portable application."""
+        if getattr(sys, "frozen", False):
+            application_root = Path(sys.executable).resolve().parent
+        else:
+            application_root = Path(__file__).resolve().parents[2]
+        filename = f"sing-box-{self.version}-{platform.system().lower()}.archive"
+        return application_root / "bundles" / "sing-box" / filename
+
+    def _install_bundled_engine(self) -> bool:
+        """Import the release-bundled pinned engine into per-user storage without networking."""
+        if self.version not in _ENGINE_RELEASES or self.is_running():
+            return False
+        source_archive = self._bundled_engine_archive_path()
+        if source_archive.is_symlink() or not source_archive.is_file():
+            return False
+
+        asset = self.platform_asset
+        source_size = source_archive.stat().st_size
+        if not 0 < source_size <= MAX_ENGINE_ARCHIVE_BYTES:
+            raise SystemTunnelError("The bundled sing-box archive has an unexpected size.")
+        if not asset.get("sha256") or _sha256(source_archive) != asset["sha256"]:
+            raise SystemTunnelError("The bundled sing-box archive failed its pinned SHA-256 check.")
+
+        self.runtime_dir.mkdir(parents=True, exist_ok=True)
+        staged_archive = self.runtime_dir / f".sing-box-{uuid.uuid4().hex}.archive"
+        staged_dir = self.runtime_dir / f".engine-stage-{uuid.uuid4().hex}"
+        backup_dir = self.runtime_dir / f".engine-backup-{uuid.uuid4().hex}"
+        try:
+            shutil.copyfile(source_archive, staged_archive)
+            if _sha256(staged_archive) != asset["sha256"]:
+                raise SystemTunnelError("The copied sing-box archive failed its pinned SHA-256 check.")
+
+            staged_dir.mkdir(mode=0o700)
+            if asset["archive"] == "zip":
+                files = self._extract_zip_runtime(staged_archive, staged_dir, asset["executable"])
+            else:
+                files = self._extract_tar_runtime(staged_archive, staged_dir, asset["executable"])
+
+            staged_executable = staged_dir / asset["executable"]
+            if os.name != "nt":
+                staged_executable.chmod(0o700)
+            version_result = subprocess.run(
+                [str(staged_executable), "version"],
+                cwd=staged_dir,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=10,
+                check=False,
+                **hidden_subprocess_kwargs(),
+            )
+            version_text = (version_result.stdout or "").strip()
+            if version_result.returncode != 0 or self.version not in version_text:
+                raise SystemTunnelError(
+                    "The bundled sing-box executable reported an unexpected version: "
+                    f"{version_text[:240]}"
+                )
+
+            if self.engine_dir.exists():
+                os.replace(self.engine_dir, backup_dir)
+            try:
+                os.replace(staged_dir, self.engine_dir)
+                os.replace(staged_archive, self.archive_path)
+                _atomic_json(
+                    self.install_manifest,
+                    {
+                        "version": self.version,
+                        "archive_sha256": asset["sha256"],
+                        "source": asset["url"],
+                        "release_asset": None,
+                        "verification_method": "torproxy-pinned-sha256",
+                        "files": files,
+                    },
+                )
+            except Exception:
+                if self.engine_dir.exists():
+                    shutil.rmtree(self.engine_dir, ignore_errors=True)
+                if backup_dir.exists():
+                    os.replace(backup_dir, self.engine_dir)
+                raise
+            if backup_dir.exists():
+                shutil.rmtree(backup_dir, ignore_errors=True)
+            self._install_state_cache = None
+            self._install_state_result = False
+            logger.info("Imported bundled sing-box %s into per-user storage.", self.version)
+            return True
+        finally:
+            staged_archive.unlink(missing_ok=True)
+            if staged_dir.exists():
+                shutil.rmtree(staged_dir, ignore_errors=True)
+            if backup_dir.exists():
+                shutil.rmtree(backup_dir, ignore_errors=True)
+
     def _allowed_archive_files(self) -> set[str]:
         executable = str(self.platform_asset["executable"])
         companion = "libcronet.dll" if os.name == "nt" else "libcronet.so"
@@ -505,9 +601,17 @@ class SystemTunnelManager:
     def is_installed(self) -> bool:
         manifest = _read_json(self.install_manifest)
         if not manifest or manifest.get("version") != self.version:
-            self._install_state_cache = None
-            self._install_state_result = False
-            return False
+            if not self._bundled_import_attempted:
+                self._bundled_import_attempted = True
+                try:
+                    self._install_bundled_engine()
+                except (OSError, SystemTunnelError, subprocess.SubprocessError) as exc:
+                    logger.warning("Could not import the packaged sing-box engine: %s", exc)
+                manifest = _read_json(self.install_manifest)
+            if not manifest or manifest.get("version") != self.version:
+                self._install_state_cache = None
+                self._install_state_result = False
+                return False
         try:
             asset = self.platform_asset
             files = manifest.get("files")
