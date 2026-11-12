@@ -2952,7 +2952,7 @@ def test_home_endpoint_cards_have_clear_copy_targets_and_consistent_exit_ip_summ
     assert 'QLabel("PORT", card)' in source
     assert 'copy_button.setText("Copy")' in source
     assert 'copy_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)' in source
-    assert 'copy_button.setFixedSize(76, 32)' in source
+    assert 'copy_button.setFixedSize(84, 32)' in source
     assert 'self._show_home_endpoint_copy_feedback(key)' in source
     assert '"copy_timer": copy_feedback_timer' in source
     assert 'controls["host"].clicked' not in source  # QToolButton.clicked is connected when the card is built.
@@ -2963,6 +2963,8 @@ def test_home_endpoint_cards_have_clear_copy_targets_and_consistent_exit_ip_summ
     assert 'QFrame#homeEndpointCard, QFrame#homeExitIpCard' in source
     assert 'QFrame#systemProxyControls {{ background: {surface}; border: 1px solid {border}; border-radius: 12px; }}' in source
     assert 'QLabel#connectionHint' in source
+    assert 'QLabel("BOOTSTRAP", self.home_content)' in source
+    assert 'QLabel#homeMetricCaption' in source
     assert 'self.connection_hint.setText(hints.get(stmt, hints["disconnected"]))' in source
     assert 'http_proxy_bind_all_interfaces' in source
     assert 'tor_socks_bind_all_interfaces' in source
