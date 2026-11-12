@@ -8,7 +8,7 @@ from typing import Any
 
 PORT_SPECS = (
     ("proxy_port", "proxy_port_checked", "HTTP proxy"),
-    ("tor_port", "tor_port_checked", "Tor SOCKS"),
+    ("tor_port", "tor_port_checked", "Main Tor SOCKS gateway"),
     ("control_port", "control_port_checked", "Tor ControlPort"),
     ("dns_port", "dns_port_checked", "Tor DNS"),
 )
@@ -178,9 +178,14 @@ def resolve_listener_ports(
     used: set[int] = set()
     reservations: list[socket.socket] = []
 
+    def listener_host(key: str) -> str:
+        if key == "tor_port" and bool(config.get("tor_socks_bind_all_interfaces", False)):
+            return "0.0.0.0"
+        return "127.0.0.1"
+
     def port_is_available(key: str, port: int) -> bool:
         try:
-            if not bool(probe("127.0.0.1", port)):
+            if not bool(probe(listener_host(key), port)):
                 return False
             # Tor's DNSPort can require the same numeric port for TCP and UDP.
             if key == "dns_port" and not bool(udp_probe("127.0.0.1", port)):
@@ -218,7 +223,7 @@ def resolve_listener_ports(
                     continue
 
                 tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                tcp_socket.bind(("127.0.0.1", port))
+                tcp_socket.bind((listener_host(key), port))
                 if key != "dns_port":
                     port = int(tcp_socket.getsockname()[1])
                 if not _valid_port(port) or port in used:

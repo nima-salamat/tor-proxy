@@ -1,6 +1,8 @@
-"""Loopback SOCKS5 gateway with per-connection failover across healthy Tor backends."""
+"""Main SOCKS5 gateway with optional authenticated LAN access and Tor failover."""
 from __future__ import annotations
 
+import hmac
+import ipaddress
 import logging
 import select
 import socket
@@ -55,15 +57,27 @@ class SocksFailoverGateway:
         max_sessions: int = 256,
         host_router: Callable[[str], str] | None = None,
         selection_mode: str = "balanced",
+        username: str = "",
+        password: str = "",
+        traffic_recorder: Callable[[int, str], None] | None = None,
     ) -> None:
-        if host not in {"127.0.0.1", "::1", "localhost"}:
-            raise ValueError("The Tor SOCKS gateway must bind to loopback.")
+        if host not in {"127.0.0.1", "::1", "localhost", "0.0.0.0"}:
+            raise ValueError("The Tor SOCKS gateway may bind only to loopback or 0.0.0.0.")
+        if not isinstance(username, str) or not isinstance(password, str) or bool(username) != bool(password):
+            raise ValueError("SOCKS gateway username and password must both be configured or both be empty.")
+        if username and (len(username.encode("utf-8")) > 255 or len(password.encode("utf-8")) > 255):
+            raise ValueError("SOCKS gateway credentials must each contain 1–255 UTF-8 bytes.")
+        if host == "0.0.0.0" and not username:
+            raise ValueError("Remote SOCKS access requires username/password authentication.")
         if type(port) is not int or not 1 <= port <= 65535:
             raise ValueError("The Tor SOCKS gateway port must be in the range 1..65535.")
         self.host = host
         self.port = port
         self._backend_provider = backend_provider
         self._host_router = host_router
+        self._username = username.encode("utf-8") if username else b""
+        self._password = password.encode("utf-8") if password else b""
+        self._traffic_recorder = traffic_recorder
         self._selection_mode = self._validate_selection_mode(selection_mode)
         self._connect_timeout = max(0.5, float(connect_timeout))
         self._handshake_timeout = max(1.0, float(handshake_timeout))
@@ -542,8 +556,45 @@ class SocksFailoverGateway:
                 for endpoint, stats in self._backend_stats.items()
             }
 
-    @staticmethod
-    def _relay(left: socket.socket, right: socket.socket, idle_timeout: float) -> None:
+    def _client_is_loopback(self, client: socket.socket) -> bool:
+        try:
+            peer_host = str(client.getpeername()[0]).split("%", 1)[0]
+            return ipaddress.ip_address(peer_host).is_loopback
+        except (OSError, ValueError, TypeError, IndexError):
+            return False
+
+    def _authenticate_client(self, client: socket.socket, methods: bytes) -> bool:
+        """Negotiate SOCKS5 auth; wildcard listeners require RFC 1929 for non-local peers."""
+        local_client = self._client_is_loopback(client)
+        has_credentials = bool(self._username and self._password)
+        if local_client and 0 in methods:
+            client.sendall(b"\x05\x00")
+            return True
+        if not has_credentials or 2 not in methods:
+            client.sendall(b"\x05\xff")
+            return False
+
+        client.sendall(b"\x05\x02")
+        auth_version = self._recv_exact(client, 1)[0]
+        if auth_version != 1:
+            client.sendall(b"\x01\x01")
+            return False
+        username_length = self._recv_exact(client, 1)[0]
+        if username_length == 0:
+            client.sendall(b"\x01\x01")
+            return False
+        supplied_username = self._recv_exact(client, username_length)
+        password_length = self._recv_exact(client, 1)[0]
+        if password_length == 0:
+            client.sendall(b"\x01\x01")
+            return False
+        supplied_password = self._recv_exact(client, password_length)
+        valid = hmac.compare_digest(supplied_username, self._username)
+        valid = hmac.compare_digest(supplied_password, self._password) and valid
+        client.sendall(b"\x01\x00" if valid else b"\x01\x01")
+        return valid
+
+    def _relay(self, left: socket.socket, right: socket.socket, idle_timeout: float) -> None:
         active = {left, right}
         peers = {left: right, right: left}
         while active:
@@ -570,6 +621,12 @@ class SocksFailoverGateway:
                     destination.sendall(payload)
                 except (OSError, TimeoutError):
                     return
+                if self._traffic_recorder is not None:
+                    direction = "upload" if source is left else "download"
+                    try:
+                        self._traffic_recorder(len(payload), direction)
+                    except Exception:
+                        LOGGER.debug("Could not enqueue SOCKS gateway traffic accounting event.", exc_info=True)
 
     def _handle_client(self, client: socket.socket) -> None:
         upstream: socket.socket | None = None
@@ -580,12 +637,8 @@ class SocksFailoverGateway:
             if version_and_count[0] != 5 or version_and_count[1] == 0:
                 return
             methods = self._recv_exact(client, version_and_count[1])
-            if 0 not in methods:
-                client.sendall(b"\x05\xff")
+            if not self._authenticate_client(client, methods):
                 return
-            # The local gateway intentionally exposes no-auth only. It is loopback
-            # restricted and does not forward arbitrary client credentials to Tor.
-            client.sendall(b"\x05\x00")
             request = self._read_request(client)
             destination_host, destination_port = self._request_destination(request)
             try:
