@@ -33,6 +33,20 @@ When a configured bridge list includes WebTunnel, TorProxy adds the Go-documente
 
 WebTunnel peer-side TLS alerts such as `remote error: tls: illegal parameter` or an unrecognized handshake reply are treated as inconclusive connection attempts. Tor is allowed to try the configured bridges for the full startup window; a timeout does not classify all bridges as dead or delete records. The separate Go/TLS error `CurvePreferences includes unsupported curve` is a local Lyrebird runtime incompatibility: when every configured bridge uses WebTunnel, TorProxy reports it immediately rather than retrying the same failing transport. If another transport such as obfs4 or Snowflake is configured, bootstrap continues so Tor can try that alternative. Bridge-health probes preserve records for both categories of error.
 
+## Diagnosing HTTP 502 responses
+
+The Onion Service forwarder is a TCP mapping: it passes the visitor's connection to the configured local host and port. It does not generate an HTTP 502 page, choose an application upstream, or route visitor requests through Developer Tor's SOCKS listener. Developer Tor intentionally has `SocksPort 0`; it publishes the service through Tor's ControlPort instead of acting as a browser proxy.
+
+TorProxy's separate local HTTP proxy can return the exact response `502 Upstream connection failed` when its own outbound connection fails. Requests sent through that proxy use the **Main Tor** SOCKS endpoint for normal Tor routes, or a direct socket for a host explicitly matched by the Exclude rules. Developer Tor being READY does not mean Main Tor is READY, and starting Developer Tor does not make the Main Tor SOCKS endpoint available.
+
+The proxy event log records the destination host and port, chosen route, upstream endpoint, exception class and a bounded exception summary for these failures. It intentionally omits the HTTP path and query string. Interpret it as follows:
+
+- `route=tor` with `Tor SOCKS endpoint 127.0.0.1:<port>` and a connection-refused error means the Main Tor SOCKS/gateway listener is unavailable or not accepting connections. Start Main Tor and wait for its verified READY state.
+- A SOCKS protocol error such as host/network unreachable means the Main Tor SOCKS listener answered but could not establish that destination. Inspect the Main Tor log, bridge/circuit state and destination availability.
+- `route=direct` means the destination matched an Exclude rule and bypassed Tor by design; test ordinary direct connectivity and review the Exclude entry.
+
+For an Onion Service page, test the configured local target directly on the same computer first (for example, `curl.exe -i http://127.0.0.1:<local-port>/`). If that returns the same 502, the error is coming from the local web application or its own reverse proxy, not from the Onion Service transport. If the local request works, repeat it with the onion hostname as the Host header; virtual-host or reverse-proxy rules may behave differently for that host. When opening the onion address through TorProxy's local HTTP proxy, the visitor-side request travels through Main Tor; use Tor Browser or another independently configured Tor client to test the published service without that additional Main Tor proxy hop.
+
 ## Onion Service model
 
 One Developer Tor process can own multiple v3 Onion Services. Each service has a unique local profile ID, a name, a local loopback target, a virtual Onion port, a persistent/temporary lifetime, public/private access and an Auto Start preference.
