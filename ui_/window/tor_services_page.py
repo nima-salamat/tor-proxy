@@ -909,12 +909,17 @@ class TorServicesPage(QWidget):
                 index = len(labels) + 1
             state = str(item.get("state", "unknown")).lower()
             if item.get("healthy"):
-                latency = item.get("latency_ms")
+                latency = item.get("latency_p50_ms")
+                if latency is None:
+                    latency = item.get("latency_ms")
                 try:
-                    suffix = f" · {float(latency):.0f} ms" if latency is not None else ""
+                    suffix = f" · P50 {float(latency):.0f} ms" if latency is not None else ""
                 except (TypeError, ValueError):
                     suffix = ""
-                description = "Healthy" + suffix
+                description = (
+                    "Tor Check verified" if item.get("verified_tor")
+                    else "Reachable · Tor Check unverified"
+                ) + suffix
             elif state == "ready-checking":
                 description = "Tor process ready · checking network"
             elif state == "unhealthy":
@@ -977,7 +982,7 @@ class TorServicesPage(QWidget):
                         "assignments are isolated between instances."
                     )
         self.lbl_primary_pool_health.setText(
-            f"Primary connection · {ready}/{total} instances verified healthy\n{detail}{distribution_note}"
+            f"Primary connection · {ready}/{total} usable instances\n{detail}{distribution_note}"
         )
 
     def _save_primary_tor_instances(self, value: int) -> None:
@@ -1379,6 +1384,8 @@ class TorServicesPage(QWidget):
             latency_text = ""
         if health == "healthy":
             return "Tor egress verified" + latency_text
+        if health == "reachable_unverified":
+            return "Tor SOCKS reachable · Tor Check unavailable (unverified)" + latency_text
         if health == "degraded":
             return "Tor egress degraded · one failed check; endpoint retained temporarily"
         if health == "unhealthy":
@@ -1432,6 +1439,9 @@ class TorServicesPage(QWidget):
             if manager_state == "ready" and health_state == "healthy":
                 state_label.setText("TOR VERIFIED")
                 service_state = "ready"
+            elif manager_state == "ready" and health_state == "reachable_unverified":
+                state_label.setText("SOCKS REACHABLE · UNVERIFIED")
+                service_state = "ready"
             elif manager_state == "ready" and health_state == "unhealthy":
                 state_label.setText("NO TOR EGRESS")
                 service_state = "failed"
@@ -1468,6 +1478,7 @@ class TorServicesPage(QWidget):
         if state == "ready":
             state_label.setText({
                 "healthy": "TOR VERIFIED",
+                "reachable_unverified": "SOCKS REACHABLE · UNVERIFIED",
                 "degraded": "DEGRADED",
                 "unhealthy": "NO TOR EGRESS",
                 "checking": "CHECKING NETWORK",

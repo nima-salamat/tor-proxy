@@ -42,6 +42,7 @@ class _ServiceEntry:
     stopping: bool = False
     network_healthy: bool = False
     network_health: str = "unchecked"
+    verified_tor: bool = False
     health_latency_ms: float | None = None
     consecutive_health_failures: int = 0
     last_health_check: float | None = None
@@ -277,6 +278,7 @@ class TorServicePool:
                     "pid": getattr(getattr(entry.manager, "process", None), "pid", None),
                     "network_healthy": bool(entry.network_healthy and not process_exited),
                     "network_health": "unhealthy" if process_exited else entry.network_health,
+                    "verified_tor": bool(entry.verified_tor and not process_exited),
                     "latency_ms": None if process_exited else entry.health_latency_ms,
                     "consecutive_health_failures": entry.consecutive_health_failures,
                     "last_health_check": entry.last_health_check,
@@ -314,6 +316,7 @@ class TorServicePool:
                     else "stopped" if manager_state == "stopped"
                     else "not_ready"
                 )
+                entry.verified_tor = False
                 entry.health_latency_ms = None
                 entry.consecutive_health_failures = 0
                 entry.last_health_error = (
@@ -326,14 +329,21 @@ class TorServicePool:
                 previous = entry.health_latency_ms
                 entry.health_latency_ms = sample if previous is None else previous * 0.65 + sample * 0.35
                 entry.network_healthy = True
-                entry.network_health = "healthy"
+                entry.verified_tor = bool(getattr(result, "verified_tor", False))
+                entry.network_health = (
+                    "healthy" if entry.verified_tor else "reachable_unverified"
+                )
                 entry.consecutive_health_failures = 0
-                entry.last_health_error = ""
+                entry.last_health_error = (
+                    "" if entry.verified_tor else result.detail
+                )
             else:
                 failures = entry.consecutive_health_failures + 1
                 entry.consecutive_health_failures = failures
                 entry.network_healthy = entry.network_healthy and failures < 2
                 entry.network_health = "degraded" if entry.network_healthy else "unhealthy"
+                if not entry.network_healthy:
+                    entry.verified_tor = False
                 entry.last_health_error = result.detail or "Tor egress check failed."
             entry.last_health_check = time.time()
 
@@ -374,6 +384,7 @@ class TorServicePool:
                         if self._services.get(service_id) is entry:
                             entry.network_healthy = False
                             entry.network_health = "unhealthy"
+                            entry.verified_tor = False
                             entry.health_latency_ms = None
                             entry.last_health_error = (
                                 f"{detail} Cleanup failed: {type(exc).__name__}: {exc}"
@@ -388,6 +399,7 @@ class TorServicePool:
                     if self._services.get(service_id) is entry:
                         entry.network_healthy = False
                         entry.network_health = "stopped"
+                        entry.verified_tor = False
                         entry.health_latency_ms = None
                         entry.consecutive_health_failures = 0
                         entry.last_health_error = detail
@@ -471,6 +483,7 @@ class TorServicePool:
                 raise TorServicePoolError(f"Tor service '{service_id}' already has a start operation in progress.")
             entry.network_health = "checking"
             entry.network_healthy = False
+            entry.verified_tor = False
             entry.health_latency_ms = None
             entry.consecutive_health_failures = 0
             entry.last_health_error = "Waiting for a real Tor egress check."
@@ -485,6 +498,7 @@ class TorServicePool:
                 if self._services.get(service_id) is entry:
                     entry.network_healthy = False
                     entry.network_health = "not_ready"
+                    entry.verified_tor = False
                     entry.last_health_error = f"{type(exc).__name__}: {exc}"
             raise
         finally:
@@ -535,6 +549,7 @@ class TorServicePool:
             with self._lock:
                 entry.network_healthy = False
                 entry.health_latency_ms = None
+                entry.verified_tor = False
                 entry.consecutive_health_failures = 0
                 entry.network_health = (
                     "stopped" if self._state_value(entry.manager) == "stopped" else "not_ready"
@@ -584,6 +599,7 @@ class TorServicePool:
             with self._lock:
                 entry.network_healthy = False
                 entry.health_latency_ms = None
+                entry.verified_tor = False
                 entry.consecutive_health_failures = 0
                 entry.network_health = (
                     "stopped" if self._state_value(entry.manager) == "stopped" else "not_ready"

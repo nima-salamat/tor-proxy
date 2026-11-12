@@ -51,7 +51,9 @@ def _pool(
         max_workers=max_workers,
         directories=directories,
         health_probe=health_probe or (
-            lambda _port, timeout=8.0: TorProbeResult(True, latency_ms=42.0)
+            lambda _port, timeout=8.0: TorProbeResult(
+                True, latency_ms=42.0, verified_tor=True
+            )
         ),
         health_interval=health_interval,
     )
@@ -286,10 +288,10 @@ def test_exited_tor_process_is_reported_and_reconciled_before_health_recheck(tmp
 
 def test_independent_service_requires_real_tor_egress_health_and_recovers_after_two_failures(tmp_path):
     outcomes = iter([
-        TorProbeResult(True, latency_ms=60.0),
+        TorProbeResult(True, latency_ms=60.0, verified_tor=True),
         TorProbeResult(False, detail="Tor Check unreachable"),
         TorProbeResult(False, detail="Tor Check unreachable"),
-        TorProbeResult(True, latency_ms=45.0),
+        TorProbeResult(True, latency_ms=45.0, verified_tor=True),
     ])
     pool = _pool(
         tmp_path,
@@ -476,3 +478,48 @@ def test_stop_all_escalates_a_service_already_being_stopped(tmp_path):
     assert entry.stopping is False
     assert entry.active_calls == 0
     pool.close()
+
+
+
+def test_independent_profile_distinguishes_reachable_unverified_from_tor_verified(tmp_path):
+    from torproxy.health import TorProbeResult
+
+    results = iter((
+        TorProbeResult(
+            True,
+            latency_ms=84.0,
+            detail="Tor Check was unavailable; independent probes succeeded.",
+            verified_tor=False,
+        ),
+        TorProbeResult(
+            True,
+            latency_ms=72.0,
+            detail="Tor Check confirmed Tor.",
+            verified_tor=True,
+        ),
+    ))
+    pool = _pool(
+        tmp_path,
+        health_probe=lambda _port, timeout=8.0: next(results),
+        health_interval=0,
+    )
+    pool.register("separate", _settings(tmp_path, 21450, 21451, 21452))
+    try:
+        pool.start_service("separate")
+        first = pool.status("separate")
+        assert first["network_healthy"] is True
+        assert first["network_health"] == "reachable_unverified"
+        assert first["verified_tor"] is False
+
+        pool._apply_health_result(
+            "separate",
+            pool._services["separate"],
+            next(results),
+        )
+        second = pool.status("separate")
+        assert second["network_healthy"] is True
+        assert second["network_health"] == "healthy"
+        assert second["verified_tor"] is True
+    finally:
+        pool.stop_service("separate")
+        pool.close()

@@ -437,7 +437,6 @@ def test_gateway_refuses_restart_while_a_previous_session_thread_is_alive():
 
 
 def test_latency_selection_mode_prioritizes_the_best_quality_backend():
-    first = ("127.0.0.1", 25301)
     second = ("127.0.0.1", 25302)
     gateway = SocksFailoverGateway(
         25303,

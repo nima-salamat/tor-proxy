@@ -7,8 +7,8 @@ import statistics
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 LOGGER = logging.getLogger(__name__)
 _EVENT_QUEUE_SIZE = 1024
