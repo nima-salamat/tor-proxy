@@ -103,6 +103,8 @@ def migrate_legacy_config(raw: dict[str, Any]) -> dict[str, Any]:
             if old == "MaxCircuitDirtiness" and isinstance(value, str) and value.isdecimal():
                 value = int(value)
             migrated[new] = value
+    if migrated.get("proxy_allow_remote") is True:
+        migrated["proxy_host"] = "0.0.0.0"
     if "data_usage" in raw and isinstance(raw["data_usage"], int) and raw["data_usage"] >= 0:
         migrated["data_usage_bytes"] = raw["data_usage"]
     if isinstance(raw.get("blocked_hosts"), list):
