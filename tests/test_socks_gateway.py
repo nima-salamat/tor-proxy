@@ -208,8 +208,8 @@ def _start_failing_socks_backend(reply_code: int):
             connection, _ = listener.accept()
             with connection:
                 connection.settimeout(3)
-                assert _recv_exact(connection, 3) == b"\\x05\\x01\\x00"
-                connection.sendall(b"\\x05\\x00")
+                assert _recv_exact(connection, 3) == b"\x05\x01\x00"
+                connection.sendall(b"\x05\x00")
                 header = _recv_exact(connection, 4)
                 if header[3] == 1:
                     _recv_exact(connection, 4)
@@ -222,7 +222,7 @@ def _start_failing_socks_backend(reply_code: int):
                     raise AssertionError("unsupported test address type")
                 _recv_exact(connection, 2)
                 connection.sendall(
-                    b"\\x05" + bytes((reply_code,)) + b"\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00"
+                    b"\x05" + bytes((reply_code,)) + b"\x00\x01\x00\x00\x00\x00\x00\x00"
                 )
         finally:
             listener.close()
@@ -247,11 +247,11 @@ def test_gateway_logs_each_tor_destination_failure_and_preserves_socks_reply(cap
     try:
         with socket.create_connection(("127.0.0.1", gateway_port), timeout=2) as client:
             client.settimeout(3)
-            client.sendall(b"\\x05\\x01\\x00")
-            assert _recv_exact(client, 2) == b"\\x05\\x00"
+            client.sendall(b"\x05\x01\x00")
+            assert _recv_exact(client, 2) == b"\x05\x00"
             host = b"diagnostic-example.onion"
             request = (
-                b"\\x05\\x01\\x00\\x03"
+                b"\x05\x01\x00\x03"
                 + bytes((len(host),))
                 + host
                 + (80).to_bytes(2, "big")
@@ -260,8 +260,8 @@ def test_gateway_logs_each_tor_destination_failure_and_preserves_socks_reply(cap
             # The gateway attempts each ready backend and relays the last
             # SOCKS failure rather than changing the protocol response.
             assert _recv_exact(client, 10) in {
-                b"\\x05\\x01\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00",
-                b"\\x05\\x04\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00",
+                b"\x05\x01\x00\x01\x00\x00\x00\x00\x00\x00",
+                b"\x05\x04\x00\x01\x00\x00\x00\x00\x00\x00",
             }
     finally:
         gateway.stop()
