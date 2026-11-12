@@ -19,8 +19,8 @@ from typing import Any
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
-from .paths import user_directories
 from .onion_traffic import OnionServiceRelay, OnionTrafficStore
+from .paths import user_directories
 from .tor_manager import TorManager, TorSettings, TorState
 
 LOGGER = logging.getLogger(__name__)
