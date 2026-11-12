@@ -913,7 +913,7 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
     allow_reuse_address = False
 
-    def __init__(self, addr, handler, tor_socks_port, max_clients=128):
+    def __init__(self, addr, handler, tor_socks_port, max_clients=128, *, allow_remote=False):
         if type(max_clients) is not int or not 1 <= max_clients <= 4096:
             raise ValueError("The HTTP proxy client limit must be between 1 and 4096.")
         self._max_clients = max_clients
@@ -928,8 +928,8 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
             is_loopback = ipaddress.ip_address(host).is_loopback
         except ValueError:
             is_loopback = host.lower() == "localhost"
-        if not is_loopback:
-            raise ValueError("The HTTP proxy can only bind to loopback; remote access is disabled.")
+        if not is_loopback and not (bool(allow_remote) and host == "0.0.0.0"):
+            raise ValueError("The HTTP proxy can bind remotely only to 0.0.0.0 when LAN access is explicitly enabled.")
         self.tor_socks_port = int(tor_socks_port)
         super().__init__(addr, handler)
 
