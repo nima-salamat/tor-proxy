@@ -64,6 +64,8 @@ The normal configuration stores only non-secret service metadata, the v3 address
 
 A persistent key file that is missing or damaged is treated as an error. TorProxy does not silently generate a replacement key, because that would change the Onion address.
 
+An existing v3 address is derived from its Ed25519 service identity and cannot be edited as an arbitrary DNS name. The service card's **New address** action rotates that identity while the service is stopped. The current address becomes invalid; when Developer Tor is ready, TorProxy can immediately republish the service with the new identity. Otherwise, the service receives its new address the next time it starts. The action preserves the local target, service configuration and private client X25519 authorization key. For a private service, export/share a fresh client authorization line after the new address is assigned because the line includes the new service ID.
+
 ## Public and private access
 
 Public services can be visited by anyone who knows the address. Private services use v3 client authorization: Tor receives a Base32 X25519 public key through `ADD_ONION ClientAuthV3=...`, while TorProxy retains the matching Base32 private key in the protected key file.
@@ -74,7 +76,7 @@ The **Copy client key** action copies the Tor client authorization line:
 
 This is a secret credential. Share it only with the intended visitor, and never paste it into issue reports, logs or public chat. The address alone is not enough to visit a private service. Tor Browser users can import the matching `.auth_private` credential according to Tor Project's client authorization instructions.
 
-The first version manages one client authorization key per private Onion Service. Multiple named clients, key revocation UI and key rotation are future work.
+The current version manages one client authorization key per private Onion Service. Multiple named clients and independent client-key revocation remain future work; rotating the service address changes the Tor Ed25519 identity but preserves the existing client X25519 key.
 
 ## Operations and lifecycle
 
@@ -85,7 +87,22 @@ The first version manages one client authorization key per private Onion Service
 5. Stop or delete an individual service without restarting other Onion Services.
 6. Restarting Developer Tor restores persistent services with their saved identities when Auto Start is enabled. Temporary services are discarded when the runtime stops.
 
-The runtime log is separate from Main Tor and Custom Tor logs. The page's service-level Logs shortcut opens this Developer Tor runtime log; application/web-server logs remain owned by the hosted application.
+The **Tor runtime logs** action appears once in the Developer Tor runtime card. It is the Tor daemon's log, not an HTTP access log. Every service card has a separate **Activity** action that opens only that service's connection and access history.
+
+## Per-service traffic and Activity
+
+Each published port is mapped through a dedicated loopback TCP relay before reaching the configured application. The relay forwards the original byte stream without rewriting the application protocol. It records:
+
+- **Incoming** bytes: data received from Onion visitors and forwarded to the local application.
+- **Outgoing** bytes: data returned by the local application and forwarded to Onion visitors.
+- Connection totals, current active connections, connection duration and relay errors.
+- For plaintext HTTP/1, the first request line and first HTTP status line visible on each TCP connection. Query strings and fragments are removed before the path is stored.
+
+The Activity dialog is a connection history, not a packet capture or a replacement for the web application's own access log. HTTP keep-alive may carry multiple requests on one TCP connection; this version records only the first request line on that connection, not every subsequent request. HTTPS/TLS and HTTP/2 over TLS remain encrypted: TorProxy reports the connection and byte counts but does not decrypt traffic, inspect request paths, or extract HTTP status codes. Visitor IPs, HTTP headers and request/response bodies are not stored.
+
+Cumulative traffic totals and the latest 2,000 connection events per service are stored locally in `developer-tor/traffic.sqlite3`. On Unix, the data directory is mode `0700` and the database file is mode `0600`; Windows inherits the per-user application-data ACL. Totals survive a Developer Tor stop/restart. Deleting a service also deletes its traffic totals and event history. The top-level dashboard sums the retained totals of existing services.
+
+The counters measure bytes at the local relay boundary. They do not include Tor relay/protocol overhead and should not be interpreted as a byte-for-byte network-interface accounting figure. Local application logs remain the authoritative place for full request details, especially for TLS sites. Treat paths shown in plaintext HTTP Activity as potentially sensitive if an application embeds identifiers or secrets in path segments; query strings are omitted, but path segments are not guaranteed to be secret-free.
 
 ## Privacy and deployment warnings
 
