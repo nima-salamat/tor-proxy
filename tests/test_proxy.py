@@ -348,6 +348,54 @@ class _ResponseHandler(BaseHTTPRequestHandler):
         pass
 
 
+def test_http_upstream_failure_logs_tor_hop_and_cause_without_request_path(monkeypatch, caplog):
+    monkeypatch.setattr(proxy_module, "_blocked_rules", HostRules())
+    monkeypatch.setattr(proxy_module, "_excluded_rules", HostRules())
+
+    def fail_upstream(_host, _port, _route, _tor_port, server=None):
+        raise proxy_module.socks.GeneralProxyError("SOCKS5 relay: host unreachable")
+
+    monkeypatch.setattr(proxy_module, "_connect_upstream", fail_upstream)
+    proxy_server = proxy_module.ThreadedHTTPServer(
+        ("127.0.0.1", 0), proxy_module.ProxyHandler, 9050
+    )
+    proxy_thread = threading.Thread(target=proxy_server.serve_forever, daemon=True)
+    proxy_thread.start()
+    client = None
+    try:
+        client = socket.create_connection(
+            ("127.0.0.1", proxy_server.server_address[1]), timeout=5
+        )
+        client.settimeout(5)
+        client.sendall(
+            b"GET http://hidden-service.example/private/path?token=secret HTTP/1.1\\r\\n"
+            b"Host: hidden-service.example\\r\\n"
+            b"Connection: close\\r\\n\\r\\n"
+        )
+        response = bytearray()
+        while True:
+            chunk = client.recv(4096)
+            if not chunk:
+                break
+            response.extend(chunk)
+
+        assert b"502" in response
+        assert b"Upstream connection failed" in response
+        assert "destination=hidden-service.example:80" in caplog.text
+        assert "route=tor" in caplog.text
+        assert "Tor SOCKS endpoint 127.0.0.1:9050" in caplog.text
+        assert "GeneralProxyError" in caplog.text
+        assert "host unreachable" in caplog.text
+        assert "/private/path" not in caplog.text
+        assert "token=secret" not in caplog.text
+    finally:
+        if client is not None:
+            client.close()
+        proxy_server.shutdown()
+        proxy_server.server_close()
+        proxy_thread.join(timeout=2)
+
+
 def test_http_request_is_forwarded_through_socks_with_remote_dns(monkeypatch, caplog):
     monkeypatch.setattr(proxy_module, "_blocked_rules", HostRules())
     monkeypatch.setattr(proxy_module, "_excluded_rules", HostRules())
