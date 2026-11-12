@@ -13,6 +13,8 @@ from PySide6.QtWidgets import (
 )
 
 
+from PySide6.QtGui import QColor, QPainter, QPen
+
 from PySide6.QtCore import (
     QAbstractAnimation,
     QEasingCurve,
@@ -21,6 +23,7 @@ from PySide6.QtCore import (
     QThreadPool,
     QTimer,
     QSize,
+    QRectF,
     Qt,
 )
 from pathlib import Path
@@ -54,6 +57,67 @@ import threading
 import qtawesome as qta
 
 logger = logging.getLogger(__name__)
+
+
+class ConnectionStatusPill(QWidget):
+    """Draw the status capsule directly so its antialiased corners stay transparent."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._state = "disconnected"
+        self._dark = True
+        self.setObjectName("connectionStatusFrame")
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        self.setAutoFillBackground(False)
+        self.set_theme_mode(CONFIG.get("mode", "dark"))
+
+    def set_theme_mode(self, mode: str) -> None:
+        dark = str(mode).strip().lower() == "dark"
+        if dark != self._dark:
+            self._dark = dark
+            self.update()
+
+    def set_connection_state(self, state: str) -> None:
+        normalized = str(state or "disconnected").strip().lower()
+        if normalized != self._state:
+            self._state = normalized
+            self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        if not painter.isActive():
+            return
+
+        # Clear any rectangular background supplied by the platform/application
+        # style first. The unpainted corners then reveal the Home canvas below.
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setCompositionMode(
+            QPainter.CompositionMode.CompositionMode_Source
+        )
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 0))
+        painter.setCompositionMode(
+            QPainter.CompositionMode.CompositionMode_SourceOver
+        )
+
+        if self._state == "connected":
+            background = QColor(46, 174, 105, 26)
+            border = QColor(46, 174, 105, 97)
+        elif self._state == "connecting":
+            background = QColor(71, 163, 242, 26)
+            border = QColor(71, 163, 242, 97)
+        else:
+            background = QColor("#202630" if self._dark else "#ffffff")
+            border = QColor("#3b4552" if self._dark else "#d7dee7")
+
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        if rect.width() > 0 and rect.height() > 0:
+            radius = min(rect.width(), rect.height()) / 2.0
+            painter.setPen(QPen(border, 1.0))
+            painter.setBrush(background)
+            painter.drawRoundedRect(rect, radius, radius)
+        painter.end()
 
 
 class SystemTunnelActionButton(QPushButton):
@@ -182,13 +246,7 @@ class ProxyWindow(QWidget):
 
         self._home_responsive_mode = None
 
-        self.connection_status_frame = QFrame(self.home_content)
-        self.connection_status_frame.setObjectName("connectionStatusFrame")
-        self.connection_status_frame.setFrameShape(QFrame.Shape.NoFrame)
-        self.connection_status_frame.setAttribute(
-            Qt.WidgetAttribute.WA_StyledBackground, True
-        )
-        self.connection_status_frame.setAutoFillBackground(False)
+        self.connection_status_frame = ConnectionStatusPill(self.home_content)
         self.connection_status_frame.setMinimumHeight(32)
         self.connection_status_frame.setMaximumHeight(42)
         self.connection_status_frame.setMaximumWidth(900)
@@ -600,11 +658,10 @@ class ProxyWindow(QWidget):
             button.setMinimumHeight(36 if compact else 42)
             button.setMaximumHeight(42 if compact else 48)
         self.connection_status_frame.setMaximumWidth(min(900, max(280, width - 36)))
-        self.connection_status_frame.setProperty(
-            "compact", "true" if compact else "false"
-        )
-        self.connection_status_frame.style().unpolish(self.connection_status_frame)
-        self.connection_status_frame.style().polish(self.connection_status_frame)
+        self.btn_status.setProperty("compact", "true" if compact else "false")
+        self.btn_status.style().unpolish(self.btn_status)
+        self.btn_status.style().polish(self.btn_status)
+        self.btn_status.update()
 
         self._home_service_controls_layout.setDirection(
             vertical if stacked_service_controls else horizontal
@@ -1310,6 +1367,7 @@ class ProxyWindow(QWidget):
         muted = "#aab4c1" if dark else "#667386"
         accent = "#47a3f2" if dark else "#1876bf"
         surface = "#202630" if dark else "#ffffff"
+        self.connection_status_frame.set_theme_mode(CONFIG["mode"])
         field = "transparent"
         hover = "#2b3643" if dark else "#eaf0f5"
         text = "#e8edf3" if dark else "#253041"
@@ -1323,39 +1381,21 @@ class ProxyWindow(QWidget):
             QPushButton#connectPulseButton:focus {{
                 background: transparent; border: none;
             }}
-            QFrame#connectionStatusFrame {{
-                background: {surface}; border: 1px solid {border};
-                border-radius: 999px;
-            }}
-            QFrame#connectionStatusFrame[connectionState="connected"] {{
-                background: rgba(46, 174, 105, 0.10);
-                border-color: rgba(46, 174, 105, 0.38);
-            }}
-            QFrame#connectionStatusFrame[connectionState="connecting"] {{
-                background: rgba(71, 163, 242, 0.10);
-                border-color: rgba(71, 163, 242, 0.38);
-            }}
-            QFrame#connectionStatusFrame[connectionState="disconnected"] {{
-                background: {surface}; border-color: {border};
-            }}
-            QFrame#connectionStatusFrame[compact="true"] {{
-                border-radius: 999px;
-            }}
             QLabel#connectionStatusText {{
                 color: {muted}; background: transparent; border: none;
                 padding: 0; font-size: 10px; font-weight: 750;
                 letter-spacing: 0.7px;
             }}
-            QFrame#connectionStatusFrame[connectionState="connected"] QLabel#connectionStatusText {{
+            QLabel#connectionStatusText[connectionState="connected"] {{
                 color: #45c98b;
             }}
-            QFrame#connectionStatusFrame[connectionState="connecting"] QLabel#connectionStatusText {{
+            QLabel#connectionStatusText[connectionState="connecting"] {{
                 color: {accent};
             }}
-            QFrame#connectionStatusFrame[connectionState="disconnected"] QLabel#connectionStatusText {{
+            QLabel#connectionStatusText[connectionState="disconnected"] {{
                 color: {muted};
             }}
-            QFrame#connectionStatusFrame[compact="true"] QLabel#connectionStatusText {{
+            QLabel#connectionStatusText[compact="true"] {{
                 font-size: 9px;
             }}
             QLabel#homeMetricCaption {{
@@ -1850,11 +1890,11 @@ class ProxyWindow(QWidget):
         QMessageBox.warning(self, "Disconnect", detail)
 
     def set_btn_status_style(self, stmt):
-        frame = self.connection_status_frame
-        frame.setProperty("connectionState", stmt)
-        frame.style().unpolish(frame)
-        frame.style().polish(frame)
-        frame.update()
+        self.connection_status_frame.set_connection_state(stmt)
+        self.btn_status.setProperty("connectionState", stmt)
+        self.btn_status.style().unpolish(self.btn_status)
+        self.btn_status.style().polish(self.btn_status)
+        self.btn_status.update()
         # The status label above is the only connection guidance on Home.
 
     def _apply_system_proxy_mode(self):
