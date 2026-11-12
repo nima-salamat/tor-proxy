@@ -278,7 +278,7 @@ class SettingWindow(QWidget):
             }}
             QCheckBox#confirmExitPreference {{ color: {text}; background: transparent; spacing: 8px; font-weight: 650; }}
             QPushButton#settingsNavButton {{
-                min-height: 34px; padding: 0 11px; spacing: 7px;
+                min-height: 34px; padding: 0 6px; spacing: 6px; font-size: 9pt;
                 border: 1px solid transparent; border-radius: 7px;
                 background: transparent; color: {text}; font-weight: 650;
             }}
