@@ -122,6 +122,22 @@ def test_authority_parser_rejects_malformed_authorities(authority):
         proxy_module._parse_authority(authority, 443)
 
 
+def test_onion_destinations_cannot_be_sent_direct_by_exclude_rules(monkeypatch):
+    onion_host = "a" * 56 + ".onion"
+    monkeypatch.setattr(proxy_module, "_blocked_rules", HostRules())
+    monkeypatch.setattr(
+        proxy_module, "_excluded_rules", HostRules.from_values(["*.onion"])
+    )
+
+    assert proxy_module._route_for_host(onion_host) == "tor"
+
+    # An explicit Block rule remains authoritative even for Onion Services.
+    monkeypatch.setattr(
+        proxy_module, "_blocked_rules", HostRules.from_values([onion_host])
+    )
+    assert proxy_module._route_for_host(onion_host) == "blocked"
+
+
 def test_block_and_bypass_rules_are_consistent_and_block_takes_precedence(monkeypatch):
     monkeypatch.setattr(proxy_module, "_blocked_rules", HostRules.from_values(["blocked.example"]))
     monkeypatch.setattr(proxy_module, "_excluded_rules", HostRules.from_values(["*.example"]))
