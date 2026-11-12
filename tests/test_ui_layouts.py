@@ -3092,3 +3092,7 @@ def test_home_page_reflows_without_horizontal_overflow_when_window_is_narrow():
     assert "self.tor_ip_label.setMinimumWidth(140)" not in source
     assert "def _logs_drawer_width(self) -> int:" in source
     assert "target_width = self._logs_drawer_width() if opening else 0" in source
+    assert "QAbstractAnimation.State.Running" in source
+    assert "self.btn_status.setWordWrap(True)" in source
+    assert "stacked_endpoint_values = width < 300" in source
+    assert "self.home_layout = QVBoxLayout(self.home_content)" in source
