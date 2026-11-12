@@ -54,7 +54,7 @@ class OnionServiceActivityDialog(_FramelessDialog):
     def __init__(self, parent, manager, service: dict):
         super().__init__(
             parent,
-            f"Activity · {service.get('display_name', 'Onion Service')}",
+            f"Request logs · {service.get('display_name', 'Onion Service')}",
             "fa6s.list-ul",
             "#287db5",
             width=940,
@@ -1506,7 +1506,7 @@ class OnionHostingPage(QWidget):
         open_button.clicked.connect(lambda _checked=False, value=service.get("address", ""): self.open_address(value))
         actions.addWidget(open_button)
 
-        activity = QPushButton("Activity", card)
+        activity = QPushButton("Request logs", card)
         activity.setObjectName("onionActionButton")
         activity.setIcon(qta.icon("fa6s.chart-line"))
         activity.setToolTip("Open request and traffic history for this Onion Service")
