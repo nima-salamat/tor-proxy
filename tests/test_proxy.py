@@ -57,7 +57,25 @@ def test_http_proxy_caps_concurrent_client_handlers(monkeypatch):
     assert server.client_metrics["active_clients"] == 0
 
 
-@pytest.mark.parametrize("address", ["0.0.0.0", "192.0.2.1", "::"])
+def test_proxy_server_allows_wildcard_bind_only_with_explicit_lan_opt_in():
+    with pytest.raises(ValueError, match="only to 0.0.0.0"):
+        proxy_module.ThreadedHTTPServer(
+            ("0.0.0.0", 0), proxy_module.ProxyHandler, 9050
+        )
+
+    server = proxy_module.ThreadedHTTPServer(
+        ("0.0.0.0", 0),
+        proxy_module.ProxyHandler,
+        9050,
+        allow_remote=True,
+    )
+    try:
+        assert server.server_address[0] == "0.0.0.0"
+    finally:
+        server.server_close()
+
+
+@pytest.mark.parametrize("address", ["192.0.2.1", "::"])
 def test_proxy_server_rejects_non_loopback_listeners(address):
     with pytest.raises(ValueError, match="only bind to loopback"):
         proxy_module.ThreadedHTTPServer((address, 0), proxy_module.ProxyHandler, 9050)
