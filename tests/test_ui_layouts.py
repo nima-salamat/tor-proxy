@@ -3085,10 +3085,13 @@ def test_home_page_uses_adaptive_compact_layout_without_scrollbars():
     assert 'font-size: 9px; font-weight: 600' in source
     assert 'QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed' in source
     assert 'self.btn_status.setWordWrap(False)' in source
-    assert 'self.connection_status_frame.setProperty("connectionState", stmt)' in source
-    assert 'QFrame#connectionStatusFrame' in source
-    assert 'border-radius: 999px;' in source
-    assert 'Qt.WidgetAttribute.WA_StyledBackground' in source
+    assert "class ConnectionStatusPill(QWidget):" in source
+    assert "self.connection_status_frame.set_connection_state(stmt)" in source
+    assert "self.connection_status_frame.set_theme_mode(CONFIG[\"mode\"])" in source
+    assert "Qt.WidgetAttribute.WA_TranslucentBackground" in source
+    assert "QPainter.RenderHint.Antialiasing" in source
+    assert "painter.drawRoundedRect(rect, radius, radius)" in source
+    assert "QFrame#connectionStatusFrame" not in source
     assert 'self.home_layout.addLayout(connect_row, 1)' in source
     assert 'self.connection_status_frame.setMaximumWidth(900)' in source
     assert 'background: transparent; border: none; border-radius: 0;' in source
@@ -3108,6 +3111,36 @@ def test_home_page_uses_adaptive_compact_layout_without_scrollbars():
     assert "def set_diameter(self, diameter: int) -> None:" in pulse
     assert "diameter = max(96, min(420, int(diameter)))" in pulse
     assert "scale = min(self.width(), self.height()) / 264.0" in pulse
+
+
+def test_connection_status_pill_renders_antialiased_transparent_corners(qt_app):
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QImage
+    from ui_.window.proxy_window import ConnectionStatusPill
+
+    pill = ConnectionStatusPill()
+    try:
+        pill.resize(240, 38)
+        pill.set_theme_mode("dark")
+        pill.set_connection_state("connected")
+        pill.show()
+        qt_app.processEvents()
+
+        image = QImage(
+            pill.size(), QImage.Format.Format_ARGB32_Premultiplied
+        )
+        image.fill(Qt.GlobalColor.transparent)
+        pill.render(image)
+
+        # The capsule paints its own centre, while the square widget corners
+        # remain transparent so the Home canvas is visible around the curve.
+        assert image.pixelColor(120, 19).alpha() > 0
+        assert image.pixelColor(0, 0).alpha() == 0
+        assert image.pixelColor(1, 1).alpha() == 0
+    finally:
+        pill.close()
+        pill.deleteLater()
+        qt_app.processEvents()
 
 
 def test_pulse_button_can_shrink_without_losing_its_animation_geometry(qt_app):
