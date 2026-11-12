@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import socket
 from types import SimpleNamespace
 
 import pytest
@@ -744,3 +745,61 @@ def test_internal_worker_dns_port_allocation_retries_udp_conflicts(monkeypatch):
         (tor.socket.SOCK_STREAM, 0),
         (tor.socket.SOCK_DGRAM, 62002),
     ]
+
+
+
+def test_main_socks_gateway_port_is_separate_from_random_tor_worker_ports(monkeypatch, tmp_path):
+    runner, _config = _runner(monkeypatch, tmp_path, "")
+    runner.path_set = True
+    runner.tor_path = str(tmp_path / "tor.exe")
+    runner.geoip_path = None
+    runner.geoip6_path = None
+
+    directories = SimpleNamespace(data=tmp_path / "app-data", logs=tmp_path / "logs")
+    monkeypatch.setattr(tor, "user_directories", lambda: directories)
+
+    managers = [runner._make_manager(index) for index in range(3)]
+    worker_ports = [manager.settings.socks_port for manager in managers]
+
+    assert len(set(worker_ports)) == 3
+    assert all(1 <= port <= 65535 for port in worker_ports)
+    assert runner.socks_port not in worker_ports
+    assert runner.control_port not in worker_ports
+    assert all(manager.settings.control_port != runner.socks_port for manager in managers)
+
+
+def test_main_socks_gateway_reconfigures_without_restarting_tor_workers(monkeypatch, tmp_path):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = int(probe.getsockname()[1])
+    runner, config = _runner(monkeypatch, tmp_path, "")
+    config["tor_socks_bind_all_interfaces"] = False
+    config["tor_path"] = None
+    config["primary_tor_instances"] = 2
+    runner.socks_port = port
+    runner._gateway_access_config = ("127.0.0.1", "", "")
+    gateway = runner._build_socks_gateway(runner._gateway_access_config)
+    gateway.start()
+    runner._gateway = gateway
+
+    monkeypatch.setattr(
+        tor,
+        "read_socks_gateway_credentials",
+        lambda: {"username": "lan-user", "password": "lan-password"},
+    )
+    try:
+        config["tor_socks_bind_all_interfaces"] = True
+        enabled_message = runner.reconfigure_socks_gateway()
+        assert runner._gateway.host == "0.0.0.0"
+        assert runner._gateway.port == port
+        assert runner._gateway.running
+        assert "authenticate" in enabled_message
+
+        config["tor_socks_bind_all_interfaces"] = False
+        disabled_message = runner.reconfigure_socks_gateway()
+        assert runner._gateway.host == "127.0.0.1"
+        assert runner._gateway.port == port
+        assert runner._gateway.running
+        assert "restricted" in disabled_message
+    finally:
+        runner._gateway.stop()
