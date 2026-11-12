@@ -368,9 +368,9 @@ def test_http_upstream_failure_logs_tor_hop_and_cause_without_request_path(monke
         )
         client.settimeout(5)
         client.sendall(
-            b"GET http://hidden-service.example/private/path?token=secret HTTP/1.1\\r\\n"
-            b"Host: hidden-service.example\\r\\n"
-            b"Connection: close\\r\\n\\r\\n"
+            b"GET http://hidden-service.example/private/path?token=secret HTTP/1.1\r\n"
+            b"Host: hidden-service.example\r\n"
+            b"Connection: close\r\n\r\n"
         )
         response = bytearray()
         while True:
