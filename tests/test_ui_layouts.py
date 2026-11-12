@@ -2190,7 +2190,8 @@ def test_disabled_home_action_text_uses_the_theme_muted_foreground():
 
     assert 'self.btn_open_browser.setObjectName("secondaryAction")' in source
     assert 'self.btn_open_browser.setEnabled(False)' in source
-    assert "QPushButton#secondaryAction:disabled {{ color: {muted}; }}" in source
+    assert "QPushButton#secondaryAction:disabled {{" in source
+    assert "background: {field}; color: {muted}; border-color: {border};" in source
     assert 'muted = "#aab4c1" if dark else "#667386"' in source
 
 
@@ -2996,7 +2997,8 @@ def test_home_endpoint_cards_have_clear_copy_targets_and_consistent_exit_ip_summ
     assert 'metrics.addWidget(right_metrics, 1)' in source
     assert 'separator.setFixedWidth(1)' in source
     assert 'separator.setFixedHeight(36)' in source
-    assert 'QWidget#homeEndpointPanel, QWidget#homeMetricsLeft, QWidget#homeMetricsRight' in source
+    normalized_source = " ".join(source.split())
+    assert "QWidget#homeEndpointPanel, QWidget#homeMetricsLeft, QWidget#homeMetricsRight" in normalized_source
     assert 'http_proxy_bind_all_interfaces' in source
     assert 'tor_socks_bind_all_interfaces' in source
     assert 'LAN IP unavailable' in source
@@ -3024,7 +3026,8 @@ def test_developer_tor_separates_runtime_logs_from_service_activity_and_exposes_
     assert "OnionServiceRelay(profile_id, mappings, self._traffic_store)" in manager
     assert "self.store.finish_connection(" in traffic
     assert "self._request_buffer.find(b\"\\r\\n\")" in traffic
-    assert "self._safe_request_path" in traffic
+    assert "def _safe_request_path(raw_target: bytes) -> str" in traffic
+    assert "self.path = _safe_request_path(" in traffic
     assert "query strings are not stored" in page
 
 
@@ -3057,7 +3060,7 @@ def test_developer_tor_activity_exposes_per_port_events_and_error_counters():
     assert 'self._traffic_store.delete_service(profile_id)' in (
         repository / "src/torproxy/onion_hosting.py"
     ).read_text(encoding="utf-8")
-    assert '"HTTP sessions"' in page
+    assert 'HTTP sessions  {stats[' in page
     assert "one first request line per TCP connection" in page
     assert "_MAX_CONNECTIONS_PER_PORT = 128" in store
 
@@ -3178,8 +3181,13 @@ def test_connection_status_pill_renders_over_its_parent_background(qt_app):
         # The capsule is visible in its centre, but its outer corner pixels
         # show the actual parent surface rather than a black rectangle.
         assert image.pixelColor(130, 29) != parent_color
+        # The parent background is inherited by the custom-painted child;
+        # the transparent QSS surface must not replace it with a palette fill.
         assert image.pixelColor(10, 10) == parent_color
         assert image.pixelColor(11, 11) == parent_color
+        assert pill.testAttribute(
+            Qt.WidgetAttribute.WA_StyledBackground
+        )
         assert not pill.testAttribute(
             Qt.WidgetAttribute.WA_TranslucentBackground
         )
@@ -3228,8 +3236,9 @@ def test_home_keeps_status_at_top_with_a_minimum_gap_and_polishes_bottom_actions
     assert "self.home_layout.addStretch(1)" not in status_setup
     assert "Keep the connection status anchored at the top of Home." in status_setup
 
-    assert 'margins, spacing, diameter = (18, 8, 18, 8), 7, 128' in source
-    assert 'margins, spacing, diameter = (18, 10, 18, 10), 8, 148' in source
+    assert "utility_row.setSpacing(10)" in source
+    assert "button.setMinimumHeight(42)" in source
+    assert "button.setMaximumHeight(48)" in source
 
     assert 'utility_row.addWidget(self.btn_change_identity, 1)' in source
     assert 'utility_row.addWidget(self.btn_log, 1)' in source

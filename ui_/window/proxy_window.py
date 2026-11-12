@@ -67,9 +67,11 @@ class ConnectionStatusPill(QWidget):
         self._state = "disconnected"
         self._dark = True
         self.setObjectName("connectionStatusFrame")
-        # This is a child of Home, not a top-level translucent window.
-        # Let Qt paint the parent behind the unpainted corners.
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        # Override app-wide QWidget surfaces for this custom-painted child.
+        # The explicit transparent background keeps only the antialiased pill
+        # visible; the uncovered corners reveal the actual Home parent surface.
+        self.setStyleSheet("background: transparent; border: none;")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setAutoFillBackground(False)
         self.set_theme_mode(CONFIG.get("mode", "dark"))
 
