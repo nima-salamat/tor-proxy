@@ -16,6 +16,7 @@ from torproxy.browsers import (
     BrowserProfileManager,
     CustomBrowserStore,
 )
+from torproxy import ports as ports_module
 from torproxy.ports import (
     PortAllocationError,
     can_bind_loopback,
@@ -683,3 +684,46 @@ def test_custom_browser_store_persists_and_reloads_entries(tmp_path):
     assert reloaded == [browser]
     if os.name != "nt":
         assert (tmp_path / "custom_browsers.json").stat().st_mode & 0o077 == 0
+
+
+def test_dns_allocator_selects_an_available_udp_ephemeral_port_before_tcp(monkeypatch):
+    config = _port_config()
+    calls = []
+    tcp_ports = iter((51001, 51002, 51003))
+    dns_udp_port = 51004
+
+    class FakeSocket:
+        def __init__(self, socket_type):
+            self.socket_type = socket_type
+            self.port = None
+            self.closed = False
+
+        def bind(self, address):
+            requested = int(address[1])
+            if self.socket_type == ports_module.socket.SOCK_DGRAM:
+                self.port = dns_udp_port if requested == 0 else requested
+            elif requested == 0:
+                self.port = next(tcp_ports)
+            else:
+                self.port = requested
+            calls.append((self.socket_type, requested, self.port))
+
+        def getsockname(self):
+            return ("127.0.0.1", self.port)
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(
+        ports_module.socket,
+        "socket",
+        lambda _family, socket_type: FakeSocket(socket_type),
+    )
+
+    allocated, _messages = resolve_listener_ports(config)
+
+    assert allocated["dns_port"] == dns_udp_port
+    assert calls[-2:] == [
+        (ports_module.socket.SOCK_DGRAM, 0, dns_udp_port),
+        (ports_module.socket.SOCK_STREAM, dns_udp_port, dns_udp_port),
+    ]

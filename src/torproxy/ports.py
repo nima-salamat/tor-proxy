@@ -195,18 +195,42 @@ def resolve_listener_ports(
             tcp_socket: socket.socket | None = None
             udp_socket: socket.socket | None = None
             try:
-                tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                tcp_socket.bind(("127.0.0.1", 0))
-                port = int(tcp_socket.getsockname()[1])
-                if not _valid_port(port) or port in used:
-                    tcp_socket.close()
+                if key == "dns_port":
+                    # Windows can return a TCP-available ephemeral port that is
+                    # excluded for UDP (for example by Hyper-V/WinNAT). Allocate
+                    # the UDP endpoint first, then reserve the same number for
+                    # TCP. If TCP cannot use it, close both and try another pair.
+                    udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    udp_socket.bind(("127.0.0.1", 0))
+                    port = int(udp_socket.getsockname()[1])
+                else:
+                    port = 0
+
+                if not _valid_port(port) and key == "dns_port":
+                    if udp_socket is not None:
+                        udp_socket.close()
+                        udp_socket = None
+                    continue
+                if key == "dns_port" and port in used:
+                    if udp_socket is not None:
+                        udp_socket.close()
+                        udp_socket = None
                     continue
 
-                if key == "dns_port":
-                    udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                    udp_socket.bind(("127.0.0.1", port))
+                tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                tcp_socket.bind(("127.0.0.1", port))
+                if key != "dns_port":
+                    port = int(tcp_socket.getsockname()[1])
+                if not _valid_port(port) or port in used:
+                    tcp_socket.close()
+                    tcp_socket = None
+                    if udp_socket is not None:
+                        udp_socket.close()
+                        udp_socket = None
+                    continue
 
-                # Keep the reservation until every listener port has been selected.
+                # Keep both protocol reservations until every listener port has
+                # been selected, preventing a later allocator from reusing either.
                 reservations.append(tcp_socket)
                 tcp_socket = None
                 if udp_socket is not None:
