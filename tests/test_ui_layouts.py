@@ -3085,9 +3085,12 @@ def test_home_page_uses_adaptive_compact_layout_without_scrollbars():
     assert 'font-size: 9px; font-weight: 600' in source
     assert 'QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed' in source
     assert 'self.btn_status.setWordWrap(False)' in source
-    assert 'border-radius: 18px;' in source
+    assert 'self.connection_status_frame.setProperty("connectionState", stmt)' in source
+    assert 'QFrame#connectionStatusFrame' in source
+    assert 'border-radius: 999px;' in source
+    assert 'Qt.WidgetAttribute.WA_StyledBackground' in source
     assert 'self.home_layout.addLayout(connect_row, 1)' in source
-    assert 'self.btn_status.setMaximumWidth(900)' in source
+    assert 'self.connection_status_frame.setMaximumWidth(900)' in source
     assert 'background: transparent; border: none; border-radius: 0;' in source
     assert "self._home_service_controls_layout.setDirection(" in source
     assert "self._home_endpoint_row.setDirection(" in source
@@ -3133,7 +3136,8 @@ def test_home_keeps_status_at_top_with_a_minimum_gap_and_polishes_bottom_actions
     source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
 
     status_index = source.index(
-        'self.home_layout.addWidget(self.btn_status, 0, Qt.AlignmentFlag.AlignHCenter)'
+        'self.home_layout.addWidget('
+        + '\n            self.connection_status_frame, 0, Qt.AlignmentFlag.AlignHCenter'
     )
     connect_row_index = source.index("self.home_layout.addLayout(connect_row, 1)", status_index)
     metrics_index = source.index("self.home_layout.addWidget(metrics_panel)", connect_row_index)
