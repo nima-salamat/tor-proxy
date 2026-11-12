@@ -148,7 +148,7 @@ def test_webtunnel_handshake_errors_do_not_abort_other_bridge_attempts(tmp_path,
             socks_port=0,
             control_port=19451,
             bridges_enabled=True,
-            bridges="\\n".join((
+            bridges="\n".join((
                 "obfs4 192.0.2.4:443 A1B2C3D4E5F60718293A4B5C6D7E8F9012345678 cert=abc",
                 "webtunnel 192.0.2.10:443 "
                 "B1B2C3D4E5F60718293A4B5C6D7E8F9012345678 "
