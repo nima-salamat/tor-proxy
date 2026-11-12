@@ -3,6 +3,7 @@
 All notable changes are recorded here. Dates and release numbers are added only when a release is actually published.
 
 ## Unreleased
+- Prevent intermittent false SOCKS outages when the independent Tor Check endpoint is unavailable: if no worker passes the egress probe, TorProxy can still try bootstrap-ready, live Tor SOCKS workers. Requests remain Tor-routed; failed worker processes are never used, and the UI does not falsely mark the pool network-healthy.
 - Fix WebTunnel's Go TLS curve incompatibility by defaulting WebTunnel Bridge records to the documented `utls=none` option. Main Tor and Developer Tor expose independent toggles; bridge SNI and non-WebTunnel transports are preserved. The scoped `GODEBUG=tlssecpmlkem=0` compatibility environment remains active for Go's native TLS path.
 - Added per-worker diagnostics for failed Tor SOCKS CONNECT replies. When a destination (including an Onion Service) is unreachable, logs now expose the selected backend port, RFC 1928 reply code/reason, and whether all healthy workers rejected the destination; the gateway still preserves the SOCKS reply and does not mark a responsive worker unhealthy solely because one destination failed.
 - Force `.onion` destinations through the Tor route even when a broad Exclude rule matches them; explicit Block rules remain authoritative. Added routing regression coverage and clarified the Main Tor versus Developer Tor path for onion browsing.

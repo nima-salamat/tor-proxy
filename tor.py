@@ -185,6 +185,7 @@ class TorRunner(QObject):
         self._backend_restart_attempts: dict[int, int] = {}
         self._backend_restart_at: dict[int, float] = {}
         self._backend_lock = threading.RLock()
+        self._routing_fallback_active = False
         self._gateway: SocksFailoverGateway | None = None
         self._last_pool_ready_count = -1
         self._allocated_backend_ports: set[int] = set()
@@ -330,18 +331,50 @@ class TorRunner(QObject):
         return [manager for _latency, manager in ranked]
 
     def _ready_backend_endpoints(self) -> list[tuple[str, int, float | None]]:
-        endpoints = []
+        """Prefer Tor-Check-verified workers, but never let the probe endpoint become a hard outage."""
+        verified: list[tuple[str, int, float | None]] = []
+        fallback: list[tuple[str, int, float | None]] = []
         for index, manager in self._process_ready_managers():
+            endpoint = ("127.0.0.1", int(manager.settings.socks_port))
+            fallback.append((*endpoint, None))
             with self._backend_lock:
                 health = dict(self._backend_health.get(index, {}))
-            if not health.get("healthy"):
-                continue
-            endpoints.append((
-                "127.0.0.1",
-                int(manager.settings.socks_port),
-                float(health["latency_ms"]) if health.get("latency_ms") is not None else None,
-            ))
-        return endpoints
+            if health.get("healthy"):
+                verified.append((
+                    endpoint[0],
+                    endpoint[1],
+                    float(health["latency_ms"]) if health.get("latency_ms") is not None else None,
+                ))
+
+        # A READY Tor process has already passed its authenticated ControlPort,
+        # process-liveness and local SOCKS-listener checks. If the independent
+        # Tor Check endpoint is temporarily unreachable, keep attempting traffic
+        # through Tor SOCKS instead of withdrawing every worker and returning
+        # "No healthy Tor SOCKS backend". The gateway still performs SOCKS
+        # negotiation and destination CONNECT, and never falls back to direct
+        # networking here.
+        use_fallback = not verified and bool(fallback)
+        with self._backend_lock:
+            previous_fallback = self._routing_fallback_active
+            self._routing_fallback_active = use_fallback
+
+        if use_fallback and not previous_fallback:
+            logger.warning(
+                "No primary Tor worker has passed its latest end-to-end Tor Check. "
+                "Temporarily allowing %d bootstrap-ready Tor SOCKS backend(s) as a fallback; "
+                "all destination traffic remains routed through Tor.",
+                len(fallback),
+            )
+        elif verified and previous_fallback:
+            logger.info(
+                "End-to-end Tor Check recovered; routing has returned to verified Tor SOCKS backend(s)."
+            )
+        elif not fallback and previous_fallback:
+            logger.error(
+                "No primary Tor worker process remains READY; Tor SOCKS routing is unavailable."
+            )
+
+        return verified or fallback
 
     def _on_worker_status(self, index: int, manager: TorManager, state, progress, message) -> None:
         state_text = getattr(state, "value", str(state))
@@ -550,6 +583,7 @@ class TorRunner(QObject):
         self._backend_statuses = {}
         self._backend_errors = {}
         self._backend_health = {}
+        self._routing_fallback_active = False
         self._pool_ever_healthy = False
         self._backend_ever_ready = set()
         self._backend_restart_attempts = {}

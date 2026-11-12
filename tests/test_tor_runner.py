@@ -440,6 +440,11 @@ def test_primary_pool_routes_only_to_network_verified_tor_instances(monkeypatch,
     )
 
     assert runner._healthy_managers() == []
+    # Until Tor Check returns, READY workers remain eligible as Tor-only fallbacks.
+    assert runner._ready_backend_endpoints() == [
+        ("127.0.0.1", 19460, None),
+        ("127.0.0.1", 19461, None),
+    ]
     assert runner._probe_ready_backends() is True
     assert runner._healthy_managers() == [first]
     assert runner._ready_backend_endpoints() == [("127.0.0.1", 19460, 125.0)]
@@ -471,6 +476,9 @@ def test_primary_pool_withdraws_a_previously_healthy_worker_after_two_failed_pro
     assert runner._healthy_managers() == [backend]
     assert runner._probe_ready_backends() is False
     assert runner._healthy_managers() == []
+    # A failed external Tor Check withdraws the verified status, not the live
+    # Tor process itself. New requests can still test the actual destination.
+    assert runner._ready_backend_endpoints() == [("127.0.0.1", 19462, None)]
 
 
 def test_primary_pool_does_not_report_connected_before_tor_check_passes(
@@ -503,6 +511,7 @@ def test_primary_pool_does_not_report_connected_before_tor_check_passes(
     assert runner.state == "BOOTSTRAPPING"
     assert runner.app_window.data.value == "Verifying Tor network access…"
     assert runner._healthy_managers() == []
+    assert runner._ready_backend_endpoints() == [("127.0.0.1", 19463, None)]
 
 
 def test_primary_pool_health_snapshot_identifies_each_instance(monkeypatch, tmp_path):
@@ -649,3 +658,19 @@ def test_bridge_fingerprint_control_port_queries_are_throttled(monkeypatch, tmp_
     runner._publish_bridge_usage()
     runner._publish_bridge_usage()
     assert calls == ["query"]
+
+
+
+def test_primary_pool_fallback_excludes_workers_whose_process_is_not_alive(monkeypatch, tmp_path):
+    runner, _config = _runner(monkeypatch, tmp_path, "")
+    live = _ready_fake_backend(19469)
+    dead = _ready_fake_backend(19470)
+    dead.process.poll = lambda: 1
+    runner._backend_managers = [live, dead]
+    runner._backend_statuses = {0: "READY", 1: "READY"}
+    runner._backend_health = {
+        0: {"healthy": False, "latency_ms": None, "consecutive_failures": 2},
+        1: {"healthy": False, "latency_ms": None, "consecutive_failures": 2},
+    }
+
+    assert runner._ready_backend_endpoints() == [("127.0.0.1", 19469, None)]
