@@ -182,22 +182,39 @@ class ProxyWindow(QWidget):
 
         self._home_responsive_mode = None
 
-        self.btn_status = QLabel("NOT CONNECTED")
-        self.btn_status.setObjectName("connectionStatus")
+        self.connection_status_frame = QFrame(self.home_content)
+        self.connection_status_frame.setObjectName("connectionStatusFrame")
+        self.connection_status_frame.setFrameShape(QFrame.Shape.NoFrame)
+        self.connection_status_frame.setAttribute(
+            Qt.WidgetAttribute.WA_StyledBackground, True
+        )
+        self.connection_status_frame.setAutoFillBackground(False)
+        self.connection_status_frame.setMinimumHeight(32)
+        self.connection_status_frame.setMaximumHeight(42)
+        self.connection_status_frame.setMaximumWidth(900)
+        self.connection_status_frame.setSizePolicy(
+            QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed
+        )
+        status_frame_layout = QHBoxLayout(self.connection_status_frame)
+        status_frame_layout.setContentsMargins(14, 3, 14, 3)
+        status_frame_layout.setSpacing(0)
+
+        self.btn_status = QLabel("NOT CONNECTED", self.connection_status_frame)
+        self.btn_status.setObjectName("connectionStatusText")
         self.btn_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.btn_status.setWordWrap(False)
         self.btn_status.setMinimumWidth(0)
-        self.btn_status.setMaximumWidth(900)
-        self.btn_status.setMinimumHeight(32)
-        self.btn_status.setMaximumHeight(42)
+        self.btn_status.setMaximumWidth(870)
         self.btn_status.setSizePolicy(
             QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed
         )
+        status_frame_layout.addWidget(self.btn_status)
         self.set_btn_status_style("disconnected")
         # Keep the connection status anchored at the top of Home.
-        # The responsive top margin below provides a visible gap from the
-        # navigation/header above without tying this label to the Connect row.
-        self.home_layout.addWidget(self.btn_status, 0, Qt.AlignmentFlag.AlignHCenter)
+        # The rounded frame is an independent, content-sized status pill.
+        self.home_layout.addWidget(
+            self.connection_status_frame, 0, Qt.AlignmentFlag.AlignHCenter
+        )
 
         self.connect_btn = PulseButton("CONNECT")
         self.connect_btn.setObjectName("connectPulseButton")
@@ -582,10 +599,12 @@ class ProxyWindow(QWidget):
         for button in self._home_utility_buttons:
             button.setMinimumHeight(36 if compact else 42)
             button.setMaximumHeight(42 if compact else 48)
-        self.btn_status.setMaximumWidth(min(900, max(280, width - 36)))
-        self.btn_status.setProperty("compact", "true" if compact else "false")
-        self.btn_status.style().unpolish(self.btn_status)
-        self.btn_status.style().polish(self.btn_status)
+        self.connection_status_frame.setMaximumWidth(min(900, max(280, width - 36)))
+        self.connection_status_frame.setProperty(
+            "compact", "true" if compact else "false"
+        )
+        self.connection_status_frame.style().unpolish(self.connection_status_frame)
+        self.connection_status_frame.style().polish(self.connection_status_frame)
 
         self._home_service_controls_layout.setDirection(
             vertical if stacked_service_controls else horizontal
@@ -1304,25 +1323,40 @@ class ProxyWindow(QWidget):
             QPushButton#connectPulseButton:focus {{
                 background: transparent; border: none;
             }}
-            QLabel#connectionStatus {{
-                color: {muted}; background: {surface};
-                border: 1px solid {border}; border-radius: 18px;
-                padding: 4px 14px; min-height: 22px;
-                font-size: 10px; font-weight: 750; letter-spacing: 0.7px;
+            QFrame#connectionStatusFrame {{
+                background: {surface}; border: 1px solid {border};
+                border-radius: 999px;
             }}
-            QLabel#connectionStatus[connectionState="connected"] {{
-                color: #45c98b; background: rgba(46, 174, 105, 0.10);
+            QFrame#connectionStatusFrame[connectionState="connected"] {{
+                background: rgba(46, 174, 105, 0.10);
                 border-color: rgba(46, 174, 105, 0.38);
             }}
-            QLabel#connectionStatus[connectionState="connecting"] {{
-                color: {accent}; background: rgba(71, 163, 242, 0.10);
+            QFrame#connectionStatusFrame[connectionState="connecting"] {{
+                background: rgba(71, 163, 242, 0.10);
                 border-color: rgba(71, 163, 242, 0.38);
             }}
-            QLabel#connectionStatus[connectionState="disconnected"] {{
-                color: {muted}; background: {surface}; border-color: {border};
+            QFrame#connectionStatusFrame[connectionState="disconnected"] {{
+                background: {surface}; border-color: {border};
             }}
-            QLabel#connectionStatus[compact="true"] {{
-                font-size: 9px; padding: 3px 11px; border-radius: 18px;
+            QFrame#connectionStatusFrame[compact="true"] {{
+                border-radius: 999px;
+            }}
+            QLabel#connectionStatusText {{
+                color: {muted}; background: transparent; border: none;
+                padding: 0; font-size: 10px; font-weight: 750;
+                letter-spacing: 0.7px;
+            }}
+            QFrame#connectionStatusFrame[connectionState="connected"] QLabel#connectionStatusText {{
+                color: #45c98b;
+            }}
+            QFrame#connectionStatusFrame[connectionState="connecting"] QLabel#connectionStatusText {{
+                color: {accent};
+            }}
+            QFrame#connectionStatusFrame[connectionState="disconnected"] QLabel#connectionStatusText {{
+                color: {muted};
+            }}
+            QFrame#connectionStatusFrame[compact="true"] QLabel#connectionStatusText {{
+                font-size: 9px;
             }}
             QLabel#homeMetricCaption {{
                 color: {muted}; background: transparent; border: none;
@@ -1816,10 +1850,11 @@ class ProxyWindow(QWidget):
         QMessageBox.warning(self, "Disconnect", detail)
 
     def set_btn_status_style(self, stmt):
-        self.btn_status.setProperty("connectionState", stmt)
-        self.btn_status.style().unpolish(self.btn_status)
-        self.btn_status.style().polish(self.btn_status)
-        self.btn_status.update()
+        frame = self.connection_status_frame
+        frame.setProperty("connectionState", stmt)
+        frame.style().unpolish(frame)
+        frame.style().polish(frame)
+        frame.update()
         # The status label above is the only connection guidance on Home.
 
     def _apply_system_proxy_mode(self):
