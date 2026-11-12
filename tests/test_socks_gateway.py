@@ -196,6 +196,85 @@ def test_gateway_fails_over_to_next_ready_backend_before_connect_reply():
     assert not backend_thread.is_alive()
 
 
+def _start_failing_socks_backend(reply_code: int):
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    listener.settimeout(4)
+    port = int(listener.getsockname()[1])
+
+    def serve():
+        try:
+            connection, _ = listener.accept()
+            with connection:
+                connection.settimeout(3)
+                assert _recv_exact(connection, 3) == b"\\x05\\x01\\x00"
+                connection.sendall(b"\\x05\\x00")
+                header = _recv_exact(connection, 4)
+                if header[3] == 1:
+                    _recv_exact(connection, 4)
+                elif header[3] == 4:
+                    _recv_exact(connection, 16)
+                elif header[3] == 3:
+                    size = _recv_exact(connection, 1)[0]
+                    _recv_exact(connection, size)
+                else:
+                    raise AssertionError("unsupported test address type")
+                _recv_exact(connection, 2)
+                connection.sendall(
+                    b"\\x05" + bytes((reply_code,)) + b"\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00"
+                )
+        finally:
+            listener.close()
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    return port, thread
+
+
+def test_gateway_logs_each_tor_destination_failure_and_preserves_socks_reply(caplog):
+    first_port, first_thread = _start_failing_socks_backend(0x01)
+    second_port, second_thread = _start_failing_socks_backend(0x04)
+    gateway_port = _free_port()
+    gateway = SocksFailoverGateway(
+        gateway_port,
+        lambda: [("127.0.0.1", first_port), ("127.0.0.1", second_port)],
+        connect_timeout=2,
+        handshake_timeout=2,
+        idle_timeout=5,
+    )
+    gateway.start()
+    try:
+        with socket.create_connection(("127.0.0.1", gateway_port), timeout=2) as client:
+            client.settimeout(3)
+            client.sendall(b"\\x05\\x01\\x00")
+            assert _recv_exact(client, 2) == b"\\x05\\x00"
+            host = b"diagnostic-example.onion"
+            request = (
+                b"\\x05\\x01\\x00\\x03"
+                + bytes((len(host),))
+                + host
+                + (80).to_bytes(2, "big")
+            )
+            client.sendall(request)
+            # The gateway attempts each ready backend and relays the last
+            # SOCKS failure rather than changing the protocol response.
+            assert _recv_exact(client, 10) in {
+                b"\\x05\\x01\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00",
+                b"\\x05\\x04\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00",
+            }
+    finally:
+        gateway.stop()
+        first_thread.join(timeout=2)
+        second_thread.join(timeout=2)
+
+    assert f"backend=127.0.0.1:{first_port}" in caplog.text
+    assert f"backend=127.0.0.1:{second_port}" in caplog.text
+    assert "reply=0x01 (general SOCKS server failure)" in caplog.text
+    assert "reply=0x04 (host unreachable)" in caplog.text
+    assert "All 2 available Tor SOCKS backend(s) rejected" in caplog.text
+
+
 def test_gateway_rejects_clients_that_do_not_offer_no_auth():
     gateway_port = _free_port()
     gateway = SocksFailoverGateway(gateway_port, lambda: [])
