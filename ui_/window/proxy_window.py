@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPen
 
 from PySide6.QtCore import (
     QAbstractAnimation,
@@ -84,6 +84,31 @@ class ConnectionStatusPill(QWidget):
         if normalized != self._state:
             self._state = normalized
             self.update()
+
+    def set_status_text(self, label: QLabel, text: str, max_width: int) -> None:
+        """Size the capsule to its text, eliding only when Home is genuinely narrow."""
+        full_text = str(text or "")
+        margins = self.layout().contentsMargins() if self.layout() is not None else None
+        horizontal_padding = (
+            margins.left() + margins.right() if margins is not None else 40
+        )
+        available_label_width = max(1, int(max_width) - horizontal_padding - 2)
+        metrics = QFontMetrics(label.font())
+        display_text = metrics.elidedText(
+            full_text, Qt.TextElideMode.ElideRight, available_label_width
+        )
+        # QSS letter-spacing is not included by every Qt font-metrics backend.
+        tracking = max(0, len(display_text) - 1)
+        label_width = min(
+            available_label_width,
+            metrics.horizontalAdvance(display_text) + tracking + 2,
+        )
+        label.setText(display_text)
+        label.setFixedWidth(max(1, label_width))
+        label.setToolTip(full_text if display_text != full_text else "")
+        self.setFixedWidth(max(1, label_width + horizontal_padding + 2))
+        self.updateGeometry()
+        label.updateGeometry()
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
@@ -251,7 +276,7 @@ class ProxyWindow(QWidget):
         status_frame_layout.setContentsMargins(20, 3, 20, 3)
         status_frame_layout.setSpacing(0)
 
-        self.btn_status = QLabel("NOT CONNECTED", self.connection_status_frame)
+        self.btn_status = QLabel("", self.connection_status_frame)
         self.btn_status.setObjectName("connectionStatusText")
         self.btn_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.btn_status.setWordWrap(False)
@@ -267,6 +292,8 @@ class ProxyWindow(QWidget):
         self.home_layout.addWidget(
             self.connection_status_frame, 0, Qt.AlignmentFlag.AlignHCenter
         )
+        self._home_status_full_text = "NOT CONNECTED"
+        self._refresh_home_status_geometry()
 
         self.connect_btn = PulseButton("CONNECT")
         self.connect_btn.setObjectName("connectPulseButton")
@@ -602,6 +629,7 @@ class ProxyWindow(QWidget):
             stacked_proxy_mode, stacked_endpoint_values,
         )
         if mode == self._home_responsive_mode:
+            self._refresh_home_status_geometry()
             self._resize_home_connect_button(width)
             return
         self._home_responsive_mode = mode
@@ -651,11 +679,11 @@ class ProxyWindow(QWidget):
         for button in self._home_utility_buttons:
             button.setMinimumHeight(36 if compact else 42)
             button.setMaximumHeight(42 if compact else 48)
-        self.connection_status_frame.setMaximumWidth(min(900, max(280, width - 36)))
         self.btn_status.setProperty("compact", "true" if compact else "false")
         self.btn_status.style().unpolish(self.btn_status)
         self.btn_status.style().polish(self.btn_status)
         self.btn_status.update()
+        self._refresh_home_status_geometry()
 
         self._home_service_controls_layout.setDirection(
             vertical if stacked_service_controls else horizontal
@@ -1713,7 +1741,7 @@ class ProxyWindow(QWidget):
             if self._parent is not None and self._parent.isHidden():
                 self._parent._notify("TorProxy", "Tor bootstrap completed")
             self._set_home_connected_feedback(True)
-            self.btn_status.setText("CONNECTED TO TOR")
+            self._set_home_status_text("CONNECTED TO TOR")
             self.set_btn_status_style("connected")
             self._update_proxy_buttons()
             self._update_tunnel_hint()
@@ -1743,16 +1771,16 @@ class ProxyWindow(QWidget):
             self._set_home_connected_feedback(True)
             self.failed = False
             if total > 0 and ready < total:
-                self.btn_status.setText(f"CONNECTED · {ready}/{total} TOR INSTANCES READY")
+                self._set_home_status_text(f"CONNECTED · {ready}/{total} TOR INSTANCES READY")
             else:
-                self.btn_status.setText("CONNECTED TO TOR")
+                self._set_home_status_text("CONNECTED TO TOR")
             self.set_btn_status_style("connected")
         elif self.connected:
             # A complete backend outage may be temporary while the supervisor
             # restarts an instance. Keep the gateway alive and show reconnecting
             # instead of tearing the whole pool down immediately.
             self._set_home_connected_feedback(False)
-            self.btn_status.setText("TOR INSTANCES RECONNECTING…")
+            self._set_home_status_text("TOR INSTANCES RECONNECTING…")
             self.set_btn_status_style("connecting")
 
         self._update_proxy_buttons()
@@ -1774,7 +1802,7 @@ class ProxyWindow(QWidget):
             self._request_stop_services(final_status="TOR STARTUP FAILED · SEE EVENT LOG")
         else:
             self.connect_btn.set_connected(False)
-            self.btn_status.setText("TOR STARTUP FAILED · SEE EVENT LOG")
+            self._set_home_status_text("TOR STARTUP FAILED · SEE EVENT LOG")
             self.set_btn_status_style("disconnected")
 
         self._update_proxy_buttons()
@@ -1801,7 +1829,7 @@ class ProxyWindow(QWidget):
         self._stopping = False
         self._disconnect_worker = None
         self.lbl_percent.setText("0%")
-        self.btn_status.setText(self._disconnect_final_status)
+        self._set_home_status_text(self._disconnect_final_status)
         self.set_btn_status_style("disconnected")
         self.connect_btn.set_connected(False)
         self.connect_btn.setEnabled(True)
@@ -1820,7 +1848,7 @@ class ProxyWindow(QWidget):
         self._disconnect_worker = None
         self.connect_btn.set_connected(bool(self.connected))
         self.connect_btn.setEnabled(True)
-        self.btn_status.setText(
+        self._set_home_status_text(
             "DISCONNECT CANCELLED · SERVICES STILL RUNNING"
             if self.running else "DISCONNECT CANCELLED"
         )
@@ -1870,7 +1898,7 @@ class ProxyWindow(QWidget):
             status = "PARTIAL DISCONNECT · LOCAL PROXY STILL RUNNING"
         else:
             status = "DISCONNECTED · CLEANUP WARNING"
-        self.btn_status.setText(status)
+        self._set_home_status_text(status)
         self.set_btn_status_style("connected" if self.connected else "disconnected")
         if not self.connected:
             self.timer_data_usage.stop()
@@ -1883,12 +1911,35 @@ class ProxyWindow(QWidget):
             return
         QMessageBox.warning(self, "Disconnect", detail)
 
+    def _refresh_home_status_geometry(self) -> None:
+        """Recompute status-pill width after text, font, or Home geometry changes."""
+        if not hasattr(self, "btn_status") or not hasattr(self, "connection_status_frame"):
+            return
+        home_width = max(0, self.home_content.width() or self.width())
+        if home_width <= 0:
+            max_frame_width = 900
+        else:
+            max_frame_width = min(900, max(96, home_width - 36))
+        self.connection_status_frame.setMaximumWidth(max_frame_width)
+        self.connection_status_frame.set_status_text(
+            self.btn_status,
+            getattr(self, "_home_status_full_text", self.btn_status.text()),
+            max_frame_width,
+        )
+        self.home_layout.invalidate()
+        self.home_layout.activate()
+
+    def _set_home_status_text(self, text: str) -> None:
+        self._home_status_full_text = str(text or "")
+        self._refresh_home_status_geometry()
+
     def set_btn_status_style(self, stmt):
         self.connection_status_frame.set_connection_state(stmt)
         self.btn_status.setProperty("connectionState", stmt)
         self.btn_status.style().unpolish(self.btn_status)
         self.btn_status.style().polish(self.btn_status)
         self.btn_status.update()
+        self._refresh_home_status_geometry()
         # The status label above is the only connection guidance on Home.
 
     def _apply_system_proxy_mode(self):
@@ -1920,7 +1971,7 @@ class ProxyWindow(QWidget):
         self.failed = False
         self.connect_btn.set_connecting()
         self.connect_btn.setEnabled(False)
-        self.btn_status.setText("CHECKING PORTS…")
+        self._set_home_status_text("CHECKING PORTS…")
         self.set_btn_status_style("connecting")
 
         worker = Worker(self._check_ports_worker)
@@ -1937,7 +1988,7 @@ class ProxyWindow(QWidget):
         self.connected = False
         self.connect_btn.set_connected(False)
         self.connect_btn.setEnabled(True)
-        self.btn_status.setText("CONNECTION CANCELLED")
+        self._set_home_status_text("CONNECTION CANCELLED")
         self.set_btn_status_style("disconnected")
         self.logs_widget.update_log(
             "Connection cancelled; the previous system tunnel was not changed. "
@@ -1959,7 +2010,7 @@ class ProxyWindow(QWidget):
         self.connected = False
         self.connect_btn.set_connected(False)
         self.connect_btn.setEnabled(True)
-        self.btn_status.setText("CONNECTION PREFLIGHT FAILED")
+        self._set_home_status_text("CONNECTION PREFLIGHT FAILED")
         self.set_btn_status_style("disconnected")
         self._update_proxy_buttons()
         QMessageBox.warning(self, "Connection preflight", str(error))
@@ -1998,7 +2049,7 @@ class ProxyWindow(QWidget):
             self.failed = True
             self.connect_btn.set_connected(False)
             self.set_btn_status_style("disconnected")
-            self.btn_status.setText("PORT CHECK FAILED")
+            self._set_home_status_text("PORT CHECK FAILED")
             self.connect_btn.setEnabled(True)
             QMessageBox.warning(
                 self,
@@ -2031,7 +2082,7 @@ class ProxyWindow(QWidget):
                 sync_listener_ports(ports)
 
             # start services (wrap try/except)
-            self.btn_status.setText("CONNECTING TO TOR")
+            self._set_home_status_text("CONNECTING TO TOR")
             self.set_btn_status_style("connecting")
 
             try:
@@ -2065,7 +2116,7 @@ class ProxyWindow(QWidget):
             self.running = False
             self.connected = False
             self.failed = True
-            self.btn_status.setText("CONNECTION FAILED")
+            self._set_home_status_text("CONNECTION FAILED")
             self.set_btn_status_style("disconnected")
             self.connect_btn.set_connected(False)
         finally:
@@ -2119,7 +2170,7 @@ class ProxyWindow(QWidget):
         self._disconnect_final_status = final_status
         self.connect_btn.set_disconnecting()
         self.connect_btn.setEnabled(False)
-        self.btn_status.setText("DISCONNECTING…")
+        self._set_home_status_text("DISCONNECTING…")
         self.set_btn_status_style("disconnecting")
         self._update_proxy_buttons()
         self._update_tunnel_hint()
