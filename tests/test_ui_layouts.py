@@ -3080,6 +3080,10 @@ def test_home_page_uses_adaptive_compact_layout_without_scrollbars():
     assert "height < 530" in source
     assert "height < 570" in source
     assert "height_band = (" in source
+    assert 'margins, spacing, diameter = (20, 1, 20, 1), 2, 172' in source
+    assert 'margins, spacing, diameter = (20, 2, 20, 2), 3, 188' in source
+    assert 'self._home_connection_hero_layout.setSpacing(' in source
+    assert '16 if very_compact else 20 if compact else 28' in source
     assert "self.connect_btn.set_diameter(diameter)" in source
     assert "self._home_connection_hero_layout.setSpacing(" in source
     assert "self._home_service_controls_layout.setDirection(" in source
