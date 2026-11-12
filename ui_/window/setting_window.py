@@ -944,7 +944,7 @@ class SettingWindow(QWidget):
         elif listener_ready and tor_ready:
             status = f"Ready · {bind_host}:{getattr(runner, 'port', CONFIG['proxy_port'])} · HTTPS uses CONNECT."
         elif listener_ready:
-            status = "Listening · waiting for a verified Tor network connection."
+            status = f"Listening · {bind_host}:{getattr(runner, 'port', CONFIG['proxy_port'])} · waiting for a verified Tor network connection."
         elif getattr(proxy_widget, "running", False):
             status = "Enabled · HTTP listener is not running; check the Event Log."
         else:
