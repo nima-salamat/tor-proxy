@@ -348,6 +348,9 @@ class TunnelManagerWindow(QWidget):
             selected_installed = self.manager.is_installed()
         except SystemTunnelError:
             selected_installed = False
+        # The first install-state check may import the verified sing-box
+        # archive shipped in With-Tor packages; refresh the version afterward.
+        installed_version = self.manager.installed_version
 
         if status.get("active"):
             self.installed_state.setText(
