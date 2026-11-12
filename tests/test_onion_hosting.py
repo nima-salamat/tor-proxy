@@ -383,14 +383,22 @@ def test_multiple_onion_ports_publish_through_one_service_and_preflight_each_tar
 
     command = next(item for item in tor.commands if item.startswith("ADD_ONION"))
     assert address == ("a" * 56) + ".onion"
-    assert "Port=80,127.0.0.1:8080" in command
-    assert "Port=443,127.0.0.1:8443" in command
+    mappings = [part for part in command.split() if part.startswith("Port=")]
+    assert len(mappings) == 2
+    assert mappings[0].startswith("Port=80,127.0.0.1:")
+    assert mappings[1].startswith("Port=443,127.0.0.1:")
+    relay_ports = {
+        int(part.rsplit(":", 1)[1]) for part in mappings
+    }
+    assert len(relay_ports) == 2
+    assert not relay_ports.intersection({8080, 8443})
     assert checked_targets == [
         (("127.0.0.1", 8080), 2.5),
         (("127.0.0.1", 8443), 2.5),
     ]
     saved = manager.services_snapshot()[0]
     assert [item["onion_port"] for item in saved["port_mappings"]] == [80, 443]
+    manager.stop_service(profile_id)
 
 
 def test_onion_port_mappings_reject_duplicate_virtual_ports_and_non_loopback(hosting):
@@ -431,8 +439,11 @@ def test_legacy_single_port_service_keeps_single_port_control_command(hosting):
     manager.start_service(profile_id)
 
     command = next(item for item in tor.commands if item.startswith("ADD_ONION"))
-    assert "Port=8080,127.0.0.1:9000" in command
-    assert command.count("Port=") == 1
+    mappings = [part for part in command.split() if part.startswith("Port=")]
+    assert len(mappings) == 1
+    assert mappings[0].startswith("Port=8080,127.0.0.1:")
+    assert not mappings[0].endswith(":9000")
+    manager.stop_service(profile_id)
 
 
 def test_editing_port_mappings_preserves_the_persistent_onion_identity(hosting):
@@ -459,6 +470,73 @@ def test_editing_port_mappings_preserves_the_persistent_onion_identity(hosting):
 
     assert second_address == first_address
     command = next(item for item in reversed(tor.commands) if item.startswith("ADD_ONION"))
-    assert "Port=80,127.0.0.1:8080" in command
-    assert "Port=9443,[::1]:9443" in command
-    assert "Port=443,127.0.0.1:8443" not in command
+    mappings = [part for part in command.split() if part.startswith("Port=")]
+    assert len(mappings) == 2
+    assert mappings[0].startswith("Port=80,127.0.0.1:")
+    assert mappings[1].startswith("Port=9443,127.0.0.1:")
+    assert "Port=443,127.0.0.1:" not in command
+    manager.stop_service(profile_id)
+
+
+
+def test_rotating_service_identity_generates_new_onion_address_and_keeps_private_client_key(hosting):
+    manager, config, tor = hosting
+    profile_id = manager.create_service(
+        display_name="Private rotating site",
+        local_host="127.0.0.1",
+        local_port=9100,
+        persistent=True,
+        access_mode="private",
+    )
+    first_address = manager.start_service(profile_id)
+    manager.stop_service(profile_id)
+    private_auth_before = manager._read_key_material(profile_id)["client_private_key"]
+
+    manager.rotate_service_identity(profile_id)
+    saved = manager.services_snapshot()[0]
+    rotated_material = manager._read_key_material(profile_id)
+    assert saved["address"] == ""
+    assert rotated_material.get("tor_private_key") is None
+    assert rotated_material["client_private_key"] == private_auth_before
+
+    tor.service_id = "b" * 56
+    second_address = manager.start_service(profile_id)
+    assert second_address == ("b" * 56) + ".onion"
+    assert second_address != first_address
+    add_command = next(
+        command for command in reversed(tor.commands)
+        if command.startswith("ADD_ONION")
+    )
+    assert add_command.startswith("ADD_ONION NEW:ED25519-V3")
+    assert "ClientAuthV3=" in add_command
+    assert manager._read_key_material(profile_id)["client_private_key"] == private_auth_before
+    manager.stop_service(profile_id)
+
+
+def test_deleting_service_also_deletes_its_persisted_traffic_history(hosting):
+    manager, _config, _tor = hosting
+    profile_id = manager.create_service(
+        display_name="Disposable site",
+        local_host="127.0.0.1",
+        local_port=9101,
+        persistent=True,
+    )
+    manager._traffic_store.finish_connection(
+        profile_id,
+        onion_port=80,
+        local_port=9101,
+        protocol="HTTP",
+        method="GET",
+        path="/",
+        status_code=200,
+        incoming_bytes=100,
+        outgoing_bytes=250,
+        duration_ms=12,
+    )
+    assert manager.traffic_snapshot(profile_id)["incoming_bytes"] == 100
+    assert manager.traffic_snapshot()["outgoing_bytes"] == 250
+
+    manager.delete_service(profile_id)
+    assert manager.traffic_snapshot(profile_id)["incoming_bytes"] == 0
+    assert manager.traffic_events(profile_id) == []
+    assert manager.traffic_snapshot()["outgoing_bytes"] == 0
