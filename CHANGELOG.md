@@ -3,6 +3,7 @@
 All notable changes are recorded here. Dates and release numbers are added only when a release is actually published.
 
 ## Unreleased
+- Force `.onion` destinations through the Tor route even when a broad Exclude rule matches them; explicit Block rules remain authoritative. Added routing regression coverage and clarified the Main Tor versus Developer Tor path for onion browsing.
 - Improved HTTP proxy 502 diagnostics: event logs now identify the destination, Tor SOCKS versus explicit direct route, local SOCKS endpoint, and bounded socket/SOCKS failure reason without recording request paths or query strings. Documented the separate Main Tor visitor-side route versus Developer Tor's inbound-only Onion Service forwarding.
 
 - Fixed the Developer Tor Onion Services dashboard deleting its permanent empty-state QLabel while rebuilding service cards. Worker completion, error, and cancellation signals now pass through GUI-thread QObject slots, preventing background callbacks from updating destroyed widgets.
