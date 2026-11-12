@@ -75,7 +75,11 @@ def hosting(tmp_path, monkeypatch):
         return nullcontext()
 
     monkeypatch.setattr(onion_module.socket, "create_connection", fake_connection)
-    return manager, config, fake_tor
+    yield manager, config, fake_tor
+    # Keep the test process free of relay listeners even when a test stops
+    # immediately after verifying ADD_ONION behavior.
+    for relay in tuple(manager._traffic_relays.values()):
+        relay.close()
 
 
 def test_only_literal_loopback_targets_are_accepted():
@@ -102,7 +106,10 @@ def test_private_persistent_service_uses_detached_v3_auth_and_keeps_secrets_out_
     assert address == ("a" * 56) + ".onion"
     command = next(item for item in tor.commands if item.startswith("ADD_ONION"))
     assert "Flags=Detach,V3Auth" in command
-    assert "Port=443,127.0.0.1:8000" in command
+    mappings = [part for part in command.split() if part.startswith("Port=")]
+    assert len(mappings) == 1
+    assert mappings[0].startswith("Port=443,127.0.0.1:")
+    assert not mappings[0].endswith(":8000")
     assert "ClientAuthV3=" in command
 
     # The private credentials are only in the protected key file, never config.json.
@@ -480,7 +487,7 @@ def test_editing_port_mappings_preserves_the_persistent_onion_identity(hosting):
 
 
 def test_rotating_service_identity_generates_new_onion_address_and_keeps_private_client_key(hosting):
-    manager, config, tor = hosting
+    manager, _config, tor = hosting
     profile_id = manager.create_service(
         display_name="Private rotating site",
         local_host="127.0.0.1",
