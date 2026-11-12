@@ -160,8 +160,8 @@ class ProxyWindow(QWidget):
         self.home_content = QWidget(self)
         self.home_content.setObjectName("homeContent")
         self.home_layout = QVBoxLayout(self.home_content)
-        self.home_layout.setContentsMargins(26, 18, 26, 14)
-        self.home_layout.setSpacing(10)
+        self.home_layout.setContentsMargins(24, 18, 24, 16)
+        self.home_layout.setSpacing(12)
         self.main_layout.addWidget(self.home_content, 1)
 
         self.btn_status = QLabel("NOT CONNECTED")
@@ -173,10 +173,32 @@ class ProxyWindow(QWidget):
         self.connect_btn = PulseButton("Connect")
         self.connect_btn.setObjectName("connectPulseButton")
         self.connect_btn.clicked.connect(self._toggle)
+
+        connection_hero = QWidget(self.home_content)
+        connection_hero.setObjectName("connectionHero")
+        connection_hero_layout = QVBoxLayout(connection_hero)
+        connection_hero_layout.setContentsMargins(0, 0, 0, 0)
+        connection_hero_layout.setSpacing(10)
+        connection_hero_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        connection_hero_layout.addWidget(
+            self.connect_btn, 0, Qt.AlignmentFlag.AlignHCenter
+        )
+        self.connection_hint = QLabel(
+            "Start Tor to enable your configured proxy listeners.",
+            connection_hero,
+        )
+        self.connection_hint.setObjectName("connectionHint")
+        self.connection_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.connection_hint.setWordWrap(True)
+        self.connection_hint.setMaximumWidth(420)
+        connection_hero_layout.addWidget(
+            self.connection_hint, 0, Qt.AlignmentFlag.AlignHCenter
+        )
+
         connect_row = QHBoxLayout()
         connect_row.setContentsMargins(0, 0, 0, 0)
         connect_row.addStretch(1)
-        connect_row.addWidget(self.connect_btn, 0, Qt.AlignmentFlag.AlignCenter)
+        connect_row.addWidget(connection_hero, 0, Qt.AlignmentFlag.AlignCenter)
         connect_row.addStretch(1)
         self.home_layout.addLayout(connect_row, 1)
 
@@ -210,7 +232,7 @@ class ProxyWindow(QWidget):
         proxy_controls = QFrame(self.home_content)
         proxy_controls.setObjectName("systemProxyControls")
         proxy_controls_layout = QVBoxLayout(proxy_controls)
-        proxy_controls_layout.setContentsMargins(0, 0, 0, 0)
+        proxy_controls_layout.setContentsMargins(12, 7, 12, 7)
         proxy_controls_layout.setSpacing(3)
 
         proxy_row = QHBoxLayout()
@@ -284,12 +306,28 @@ class ProxyWindow(QWidget):
         endpoint_layout.addWidget(self._build_home_endpoint_card("HTTP", "http"), 1)
         endpoint_row.addWidget(endpoint_panel, 2)
 
-        self.tor_ip_label = QLabel("Exit IP: not checked")
+        self.exit_ip_card = QFrame(self.home_content)
+        self.exit_ip_card.setObjectName("homeExitIpCard")
+        self.exit_ip_card.setMinimumWidth(180)
+        exit_ip_layout = QVBoxLayout(self.exit_ip_card)
+        exit_ip_layout.setContentsMargins(12, 9, 12, 9)
+        exit_ip_layout.setSpacing(5)
+        exit_ip_title = QLabel("TOR EXIT IP", self.exit_ip_card)
+        exit_ip_title.setObjectName("homeExitIpTitle")
+        exit_ip_layout.addWidget(exit_ip_title)
+
+        self.tor_ip_label = QLabel("Not checked yet", self.exit_ip_card)
         self.tor_ip_label.setObjectName("exitIpLabel")
-        self.tor_ip_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.tor_ip_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
         self.tor_ip_label.setWordWrap(True)
-        self.tor_ip_label.setMinimumWidth(150)
-        endpoint_row.addWidget(self.tor_ip_label, 1)
+        self.tor_ip_label.setMinimumWidth(140)
+        self.exit_ip_card.setToolTip(
+            "Exit address observed through Tor using the local HTTP proxy."
+        )
+        exit_ip_layout.addWidget(self.tor_ip_label)
+        endpoint_row.addWidget(self.exit_ip_card, 1)
         self.home_layout.addLayout(endpoint_row)
 
         utility_row = QHBoxLayout()
@@ -340,9 +378,10 @@ class ProxyWindow(QWidget):
     def _build_home_endpoint_card(self, title: str, key: str) -> QFrame:
         card = QFrame(self.home_content)
         card.setObjectName("homeEndpointCard")
+        card.setMinimumWidth(210)
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(8, 5, 7, 5)
-        layout.setSpacing(1)
+        layout.setContentsMargins(12, 9, 10, 9)
+        layout.setSpacing(5)
 
         title_label = QLabel(title, card)
         title_label.setObjectName("homeEndpointTitle")
@@ -350,45 +389,71 @@ class ProxyWindow(QWidget):
 
         values = QHBoxLayout()
         values.setContentsMargins(0, 0, 0, 0)
-        values.setSpacing(1)
+        values.setSpacing(10)
+
+        host_column = QVBoxLayout()
+        host_column.setContentsMargins(0, 0, 0, 0)
+        host_column.setSpacing(2)
+        host_caption = QLabel("ADDRESS", card)
+        host_caption.setObjectName("homeEndpointFieldLabel")
+        host_column.addWidget(host_caption)
+
         host_button = QToolButton(card)
         host_button.setObjectName("homeEndpointPart")
         host_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         host_button.setAutoRaise(True)
-        host_button.setMinimumWidth(78)
+        host_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        host_button.setMinimumWidth(84)
+        host_button.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
         host_button.setToolTip("Copy IP address")
         host_button.clicked.connect(
             lambda _checked=False, endpoint=key: self._copy_home_endpoint_part(endpoint, "host")
         )
-        separator = QLabel(":", card)
-        separator.setObjectName("homeEndpointSeparator")
+        host_column.addWidget(host_button)
+
+        port_column = QVBoxLayout()
+        port_column.setContentsMargins(0, 0, 0, 0)
+        port_column.setSpacing(2)
+        port_caption = QLabel("PORT", card)
+        port_caption.setObjectName("homeEndpointFieldLabel")
+        port_column.addWidget(port_caption)
+
         port_button = QToolButton(card)
         port_button.setObjectName("homeEndpointPart")
         port_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         port_button.setAutoRaise(True)
-        port_button.setMinimumWidth(38)
+        port_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        port_button.setMinimumWidth(48)
         port_button.setToolTip("Copy port")
         port_button.clicked.connect(
             lambda _checked=False, endpoint=key: self._copy_home_endpoint_part(endpoint, "port")
         )
+        port_column.addWidget(port_button)
+
         copy_button = QToolButton(card)
         copy_button.setObjectName("homeEndpointCopy")
-        copy_button.setAutoRaise(True)
-        copy_button.setFixedSize(23, 23)
-        copy_button.setToolTip("Copy complete IP:port endpoint")
+        copy_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        copy_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        copy_button.setFixedSize(76, 32)
+        copy_button.setText("Copy")
+        copy_button.setToolTip("Copy the complete host:port endpoint")
         copy_button.setIcon(qta.icon("fa6s.copy", color="#aab4c1"))
         copy_button.clicked.connect(
             lambda _checked=False, endpoint=key: self._copy_home_endpoint_full(endpoint)
         )
-        values.addWidget(host_button, 1)
-        values.addWidget(separator)
-        values.addWidget(port_button)
-        values.addWidget(copy_button)
+
+        values.addLayout(host_column, 1)
+        values.addLayout(port_column, 0)
+        values.addWidget(copy_button, 0, Qt.AlignmentFlag.AlignBottom)
         layout.addLayout(values)
 
         self._home_endpoint_controls[key] = {
             "title": title_label,
+            "host_caption": host_caption,
             "host": host_button,
+            "port_caption": port_caption,
             "port": port_button,
             "copy": copy_button,
         }
@@ -500,6 +565,31 @@ class ProxyWindow(QWidget):
         port = str(values.get("port", "") or "")
         if host and port:
             QApplication.clipboard().setText(f"{host}:{port}")
+            self._show_home_endpoint_copy_feedback(key)
+
+    def _show_home_endpoint_copy_feedback(self, key: str) -> None:
+        controls = self._home_endpoint_controls.get(key, {})
+        button = controls.get("copy")
+        if button is None:
+            return
+        dark = CONFIG["mode"] == "dark"
+        success = "#45c98b" if dark else "#16834f"
+        button.setText("Copied")
+        button.setIcon(qta.icon("fa6s.check", color=success))
+        button.setToolTip("Endpoint copied to the clipboard")
+        QTimer.singleShot(
+            1100, lambda endpoint=key: self._restore_home_endpoint_copy_button(endpoint)
+        )
+
+    def _restore_home_endpoint_copy_button(self, key: str) -> None:
+        controls = self._home_endpoint_controls.get(key, {})
+        button = controls.get("copy")
+        if button is None:
+            return
+        muted = "#aab4c1" if CONFIG["mode"] == "dark" else "#667386"
+        button.setText("Copy")
+        button.setIcon(qta.icon("fa6s.copy", color=muted))
+        button.setToolTip("Copy the complete host:port endpoint")
 
     def _tor_service_reserved_ports(self) -> tuple[int, ...]:
         """Return configured and dynamically allocated primary Tor listener ports."""
@@ -774,11 +864,11 @@ class ProxyWindow(QWidget):
         if self._exit_ip_check_busy:
             return
         if not self.running or not self.connected:
-            self.tor_ip_label.setText("Exit IP: unavailable — Tor proxy is not ready")
+            self.tor_ip_label.setText("Unavailable · Tor is not ready")
             logger.info("Exit-IP check ignored because Tor is not in the verified connected state.")
             return
         if not bool(CONFIG["http_proxy_enabled"]) or not bool(getattr(self.proxy, "is_running", False)):
-            self.tor_ip_label.setText("Exit IP: unavailable — local HTTP proxy is disabled")
+            self.tor_ip_label.setText("Unavailable · HTTP proxy is disabled")
             return
 
         try:
@@ -788,7 +878,7 @@ class ProxyWindow(QWidget):
             proxy_url = f"http://127.0.0.1:{proxy_port}"
             self._exit_ip_check_busy = True
             self.btn_whatismyip.setEnabled(False)
-            self.tor_ip_label.setText("Exit IP: checking through Tor proxy…")
+            self.tor_ip_label.setText("Checking via Tor proxy…")
             worker = Worker(self._perform_exit_ip_check, proxy_url)
             worker.signals.finished.connect(self._on_exit_ip_checked)
             worker.signals.error.connect(self._on_exit_ip_failed)
@@ -816,15 +906,15 @@ class ProxyWindow(QWidget):
         try:
             address = str(result or "").strip()
             if address and address.casefold() != "none":
-                self.tor_ip_label.setText("Observed exit IP (proxied): " + address)
+                self.tor_ip_label.setText(address)
                 logger.info("Exit-IP verification completed through the local proxy.")
             else:
-                self.tor_ip_label.setText("Exit IP: unverified")
+                self.tor_ip_label.setText("Unverified")
                 logger.warning("Exit-IP endpoint returned an empty response.")
         except Exception:
             logger.exception("Could not display the verified exit-IP result.")
             try:
-                self.tor_ip_label.setText("Exit IP result could not be displayed; see the event log")
+                self.tor_ip_label.setText("Could not display result · See Event Log")
             except RuntimeError:
                 pass
         finally:
@@ -834,7 +924,7 @@ class ProxyWindow(QWidget):
         message = str(error or "Unknown exit-IP verification failure.")
         logger.warning("Proxied exit-IP check failed: %s", message)
         try:
-            self.tor_ip_label.setText("Exit IP check failed — no direct fallback used")
+            self.tor_ip_label.setText("Check failed · no direct fallback used")
             self.logs_widget.update_log(f"Exit-IP verification failed: {message}", level="error")
         except (RuntimeError, AttributeError):
             logger.exception("Could not display the exit-IP verification failure.")
@@ -872,37 +962,72 @@ class ProxyWindow(QWidget):
             QWidget#homeContent {{ background: transparent; }}
             QPushButton#connectPulseButton {{ background: transparent; border: none; padding: 0; margin: 0; }}
             QPushButton#connectPulseButton:hover, QPushButton#connectPulseButton:pressed, QPushButton#connectPulseButton:focus {{ background: transparent; border: none; }}
-            QLabel#connectionStatus {{ color: {text}; background: transparent; border: none; padding: 4px; font-size: 12px; font-weight: 700; }}
-            QLabel#connectionStatus[connectionState="connected"] {{ color: #2eae69; }}
-            QLabel#connectionStatus[connectionState="connecting"] {{ color: {accent}; }}
-            QLabel#connectionStatus[connectionState="disconnected"] {{ color: {text}; }}
-            QLabel#bootstrapPercent {{ color: {accent}; background: transparent; border: none; font-size: 14px; font-weight: 700; padding: 3px; }}
-            QLabel#trafficUsage, QLabel#proxyStatusLabel, QLabel#exitIpLabel {{ color: {muted}; background: transparent; border: none; font-size: 11px; padding: 2px; }}
+            QLabel#connectionStatus {{
+                color: {muted}; background: {surface}; border: 1px solid {border};
+                border-radius: 12px; padding: 6px 14px; font-size: 11px;
+                font-weight: 750; letter-spacing: 0.6px;
+            }}
+            QLabel#connectionStatus[connectionState="connected"] {{
+                color: #45c98b; background: rgba(46, 174, 105, 0.10);
+                border-color: rgba(46, 174, 105, 0.38);
+            }}
+            QLabel#connectionStatus[connectionState="connecting"] {{
+                color: {accent}; background: rgba(71, 163, 242, 0.10);
+                border-color: rgba(71, 163, 242, 0.38);
+            }}
+            QLabel#connectionStatus[connectionState="disconnected"] {{
+                color: {muted}; background: {surface}; border-color: {border};
+            }}
+            QLabel#connectionHint {{
+                color: {muted}; background: transparent; border: none;
+                font-size: 11px; padding: 0 12px;
+            }}
+            QLabel#bootstrapPercent {{ color: {accent}; background: transparent; border: none; font-size: 16px; font-weight: 750; padding: 3px; }}
+            QLabel#trafficUsage, QLabel#proxyStatusLabel {{ color: {muted}; background: transparent; border: none; font-size: 11px; padding: 2px; }}
             QWidget#homeEndpointPanel {{ background: transparent; border: none; }}
-            QFrame#homeEndpointCard {{ background: {surface}; border: 1px solid {border}; border-radius: 8px; }}
-            QLabel#homeEndpointTitle {{ color: {muted}; background: transparent; border: none; font-size: 9px; font-weight: 750; letter-spacing: 0.6px; }}
-            QLabel#homeEndpointSeparator {{ color: {muted}; background: transparent; border: none; font-size: 11px; }}
-            QToolButton#homeEndpointPart {{ color: {text}; background: transparent; border: none; padding: 0 1px; font-size: 11px; font-weight: 650; }}
+            QFrame#homeEndpointCard, QFrame#homeExitIpCard {{
+                background: {surface}; border: 1px solid {border}; border-radius: 12px;
+            }}
+            QLabel#homeEndpointTitle, QLabel#homeExitIpTitle {{
+                color: {muted}; background: transparent; border: none;
+                font-size: 9px; font-weight: 800; letter-spacing: 0.8px;
+            }}
+            QLabel#homeEndpointFieldLabel {{
+                color: {muted}; background: transparent; border: none;
+                font-size: 8px; font-weight: 750; letter-spacing: 0.6px;
+            }}
+            QToolButton#homeEndpointPart {{
+                color: {text}; background: transparent; border: none;
+                padding: 0; font-size: 12px; font-weight: 700; text-align: left;
+            }}
             QToolButton#homeEndpointPart:hover {{ color: {accent}; }}
             QToolButton#homeEndpointPart:disabled {{ color: {muted}; }}
-            QToolButton#homeEndpointCopy {{ color: {muted}; background: transparent; border: 1px solid {border}; border-radius: 6px; padding: 1px; }}
-            QToolButton#homeEndpointCopy:hover {{ color: {text}; background: {hover}; border-color: {accent}; }}
+            QToolButton#homeEndpointCopy {{
+                min-width: 76px; min-height: 32px; color: {text}; background: {hover};
+                border: 1px solid {border}; border-radius: 8px; padding: 0 7px;
+                font-size: 10px; font-weight: 750;
+            }}
+            QToolButton#homeEndpointCopy:hover {{ background: rgba(71, 163, 242, 0.12); border-color: {accent}; }}
             QToolButton#homeEndpointCopy:disabled {{ color: {muted}; background: transparent; border-color: {border}; }}
+            QLabel#exitIpLabel {{
+                color: {text}; background: transparent; border: none;
+                font-size: 12px; font-weight: 650; padding: 0;
+            }}
             QPushButton#statisticsLink {{ color: {accent}; background: transparent; border: none; padding: 2px 4px; font-size: 11px; font-weight: 700; }}
             QPushButton#statisticsLink:hover {{ color: {text}; border-bottom: 1px solid {accent}; }}
-            QLabel#systemProxyTitle {{ color: {muted}; background: transparent; border: none; font-size: 10px; font-weight: 750; letter-spacing: 1px; }}
+            QLabel#systemProxyTitle {{ color: {muted}; background: transparent; border: none; font-size: 9px; font-weight: 800; letter-spacing: 0.9px; }}
             QFrame#homeMetricSeparator {{ color: {border}; background: {border}; max-width: 1px; }}
-            QComboBox#systemProxyMode {{ min-height: 34px; padding: 0 12px; border: 1px solid {border}; border-radius: 8px; background: transparent; color: {text}; }}
+            QComboBox#systemProxyMode {{ min-height: 36px; padding: 0 12px; border: 1px solid {border}; border-radius: 9px; background: transparent; color: {text}; }}
             QComboBox#systemProxyMode:hover {{ border-color: {accent}; }}
             QComboBox#systemProxyMode QAbstractItemView {{ background: {surface}; color: {text}; selection-background-color: {accent}; selection-color: #ffffff; outline: none; border: 1px solid {border}; }}
             QComboBox#systemProxyMode QAbstractItemView::item {{ background: {surface}; color: {text}; padding: 8px 10px; min-height: 22px; }}
             QComboBox#systemProxyMode QAbstractItemView::item:selected {{ background: {accent}; color: #ffffff; }}
-            QPushButton#secondaryAction {{ min-height: 36px; padding: 0 14px; border-radius: 8px; background: transparent; color: {text}; border: 1px solid {border}; font-weight: 600; }}
+            QPushButton#secondaryAction {{ min-height: 40px; padding: 0 14px; border-radius: 10px; background: transparent; color: {text}; border: 1px solid {border}; font-weight: 650; }}
             QPushButton#secondaryAction:hover {{ background: rgba(71, 163, 242, 0.12); border-color: {accent}; }}
             QPushButton#secondaryAction:disabled {{ color: {muted}; }}
             QPushButton#secondaryAction:checked {{ background: rgba(71, 163, 242, 0.18); border-color: {accent}; }}
-            QFrame#systemProxyControls {{ background: transparent; border: none; }}
-            QFrame#systemTunnelHint {{ background: transparent; border: 1px solid {border}; border-radius: 8px; }}
+            QFrame#systemProxyControls {{ background: {surface}; border: 1px solid {border}; border-radius: 12px; }}
+            QFrame#systemTunnelHint {{ background: {surface}; border: 1px solid {border}; border-radius: 12px; }}
             QLabel#systemTunnelHintLabel {{ color: {muted}; background: transparent; border: none; font-size: 10px; }}
             QPushButton#systemTunnelAction {{ min-height: 27px; padding: 0 11px; border-radius: 7px; background: {accent}; color: #ffffff; border: 1px solid {accent}; font-size: 10px; font-weight: 750; }}
             QPushButton#systemTunnelAction:hover {{ background: {hover}; color: {text}; border-color: {accent}; }}
@@ -1261,6 +1386,14 @@ class ProxyWindow(QWidget):
         self.btn_status.style().unpolish(self.btn_status)
         self.btn_status.style().polish(self.btn_status)
         self.btn_status.update()
+        hint = getattr(self, "connection_hint", None)
+        if hint is not None:
+            hints = {
+                "connected": "Tor is ready · your configured proxy listeners are available.",
+                "connecting": "Connecting to Tor · proxy traffic is not ready yet.",
+                "disconnected": "Start Tor to enable your configured proxy listeners.",
+            }
+            hint.setText(hints.get(stmt, hints["disconnected"]))
 
     def _apply_system_proxy_mode(self):
         mode = CONFIG["system_proxy_mode"]
