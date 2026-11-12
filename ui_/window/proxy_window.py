@@ -185,9 +185,9 @@ class ProxyWindow(QWidget):
         self.btn_status = QLabel("NOT CONNECTED")
         self.btn_status.setObjectName("connectionStatus")
         self.btn_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.btn_status.setWordWrap(True)
+        self.btn_status.setWordWrap(False)
         self.btn_status.setMinimumWidth(0)
-        self.btn_status.setMaximumWidth(640)
+        self.btn_status.setMaximumWidth(900)
         self.btn_status.setMinimumHeight(32)
         self.btn_status.setMaximumHeight(42)
         self.btn_status.setSizePolicy(
@@ -247,11 +247,11 @@ class ProxyWindow(QWidget):
         metrics_panel.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
-        metrics_panel.setMinimumHeight(62)
-        metrics_panel.setMaximumHeight(84)
+        metrics_panel.setMinimumHeight(0)
+        metrics_panel.setMaximumHeight(56)
         self._home_metrics_panel = metrics_panel
         metrics = QHBoxLayout(metrics_panel)
-        metrics.setContentsMargins(14, 7, 14, 7)
+        metrics.setContentsMargins(0, 0, 0, 0)
         metrics.setSpacing(0)
         self._home_metrics_layout = metrics
 
@@ -582,10 +582,9 @@ class ProxyWindow(QWidget):
         )
         self.connection_hint.setMaximumWidth(400 if compact else 460)
         self._home_metrics_panel.setFixedHeight(
-            58 if very_compact and not stacked_metrics else
-            70 if very_compact else
-            72 if compact and not stacked_metrics else
-            82 if compact else 76
+            50 if stacked_metrics else
+            40 if very_compact or compact else
+            44
         )
         self._home_proxy_controls_layout.setContentsMargins(
             8 if compact else 12, 5 if compact else 7,
@@ -607,6 +606,7 @@ class ProxyWindow(QWidget):
         for button in self._home_utility_buttons:
             button.setMinimumHeight(36 if compact else 42)
             button.setMaximumHeight(42 if compact else 48)
+        self.btn_status.setMaximumWidth(min(900, max(280, width - 36)))
         self.btn_status.setProperty("compact", "true" if compact else "false")
         self.connection_hint.setProperty("compact", "true" if compact else "false")
         for widget in (self.btn_status, self.connection_hint):
@@ -1346,23 +1346,22 @@ class ProxyWindow(QWidget):
             }}
             QLabel#homeMetricCaption {{
                 color: {muted}; background: transparent; border: none;
-                font-size: 9px; font-weight: 800; letter-spacing: 0.9px;
+                font-size: 9px; font-weight: 600; letter-spacing: 0.55px;
             }}
             QLabel#bootstrapPercent {{
                 color: {accent}; background: transparent; border: none;
-                font-size: 18px; font-weight: 780; padding: 2px 3px;
+                font-size: 15px; font-weight: 620; padding: 0 2px;
             }}
             QLabel#trafficUsage, QLabel#proxyStatusLabel {{
                 color: {muted}; background: transparent; border: none;
-                font-size: 11px; padding: 2px;
+                font-size: 10px; font-weight: 500; padding: 0 2px;
             }}
             QWidget#homeEndpointPanel, QWidget#homeMetricsLeft,
             QWidget#homeMetricsRight {{
                 background: transparent; border: none;
             }}
             QFrame#homeMetricsPanel {{
-                background: {surface}; border: 1px solid {border};
-                border-radius: 13px;
+                background: transparent; border: none; border-radius: 0;
             }}
             QFrame#homeEndpointCard, QFrame#homeExitIpCard {{
                 background: {surface}; border: 1px solid {border};
@@ -1403,8 +1402,8 @@ class ProxyWindow(QWidget):
             }}
             QPushButton#statisticsLink {{
                 color: {accent}; background: transparent; border: none;
-                border-radius: 7px; padding: 5px 8px;
-                font-size: 11px; font-weight: 750;
+                border-radius: 7px; padding: 3px 6px;
+                font-size: 10px; font-weight: 620;
             }}
             QPushButton#statisticsLink:hover {{
                 color: {text}; background: {hover};
