@@ -284,15 +284,25 @@ class TorRunner(QObject):
         return True
 
     @staticmethod
-    def _allocate_local_port(reserved: set[int]) -> int:
-        """Choose an unused loopback TCP port for an internal Tor worker."""
+    def _allocate_local_port(reserved: set[int], *, udp: bool = False) -> int:
+        """Choose an unused loopback port, checking UDP too for Tor DNSPort."""
         for _attempt in range(64):
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-                probe.bind(("127.0.0.1", 0))
-                port = int(probe.getsockname()[1])
-            if port not in reserved:
-                reserved.add(port)
-                return port
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                    probe.bind(("127.0.0.1", 0))
+                    port = int(probe.getsockname()[1])
+                    if port in reserved:
+                        continue
+                    if udp:
+                        # Tor DNSPort may need this same numeric port for both
+                        # TCP and UDP. Check both while the TCP probe is held.
+                        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp_probe:
+                            udp_probe.bind(("127.0.0.1", port))
+                    reserved.add(port)
+                    return port
+            except OSError:
+                # A port occupied by either protocol is not a usable DNSPort.
+                continue
         raise TorManagerError("Could not allocate distinct local listener ports for the primary Tor instances.")
 
     def _make_manager(self, worker_index: int = 0) -> TorManager:
@@ -328,7 +338,7 @@ class TorRunner(QObject):
             dns_port = int(self.dns_port) if self.dns_port is not None else None
         else:
             control_port = self._allocate_local_port(reserved)
-            dns_port = self._allocate_local_port(reserved) if self.dns_port is not None else None
+            dns_port = self._allocate_local_port(reserved, udp=True) if self.dns_port is not None else None
 
         if worker_index == 0:
             data_directory = dirs.data / "tor"

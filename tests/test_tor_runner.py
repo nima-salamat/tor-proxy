@@ -674,3 +674,47 @@ def test_primary_pool_fallback_excludes_workers_whose_process_is_not_alive(monke
     }
 
     assert runner._ready_backend_endpoints() == [("127.0.0.1", 19469, None)]
+
+
+
+def test_internal_worker_dns_port_allocation_retries_udp_conflicts(monkeypatch):
+    allocated_stream_ports = iter((62001, 62002))
+    socket_calls = []
+
+    class FakeSocket:
+        def __init__(self, _family, socket_type):
+            self.socket_type = socket_type
+            self.port = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def bind(self, address):
+            _host, requested_port = address
+            socket_calls.append((self.socket_type, requested_port))
+            if self.socket_type == tor.socket.SOCK_STREAM and requested_port == 0:
+                self.port = next(allocated_stream_ports)
+                return
+            self.port = requested_port
+            if self.socket_type == tor.socket.SOCK_DGRAM and requested_port == 62001:
+                raise OSError("UDP port is already in use")
+
+        def getsockname(self):
+            return ("127.0.0.1", self.port)
+
+    monkeypatch.setattr(tor.socket, "socket", FakeSocket)
+    reserved = set()
+
+    selected = tor.TorRunner._allocate_local_port(reserved, udp=True)
+
+    assert selected == 62002
+    assert reserved == {62002}
+    assert socket_calls == [
+        (tor.socket.SOCK_STREAM, 0),
+        (tor.socket.SOCK_DGRAM, 62001),
+        (tor.socket.SOCK_STREAM, 0),
+        (tor.socket.SOCK_DGRAM, 62002),
+    ]

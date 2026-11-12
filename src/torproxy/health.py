@@ -11,6 +11,9 @@ import requests
 TOR_CHECK_URL = "https://check.torproject.org/api/ip"
 MAX_TOR_CHECK_RESPONSE_BYTES = 16 * 1024
 MAX_FALLBACK_RESPONSE_BYTES = 4 * 1024
+# Keep blocking socket reads short; the absolute deadline is enforced again
+# between streamed chunks to bound slow-trickle responses.
+MAX_RESPONSE_IDLE_SECONDS = 1.0
 FALLBACK_PROBES = (
     ("cloudflare_trace", "https://www.cloudflare.com/cdn-cgi/trace", 200),
     ("google_204", "https://www.google.com/generate_204", 204),
@@ -21,10 +24,10 @@ FALLBACK_PROBES = (
 class TorProbeResult:
     """Privacy-preserving result from one Tor SOCKS egress probe cycle.
 
-    healthy means either Tor Check positively confirmed Tor, or both
-    independent HTTPS fallback targets were reachable through the managed
-    SOCKS endpoint. verified_tor is deliberately stricter and is only true
-    when Tor Check returned IsTor=true.
+    healthy means Tor Check positively confirmed Tor, or at least one
+    independent HTTPS fallback target was reachable through the managed
+    SOCKS endpoint before the probe's total deadline. verified_tor is
+    deliberately stricter and is only true when Tor Check returned IsTor=true.
     """
 
     healthy: bool
@@ -36,14 +39,39 @@ class TorProbeResult:
     latency_samples_ms: tuple[float, ...] = ()
 
 
-def _read_bounded(response, limit: int) -> bytes | None:
+def _request_timeout(
+    deadline: float, *, connect_timeout: float, read_timeout: float
+) -> tuple[float, float]:
+    """Return connect/read timeouts bounded by the remaining probe budget.
+
+    Requests' read timeout is an inactivity timeout, not a total response
+    deadline. The streaming reader below also checks the absolute deadline
+    between chunks so a peer cannot keep a probe alive by trickling data.
+    """
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise requests.Timeout("Tor connectivity probe exceeded its total deadline.")
+    return (
+        min(float(connect_timeout), remaining),
+        min(float(read_timeout), remaining, MAX_RESPONSE_IDLE_SECONDS),
+    )
+
+
+def _read_bounded(response, limit: int, *, deadline: float) -> bytes | None:
+    """Read a bounded body and enforce a wall-clock deadline while streaming."""
     body = bytearray()
+    if time.monotonic() >= deadline:
+        raise requests.Timeout("Tor connectivity probe exceeded its total deadline.")
     for chunk in response.iter_content(chunk_size=4096):
+        if time.monotonic() >= deadline:
+            raise requests.Timeout("Tor connectivity probe exceeded its total deadline.")
         if not chunk:
             continue
         if len(body) + len(chunk) > limit:
             return None
         body.extend(chunk)
+    if time.monotonic() >= deadline:
+        raise requests.Timeout("Tor connectivity probe exceeded its total deadline.")
     return bytes(body)
 
 
@@ -52,8 +80,8 @@ def probe_tor_socks(socks_port: int, *, timeout: float = 8.0) -> TorProbeResult:
 
     The primary probe proves that the managed SOCKS endpoint exits through
     Tor. If that verification service is unavailable (but does not explicitly
-    say IsTor=false), two independent HTTPS endpoints are checked through the
-    same SOCKS5H route. A fallback result is marked reachable but unverified;
+    say IsTor=false), up to two independent HTTPS endpoints are checked through
+    the same SOCKS5H route. A fallback result is marked reachable but unverified;
     it is never described as a positive Tor Check result.
 
     Redirects and oversized bodies are rejected, TLS verification remains
@@ -68,7 +96,9 @@ def probe_tor_socks(socks_port: int, *, timeout: float = 8.0) -> TorProbeResult:
 
     proxy = f"socks5h://127.0.0.1:{socks_port}"
     proxies = {"http": proxy, "https": proxy}
-    timeout_pair = (timeout / 2.0, timeout / 2.0)
+    deadline = time.monotonic() + timeout
+    connect_timeout = timeout / 2.0
+    read_timeout = MAX_RESPONSE_IDLE_SECONDS
     headers = {
         "Cache-Control": "no-cache",
         "Pragma": "no-cache",
@@ -84,14 +114,20 @@ def probe_tor_socks(socks_port: int, *, timeout: float = 8.0) -> TorProbeResult:
                 with session.get(
                     TOR_CHECK_URL,
                     proxies=proxies,
-                    timeout=timeout_pair,
+                    timeout=_request_timeout(
+                        deadline,
+                        connect_timeout=connect_timeout,
+                        read_timeout=read_timeout,
+                    ),
                     allow_redirects=False,
                     stream=True,
                     headers={**headers, "Accept": "application/json"},
                 ) as response:
-                    elapsed = max(0.0, (time.monotonic() - started) * 1000.0)
                     if response.status_code == 200:
-                        body = _read_bounded(response, MAX_TOR_CHECK_RESPONSE_BYTES)
+                        body = _read_bounded(
+                            response, MAX_TOR_CHECK_RESPONSE_BYTES, deadline=deadline
+                        )
+                        elapsed = max(0.0, (time.monotonic() - started) * 1000.0)
                         if body is None:
                             return TorProbeResult(
                                 False,
@@ -129,29 +165,33 @@ def probe_tor_socks(socks_port: int, *, timeout: float = 8.0) -> TorProbeResult:
             successful: list[str] = []
             failed: list[str] = []
             samples: list[float] = []
-            fallback_timeout = (
-                min(timeout_pair[0], 2.5),
-                min(timeout_pair[1], 2.5),
-            )
             for target_name, target_url, expected_status in FALLBACK_PROBES:
                 started = time.monotonic()
                 try:
                     with session.get(
                         target_url,
                         proxies=proxies,
-                        timeout=fallback_timeout,
+                        timeout=_request_timeout(
+                            deadline,
+                            connect_timeout=min(connect_timeout, 2.5),
+                            read_timeout=read_timeout,
+                        ),
                         allow_redirects=False,
                         stream=True,
                         headers={**headers, "Accept": "*/*"},
                     ) as response:
-                        elapsed = max(0.0, (time.monotonic() - started) * 1000.0)
                         if response.status_code != expected_status:
                             failed.append(target_name)
                             continue
-                        body = _read_bounded(response, MAX_FALLBACK_RESPONSE_BYTES)
+                        body = _read_bounded(
+                            response, MAX_FALLBACK_RESPONSE_BYTES, deadline=deadline
+                        )
                         if body is None:
                             failed.append(target_name)
                             continue
+                        # Measure the complete response, including streamed body
+                        # consumption, rather than only time-to-response-headers.
+                        elapsed = max(0.0, (time.monotonic() - started) * 1000.0)
                         successful.append(target_name)
                         samples.append(elapsed)
                 except requests.RequestException:
