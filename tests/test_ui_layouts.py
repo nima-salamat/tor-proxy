@@ -3085,6 +3085,7 @@ def test_home_page_uses_adaptive_compact_layout_without_scrollbars():
     assert 'font-size: 9px; font-weight: 600' in source
     assert 'QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed' in source
     assert 'self.btn_status.setWordWrap(False)' in source
+    assert 'border-radius: 18px;' in source
     assert 'self.home_layout.addLayout(connect_row, 1)' in source
     assert 'self.btn_status.setMaximumWidth(900)' in source
     assert 'background: transparent; border: none; border-radius: 0;' in source
