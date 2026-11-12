@@ -191,7 +191,12 @@ class ProxyWindow(QWidget):
         self.connection_hint.setObjectName("connectionHint")
         self.connection_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.connection_hint.setWordWrap(True)
-        self.connection_hint.setMaximumWidth(420)
+        self.connection_hint.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
+        self.connection_hint.setMinimumHeight(38)
+        self.connection_hint.setMaximumWidth(440)
+        self.connection_hint.setProperty("connectionState", "disconnected")
         connection_hero_layout.addWidget(
             self.connection_hint, 0, Qt.AlignmentFlag.AlignHCenter
         )
@@ -991,8 +996,12 @@ class ProxyWindow(QWidget):
             }}
             QLabel#connectionHint {{
                 color: {muted}; background: transparent; border: none;
-                font-size: 11px; padding: 0 12px;
+                font-size: 11px; font-weight: 550;
+                padding: 2px 12px; min-height: 38px;
             }}
+            QLabel#connectionHint[connectionState="connecting"] {{ color: {accent}; }}
+            QLabel#connectionHint[connectionState="connected"] {{ color: #45c98b; }}
+            QLabel#connectionHint[connectionState="disconnected"] {{ color: {muted}; }}
             QLabel#homeMetricCaption {{ color: {muted}; background: transparent; border: none; font-size: 8px; font-weight: 800; letter-spacing: 0.8px; }}
             QLabel#bootstrapPercent {{ color: {accent}; background: transparent; border: none; font-size: 16px; font-weight: 750; padding: 3px; }}
             QLabel#trafficUsage, QLabel#proxyStatusLabel {{ color: {muted}; background: transparent; border: none; font-size: 11px; padding: 2px; }}
@@ -1401,11 +1410,17 @@ class ProxyWindow(QWidget):
         hint = getattr(self, "connection_hint", None)
         if hint is not None:
             hints = {
-                "connected": "Tor is ready · your configured proxy listeners are available.",
-                "connecting": "Connecting to Tor · proxy traffic is not ready yet.",
-                "disconnected": "Start Tor to enable your configured proxy listeners.",
+                "connected": "Tor connection verified.\nYour proxy listeners are ready.",
+                "connecting": "Connecting to Tor…\nProxy becomes available after bootstrap.",
+                "disconnected": "Start Tor to enable\nyour configured proxy listeners.",
             }
-            hint.setText(hints.get(stmt, hints["disconnected"]))
+            state = stmt if stmt in hints else "disconnected"
+            hint.setText(hints[state])
+            hint.setProperty("connectionState", state)
+            hint.style().unpolish(hint)
+            hint.style().polish(hint)
+            hint.updateGeometry()
+            hint.update()
 
     def _apply_system_proxy_mode(self):
         mode = CONFIG["system_proxy_mode"]
