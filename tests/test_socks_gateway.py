@@ -517,22 +517,22 @@ def test_remote_gateway_requires_rfc1929_authentication_and_rejects_no_auth():
         password="strong-client-password",
     )
     rejected = _HandshakePeer("192.0.2.20", b"")
-    assert gateway._authenticate_client(rejected, b"\\x00") is False
-    assert bytes(rejected.sent) == b"\\x05\\xff"
+    assert gateway._authenticate_client(rejected, bytes((0,))) is False
+    assert bytes(rejected.sent) == bytes((5, 255))
 
     username = b"client-user"
     password = b"strong-client-password"
     auth_payload = (
-        b"\\x01" + bytes((len(username),)) + username
+        bytes((1, len(username))) + username
         + bytes((len(password),)) + password
     )
     accepted = _HandshakePeer("192.0.2.20", auth_payload)
-    assert gateway._authenticate_client(accepted, b"\\x02") is True
-    assert bytes(accepted.sent) == b"\\x05\\x02\\x01\\x00"
+    assert gateway._authenticate_client(accepted, bytes((2,))) is True
+    assert bytes(accepted.sent) == bytes((5, 2, 1, 0))
 
     wrong = _HandshakePeer("192.0.2.20", auth_payload[:-1] + b"X")
-    assert gateway._authenticate_client(wrong, b"\\x02") is False
-    assert bytes(wrong.sent) == b"\\x05\\x02\\x01\\x01"
+    assert gateway._authenticate_client(wrong, bytes((2,))) is False
+    assert bytes(wrong.sent) == bytes((5, 2, 1, 1))
 
 
 def test_wildcard_gateway_keeps_loopback_no_auth_compatibility():
@@ -544,8 +544,8 @@ def test_wildcard_gateway_keeps_loopback_no_auth_compatibility():
         password="client-password",
     )
     local = _HandshakePeer("127.0.0.1", b"")
-    assert gateway._authenticate_client(local, b"\\x00") is True
-    assert bytes(local.sent) == b"\\x05\\x00"
+    assert gateway._authenticate_client(local, bytes((0,))) is True
+    assert bytes(local.sent) == bytes((5, 0))
 
 
 def test_gateway_rejects_wildcard_bind_without_credentials():
@@ -554,25 +554,30 @@ def test_gateway_rejects_wildcard_bind_without_credentials():
 
 
 def test_gateway_relay_records_upload_and_download_bytes():
-    left, right = socket.socketpair()
+    client, gateway_client = socket.socketpair()
+    gateway_upstream, upstream = socket.socketpair()
     events = []
     gateway = SocksFailoverGateway(
         _free_port(),
         lambda: [],
         traffic_recorder=lambda amount, direction: events.append((amount, direction)),
     )
-    worker = threading.Thread(target=gateway._relay, args=(left, right, 2), daemon=True)
+    worker = threading.Thread(
+        target=gateway._relay,
+        args=(gateway_client, gateway_upstream, 2),
+        daemon=True,
+    )
     worker.start()
     try:
-        left.sendall(b"upstream")
-        assert _recv_exact(right, 8) == b"upstream"
-        right.sendall(b"down")
-        assert _recv_exact(left, 4) == b"down"
-        left.shutdown(socket.SHUT_WR)
-        right.shutdown(socket.SHUT_WR)
+        client.sendall(b"upstream")
+        assert _recv_exact(upstream, 8) == b"upstream"
+        upstream.sendall(b"down")
+        assert _recv_exact(client, 4) == b"down"
+        client.shutdown(socket.SHUT_WR)
+        upstream.shutdown(socket.SHUT_WR)
         worker.join(timeout=3)
     finally:
-        left.close()
-        right.close()
+        for peer in (client, gateway_client, gateway_upstream, upstream):
+            peer.close()
     assert not worker.is_alive()
     assert events == [(8, "upload"), (4, "download")]

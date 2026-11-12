@@ -762,24 +762,25 @@ def test_http_proxy_relay_can_defer_tor_routed_accounting_to_socks_gateway(monke
         "_record_bytes",
         lambda amount, direction=None: recorded.append((amount, direction)),
     )
-    left, right = socket.socketpair()
+    client, proxy_side = socket.socketpair()
+    proxy_upstream, upstream = socket.socketpair()
     worker = threading.Thread(
         target=proxy_module.ProxyHandler._relay,
-        args=(left, right),
+        args=(proxy_side, proxy_upstream),
         kwargs={"record_traffic": record_traffic},
         daemon=True,
     )
     worker.start()
     try:
-        left.sendall(b"upload")
-        assert _receive_exact(right, 6) == b"upload"
-        right.sendall(b"download")
-        assert _receive_exact(left, 8) == b"download"
-        left.shutdown(socket.SHUT_WR)
-        right.shutdown(socket.SHUT_WR)
+        client.sendall(b"upload")
+        assert _receive_exact(upstream, 6) == b"upload"
+        upstream.sendall(b"download")
+        assert _receive_exact(client, 8) == b"download"
+        client.shutdown(socket.SHUT_WR)
+        upstream.shutdown(socket.SHUT_WR)
         worker.join(timeout=3)
     finally:
-        left.close()
-        right.close()
+        for peer in (client, proxy_side, proxy_upstream, upstream):
+            peer.close()
     assert not worker.is_alive()
     assert recorded == ([(6, "upload"), (8, "download")] if record_traffic else [])

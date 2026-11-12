@@ -1080,6 +1080,10 @@ class SettingWindow(QWidget):
             self._refresh_tor_socks_status()
             return
         self._refresh_tor_socks_status(result)
+        proxy_widget = getattr(self._parent, "proxyWidget", None)
+        refresh = getattr(proxy_widget, "refresh_home_endpoint_display", None)
+        if callable(refresh):
+            refresh()
 
     def save_tor_socks_credentials(self) -> None:
         username = self.inp_tor_socks_username.text().strip()
@@ -1240,6 +1244,9 @@ class SettingWindow(QWidget):
         runner = getattr(proxy_widget, "proxy", None)
         if runner is None:
             self._refresh_http_proxy_status()
+            refresh = getattr(proxy_widget, "refresh_home_endpoint_display", None)
+            if callable(refresh):
+                refresh()
             return
         try:
             result = runner.set_http_bind_all_interfaces(enabled)
@@ -1257,6 +1264,9 @@ class SettingWindow(QWidget):
         if result:
             self.lbl_http_proxy_status.setText(str(result))
         self._refresh_http_proxy_status()
+        refresh = getattr(proxy_widget, "refresh_home_endpoint_display", None)
+        if callable(refresh):
+            refresh()
 
     def test_http_connect(self) -> None:
         """Verify an actual HTTPS request through this HTTP proxy and Tor."""

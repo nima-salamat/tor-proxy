@@ -757,6 +757,11 @@ def test_main_socks_gateway_port_is_separate_from_random_tor_worker_ports(monkey
 
     directories = SimpleNamespace(data=tmp_path / "app-data", logs=tmp_path / "logs")
     monkeypatch.setattr(tor, "user_directories", lambda: directories)
+    monkeypatch.setattr(
+        tor,
+        "TorManager",
+        lambda settings: SimpleNamespace(settings=settings),
+    )
 
     managers = [runner._make_manager(index) for index in range(3)]
     worker_ports = [manager.settings.socks_port for manager in managers]

@@ -1,5 +1,7 @@
 from PySide6.QtWidgets import (
+    QApplication,
     QLabel,
+    QToolButton,
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
@@ -34,8 +36,10 @@ from torproxy.paths import user_directories
 from torproxy.system_tunnel import SystemTunnelCancelled, SystemTunnelManager
 from ui_.window.tor_log_dialog import TorLogDialog
 from ui_.window.open_browser_dialog import OpenBrowserDialog
+import ipaddress
 import json
 import logging
+import socket
 import threading
 import qtawesome as qta
 
@@ -265,11 +269,28 @@ class ProxyWindow(QWidget):
         service_controls_row.addWidget(self.system_tunnel_hint, 1)
         self.home_layout.addLayout(service_controls_row)
 
+        # Compact copyable listener endpoints sit beside the observed exit IP.
+        self._home_endpoint_controls = {}
+        self._home_endpoint_values = {}
+        endpoint_row = QHBoxLayout()
+        endpoint_row.setContentsMargins(0, 0, 0, 0)
+        endpoint_row.setSpacing(12)
+        endpoint_panel = QWidget(self.home_content)
+        endpoint_panel.setObjectName("homeEndpointPanel")
+        endpoint_layout = QHBoxLayout(endpoint_panel)
+        endpoint_layout.setContentsMargins(0, 0, 0, 0)
+        endpoint_layout.setSpacing(8)
+        endpoint_layout.addWidget(self._build_home_endpoint_card("SOCKS5", "socks"), 1)
+        endpoint_layout.addWidget(self._build_home_endpoint_card("HTTP", "http"), 1)
+        endpoint_row.addWidget(endpoint_panel, 2)
+
         self.tor_ip_label = QLabel("Exit IP: not checked")
         self.tor_ip_label.setObjectName("exitIpLabel")
-        self.tor_ip_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.tor_ip_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.tor_ip_label.setWordWrap(True)
-        self.home_layout.addWidget(self.tor_ip_label)
+        self.tor_ip_label.setMinimumWidth(150)
+        endpoint_row.addWidget(self.tor_ip_label, 1)
+        self.home_layout.addLayout(endpoint_row)
 
         utility_row = QHBoxLayout()
         utility_row.setSpacing(8)
@@ -303,6 +324,7 @@ class ProxyWindow(QWidget):
         self.tor.bridges_updated.connect(self._sync_bridge_editor)
         self.logs_widget.apply_theme(CONFIG["mode"])
         self._apply_home_theme()
+        self._refresh_home_endpoint_display()
         self._update_proxy_buttons()
         self._update_proxy_mode_status()
         if CONFIG["system_proxy_mode"] == "clear":
@@ -314,6 +336,169 @@ class ProxyWindow(QWidget):
         self.timer_data_usage = QTimer()
         self.timer_data_usage.setInterval(1000)
         self.timer_data_usage.timeout.connect(self.change_data_usage)
+
+    def _build_home_endpoint_card(self, title: str, key: str) -> QFrame:
+        card = QFrame(self.home_content)
+        card.setObjectName("homeEndpointCard")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(8, 5, 7, 5)
+        layout.setSpacing(1)
+
+        title_label = QLabel(title, card)
+        title_label.setObjectName("homeEndpointTitle")
+        layout.addWidget(title_label)
+
+        values = QHBoxLayout()
+        values.setContentsMargins(0, 0, 0, 0)
+        values.setSpacing(1)
+        host_button = QToolButton(card)
+        host_button.setObjectName("homeEndpointPart")
+        host_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        host_button.setAutoRaise(True)
+        host_button.setMinimumWidth(78)
+        host_button.setToolTip("Copy IP address")
+        host_button.clicked.connect(
+            lambda _checked=False, endpoint=key: self._copy_home_endpoint_part(endpoint, "host")
+        )
+        separator = QLabel(":", card)
+        separator.setObjectName("homeEndpointSeparator")
+        port_button = QToolButton(card)
+        port_button.setObjectName("homeEndpointPart")
+        port_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        port_button.setAutoRaise(True)
+        port_button.setMinimumWidth(38)
+        port_button.setToolTip("Copy port")
+        port_button.clicked.connect(
+            lambda _checked=False, endpoint=key: self._copy_home_endpoint_part(endpoint, "port")
+        )
+        copy_button = QToolButton(card)
+        copy_button.setObjectName("homeEndpointCopy")
+        copy_button.setAutoRaise(True)
+        copy_button.setFixedSize(23, 23)
+        copy_button.setToolTip("Copy complete IP:port endpoint")
+        copy_button.setIcon(qta.icon("fa6s.copy", color="#aab4c1"))
+        copy_button.clicked.connect(
+            lambda _checked=False, endpoint=key: self._copy_home_endpoint_full(endpoint)
+        )
+        values.addWidget(host_button, 1)
+        values.addWidget(separator)
+        values.addWidget(port_button)
+        values.addWidget(copy_button)
+        layout.addLayout(values)
+
+        self._home_endpoint_controls[key] = {
+            "title": title_label,
+            "host": host_button,
+            "port": port_button,
+            "copy": copy_button,
+        }
+        return card
+
+    @staticmethod
+    def _resolve_lan_ipv4() -> str | None:
+        """Find a usable physical LAN IPv4 address, never returning a wildcard or loopback."""
+        try:
+            import psutil
+
+            interface_stats = psutil.net_if_stats()
+            candidates: list[tuple[int, str, str]] = []
+            virtual_markers = (
+                "loopback", "torproxy", "sing-box", "wintun", "tun", "tap",
+                "virtual", "vmware", "virtualbox", "vbox", "hyper-v", "docker",
+                "wsl", "tailscale", "zerotier", "teredo", "bluetooth",
+            )
+            preferred_markers = ("wi-fi", "wifi", "wlan", "wireless", "ethernet", "eth")
+            lan_networks = tuple(
+                ipaddress.ip_network(network)
+                for network in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+            )
+            for interface_name, addresses in psutil.net_if_addrs().items():
+                name = str(interface_name).casefold()
+                if any(marker in name for marker in virtual_markers):
+                    continue
+                stats = interface_stats.get(interface_name)
+                if stats is not None and not bool(getattr(stats, "isup", False)):
+                    continue
+                for item in addresses:
+                    if item.family != socket.AF_INET:
+                        continue
+                    try:
+                        address = ipaddress.ip_address(str(item.address))
+                    except ValueError:
+                        continue
+                    if not any(address in network for network in lan_networks):
+                        continue
+                    priority = 2 if any(marker in name for marker in preferred_markers) else 1
+                    candidates.append((priority, name, str(address)))
+
+            if not candidates:
+                return None
+
+            # UDP connect performs a local route lookup; it does not send a packet.
+            route_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                route_socket.connect(("1.1.1.1", 53))
+                route_address = str(route_socket.getsockname()[0])
+                if any(address == route_address for _priority, _name, address in candidates):
+                    return route_address
+            except OSError:
+                pass
+            finally:
+                route_socket.close()
+
+            candidates.sort(key=lambda item: (-item[0], item[1], item[2]))
+            return candidates[0][2]
+        except Exception:
+            logger.debug("Could not determine a physical LAN IPv4 address for proxy endpoint display.", exc_info=True)
+            return None
+
+    def _refresh_home_endpoint_display(self) -> None:
+        """Show the client-reachable host for each independent listener binding."""
+        if not getattr(self, "_home_endpoint_controls", None):
+            return
+        socks_remote = bool(CONFIG.get("tor_socks_bind_all_interfaces", False))
+        http_remote = bool(CONFIG.get("http_proxy_bind_all_interfaces", False))
+        lan_ip = self._resolve_lan_ipv4() if socks_remote or http_remote else None
+        endpoint_specs = (
+            ("socks", socks_remote, int(self.tor_socks_port), "SOCKS5"),
+            ("http", http_remote, int(self.proxy_port), "HTTP"),
+        )
+        for key, remote, port, label in endpoint_specs:
+            host = lan_ip if remote else "127.0.0.1"
+            available_host = bool(host)
+            displayed_host = host or "LAN IP unavailable"
+            controls = self._home_endpoint_controls[key]
+            controls["title"].setText(
+                label + (" · OFF" if key == "http" and not bool(CONFIG.get("http_proxy_enabled", True)) else "")
+            )
+            controls["host"].setText(displayed_host)
+            controls["host"].setEnabled(available_host)
+            controls["port"].setText(str(port))
+            controls["port"].setEnabled(1 <= port <= 65535)
+            controls["copy"].setEnabled(available_host and 1 <= port <= 65535)
+            controls["host"].setToolTip(
+                "Copy IP address" if available_host else "No physical LAN IPv4 address was detected."
+            )
+            self._home_endpoint_values[key] = {
+                "host": host or "",
+                "port": str(port),
+            }
+
+    def refresh_home_endpoint_display(self) -> None:
+        """Public hook for Settings when a listener changes between local and LAN binding."""
+        self._refresh_home_endpoint_display()
+
+    def _copy_home_endpoint_part(self, key: str, part: str) -> None:
+        value = str(self._home_endpoint_values.get(key, {}).get(part, "") or "")
+        if value:
+            QApplication.clipboard().setText(value)
+
+    def _copy_home_endpoint_full(self, key: str) -> None:
+        values = self._home_endpoint_values.get(key, {})
+        host = str(values.get("host", "") or "")
+        port = str(values.get("port", "") or "")
+        if host and port:
+            QApplication.clipboard().setText(f"{host}:{port}")
 
     def _tor_service_reserved_ports(self) -> tuple[int, ...]:
         """Return configured and dynamically allocated primary Tor listener ports."""
@@ -692,6 +877,16 @@ class ProxyWindow(QWidget):
             QLabel#connectionStatus[connectionState="disconnected"] {{ color: {text}; }}
             QLabel#bootstrapPercent {{ color: {accent}; background: transparent; border: none; font-size: 14px; font-weight: 700; padding: 3px; }}
             QLabel#trafficUsage, QLabel#proxyStatusLabel, QLabel#exitIpLabel {{ color: {muted}; background: transparent; border: none; font-size: 11px; padding: 2px; }}
+            QWidget#homeEndpointPanel {{ background: transparent; border: none; }}
+            QFrame#homeEndpointCard {{ background: {surface}; border: 1px solid {border}; border-radius: 8px; }}
+            QLabel#homeEndpointTitle {{ color: {muted}; background: transparent; border: none; font-size: 9px; font-weight: 750; letter-spacing: 0.6px; }}
+            QLabel#homeEndpointSeparator {{ color: {muted}; background: transparent; border: none; font-size: 11px; }}
+            QToolButton#homeEndpointPart {{ color: {text}; background: transparent; border: none; padding: 0 1px; font-size: 11px; font-weight: 650; }}
+            QToolButton#homeEndpointPart:hover {{ color: {accent}; }}
+            QToolButton#homeEndpointPart:disabled {{ color: {muted}; }}
+            QToolButton#homeEndpointCopy {{ color: {muted}; background: transparent; border: 1px solid {border}; border-radius: 6px; padding: 1px; }}
+            QToolButton#homeEndpointCopy:hover {{ color: {text}; background: {hover}; border-color: {accent}; }}
+            QToolButton#homeEndpointCopy:disabled {{ color: {muted}; background: transparent; border-color: {border}; }}
             QPushButton#statisticsLink {{ color: {accent}; background: transparent; border: none; padding: 2px 4px; font-size: 11px; font-weight: 700; }}
             QPushButton#statisticsLink:hover {{ color: {text}; border-bottom: 1px solid {accent}; }}
             QLabel#systemProxyTitle {{ color: {muted}; background: transparent; border: none; font-size: 10px; font-weight: 750; letter-spacing: 1px; }}
@@ -722,6 +917,8 @@ class ProxyWindow(QWidget):
         self.btn_open_browser.setIcon(qta.icon("fa6s.globe", color=icon_color))
         self.btn_system_tunnel_action.set_theme_colors(text=text, muted=muted)
         self.btn_statistics.setIcon(qta.icon("fa6s.chart-line", color=accent))
+        for controls in getattr(self, "_home_endpoint_controls", {}).values():
+            controls["copy"].setIcon(qta.icon("fa6s.copy", color=muted))
 
     def _on_system_proxy_mode_changed(self, index):
         mode = self.system_proxy_mode.itemData(index)
