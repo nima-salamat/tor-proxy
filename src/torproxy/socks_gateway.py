@@ -12,6 +12,24 @@ from torproxy.host_rules import HostRuleError, normalize_hostname
 
 LOGGER = logging.getLogger(__name__)
 
+_SOCKS_REPLY_REASONS = {
+    0x00: "succeeded",
+    0x01: "general SOCKS server failure",
+    0x02: "connection not allowed by ruleset",
+    0x03: "network unreachable",
+    0x04: "host unreachable",
+    0x05: "connection refused",
+    0x06: "TTL expired",
+    0x07: "command not supported",
+    0x08: "address type not supported",
+}
+
+
+def _socks_reply_reason(code: int) -> str:
+    """Return the RFC 1928 meaning for a SOCKS5 REP code."""
+    return _SOCKS_REPLY_REASONS.get(int(code), "unassigned SOCKS5 reply code")
+
+
 
 class SocksGatewayError(RuntimeError):
     """The local failover SOCKS gateway could not start or stop safely."""
@@ -567,12 +585,14 @@ class SocksFailoverGateway:
                 return
 
             last_reply: bytes | None = None
+            attempted_backends = 0
 
             for endpoint in self._ordered_backends():
                 if self._stop.is_set():
                     return
                 if not self._reserve_backend(endpoint):
                     continue
+                attempted_backends += 1
                 candidate: socket.socket | None = None
                 keep_reservation = False
                 attempt_started = time.monotonic()
@@ -611,6 +631,17 @@ class SocksFailoverGateway:
                     # let another healthy instance try the same destination.
                     self._record_backend_success(endpoint, elapsed_ms)
                     last_reply = reply
+                    LOGGER.warning(
+                        "Tor SOCKS backend could not connect to destination: destination=%s:%s "
+                        "backend=%s:%s reply=0x%02x (%s). The backend completed SOCKS negotiation; "
+                        "this is a destination-connect failure, not a local gateway listener failure.",
+                        destination_host,
+                        destination_port,
+                        endpoint[0],
+                        endpoint[1],
+                        reply[1],
+                        _socks_reply_reason(reply[1]),
+                    )
                 except (OSError, TimeoutError, ValueError):
                     self._record_backend_failure(endpoint)
                     LOGGER.debug("A Tor SOCKS backend failed before CONNECT was established.", exc_info=True)
@@ -624,6 +655,22 @@ class SocksFailoverGateway:
                     if not keep_reservation:
                         self._release_backend(endpoint)
 
+            if last_reply is not None:
+                LOGGER.warning(
+                    "All %d available Tor SOCKS backend(s) rejected destination=%s:%s; "
+                    "returning reply=0x%02x (%s) to the local client.",
+                    attempted_backends,
+                    destination_host,
+                    destination_port,
+                    last_reply[1],
+                    _socks_reply_reason(last_reply[1]),
+                )
+            elif attempted_backends == 0:
+                LOGGER.error(
+                    "No healthy Tor SOCKS backend was available for destination=%s:%s.",
+                    destination_host,
+                    destination_port,
+                )
             try:
                 client.sendall(last_reply or self._failure_reply(1))
             except OSError:
