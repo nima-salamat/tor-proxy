@@ -2918,3 +2918,22 @@ def test_custom_tor_copy_socks_icon_tracks_light_and_dark_theme(qt_app, monkeypa
         page.close()
         page.deleteLater()
         qt_app.processEvents()
+
+
+
+def test_main_socks_gateway_settings_and_authentication_are_wired_safely():
+    repository = Path(__file__).resolve().parents[1]
+    settings = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
+    config = (repository / "config.py").read_text(encoding="utf-8")
+    gateway = (repository / "src/torproxy/socks_gateway.py").read_text(encoding="utf-8")
+    tor_source = (repository / "tor.py").read_text(encoding="utf-8")
+    proxy_source = (repository / "proxy.py").read_text(encoding="utf-8")
+
+    assert '"tor_socks_bind_all_interfaces": False' in config
+    assert 'mainSocksLanAccessPreference' in settings
+    assert 'generate_socks_gateway_credentials' in settings
+    assert 'write_socks_gateway_credentials' in settings
+    assert 'not encrypted' in settings
+    assert 'traffic_recorder=record_proxy_traffic' in tor_source
+    assert 'hmac.compare_digest' in gateway
+    assert 'record_traffic=(route == "direct")' in proxy_source
