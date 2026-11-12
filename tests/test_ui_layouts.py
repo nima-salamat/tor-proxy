@@ -3062,3 +3062,33 @@ def test_developer_tor_activity_exposes_per_port_events_and_error_counters():
     assert '"HTTP sessions"' in page
     assert "one first request line per TCP connection" in page
     assert "_MAX_CONNECTIONS_PER_PORT = 128" in store
+
+
+
+def test_home_page_reflows_without_horizontal_overflow_when_window_is_narrow():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+
+    assert "QScrollArea," in source
+    assert 'self.home_scroll.setObjectName("homeScrollArea")' in source
+    assert "self.home_scroll.setWidgetResizable(True)" in source
+    assert "Qt.ScrollBarPolicy.ScrollBarAlwaysOff" in source
+    assert "Qt.ScrollBarPolicy.ScrollBarAsNeeded" in source
+    assert "self.home_scroll.setWidget(self.home_content)" in source
+    assert "self.home_content.setMinimumWidth(0)" in source
+    assert "def _update_home_responsive_layout(self)" in source
+    assert "def resizeEvent(self, event) -> None:" in source
+    assert "QBoxLayout.Direction.TopToBottom" in source
+    assert "QBoxLayout.Direction.LeftToRight" in source
+    assert "self._home_service_controls_layout.setDirection(" in source
+    assert "self._home_endpoint_row.setDirection(" in source
+    assert "self._home_endpoint_layout.setDirection(" in source
+    assert "self._home_utility_layout.setDirection(" in source
+    assert "self._home_metrics_layout.setDirection(" in source
+    assert "self._home_metric_separator.setFrameShape(QFrame.Shape.HLine)" in source
+    assert "self.system_tunnel_hint_label.setWordWrap(True)" in source
+    assert "card.setMinimumWidth(210)" not in source
+    assert "self.exit_ip_card.setMinimumWidth(180)" not in source
+    assert "self.tor_ip_label.setMinimumWidth(140)" not in source
+    assert "def _logs_drawer_width(self) -> int:" in source
+    assert "target_width = self._logs_drawer_width() if opening else 0" in source
