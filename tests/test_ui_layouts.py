@@ -3097,7 +3097,7 @@ def test_home_page_uses_adaptive_compact_layout_without_scrollbars():
     assert "self.btn_status.setText(" not in source
     assert "self.connection_status_frame.set_connection_state(stmt)" in source
     assert "self.connection_status_frame.set_theme_mode(CONFIG[\"mode\"])" in source
-    assert "Qt.WidgetAttribute.WA_TranslucentBackground" not in source
+    assert "self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)" in source
     assert "Qt.WidgetAttribute.WA_NoSystemBackground" not in source
     assert "Paint only the rounded capsule." in source
     assert "QPainter.RenderHint.Antialiasing" in source
@@ -3166,6 +3166,7 @@ def test_connection_status_pill_renders_over_its_parent_background(qt_app):
     palette = parent.palette()
     palette.setColor(QPalette.ColorRole.Window, parent_color)
     parent.setPalette(palette)
+    parent.setStyleSheet("background-color: #314159;")
     parent.setAutoFillBackground(True)
 
     pill = ConnectionStatusPill(parent)
