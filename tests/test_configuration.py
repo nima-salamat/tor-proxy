@@ -45,6 +45,9 @@ def test_typed_configuration_requires_explicit_opt_in_for_wildcard_proxy_host():
         TorProxyConfig(proxy_host="0.0.0.0")
     config = TorProxyConfig(proxy_host="0.0.0.0", proxy_allow_remote=True)
     assert config.proxy_allow_remote is True
+    migrated = migrate_legacy_config({"http_proxy_bind_all_interfaces": True})
+    assert migrated["proxy_allow_remote"] is True
+    assert migrated["proxy_host"] == "0.0.0.0"
     with pytest.raises(ConfigurationError, match="proxy_allow_remote"):
         TorProxyConfig(proxy_allow_remote=1)
 
