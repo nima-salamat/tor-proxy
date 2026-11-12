@@ -1853,6 +1853,10 @@ class Runner:
             self.http_enabled = bool(CONFIG["http_proxy_enabled"])
         except (KeyError, TypeError):
             self.http_enabled = True
+        try:
+            self.http_bind_all_interfaces = bool(CONFIG["http_proxy_bind_all_interfaces"])
+        except (KeyError, TypeError):
+            self.http_bind_all_interfaces = False
         self._started = False
         self._lifecycle_lock = threading.RLock()
 
@@ -1873,7 +1877,13 @@ class Runner:
                 self.thread = None
 
         ProxyHandler.app_window = self.app_window
-        server = ThreadedHTTPServer(("127.0.0.1", self.port), ProxyHandler, self.tor_socks_port)
+        bind_host = "0.0.0.0" if self.http_bind_all_interfaces else "127.0.0.1"
+        server = ThreadedHTTPServer(
+            (bind_host, self.port),
+            ProxyHandler,
+            self.tor_socks_port,
+            allow_remote=self.http_bind_all_interfaces,
+        )
         thread = threading.Thread(target=server.serve_forever, name="torproxy-http-proxy", daemon=True)
         try:
             thread.start()
@@ -1882,7 +1892,12 @@ class Runner:
             raise
         self.server = server
         self.thread = thread
-        logger.info("Loopback HTTP proxy started on 127.0.0.1:%s.", self.port)
+        logger.warning(
+            "HTTP proxy started on %s:%s; LAN access is %s and the listener has no authentication.",
+            bind_host,
+            self.port,
+            "ENABLED" if self.http_bind_all_interfaces else "disabled",
+        )
 
     def _stop_http_listener(self) -> None:
         server = self.server
@@ -1947,6 +1962,35 @@ class Runner:
                     return f"HTTP proxy listening at 127.0.0.1:{self.port}."
                 return "HTTP proxy enabled; it will start with the next Tor connection."
             return "HTTP proxy disabled. Tor SOCKS and System Tunnel remain available."
+
+    def set_http_bind_all_interfaces(self, enabled: bool) -> str:
+        """Switch the HTTP listener between loopback and wildcard LAN binding."""
+        target = bool(enabled)
+        with self._lifecycle_lock:
+            previous = self.http_bind_all_interfaces
+            if target == previous:
+                host = "0.0.0.0" if target else "127.0.0.1"
+                return f"HTTP proxy is already bound to {host}:{self.port}."
+            self.http_bind_all_interfaces = target
+            try:
+                if self._started and self.http_enabled:
+                    self._stop_http_listener()
+                    self._start_http_listener()
+            except Exception:
+                self.http_bind_all_interfaces = previous
+                try:
+                    if self._started and self.http_enabled and not self.is_running:
+                        self._start_http_listener()
+                except Exception:
+                    logger.exception("Could not restore the previous HTTP proxy bind address.")
+                raise
+            host = "0.0.0.0" if target else "127.0.0.1"
+            if target:
+                return (
+                    f"HTTP proxy is listening on {host}:{self.port}. "
+                    "Any device that can reach this computer may use it; no proxy authentication is configured."
+                )
+            return f"HTTP proxy is restricted to this device at {host}:{self.port}."
 
     def start(self):
         with self._lifecycle_lock:
