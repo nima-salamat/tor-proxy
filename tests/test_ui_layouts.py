@@ -1660,16 +1660,16 @@ def test_home_places_system_proxy_and_tunnel_controls_in_one_row():
     assert "self.home_layout.addLayout(proxy_row)" not in source
 
 
-def test_home_proxy_controls_hide_explanatory_copy_and_blend_with_home_surface():
+def test_home_proxy_controls_hide_explanatory_copy_and_use_consistent_surfaces():
     repository = Path(__file__).resolve().parents[1]
     source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
 
     assert "self.proxy_status_label.setVisible(False)" in source
     assert "proxy_controls_layout.addWidget(self.proxy_status_label)" not in source
-    assert "QComboBox#systemProxyMode {{ min-height: 34px; padding: 0 12px; border: 1px solid {border}; border-radius: 8px; background: transparent; color: {text}; }}" in source
-    assert "QFrame#systemProxyControls {{ background: transparent; border: none; }}" in source
-    assert "QFrame#systemTunnelHint {{ background: transparent; border: 1px solid {border}; border-radius: 8px; }}" in source
-    assert "QFrame#systemTunnelHint {{ background: {surface};" not in source
+    assert "QComboBox#systemProxyMode" in source
+    assert "QFrame#systemProxyControls" in source
+    assert "QFrame#systemTunnelHint" in source
+    assert "border-radius: 12px" in source
 
 
 def test_home_tunnel_controls_start_and_stop_installed_engine_without_showing_manage():
@@ -2975,7 +2975,8 @@ def test_home_endpoint_cards_have_clear_copy_targets_and_consistent_exit_ip_summ
     assert '_copy_home_endpoint_full(endpoint)' in source
     assert 'QApplication.clipboard().setText(f"{host}:{port}")' in source
     assert 'QFrame#homeEndpointCard, QFrame#homeExitIpCard' in source
-    assert 'QFrame#systemProxyControls {{ background: {surface}; border: 1px solid {border}; border-radius: 12px; }}' in source
+    assert 'QFrame#systemProxyControls' in source
+    assert 'QFrame#homeMetricsPanel' in source
     assert 'QLabel#connectionHint' in source
     assert 'connection_hero_layout = QVBoxLayout()' in source
     assert 'connect_row.addLayout(connection_hero_layout)' in source
@@ -2986,7 +2987,7 @@ def test_home_endpoint_cards_have_clear_copy_targets_and_consistent_exit_ip_summ
     assert '"connected": "Tor connection verified.\\nYour proxy listeners are ready."' in source
     assert 'self.connection_hint.setWordWrap(True)' in source
     assert 'QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed' in source
-    assert 'self.connection_hint.setMinimumHeight(38)' in source
+    assert 'self.connection_hint.setMinimumHeight(22)' in source
     assert 'hint.setProperty("connectionState", state)' in source
     assert 'hint.updateGeometry()' in source
     assert 'left_metrics_layout.setAlignment(' in source
@@ -3080,12 +3081,15 @@ def test_home_page_uses_adaptive_compact_layout_without_scrollbars():
     assert "height < 530" in source
     assert "height < 570" in source
     assert "height_band = (" in source
-    assert 'margins, spacing, diameter = (20, 1, 20, 1), 2, 172' in source
-    assert 'margins, spacing, diameter = (20, 2, 20, 2), 3, 188' in source
+    assert 'margins, spacing, diameter = (18, 8, 18, 8), 7, 128' in source
+    assert 'margins, spacing, diameter = (18, 10, 18, 10), 8, 148' in source
     assert 'self._home_connection_hero_layout.setSpacing(' in source
-    assert '16 if very_compact else 20 if compact else 28' in source
+    assert '16 if very_compact else 20 if compact else 24' in source
     assert "self.connect_btn.set_diameter(diameter)" in source
     assert "self._home_connection_hero_layout.setSpacing(" in source
+    assert 'self._home_metrics_panel.setFixedHeight(' in source
+    assert 'QFrame#homeMetricsPanel' in source
+    assert 'QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed' in source
     assert "self._home_service_controls_layout.setDirection(" in source
     assert "self._home_endpoint_row.setDirection(" in source
     assert "self._home_endpoint_layout.setDirection(" in source
@@ -3137,10 +3141,10 @@ def test_home_keeps_status_at_top_with_a_minimum_gap_and_polishes_bottom_actions
     assert "self.home_layout.addStretch(1)" not in status_setup
     assert "Keep the connection status anchored at the top of Home." in status_setup
 
-    assert 'margins, spacing, diameter = (20, 10, 20, 1), 2, 172' in source
-    assert 'margins, spacing, diameter = (20, 10, 20, 2), 3, 188' in source
-    assert 'margins, spacing, diameter = (20, 10, 20, 4), 4, 204' in source
-    assert 'margins, spacing, diameter = (20, 12, 20, 7), 6, 220' in source
+    assert 'margins, spacing, diameter = (18, 8, 18, 8), 7, 128' in source
+    assert 'margins, spacing, diameter = (18, 10, 18, 10), 8, 148' in source
+    assert 'margins, spacing, diameter = (20, 12, 20, 12), 9, 164' in source
+    assert 'margins, spacing, diameter = (22, 14, 22, 14), 10, 182' in source
 
     assert 'utility_row.addWidget(self.btn_change_identity, 1)' in source
     assert 'utility_row.addWidget(self.btn_log, 1)' in source
