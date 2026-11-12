@@ -209,27 +209,10 @@ class ProxyWindow(QWidget):
         connection_hero_layout = QVBoxLayout()
         self._home_connection_hero_layout = connection_hero_layout
         connection_hero_layout.setContentsMargins(0, 0, 0, 0)
-        connection_hero_layout.setSpacing(8)
+        connection_hero_layout.setSpacing(0)
         connection_hero_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         connection_hero_layout.addWidget(
             self.connect_btn, 0, Qt.AlignmentFlag.AlignHCenter
-        )
-        self.connection_hint = QLabel(
-            "Start Tor to enable your configured proxy listeners.",
-            self.home_content,
-        )
-        self.connection_hint.setObjectName("connectionHint")
-        self.connection_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.connection_hint.setWordWrap(True)
-        self.connection_hint.setSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
-        )
-        self.connection_hint.setMinimumHeight(22)
-        self.connection_hint.setMaximumHeight(42)
-        self.connection_hint.setMaximumWidth(460)
-        self.connection_hint.setProperty("connectionState", "disconnected")
-        connection_hero_layout.addWidget(
-            self.connection_hint, 0, Qt.AlignmentFlag.AlignHCenter
         )
 
         connect_row = QHBoxLayout()
@@ -238,7 +221,7 @@ class ProxyWindow(QWidget):
         connect_row.addLayout(connection_hero_layout)
         connect_row.addStretch(1)
         self._home_connect_row = connect_row
-        self.home_layout.addLayout(connect_row)
+        self.home_layout.addLayout(connect_row, 1)
 
         # Split the metric strip into equal-width halves so the divider stays
         # on the exact center line regardless of changing percentage/traffic text.
@@ -550,37 +533,30 @@ class ProxyWindow(QWidget):
             stacked_proxy_mode, stacked_endpoint_values,
         )
         if mode == self._home_responsive_mode:
+            self._resize_home_connect_button(width)
             return
         self._home_responsive_mode = mode
 
         horizontal = QBoxLayout.Direction.LeftToRight
         vertical = QBoxLayout.Direction.TopToBottom
 
-        # Preserve horizontal breathing room; reclaim vertical pixels first.
-        # This lets the Connect control stay substantially larger in short windows.
+        # The connection row receives the page's remaining height. Its button
+        # is sized from the actual geometry after the other sections are laid out.
         if height < 490:
-            margins, spacing, diameter = (18, 8, 18, 8), 7, 128
+            margins, spacing = (18, 8, 18, 8), 7
         elif height < 530:
-            margins, spacing, diameter = (18, 10, 18, 10), 8, 148
+            margins, spacing = (18, 10, 18, 10), 8
         elif height < 570:
-            margins, spacing, diameter = (20, 12, 20, 12), 9, 164
+            margins, spacing = (20, 12, 20, 12), 9
         elif height < 630:
-            margins, spacing, diameter = (22, 14, 22, 14), 10, 182
+            margins, spacing = (22, 14, 22, 14), 10
         elif height < 700:
-            margins, spacing, diameter = (24, 16, 24, 14), 11, 198
+            margins, spacing = (24, 16, 24, 14), 11
         else:
-            margins, spacing, diameter = (26, 18, 26, 16), 12, 216
+            margins, spacing = (26, 18, 26, 16), 12
 
         self.home_layout.setContentsMargins(*margins)
         self.home_layout.setSpacing(spacing)
-        self._home_connection_hero_layout.setSpacing(
-            1 if very_compact else 3 if compact else 8
-        )
-        self.connect_btn.set_diameter(diameter)
-        self.connection_hint.setMinimumHeight(
-            16 if very_compact else 20 if compact else 24
-        )
-        self.connection_hint.setMaximumWidth(400 if compact else 460)
         self._home_metrics_panel.setFixedHeight(
             50 if stacked_metrics else
             40 if very_compact or compact else
@@ -608,10 +584,8 @@ class ProxyWindow(QWidget):
             button.setMaximumHeight(42 if compact else 48)
         self.btn_status.setMaximumWidth(min(900, max(280, width - 36)))
         self.btn_status.setProperty("compact", "true" if compact else "false")
-        self.connection_hint.setProperty("compact", "true" if compact else "false")
-        for widget in (self.btn_status, self.connection_hint):
-            widget.style().unpolish(widget)
-            widget.style().polish(widget)
+        self.btn_status.style().unpolish(self.btn_status)
+        self.btn_status.style().polish(self.btn_status)
 
         self._home_service_controls_layout.setDirection(
             vertical if stacked_service_controls else horizontal
@@ -694,6 +668,23 @@ class ProxyWindow(QWidget):
             copy_button.style().polish(copy_button)
 
         self.home_content.updateGeometry()
+        self.home_layout.activate()
+        self._resize_home_connect_button(width)
+
+    def _resize_home_connect_button(self, width: int | None = None) -> None:
+        """Use the available connection-row space without displacing other Home controls."""
+        if not hasattr(self, "_home_connect_row") or not hasattr(self, "connect_btn"):
+            return
+
+        self.home_layout.activate()
+        available_width = max(96, int(width or self.home_content.width()) - 48)
+        row_height = int(self._home_connect_row.geometry().height())
+        if row_height <= 0:
+            # Initial construction can happen before the first show/layout pass.
+            row_height = max(112, self.home_content.height() - 360)
+        available_height = max(96, row_height - 20)
+        diameter = min(420, available_width, available_height)
+        self.connect_btn.set_diameter(diameter)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -1333,17 +1324,6 @@ class ProxyWindow(QWidget):
             QLabel#connectionStatus[compact="true"] {{
                 font-size: 9px; padding: 2px 10px; border-radius: 12px;
             }}
-            QLabel#connectionHint {{
-                color: {muted}; background: transparent; border: none;
-                font-size: 10px; font-weight: 550; padding: 0 12px;
-                min-height: 22px; max-height: 42px;
-            }}
-            QLabel#connectionHint[connectionState="connecting"] {{ color: {accent}; }}
-            QLabel#connectionHint[connectionState="connected"] {{ color: #45c98b; }}
-            QLabel#connectionHint[connectionState="disconnected"] {{ color: {muted}; }}
-            QLabel#connectionHint[compact="true"] {{
-                font-size: 9px; padding: 0 6px; min-height: 18px;
-            }}
             QLabel#homeMetricCaption {{
                 color: {muted}; background: transparent; border: none;
                 font-size: 9px; font-weight: 600; letter-spacing: 0.55px;
@@ -1840,20 +1820,7 @@ class ProxyWindow(QWidget):
         self.btn_status.style().unpolish(self.btn_status)
         self.btn_status.style().polish(self.btn_status)
         self.btn_status.update()
-        hint = getattr(self, "connection_hint", None)
-        if hint is not None:
-            hints = {
-                "connected": "Tor connection verified.\nYour proxy listeners are ready.",
-                "connecting": "Connecting to Tor…\nProxy becomes available after bootstrap.",
-                "disconnected": "Start Tor to enable\nyour configured proxy listeners.",
-            }
-            state = stmt if stmt in hints else "disconnected"
-            hint.setText(hints[state])
-            hint.setProperty("connectionState", state)
-            hint.style().unpolish(hint)
-            hint.style().polish(hint)
-            hint.updateGeometry()
-            hint.update()
+        # The status label above is the only connection guidance on Home.
 
     def _apply_system_proxy_mode(self):
         mode = CONFIG["system_proxy_mode"]
