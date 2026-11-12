@@ -79,7 +79,8 @@ class OnionServiceActivityDialog(_FramelessDialog):
         privacy = QLabel(
             "Privacy: visitor IPs, headers, request bodies and query strings are not stored. "
             "HTTPS paths stay encrypted; HTTPS entries show connection and traffic details only. "
-            "For plaintext HTTP, the first request line on each TCP connection may be displayed.",
+            "For plaintext HTTP, only the first HTTP request line on each TCP connection is detected; "
+            "later keep-alive requests are not counted individually.",
             self.body_host,
         )
         privacy.setObjectName("dialogHint")
@@ -89,7 +90,7 @@ class OnionServiceActivityDialog(_FramelessDialog):
         self.table = QTableWidget(0, 7, self.body_host)
         self.table.setObjectName("onionActivityTable")
         self.table.setHorizontalHeaderLabels(
-            ["Time (UTC)", "Protocol", "Request / connection", "Status", "In", "Out", "Duration"]
+            ["Time (UTC)", "Protocol", "First request line / connection", "Status", "In", "Out", "Duration"]
         )
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -128,7 +129,7 @@ class OnionServiceActivityDialog(_FramelessDialog):
         self.summary.setText(
             f"IN  {_format_bytes(stats['incoming_bytes'])}     "
             f"OUT  {_format_bytes(stats['outgoing_bytes'])}     "
-            f"HTTP requests  {stats['http_requests']:,}     "
+            f"HTTP sessions  {stats['http_requests']:,}     "
             f"Connections  {stats['connections']:,}     "
             f"Active  {stats['active_connections']:,}"
         )
@@ -810,12 +811,18 @@ class OnionHostingPage(QWidget):
         for key, title in (
             ("incoming_bytes", "TOTAL IN"),
             ("outgoing_bytes", "TOTAL OUT"),
-            ("http_requests", "HTTP REQUESTS"),
+            ("http_requests", "HTTP SESSIONS"),
             ("connections", "CONNECTIONS"),
             ("active_connections", "ACTIVE"),
         ):
             metric = QFrame(traffic_summary)
             metric.setObjectName("onionTrafficMetric")
+            if key == "incoming_bytes":
+                metric.setToolTip("Bytes received from Onion visitors by the hosted applications.")
+            elif key == "outgoing_bytes":
+                metric.setToolTip("Bytes sent from the hosted applications back to Onion visitors.")
+            elif key == "http_requests":
+                metric.setToolTip("Detected plaintext HTTP sessions, one first request line per TCP connection.")
             metric_layout = QVBoxLayout(metric)
             metric_layout.setContentsMargins(9, 4, 9, 4)
             metric_layout.setSpacing(2)
@@ -843,7 +850,7 @@ class OnionHostingPage(QWidget):
         self.service_search.setPlaceholderText("Filter services…")
         self.service_search.setClearButtonEnabled(True)
         self.service_search.setFixedWidth(190)
-        self.service_search.textChanged.connect(self.refresh_dashboard)
+        self.service_search.textChanged.connect(lambda _text: self.refresh_dashboard())
         service_header.addWidget(self.service_search)
 
         self.service_filter = QComboBox(self)
@@ -853,7 +860,7 @@ class OnionHostingPage(QWidget):
         self.service_filter.addItem("Stopped", "stopped")
         self.service_filter.addItem("Errors", "error")
         self.service_filter.setFixedWidth(112)
-        self.service_filter.currentIndexChanged.connect(self.refresh_dashboard)
+        self.service_filter.currentIndexChanged.connect(lambda _index: self.refresh_dashboard())
         service_header.addWidget(self.service_filter)
 
         self.add_service_button = QPushButton("Create Onion Service", self)
@@ -1299,11 +1306,8 @@ class OnionHostingPage(QWidget):
         for key, label in self._global_traffic_labels.items():
             value = totals.get(key, 0)
             label.setText(_format_bytes(value) if key in {"incoming_bytes", "outgoing_bytes"} else f"{int(value):,}")
-        for service in services:
-            labels = self._service_traffic_widgets.get(str(service["id"]))
-            if not labels:
-                continue
-            snapshot = manager.traffic_snapshot(str(service["id"]))
+        for service_id, labels in self._service_traffic_widgets.items():
+            snapshot = manager.traffic_snapshot(service_id)
             labels["incoming_bytes"].setText(_format_bytes(snapshot["incoming_bytes"]))
             labels["outgoing_bytes"].setText(_format_bytes(snapshot["outgoing_bytes"]))
             labels["http_requests"].setText(f"{int(snapshot['http_requests']):,}")
@@ -1425,7 +1429,7 @@ class OnionHostingPage(QWidget):
         for key, caption in (
             ("incoming_bytes", "IN"),
             ("outgoing_bytes", "OUT"),
-            ("http_requests", "REQUESTS"),
+            ("http_requests", "HTTP"),
             ("active_connections", "ACTIVE"),
         ):
             metric = QHBoxLayout()
@@ -1435,7 +1439,10 @@ class OnionHostingPage(QWidget):
             title.setObjectName("onionTrafficCaption")
             value = QLabel("0", card)
             value.setObjectName("onionServiceTraffic")
-            value.setToolTip(caption.title())
+            value.setToolTip(
+                "Detected plaintext HTTP sessions (one first request line per TCP connection)."
+                if key == "http_requests" else caption.title()
+            )
             metric.addWidget(title)
             metric.addWidget(value)
             traffic_row.addLayout(metric)
