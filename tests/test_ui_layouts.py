@@ -2677,6 +2677,27 @@ def test_tor_tools_use_top_navigation_without_home_or_back_buttons():
     assert "def refresh_dashboard(self)" in developer_page_source
 
 
+def test_developer_and_custom_tor_pages_use_compact_consistent_surfaces():
+    repository = Path(__file__).resolve().parents[1]
+    developer = (repository / "ui_/window/onion_hosting_page.py").read_text(encoding="utf-8")
+    custom = (repository / "ui_/window/tor_services_page.py").read_text(encoding="utf-8")
+
+    # Both pages share the same compact page insets and 12px outer-card radius.
+    assert "root.setContentsMargins(20, 12, 20, 12)" in developer
+    assert "root_layout.setContentsMargins(20, 12, 20, 12)" in custom
+    assert "border-radius: 12px" in developer
+    assert "border-radius: 12px" in custom
+    assert "border-radius: 16px" not in developer
+    assert "border-radius: 16px" not in custom
+
+    # Compact title rows and controls replace the oversized 54px icon headers.
+    assert "setFixedSize(34, 34)" in developer
+    assert "setFixedSize(34, 34)" in custom
+    assert "setMinimumHeight(32)" in developer
+    assert "self._management_hero_layout.addLayout(actions)" in custom
+    assert "QPushButton#settingsActionButton, QPushButton#customTorPrimaryButton" in custom
+
+
 def test_custom_tor_supports_startup_cancellation_force_stop_and_live_logs():
     repository = Path(__file__).resolve().parents[1]
     page = (repository / "ui_/window/tor_services_page.py").read_text(encoding="utf-8")

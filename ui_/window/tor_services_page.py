@@ -467,33 +467,31 @@ class TorServicesPage(QWidget):
         self._health_refresh_timer.start()
 
         root_layout = QVBoxLayout(self)
-        root_layout.setContentsMargins(26, 20, 26, 18)
-        root_layout.setSpacing(12)
+        root_layout.setContentsMargins(20, 12, 20, 12)
+        root_layout.setSpacing(8)
+        self._management_hero_layout = None
         if self._management_only:
             hero = QFrame(self)
             hero.setObjectName("customTorHero")
             hero_layout = QHBoxLayout(hero)
-            hero_layout.setContentsMargins(18, 14, 18, 14)
-            hero_layout.setSpacing(14)
+            hero_layout.setContentsMargins(13, 8, 13, 8)
+            hero_layout.setSpacing(8)
+            self._management_hero_layout = hero_layout
 
             hero_icon = QLabel(hero)
             hero_icon.setObjectName("customTorHeroIcon")
             hero_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            hero_icon.setFixedSize(54, 54)
-            hero_icon.setPixmap(qta.icon("fa6s.server", color="#ffffff").pixmap(27, 27))
+            hero_icon.setFixedSize(34, 34)
+            hero_icon.setPixmap(qta.icon("fa6s.server", color="#ffffff").pixmap(18, 18))
             hero_layout.addWidget(hero_icon)
 
             hero_copy = QVBoxLayout()
             hero_copy.setContentsMargins(0, 0, 0, 0)
-            hero_copy.setSpacing(4)
+            hero_copy.setSpacing(1)
             page_title = QLabel("Custom Tor", hero)
             page_title.setObjectName("customTorPageTitle")
-            hero_subtitle = QLabel(
-                "Independent Tor profiles, each with its own ports, identity, data directory and logs.",
-                hero,
-            )
+            hero_subtitle = QLabel("Independent Tor profiles", hero)
             hero_subtitle.setObjectName("customTorHeroSubtitle")
-            hero_subtitle.setWordWrap(True)
             hero_copy.addWidget(page_title)
             hero_copy.addWidget(hero_subtitle)
             hero_layout.addLayout(hero_copy, 1)
@@ -511,8 +509,8 @@ class TorServicesPage(QWidget):
         content = QWidget(scroll)
         content.setObjectName("customTorContent")
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(2, 2, 12, 4)
-        layout.setSpacing(12)
+        layout.setContentsMargins(2, 1, 10, 3)
+        layout.setSpacing(8)
         scroll.setWidget(content)
         root_layout.addWidget(scroll, 1)
 
@@ -630,10 +628,11 @@ class TorServicesPage(QWidget):
         layout.addWidget(service_workers_card)
 
         actions = QHBoxLayout()
-        actions.setSpacing(8)
-        self.btn_add = QPushButton("Create custom Tor service", self)
+        actions.setSpacing(6)
+        self.btn_add = QPushButton("Create service", self)
         self.btn_add.setObjectName("customTorPrimaryButton")
         self.btn_add.setIcon(qta.icon("fa6s.plus"))
+        self.btn_add.setToolTip("Create a new isolated Custom Tor profile.")
         self.btn_add.clicked.connect(self.add_service)
         actions.addWidget(self.btn_add)
         self.btn_start_all = QPushButton("Start all", self)
@@ -652,7 +651,10 @@ class TorServicesPage(QWidget):
         self.btn_refresh.clicked.connect(self.refresh_services)
         actions.addWidget(self.btn_refresh)
         actions.addStretch(1)
-        layout.addLayout(actions)
+        if self._management_only and self._management_hero_layout is not None:
+            self._management_hero_layout.addLayout(actions)
+        else:
+            layout.addLayout(actions)
 
         self.lbl_runtime_status = QLabel("")
         self.lbl_runtime_status.setObjectName("settingsDescription")
@@ -692,34 +694,31 @@ class TorServicesPage(QWidget):
         self.setStyleSheet(f"""
             QWidget#customTorContent {{ background: transparent; }}
             QFrame#customTorHero {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 {panel}, stop:1 {field});
-                border: 1px solid {border}; border-radius: 16px;
+                background: {panel}; border: 1px solid {border}; border-radius: 12px;
             }}
             QLabel#customTorHeroIcon {{
-                background: {accent}; border: 1px solid {accent}; border-radius: 16px;
+                background: {accent}; border: 1px solid {accent}; border-radius: 10px;
             }}
             QLabel#customTorPageTitle {{
-                color: {text}; background: transparent; font-size: 21px; font-weight: 850;
+                color: {text}; background: transparent; font-size: 17px; font-weight: 800;
             }}
             QLabel#customTorHeroSubtitle {{
-                color: {muted}; background: transparent; font-size: 10px;
+                color: {muted}; background: transparent; font-size: 9px;
             }}
             QLabel#customTorProfileCount {{
                 color: {accent}; background: {field}; border: 1px solid {border};
-                border-radius: 9px; padding: 6px 11px; font-size: 9px; font-weight: 850;
+                border-radius: 7px; padding: 3px 8px; font-size: 8px; font-weight: 800;
             }}
             QLabel#settingsSectionTitle {{ color: {text}; background: transparent; font-size: 14px; font-weight: 850; }}
             QLabel#settingsDescription {{ color: {muted}; background: transparent; font-size: 10px; }}
             QLabel#settingsFieldLabel {{ color: {text}; background: transparent; font-weight: 750; }}
             QFrame#settingsRowCard, QFrame#torServiceCard {{
-                background: {panel}; border: 1px solid {border}; border-radius: 13px;
+                background: {panel}; border: 1px solid {border}; border-radius: 12px;
             }}
-            QFrame#settingsRowCard {{ border-radius: 11px; }}
             QFrame#torServiceCard:hover {{ border-color: {accent}; }}
             QLabel#torServiceStatus {{
                 color: {muted}; background: {field}; border: 1px solid {border};
-                border-radius: 8px; padding: 4px 9px; font-size: 8px; font-weight: 850;
+                border-radius: 7px; padding: 3px 8px; font-size: 8px; font-weight: 800;
             }}
             QLabel#torServiceStatus[serviceState="ready"] {{
                 color: #31b981; background: rgba(49,185,129,0.08); border-color: rgba(49,185,129,0.4);
@@ -728,7 +727,7 @@ class TorServicesPage(QWidget):
                 color: #e36b75; background: rgba(227,107,117,0.08); border-color: rgba(227,107,117,0.4);
             }}
             QPushButton#settingsActionButton, QPushButton#customTorPrimaryButton {{
-                min-height: 35px; padding: 0 12px; border: 1px solid {border};
+                min-height: 31px; padding: 0 10px; border: 1px solid {border};
                 border-radius: 8px; background: {field}; color: {text}; font-weight: 700;
             }}
             QPushButton#settingsActionButton:hover {{
@@ -1338,8 +1337,8 @@ class TorServicesPage(QWidget):
         card = QFrame(self)
         card.setObjectName("torServiceCard")
         outer = QVBoxLayout(card)
-        outer.setContentsMargins(17, 14, 17, 15)
-        outer.setSpacing(10)
+        outer.setContentsMargins(13, 10, 13, 10)
+        outer.setSpacing(7)
 
         header = QHBoxLayout()
         name = QLabel(str(profile.get("display_name") or profile.get("id", "Tor service")))
@@ -1396,7 +1395,7 @@ class TorServicesPage(QWidget):
             outer.addWidget(error_label)
 
         actions = QHBoxLayout()
-        actions.setSpacing(7)
+        actions.setSpacing(6)
         service_id = str(profile.get("id", ""))
         copy_button = QPushButton("Copy SOCKS endpoint", card)
         copy_button.setObjectName("settingsActionButton")
