@@ -2968,7 +2968,13 @@ def test_home_endpoint_cards_have_clear_copy_targets_and_consistent_exit_ip_summ
     assert 'connectionHero' not in source
     assert 'QLabel("BOOTSTRAP", self.home_content)' in source
     assert 'QLabel#homeMetricCaption' in source
-    assert 'self.connection_hint.setText(hints.get(stmt, hints["disconnected"]))' in source
+    assert '"connecting": "Connecting to Tor…\\nProxy becomes available after bootstrap."' in source
+    assert '"connected": "Tor connection verified.\\nYour proxy listeners are ready."' in source
+    assert 'self.connection_hint.setWordWrap(True)' in source
+    assert 'QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed' in source
+    assert 'self.connection_hint.setMinimumHeight(38)' in source
+    assert 'hint.setProperty("connectionState", state)' in source
+    assert 'hint.updateGeometry()' in source
     assert 'http_proxy_bind_all_interfaces' in source
     assert 'tor_socks_bind_all_interfaces' in source
     assert 'LAN IP unavailable' in source
