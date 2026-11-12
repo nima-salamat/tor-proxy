@@ -3036,11 +3036,29 @@ def test_developer_tor_service_cards_use_activity_and_rotatable_addresses():
     card = page[page.index("    def _service_card("):]
 
     assert 'QPushButton("Tor runtime logs", runtime)' in page
-    assert 'activity = QPushButton("Activity", card)' in card
+    assert 'activity = QPushButton("Request logs", card)' in card
     assert 'activity.clicked.connect(' in card
     assert 'new_address = QPushButton("New address", card)' in card
-    assert 'new_address.setEnabled(bool(service.get("address")) and not service.get("running"))' in card
+    assert 'bool(service.get("address")) and f"service:{service[\'id\']}" not in self._workers' in card
     assert 'new_address.clicked.connect(' in card
     assert 'def rotate_service_address(self, service: dict)' in page
     assert 'The current .onion address will stop working' in page
     assert 'manager.rotate_service_identity(service_id)' in page
+
+
+
+def test_developer_tor_activity_exposes_per_port_events_and_error_counters():
+    repository = Path(__file__).resolve().parents[1]
+    page = (repository / "ui_/window/onion_hosting_page.py").read_text(encoding="utf-8")
+    store = (repository / "src/torproxy/onion_traffic.py").read_text(encoding="utf-8")
+
+    assert '["Time (UTC)", "Onion port", "Protocol", "First request line / connection"' in page
+    assert '("errors", "ERRORS")' in page
+    assert '("errors", "ERR")' in page
+    assert 'labels["errors"].setText' in page
+    assert 'self._traffic_store.delete_service(profile_id)' in (
+        repository / "src/torproxy/onion_hosting.py"
+    ).read_text(encoding="utf-8")
+    assert '"HTTP sessions"' in page
+    assert "one first request line per TCP connection" in page
+    assert "_MAX_CONNECTIONS_PER_PORT = 128" in store
