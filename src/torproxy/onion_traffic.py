@@ -26,6 +26,7 @@ _REQUEST_LINE_RE = re.compile(rb"^([A-Z]{3,12})\s+(\S+)\s+HTTP/\d(?:\.\d)?$")
 _STATUS_LINE_RE = re.compile(rb"^HTTP/\d(?:\.\d)?\s+(\d{3})(?:\s|$)")
 _MAX_EVENT_ROWS_PER_SERVICE = 2000
 _MAX_CONNECTIONS_PER_PORT = 128
+_MAX_CONNECTIONS_GLOBAL = 512
 
 
 def _timestamp() -> str:
@@ -56,6 +57,8 @@ class OnionTrafficStore:
             except OSError:
                 pass
         self._lock = threading.RLock()
+        # Shared by every service and port mapping in the Developer Tor runtime.
+        self.connection_slots = threading.BoundedSemaphore(_MAX_CONNECTIONS_GLOBAL)
         self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
@@ -330,7 +333,8 @@ class _TcpPortRelay:
         self._active_lock = threading.RLock()
         self._active_sockets: set[socket.socket] = set()
         self._connection_threads: set[threading.Thread] = set()
-        self._connection_slots = threading.BoundedSemaphore(_MAX_CONNECTIONS_PER_PORT)
+        self._port_connection_slots = threading.BoundedSemaphore(_MAX_CONNECTIONS_PER_PORT)
+        self._connection_slots = store.connection_slots
         self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.listener.bind(("127.0.0.1", 0))
@@ -355,9 +359,16 @@ class _TcpPortRelay:
                 continue
             except OSError:
                 break
+            if not self._port_connection_slots.acquire(blocking=False):
+                try:
+                    client.close()
+                except OSError:
+                    pass
+                continue
             if not self._connection_slots.acquire(blocking=False):
-                # Bound per-port worker threads; overload is rejected instead of
-                # allowing one Onion Service to exhaust the desktop process.
+                self._port_connection_slots.release()
+                # A shared process-wide ceiling prevents many services or port
+                # mappings from multiplying their individual concurrency limits.
                 try:
                     client.close()
                 except OSError:
@@ -372,6 +383,7 @@ class _TcpPortRelay:
             with self._active_lock:
                 if self._stop.is_set():
                     self._connection_slots.release()
+                    self._port_connection_slots.release()
                     try:
                         client.close()
                     except OSError:
@@ -386,6 +398,7 @@ class _TcpPortRelay:
                     self._active_sockets.discard(client)
                     self._connection_threads.discard(thread)
                 self._connection_slots.release()
+                self._port_connection_slots.release()
                 client.close()
                 LOGGER.exception("Could not start Onion Service traffic worker.")
 
@@ -439,6 +452,7 @@ class _TcpPortRelay:
             with self._active_lock:
                 self._connection_threads.discard(threading.current_thread())
             self._connection_slots.release()
+            self._port_connection_slots.release()
 
     def _forward(
         self,
