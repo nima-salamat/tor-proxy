@@ -341,12 +341,23 @@ class ProxyWindow(QWidget):
 
     def _build_tor_service_settings(self, profile: dict) -> TorSettings:
         """Build an isolated manager configuration from a persisted profile."""
-        if not self.tor.path_set or not self.tor.tor_path:
-            self.tor.update_path(CONFIG["tor_path"])
-        if not self.tor.path_set or not self.tor.tor_path:
-            raise TorManagerError(
-                "A compatible Tor Expert Bundle must be installed before isolated services can start."
-            )
+        selected_bundle_version = str(profile.get("tor_bundle_version") or "").strip()
+        if selected_bundle_version:
+            from updater import resolve_verified_bundle
+
+            executable, bundle_root = resolve_verified_bundle(selected_bundle_version)
+            geoip_path = bundle_root / "data" / "geoip"
+            geoip6_path = bundle_root / "data" / "geoip6"
+        else:
+            if not self.tor.path_set or not self.tor.tor_path:
+                self.tor.update_path(CONFIG["tor_path"])
+            if not self.tor.path_set or not self.tor.tor_path:
+                raise TorManagerError(
+                    "A compatible Tor Expert Bundle must be installed or selected for this Custom Tor profile."
+                )
+            executable = Path(self.tor.tor_path)
+            geoip_path = Path(self.tor.geoip_path) if self.tor.geoip_path else None
+            geoip6_path = Path(self.tor.geoip6_path) if self.tor.geoip6_path else None
 
         use_primary_bridges = bool(profile.get("use_primary_bridges", False))
         bridges_enabled = bool(self.tor.bridge) if use_primary_bridges else bool(profile.get("bridge_enabled", False))
@@ -360,13 +371,13 @@ class ProxyWindow(QWidget):
             else {"upstream_proxy_username": "", "upstream_proxy_password": ""}
         )
         return TorSettings(
-            executable=Path(self.tor.tor_path),
+            executable=Path(executable),
             socks_port=int(profile["socks_port"]),
             control_port=int(profile["control_port"]),
             dns_port=int(dns_port_value) if dns_port_value not in (None, 0, "") else None,
             data_directory=Path(data_directory_value).expanduser() if data_directory_value else None,
-            geoip_path=Path(self.tor.geoip_path) if self.tor.geoip_path else None,
-            geoip6_path=Path(self.tor.geoip6_path) if self.tor.geoip6_path else None,
+            geoip_path=geoip_path,
+            geoip6_path=geoip6_path,
             bridges_enabled=bridges_enabled,
             bridges=bridges,
             # Legacy custom profiles inherited these two values from Main Tor.

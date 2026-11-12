@@ -533,6 +533,65 @@ def get_packaged_bundles() -> list[str]:
     ]
 
 
+def get_verified_bundle_inventory() -> list[dict[str, str]]:
+    """List one integrity-checked, compatible installation for each Tor version.
+
+    A writable user installation takes precedence over an application-packaged
+    copy when both contain the same release. The returned paths come only from
+    the existing verified-bundle discovery functions, never from folder names
+    alone.
+    """
+    inventory: dict[str, dict[str, str]] = {}
+    for source, paths in (("user", get_own_bundles()), ("packaged", get_packaged_bundles())):
+        for raw_path in paths:
+            try:
+                bundle_path = Path(raw_path).expanduser().resolve()
+                version = get_version_by_bundle(bundle_path.name + ".tar.gz")
+            except (OSError, RuntimeError, TypeError, ValueError):
+                continue
+            inventory.setdefault(
+                version,
+                {"version": version, "path": str(bundle_path), "source": source},
+            )
+    return sorted(
+        inventory.values(),
+        key=lambda item: tor_version_sort_key(item["version"]),
+        reverse=True,
+    )
+
+
+def resolve_verified_bundle(version: str) -> tuple[Path, Path]:
+    """Resolve an installed Tor version to its verified executable and bundle root."""
+    requested = str(version or "").strip()
+    if not requested:
+        raise BundleVerificationError("A Tor Expert Bundle version must be selected.")
+    entry = next(
+        (item for item in get_verified_bundle_inventory() if item["version"] == requested),
+        None,
+    )
+    if entry is None:
+        raise BundleVerificationError(
+            f"Tor Expert Bundle v{requested} is not installed or is no longer compatible. "
+            "Rescan installed bundles and choose an available version."
+        )
+
+    bundle_root = Path(entry["path"]).expanduser().resolve()
+    if not check_bundle_compatibility(str(bundle_root)):
+        raise BundleVerificationError(
+            f"Tor Expert Bundle v{requested} failed its integrity or compatibility check."
+        )
+    # Reuse Tor's executable-layout validation. The bundle inventory above is
+    # also checked before this call, including app-packaged bundles outside BUNDLE_DIR.
+    from tor import _find_executable
+
+    executable, resolved_root = _find_executable(bundle_root)
+    if executable is None or resolved_root is None:
+        raise BundleVerificationError(
+            f"Tor Expert Bundle v{requested} has no usable executable for this platform."
+        )
+    return Path(executable).resolve(), Path(resolved_root).resolve()
+
+
 def delete_bundle(name: str) -> None:
     path = bundle_path(name)
     root = Path(resource_path(BUNDLE_DIR)).resolve()

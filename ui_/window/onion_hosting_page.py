@@ -17,7 +17,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QScrollArea,
-    QSpinBox,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -25,6 +24,7 @@ from PySide6.QtWidgets import (
 
 from config import CONFIG
 from torproxy.paths import user_directories
+from ui_.window.numeric_controls import NoWheelSpinBox
 from torproxy.bridges import normalize_sni_hostname, parse_bridge_text
 from torproxy.onion_hosting import OnionHostingError, validate_loopback_target
 from ui_.worker.worker import Worker
@@ -92,11 +92,11 @@ class OnionServiceDialog(_FramelessDialog):
         self.host_input.setText(str(self.service.get("local_host", "127.0.0.1")))
         self.host_input.setPlaceholderText("127.0.0.1")
 
-        self.local_port_input = QSpinBox(self.body_host)
+        self.local_port_input = NoWheelSpinBox(self.body_host)
         self.local_port_input.setRange(1, 65535)
         self.local_port_input.setValue(int(self.service.get("local_port", 8000)))
 
-        self.onion_port_input = QSpinBox(self.body_host)
+        self.onion_port_input = NoWheelSpinBox(self.body_host)
         self.onion_port_input.setRange(1, 65535)
         self.onion_port_input.setValue(int(self.service.get("onion_port", 80)))
 
@@ -378,16 +378,16 @@ class DeveloperTorSettingsDialog(_FramelessDialog):
         advanced_form = QFormLayout()
         advanced_form.setHorizontalSpacing(14)
         advanced_form.setVerticalSpacing(8)
-        self.max_dirtiness = QSpinBox(content)
+        self.max_dirtiness = NoWheelSpinBox(content)
         self.max_dirtiness.setRange(10, 86400)
         self.max_dirtiness.setValue(int(values.get("max_circuit_dirtiness_seconds", 600)))
-        self.circuit_period = QSpinBox(content)
+        self.circuit_period = NoWheelSpinBox(content)
         self.circuit_period.setRange(10, 86400)
         self.circuit_period.setValue(int(values.get("new_circuit_period_seconds", 60)))
-        self.startup_timeout = QSpinBox(content)
+        self.startup_timeout = NoWheelSpinBox(content)
         self.startup_timeout.setRange(15, 900)
         self.startup_timeout.setValue(int(values.get("startup_timeout_seconds", 180)))
-        self.shutdown_timeout = QSpinBox(content)
+        self.shutdown_timeout = NoWheelSpinBox(content)
         self.shutdown_timeout.setRange(1, 60)
         self.shutdown_timeout.setValue(int(values.get("shutdown_timeout_seconds", 5)))
         advanced_form.addRow("Max circuit dirtiness (seconds)", self.max_dirtiness)
@@ -421,7 +421,7 @@ class DeveloperTorSettingsDialog(_FramelessDialog):
         self.proxy_host = QLineEdit(content)
         self.proxy_host.setPlaceholderText("127.0.0.1 or proxy.example.net")
         self.proxy_host.setText(str(values.get("upstream_proxy_host", "")))
-        self.proxy_port = QSpinBox(content)
+        self.proxy_port = NoWheelSpinBox(content)
         self.proxy_port.setRange(1, 65535)
         self.proxy_port.setValue(int(values.get("upstream_proxy_port", 1080)))
         self.proxy_username = QLineEdit(content)

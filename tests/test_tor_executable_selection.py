@@ -133,3 +133,57 @@ def test_packaged_bundle_discovery_is_disabled_for_source_runs(tmp_path, monkeyp
     monkeypatch.setattr(sys, "frozen", False, raising=False)
     monkeypatch.setattr(sys, "executable", str(tmp_path / "python.exe"))
     assert updater.get_packaged_bundles() == []
+
+
+
+def test_verified_bundle_inventory_lists_compatible_versions_and_prefers_user_copy(monkeypatch, tmp_path):
+    import updater
+
+    user_stable = tmp_path / "user" / "tor-expert-bundle-windows-x86_64-16.0"
+    user_alpha = tmp_path / "user" / "tor-expert-bundle-windows-x86_64-16.0a14"
+    packaged_stable = tmp_path / "app" / "bundles" / "tor-expert-bundle-windows-x86_64-16.0"
+    packaged_older = tmp_path / "app" / "bundles" / "tor-expert-bundle-windows-x86_64-15.0.26"
+    monkeypatch.setattr(
+        updater, "get_own_bundles", lambda: [str(user_stable), str(user_alpha)]
+    )
+    monkeypatch.setattr(
+        updater, "get_packaged_bundles", lambda: [str(packaged_stable), str(packaged_older)]
+    )
+
+    inventory = updater.get_verified_bundle_inventory()
+    by_version = {item["version"]: item for item in inventory}
+
+    assert set(by_version) == {"16.0", "16.0a14", "15.0.26"}
+    assert by_version["16.0"]["path"] == str(user_stable.resolve())
+    assert by_version["16.0"]["source"] == "user"
+    assert by_version["15.0.26"]["source"] == "packaged"
+
+
+def test_resolve_verified_bundle_rechecks_selected_install_and_executable_layout(monkeypatch, tmp_path):
+    import tor
+    import updater
+
+    bundle = tmp_path / "tor-expert-bundle-windows-x86_64-16.0"
+    executable = bundle / "tor" / "tor.exe"
+    monkeypatch.setattr(
+        updater,
+        "get_verified_bundle_inventory",
+        lambda: [{"version": "16.0", "path": str(bundle), "source": "user"}],
+    )
+    monkeypatch.setattr(updater, "check_bundle_compatibility", lambda _path: True)
+    monkeypatch.setattr(tor, "_find_executable", lambda _path: (executable, bundle))
+
+    resolved_executable, resolved_root = updater.resolve_verified_bundle("16.0")
+
+    assert resolved_executable == executable.resolve()
+    assert resolved_root == bundle.resolve()
+
+
+def test_resolve_verified_bundle_rejects_missing_or_untrusted_version(monkeypatch):
+    import updater
+    from torproxy.bundle import BundleVerificationError
+
+    monkeypatch.setattr(updater, "get_verified_bundle_inventory", lambda: [])
+
+    with pytest.raises(BundleVerificationError, match="not installed"):
+        updater.resolve_verified_bundle("99.0")

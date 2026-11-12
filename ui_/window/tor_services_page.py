@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QLayout,
     QPushButton,
-    QSpinBox,
     QTextEdit,
     QToolButton,
     QScrollArea,
@@ -40,6 +39,8 @@ from ui_.worker.worker import Worker
 from ui_.window.dialogs import QMessageBox, _FramelessDialog
 from ui_.window.tor_log_dialog import TorLogDialog
 from torproxy.paths import user_directories
+from ui_.window.numeric_controls import NoWheelSpinBox
+from updater import get_verified_bundle_inventory
 
 logger = logging.getLogger(__name__)
 _SERVICE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
@@ -66,7 +67,7 @@ class TorServicesSettingsPage(QWidget):
         description.setWordWrap(True)
         layout.addWidget(description)
 
-        self._spins: dict[str, QSpinBox] = {}
+        self._spins: dict[str, NoWheelSpinBox] = {}
         self._status = QLabel("Settings are saved automatically when changed.")
         self._status.setObjectName("settingsDescription")
         self._status.setWordWrap(True)
@@ -141,7 +142,7 @@ class TorServicesSettingsPage(QWidget):
         copy.addWidget(label)
         copy.addWidget(detail)
         row_layout.addLayout(copy, 1)
-        spin = QSpinBox(row)
+        spin = NoWheelSpinBox(row)
         spin.setRange(minimum, maximum)
         spin.setSuffix(suffix)
         spin.setValue(int(CONFIG[key] or fallback))
@@ -208,7 +209,7 @@ class TorServicesSettingsPage(QWidget):
             self._status.setText(f"Could not save {key.replace('_', ' ')}: {exc}")
             QMessageBox.warning(self, "Settings could not be saved", str(exc))
 
-    def _save_setting(self, key: str, value: int, control: QSpinBox) -> None:
+    def _save_setting(self, key: str, value: int, control: NoWheelSpinBox) -> None:
         previous = int(CONFIG[key] or control.minimum())
         pool = None
         try:
@@ -396,6 +397,35 @@ class TorServiceEditorDialog(_FramelessDialog):
         self.inp_display_name.setPlaceholderText("A readable name")
         form.addRow("Display name", self.inp_display_name)
 
+        self.inp_tor_bundle = QComboBox(self)
+        self.inp_tor_bundle.setToolTip(
+            "Use Main Tor's selected executable, or pin this profile to an installed, "
+            "integrity-checked and platform-compatible Expert Bundle version."
+        )
+        self.inp_tor_bundle.addItem("Use Main Tor's default bundle", "")
+        try:
+            bundle_inventory = get_verified_bundle_inventory()
+        except Exception:
+            logger.exception("Could not enumerate installed Tor Expert Bundles for Custom Tor.")
+            bundle_inventory = []
+        self._available_bundle_versions = set()
+        for bundle in bundle_inventory:
+            version = str(bundle.get("version") or "").strip()
+            if not version:
+                continue
+            self._available_bundle_versions.add(version)
+            source_label = "Installed" if bundle.get("source") == "user" else "App bundled"
+            self.inp_tor_bundle.addItem(f"v{version}  ·  {source_label}", version)
+        saved_bundle_version = str(self._source_profile.get("tor_bundle_version") or "").strip()
+        selected_bundle_index = self.inp_tor_bundle.findData(saved_bundle_version)
+        if saved_bundle_version and selected_bundle_index < 0:
+            self.inp_tor_bundle.addItem(f"v{saved_bundle_version}  ·  unavailable", saved_bundle_version)
+            selected_bundle_index = self.inp_tor_bundle.count() - 1
+        self.inp_tor_bundle.setCurrentIndex(
+            selected_bundle_index if selected_bundle_index >= 0 else 0
+        )
+        form.addRow("Tor Expert Bundle", self.inp_tor_bundle)
+
         suggested_socks, suggested_control = self._suggest_listener_ports()
         self.inp_socks_port = self._port_spin(
             self._source_profile.get("socks_port", suggested_socks), minimum=1
@@ -507,19 +537,19 @@ class TorServiceEditorDialog(_FramelessDialog):
         network_options_layout.addLayout(family_row)
 
         timing_form = QFormLayout()
-        self.spin_max_circuit_dirtiness = QSpinBox(self)
+        self.spin_max_circuit_dirtiness = NoWheelSpinBox(self)
         self.spin_max_circuit_dirtiness.setRange(10, 86400)
         self.spin_max_circuit_dirtiness.setSuffix(" sec")
         self.spin_max_circuit_dirtiness.setValue(int(self._source_profile.get("max_circuit_dirtiness_seconds", self._legacy_max_circuit_dirtiness)))
-        self.spin_new_circuit_period = QSpinBox(self)
+        self.spin_new_circuit_period = NoWheelSpinBox(self)
         self.spin_new_circuit_period.setRange(10, 86400)
         self.spin_new_circuit_period.setSuffix(" sec")
         self.spin_new_circuit_period.setValue(int(self._source_profile.get("new_circuit_period_seconds", self._legacy_new_circuit_period)))
-        self.spin_startup_timeout = QSpinBox(self)
+        self.spin_startup_timeout = NoWheelSpinBox(self)
         self.spin_startup_timeout.setRange(15, 900)
         self.spin_startup_timeout.setSuffix(" sec")
         self.spin_startup_timeout.setValue(int(self._source_profile.get("startup_timeout_seconds", 180)))
-        self.spin_shutdown_timeout = QSpinBox(self)
+        self.spin_shutdown_timeout = NoWheelSpinBox(self)
         self.spin_shutdown_timeout.setRange(1, 60)
         self.spin_shutdown_timeout.setSuffix(" sec")
         self.spin_shutdown_timeout.setValue(int(self._source_profile.get("shutdown_timeout_seconds", 5)))
@@ -562,11 +592,11 @@ class TorServiceEditorDialog(_FramelessDialog):
         self.resize(620, 680)
         self._remember_preferred_size()
         self.setStyleSheet(self.styleSheet() + f"""
-            QLineEdit, QTextEdit, QSpinBox {{
+            QLineEdit, QTextEdit, QComboBox, QSpinBox {{
                 background: {self._colors['panel']}; color: {self._colors['text']};
                 border: 1px solid {self._colors['border']}; border-radius: 7px; padding: 7px 9px;
             }}
-            QLineEdit:focus, QTextEdit:focus, QSpinBox:focus {{ border-color: {self._accent}; }}
+            QLineEdit:focus, QTextEdit:focus, QComboBox:focus, QSpinBox:focus {{ border-color: {self._accent}; }}
             QCheckBox {{ color: {self._colors['text']}; spacing: 7px; }}
             QScrollArea#dialogScroll {{
                 background: transparent;
@@ -654,8 +684,8 @@ class TorServiceEditorDialog(_FramelessDialog):
         return 49155, 49156
 
     @staticmethod
-    def _port_spin(value, *, minimum: int) -> QSpinBox:
-        spin = QSpinBox()
+    def _port_spin(value, *, minimum: int) -> NoWheelSpinBox:
+        spin = NoWheelSpinBox()
         spin.setRange(minimum, 65535)
         spin.setSingleStep(1)
         spin.setValue(int(value))
@@ -735,9 +765,17 @@ class TorServiceEditorDialog(_FramelessDialog):
         if not self.chk_client_ipv4.isChecked() and not self.chk_client_ipv6.isChecked():
             raise ValueError("At least one of IPv4 or IPv6 must be allowed.")
 
+        bundle_version = str(self.inp_tor_bundle.currentData() or "").strip()
+        if bundle_version and bundle_version not in self._available_bundle_versions:
+            raise ValueError(
+                f"Tor Expert Bundle v{bundle_version} is not installed or compatible. "
+                "Choose an available version or use Main Tor's default bundle."
+            )
+
         return {
             "id": service_id,
             "display_name": display_name,
+            "tor_bundle_version": bundle_version or None,
             "socks_port": socks_port,
             "control_port": control_port,
             "dns_port": dns_port,
@@ -881,7 +919,7 @@ class TorServicesPage(QWidget):
         primary_pool_copy.addWidget(primary_pool_title)
         primary_pool_copy.addWidget(primary_pool_description)
         primary_pool_layout.addLayout(primary_pool_copy, 1)
-        self.spin_primary_instances = QSpinBox(self)
+        self.spin_primary_instances = NoWheelSpinBox(self)
         self.spin_primary_instances.setRange(1, 4)
         self.spin_primary_instances.setSuffix(" instances")
         self.spin_primary_instances.setValue(int(CONFIG["primary_tor_instances"] or 2))
@@ -925,7 +963,7 @@ class TorServicesPage(QWidget):
         bridge_copy.addWidget(bridge_title)
         bridge_copy.addWidget(bridge_description)
         bridge_layout.addLayout(bridge_copy, 1)
-        self.spin_bridge_workers = QSpinBox(self)
+        self.spin_bridge_workers = NoWheelSpinBox(self)
         self.spin_bridge_workers.setRange(1, 8)
         self.spin_bridge_workers.setSuffix(" workers")
         self.spin_bridge_workers.setValue(int(CONFIG["bridge_probe_workers"] or 8))
@@ -953,7 +991,7 @@ class TorServicesPage(QWidget):
         worker_copy.addWidget(worker_title)
         worker_copy.addWidget(worker_description)
         worker_layout.addLayout(worker_copy, 1)
-        self.spin_service_workers = QSpinBox(self)
+        self.spin_service_workers = NoWheelSpinBox(self)
         self.spin_service_workers.setRange(1, 8)
         self.spin_service_workers.setSuffix(" workers")
         self.spin_service_workers.setValue(int(CONFIG["tor_service_workers"] or 4))
@@ -1235,7 +1273,7 @@ class TorServicesPage(QWidget):
             QMessageBox.warning(self, "Service concurrency", str(exc))
 
     @staticmethod
-    def _restore_spin(spin: QSpinBox, value: int) -> None:
+    def _restore_spin(spin: NoWheelSpinBox, value: int) -> None:
         blocked = spin.blockSignals(True)
         spin.setValue(value)
         spin.blockSignals(blocked)

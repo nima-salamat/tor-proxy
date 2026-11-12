@@ -2777,3 +2777,67 @@ def test_custom_tor_profile_updates_are_persisted_atomically_and_exit_stops_serv
     assert "self.tor_service_pool.stop_all()" in proxy
     assert "def stop_all(self, service_ids" in pool
     assert "already_stopping" in pool
+
+
+
+def test_numeric_spinboxes_ignore_mouse_wheel_events(qt_app):
+    from PySide6.QtCore import QPoint, QPointF, Qt
+    from PySide6.QtGui import QWheelEvent
+    from ui_.window.numeric_controls import NoWheelDoubleSpinBox, NoWheelSpinBox
+
+    for spin, initial in ((NoWheelSpinBox(), 42), (NoWheelDoubleSpinBox(), 4.2)):
+        spin.setRange(0, 100)
+        spin.setValue(initial)
+        spin.show()
+        spin.setFocus()
+        qt_app.processEvents()
+        event = QWheelEvent(
+            QPointF(4, 4),
+            QPointF(4, 4),
+            QPoint(0, 0),
+            QPoint(0, 120),
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+            Qt.ScrollPhase.ScrollUpdate,
+            False,
+        )
+        qt_app.sendEvent(spin, event)
+        qt_app.processEvents()
+        assert spin.value() == initial
+        assert not event.isAccepted()
+        spin.close()
+
+
+def test_custom_tor_editor_offers_and_persists_installed_bundle_version(qt_app, monkeypatch):
+    pytest.importorskip("qtawesome")
+    import ui_.window.tor_services_page as services_page
+
+    monkeypatch.setattr(
+        services_page,
+        "get_verified_bundle_inventory",
+        lambda: [
+            {"version": "16.0", "path": "/verified/tor-expert-bundle-windows-x86_64-16.0", "source": "user"},
+            {"version": "15.0.26", "path": "/verified/tor-expert-bundle-windows-x86_64-15.0.26", "source": "packaged"},
+        ],
+    )
+    dialog = services_page.TorServiceEditorDialog({"id": "work", "display_name": "Work"})
+    try:
+        assert dialog.inp_tor_bundle.findData("16.0") >= 0
+        assert dialog.inp_tor_bundle.findData("15.0.26") >= 0
+        dialog.inp_tor_bundle.setCurrentIndex(dialog.inp_tor_bundle.findData("16.0"))
+        profile = dialog._validated_profile()
+        assert profile["tor_bundle_version"] == "16.0"
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        qt_app.processEvents()
+
+
+def test_all_numeric_qt_inputs_use_no_wheel_spinbox_controls():
+    import re
+
+    repository = Path(__file__).resolve().parents[1]
+    for relative in ("ui_/window/tor_services_page.py", "ui_/window/onion_hosting_page.py"):
+        source = (repository / relative).read_text(encoding="utf-8")
+        assert not re.search(r"(?<!NoWheel)QSpinBox\s*\(", source)
+        assert "NoWheelSpinBox(" in source
