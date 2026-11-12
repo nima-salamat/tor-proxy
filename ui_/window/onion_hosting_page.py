@@ -87,10 +87,10 @@ class OnionServiceActivityDialog(_FramelessDialog):
         privacy.setWordWrap(True)
         self.body_layout.addWidget(privacy)
 
-        self.table = QTableWidget(0, 7, self.body_host)
+        self.table = QTableWidget(0, 8, self.body_host)
         self.table.setObjectName("onionActivityTable")
         self.table.setHorizontalHeaderLabels(
-            ["Time (UTC)", "Protocol", "First request line / connection", "Status", "In", "Out", "Duration"]
+            ["Time (UTC)", "Onion port", "Protocol", "First request line / connection", "Status", "In", "Out", "Duration"]
         )
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -100,9 +100,10 @@ class OnionServiceActivityDialog(_FramelessDialog):
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        for column in (4, 5, 6):
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        for column in (5, 6, 7):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
         self.body_layout.addWidget(self.table, 1)
 
@@ -131,6 +132,7 @@ class OnionServiceActivityDialog(_FramelessDialog):
             f"OUT  {_format_bytes(stats['outgoing_bytes'])}     "
             f"HTTP sessions  {stats['http_requests']:,}     "
             f"Connections  {stats['connections']:,}     "
+            f"Errors  {stats['errors']:,}     "
             f"Active  {stats['active_connections']:,}"
         )
         if events == self._last_events:
@@ -145,6 +147,7 @@ class OnionServiceActivityDialog(_FramelessDialog):
                 request = f"{request}  ·  {event['error']}"
             values = (
                 str(event.get("occurred_at", "")).replace("T", " ").replace("+00:00", ""),
+                str(event.get("onion_port") or "—"),
                 str(event.get("protocol") or "TCP"),
                 request,
                 str(event.get("status_code") or "—"),
@@ -154,7 +157,7 @@ class OnionServiceActivityDialog(_FramelessDialog):
             )
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
-                if column in {3, 4, 5, 6}:
+                if column in {1, 4, 5, 6, 7}:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 if column == 3:
                     code = event.get("status_code")
@@ -813,6 +816,7 @@ class OnionHostingPage(QWidget):
             ("outgoing_bytes", "TOTAL OUT"),
             ("http_requests", "HTTP SESSIONS"),
             ("connections", "CONNECTIONS"),
+            ("errors", "ERRORS"),
             ("active_connections", "ACTIVE"),
         ):
             metric = QFrame(traffic_summary)
@@ -1311,6 +1315,7 @@ class OnionHostingPage(QWidget):
             labels["incoming_bytes"].setText(_format_bytes(snapshot["incoming_bytes"]))
             labels["outgoing_bytes"].setText(_format_bytes(snapshot["outgoing_bytes"]))
             labels["http_requests"].setText(f"{int(snapshot['http_requests']):,}")
+            labels["errors"].setText(f"{int(snapshot['errors']):,}")
             labels["active_connections"].setText(f"{int(snapshot['active_connections']):,}")
 
     def refresh_dashboard(self):
@@ -1430,6 +1435,7 @@ class OnionHostingPage(QWidget):
             ("incoming_bytes", "IN"),
             ("outgoing_bytes", "OUT"),
             ("http_requests", "HTTP"),
+            ("errors", "ERR"),
             ("active_connections", "ACTIVE"),
         ):
             metric = QHBoxLayout()
@@ -1441,7 +1447,8 @@ class OnionHostingPage(QWidget):
             value.setObjectName("onionServiceTraffic")
             value.setToolTip(
                 "Detected plaintext HTTP sessions (one first request line per TCP connection)."
-                if key == "http_requests" else caption.title()
+                if key == "http_requests" else
+                "Failed or aborted local relay connections." if key == "errors" else caption.title()
             )
             metric.addWidget(title)
             metric.addWidget(value)
