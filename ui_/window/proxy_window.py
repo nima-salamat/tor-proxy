@@ -67,8 +67,8 @@ class ConnectionStatusPill(QWidget):
         self._state = "disconnected"
         self._dark = True
         self.setObjectName("connectionStatusFrame")
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        # This is a child of Home, not a top-level translucent window.
+        # Let Qt paint the parent behind the unpainted corners.
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
         self.setAutoFillBackground(False)
         self.set_theme_mode(CONFIG.get("mode", "dark"))
@@ -90,12 +90,10 @@ class ConnectionStatusPill(QWidget):
         if not painter.isActive():
             return
 
-        # Clear any rectangular background supplied by the platform/application
-        # style first. The unpainted corners then reveal the Home canvas below.
+        # Paint only the rounded capsule. Do not clear or fill the widget
+        # rectangle: Qt must keep the Home parent's background visible behind
+        # the transparent corner areas.
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setCompositionMode(QPainter.CompositionMode_Source)
-        painter.fillRect(self.rect(), QColor(0, 0, 0, 0))
-        painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
 
         if self._state == "connected":
             background = QColor(46, 174, 105, 26)
