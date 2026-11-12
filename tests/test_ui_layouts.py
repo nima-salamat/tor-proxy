@@ -3120,3 +3120,30 @@ def test_pulse_button_can_shrink_without_losing_its_animation_geometry(qt_app):
         button.close()
         button.deleteLater()
         qt_app.processEvents()
+
+
+
+def test_home_moves_connect_whitespace_above_status_and_polishes_bottom_actions():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+
+    status_index = source.index(
+        'self.home_layout.addWidget(self.btn_status, 0, Qt.AlignmentFlag.AlignHCenter)'
+    )
+    top_gap_index = source.index("self.home_layout.addStretch(1)", status_index - 500)
+    connect_row_index = source.index("self.home_layout.addLayout(connect_row)", status_index)
+    metrics_index = source.index("self.home_layout.addLayout(metrics)", connect_row_index)
+    assert top_gap_index < status_index < connect_row_index < metrics_index
+    assert "self.home_layout.addLayout(connect_row, 1)" not in source
+
+    assert 'utility_row.addWidget(self.btn_change_identity, 1)' in source
+    assert 'utility_row.addWidget(self.btn_log, 1)' in source
+    assert 'utility_row.addWidget(self.btn_whatismyip, 1)' in source
+    assert 'utility_row.addWidget(self.btn_open_browser, 1)' in source
+    assert 'self.btn_log.setIcon(qta.icon("fa6s.list-ul", color=icon_color))' in source
+    assert 'qta.icon("fa6s.arrow-up-right-from-square", color=icon_color)' in source
+    assert "button.setIconSize(QSize(14, 14) if compact else QSize(16, 16))" in source
+    assert "QPushButton#secondaryAction:hover" in source
+    assert "QPushButton#secondaryAction:pressed" in source
+    assert "QPushButton#secondaryAction:checked" in source
+    assert "QPushButton#secondaryAction:disabled" in source
