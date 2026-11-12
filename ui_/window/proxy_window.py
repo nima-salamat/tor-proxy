@@ -859,6 +859,15 @@ class ProxyWindow(QWidget):
             logger.warning("Tor identity request failed: %s", exc)
             return False
 
+    def _set_home_connected_feedback(self, connected: bool) -> bool:
+        """Update the Home button only when aggregate Tor readiness crosses zero."""
+        connected = bool(connected)
+        if bool(self.connected) == connected:
+            return False
+        self.connected = connected
+        self.connect_btn.set_connected(connected)
+        return True
+
     def dataValueChanged(self, v):
         if v == "100%":
             manager = getattr(self.tor, "manager", None)
@@ -878,8 +887,7 @@ class ProxyWindow(QWidget):
 
             if self._parent is not None and self._parent.isHidden():
                 self._parent._notify("TorProxy", "Tor bootstrap completed")
-            self.connected = True
-            self.connect_btn.set_connected(True)
+            self._set_home_connected_feedback(True)
             self.btn_status.setText("CONNECTED TO TOR")
             self.set_btn_status_style("connected")
             self._update_proxy_buttons()
@@ -904,9 +912,11 @@ class ProxyWindow(QWidget):
             return
 
         if ready:
-            self.connected = True
+            # The health signal can fire for each worker and each quality update.
+            # Only a 0 -> 1+ transition should replay the Connected acknowledgement;
+            # losing/recovering one backend while another is healthy must not flash it.
+            self._set_home_connected_feedback(True)
             self.failed = False
-            self.connect_btn.set_connected(True)
             if total > 0 and ready < total:
                 self.btn_status.setText(f"CONNECTED · {ready}/{total} TOR INSTANCES READY")
             else:
@@ -916,8 +926,7 @@ class ProxyWindow(QWidget):
             # A complete backend outage may be temporary while the supervisor
             # restarts an instance. Keep the gateway alive and show reconnecting
             # instead of tearing the whole pool down immediately.
-            self.connected = False
-            self.connect_btn.set_connected(False)
+            self._set_home_connected_feedback(False)
             self.btn_status.setText("TOR INSTANCES RECONNECTING…")
             self.set_btn_status_style("connecting")
 

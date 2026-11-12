@@ -1064,6 +1064,7 @@ class TorServicesPage(QWidget):
         text = "#edf3fa" if dark else "#243247"
         muted = "#9eacbd" if dark else "#66778d"
         hover = "rgba(75, 159, 231, 0.15)" if dark else "rgba(40, 120, 200, 0.09)"
+        self._theme_icon_color = text
         self.setStyleSheet(f"""
             QWidget#customTorContent {{ background: transparent; }}
             QFrame#customTorHero {{
@@ -1122,6 +1123,9 @@ class TorServicesPage(QWidget):
         ):
             if button is not None:
                 button.setIcon(qta.icon(name, color=text))
+        for button in self.findChildren(QPushButton):
+            if button.property("themeIconRole") == "copy":
+                button.setIcon(qta.icon("fa6s.copy", color=text))
 
     @staticmethod
     def _section_title(title: str) -> QLabel:
@@ -1811,7 +1815,8 @@ class TorServicesPage(QWidget):
         service_id = str(profile.get("id", ""))
         copy_button = QPushButton("Copy SOCKS endpoint", card)
         copy_button.setObjectName("settingsActionButton")
-        copy_button.setIcon(qta.icon("fa6s.copy"))
+        copy_button.setProperty("themeIconRole", "copy")
+        copy_button.setIcon(qta.icon("fa6s.copy", color=self._theme_icon_color))
         copy_button.setToolTip("Copy the loopback SOCKS endpoint for this isolated Tor profile.")
         copy_button.clicked.connect(
             lambda _checked=False, endpoint=socks_endpoint: QApplication.clipboard().setText(endpoint)

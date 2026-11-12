@@ -2841,3 +2841,65 @@ def test_all_numeric_qt_inputs_use_no_wheel_spinbox_controls():
         source = (repository / relative).read_text(encoding="utf-8")
         assert not re.search(r"(?<!NoWheel)QSpinBox\s*\(", source)
         assert "NoWheelSpinBox(" in source
+
+
+
+def test_home_connected_feedback_only_changes_on_aggregate_ready_edges():
+    from ui_.window.proxy_window import ProxyWindow
+
+    class FakeButton:
+        def __init__(self):
+            self.transitions = []
+
+        def set_connected(self, connected):
+            self.transitions.append(bool(connected))
+
+    class FakeHome:
+        connected = False
+        connect_btn = FakeButton()
+
+    home = FakeHome()
+
+    assert ProxyWindow._set_home_connected_feedback(home, True) is True
+    # Repeated pool reports, and a worker going down while another stays up,
+    # must not restart the one-second CONNECTED acknowledgement timer.
+    assert ProxyWindow._set_home_connected_feedback(home, True) is False
+    assert ProxyWindow._set_home_connected_feedback(home, True) is False
+    assert home.connect_btn.transitions == [True]
+
+    # Only a complete outage changes the aggregate state; first recovery
+    # produces one new acknowledgement, not one per worker.
+    assert ProxyWindow._set_home_connected_feedback(home, False) is True
+    assert ProxyWindow._set_home_connected_feedback(home, False) is False
+    assert ProxyWindow._set_home_connected_feedback(home, True) is True
+    assert home.connect_btn.transitions == [True, False, True]
+
+
+def test_custom_tor_copy_socks_icon_tracks_light_and_dark_theme(qt_app, monkeypatch):
+    pytest.importorskip("qtawesome")
+    import ui_.window.tor_services_page as services_page
+    from PySide6.QtWidgets import QPushButton
+
+    page = services_page.TorServicesPage(management_only=True)
+    try:
+        button = QPushButton(page)
+        button.setObjectName("settingsActionButton")
+        button.setProperty("themeIconRole", "copy")
+        calls = []
+        original_icon = services_page.qta.icon
+
+        def capture_icon(name, *args, **kwargs):
+            calls.append((name, kwargs.get("color")))
+            return original_icon(name, *args, **kwargs)
+
+        monkeypatch.setattr(services_page.qta, "icon", capture_icon)
+        page.apply_theme("dark")
+        page.apply_theme("light")
+
+        assert ("fa6s.copy", "#edf3fa") in calls
+        assert ("fa6s.copy", "#243247") in calls
+        assert button.icon().isNull() is False
+    finally:
+        page.close()
+        page.deleteLater()
+        qt_app.processEvents()
