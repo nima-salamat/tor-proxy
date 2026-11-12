@@ -321,7 +321,17 @@ def test_settings_and_bundle_pages_use_available_height_without_duplicate_subtit
     settings_source = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
     updater_source = (repository / "ui_/window/updater_window.py").read_text(encoding="utf-8")
     proxy_source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
-    assert '("General", "Bridges", "Ports", "Custom Tor", "Advanced"), self.settings_nav_icon_names' in settings_source
+    expected_settings_nav = (
+        'self.settings_nav_titles = ('
+        '\n            "General",'
+        '\n            "Bridges",'
+        '\n            "Ports",'
+        '\n            "Custom Tor",'
+        '\n            "Blocked Hosts",'
+        '\n            "Excluded Hosts",'
+        '\n            "Advanced",'
+    )
+    assert expected_settings_nav in settings_source
     assert "verify_tor_signatures" in settings_source
     assert "QScrollArea" in settings_source and "setWidgetResizable(True)" in settings_source
     assert "lbl_page_number" not in settings_source
@@ -414,7 +424,7 @@ def test_updates_nav_icon_and_text_follow_only_the_active_updates_page(monkeypat
         def __init__(self, page):
             self.page = page
 
-        def currentIndex(self):
+        def currentWidget(self):
             return self.page
 
     class _Button:
@@ -435,8 +445,13 @@ def test_updates_nav_icon_and_text_follow_only_the_active_updates_page(monkeypat
         def setMenuIndicatorOpen(self, opened):
             self.indicator_open = bool(opened)
 
+    updater_page = object()
+    tunnel_page = object()
+    other_page = object()
     fake = SimpleNamespace(
-        stack=_Stack(4),
+        stack=_Stack(updater_page),
+        updater_window=updater_page,
+        tunnel_window=tunnel_page,
         updates_nav_button=_Button(),
     )
     fake._sync_updates_nav_icon = lambda mode=None: ui.Window._sync_updates_nav_icon(fake, mode)
@@ -449,13 +464,13 @@ def test_updates_nav_icon_and_text_follow_only_the_active_updates_page(monkeypat
     assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-down", "#ffffff")
     assert fake.updates_nav_button.indicator_color == "#ffffff"
 
-    fake.stack.page = 5
+    fake.stack.page = tunnel_page
     ui.Window._sync_updates_nav_icon(fake, "dark")
     assert fake.updates_nav_button.checked is True
     assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-down", "#ffffff")
 
     # Other page, light theme: opening Updates must not make the button active.
-    fake.stack.page = 0
+    fake.stack.page = other_page
     ui.Window._sync_updates_nav_icon(fake, "light")
     assert fake.updates_nav_button.checked is False
     assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-down", "#202832")
@@ -468,7 +483,7 @@ def test_updates_nav_icon_and_text_follow_only_the_active_updates_page(monkeypat
     assert fake.updates_nav_button.indicator_color == "#202832"
 
     # Switching into an Updates page while the popup is shown follows page state.
-    fake.stack.page = 4
+    fake.stack.page = updater_page
     ui.Window._on_updates_menu_about_to_show(fake)
     assert fake.updates_nav_button.checked is True
     assert fake.updates_nav_button.icon == ("fa6s.cloud-arrow-down", "#ffffff")
@@ -481,7 +496,7 @@ def test_updates_nav_icon_and_text_follow_only_the_active_updates_page(monkeypat
     assert fake.updates_nav_button.indicator_color == "#ffffff"
 
     # Leaving Updates restores the normal theme text/icon/caret color.
-    fake.stack.page = 0
+    fake.stack.page = other_page
     ui.Window._on_updates_menu_about_to_hide(fake)
     assert fake.updates_nav_button.checked is False
     ui.Window._sync_updates_nav_icon(fake, "dark")

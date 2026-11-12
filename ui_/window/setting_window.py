@@ -95,18 +95,18 @@ class SettingWindow(QWidget):
             "fa6s.route",
             "fa6s.shield",
         )
-        for index, (title, icon_name) in enumerate(zip(
-            (
-                "General",
-                "Bridges",
-                "Ports",
-                "Service Defaults",
-                "Blocked Hosts",
-                "Excluded Hosts",
-                "Advanced",
-            ),
-            self.settings_nav_icon_names,
-        )):
+        self.settings_nav_titles = (
+            "General",
+            "Bridges",
+            "Ports",
+            "Custom Tor",
+            "Blocked Hosts",
+            "Excluded Hosts",
+            "Advanced",
+        )
+        for index, (title, icon_name) in enumerate(
+            zip(self.settings_nav_titles, self.settings_nav_icon_names)
+        ):
             button = QPushButton(title, self)
             button.setObjectName("settingsNavButton")
             button.setIcon(qta.icon(icon_name, color="#eff1f4" if CONFIG["mode"] == "dark" else "#202832"))
