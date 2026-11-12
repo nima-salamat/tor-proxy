@@ -177,6 +177,9 @@ class ProxyWindow(QWidget):
         )
         self.home_scroll.setWidget(self.home_content)
         self.main_layout.addWidget(self.home_scroll, 1)
+        self.home_layout = QVBoxLayout(self.home_content)
+        self.home_layout.setContentsMargins(24, 18, 24, 16)
+        self.home_layout.setSpacing(12)
 
         self._home_responsive_mode = None
 
@@ -256,6 +259,7 @@ class ProxyWindow(QWidget):
         left_metrics_layout.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
+        self._home_metrics_left_layout = left_metrics_layout
         left_metrics_layout.addWidget(bootstrap_caption)
         left_metrics_layout.addWidget(self.lbl_percent)
 
@@ -264,6 +268,7 @@ class ProxyWindow(QWidget):
         separator.setFrameShape(QFrame.Shape.VLine)
         separator.setFixedWidth(1)
         separator.setFixedHeight(36)
+        self._home_metric_separator = separator
 
         right_metrics = QWidget(self.home_content)
         right_metrics.setObjectName("homeMetricsRight")
@@ -273,6 +278,7 @@ class ProxyWindow(QWidget):
         right_metrics_layout.setAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
         )
+        self._home_metrics_right_layout = right_metrics_layout
         right_metrics_layout.addWidget(self.lbl_data_usage)
         right_metrics_layout.addWidget(self.btn_statistics)
 
@@ -443,6 +449,102 @@ class ProxyWindow(QWidget):
         self.timer_data_usage.timeout.connect(self.change_data_usage)
         self._update_home_responsive_layout()
         QTimer.singleShot(0, self._update_home_responsive_layout)
+
+    def _logs_drawer_width(self) -> int:
+        """Keep the event-log drawer proportional so it cannot consume a small Home window."""
+        return min(360, max(160, int(max(0, self.width()) * 0.28)))
+
+    def _update_home_responsive_layout(self) -> None:
+        """Reflow Home rows as the available viewport width changes."""
+        required = (
+            "_home_service_controls_layout",
+            "_home_endpoint_row",
+            "_home_endpoint_layout",
+            "_home_utility_layout",
+            "_home_metrics_layout",
+            "_home_metric_separator",
+        )
+        if any(not hasattr(self, name) for name in required):
+            return
+
+        viewport = getattr(self, "home_scroll", None)
+        width = viewport.viewport().width() if viewport is not None else self.width()
+        if width <= 0:
+            width = self.width()
+        compact = width < 760
+        stacked_endpoints = width < 760
+        stacked_metrics = width < 560
+        stacked_actions = width < 640
+        mode = (compact, stacked_endpoints, stacked_metrics, stacked_actions)
+        if mode == self._home_responsive_mode:
+            return
+        self._home_responsive_mode = mode
+
+        horizontal = QBoxLayout.Direction.LeftToRight
+        vertical = QBoxLayout.Direction.TopToBottom
+        self.home_layout.setContentsMargins(
+            12 if compact else 24,
+            10 if compact else 18,
+            12 if compact else 24,
+            10 if compact else 16,
+        )
+        self.home_layout.setSpacing(8 if compact else 12)
+
+        self._home_service_controls_layout.setDirection(vertical if compact else horizontal)
+        self._home_endpoint_row.setDirection(vertical if compact else horizontal)
+        self._home_endpoint_layout.setDirection(vertical if stacked_endpoints else horizontal)
+        self._home_utility_layout.setDirection(vertical if stacked_actions else horizontal)
+        self._home_metrics_layout.setDirection(vertical if stacked_metrics else horizontal)
+        self._home_metrics_layout.setSpacing(5 if stacked_metrics else 0)
+
+        if stacked_metrics:
+            self._home_metric_separator.setFrameShape(QFrame.Shape.HLine)
+            self._home_metric_separator.setFixedWidth(42)
+            self._home_metric_separator.setFixedHeight(1)
+            self._home_metrics_left_layout.setContentsMargins(0, 0, 0, 0)
+            self._home_metrics_left_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._home_metrics_right_layout.setContentsMargins(0, 0, 0, 0)
+            self._home_metrics_right_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        else:
+            self._home_metric_separator.setFrameShape(QFrame.Shape.VLine)
+            self._home_metric_separator.setFixedWidth(1)
+            self._home_metric_separator.setFixedHeight(36)
+            self._home_metrics_left_layout.setContentsMargins(0, 0, 14, 0)
+            self._home_metrics_left_layout.setAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            )
+            self._home_metrics_right_layout.setContentsMargins(14, 0, 0, 0)
+            self._home_metrics_right_layout.setAlignment(
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            )
+
+        self.system_tunnel_hint_label.setWordWrap(compact)
+        for button in (
+            self.btn_change_identity,
+            self.btn_log,
+            self.btn_whatismyip,
+            self.btn_open_browser,
+        ):
+            button.setSizePolicy(
+                QSizePolicy.Policy.Expanding if stacked_actions else QSizePolicy.Policy.Preferred,
+                QSizePolicy.Policy.Fixed,
+            )
+
+        self._home_endpoint_panel.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        self.exit_ip_card.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        self.home_content.updateGeometry()
+        self.home_scroll.updateGeometry()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._update_home_responsive_layout()
+        if getattr(self, "logs_open", False):
+            target_width = self._logs_drawer_width()
+            self.logs_widget.setMaximumWidth(target_width)
 
     def _build_home_endpoint_card(self, title: str, key: str) -> QFrame:
         card = QFrame(self.home_content)
@@ -1015,7 +1117,7 @@ class ProxyWindow(QWidget):
         self.btn_log.setChecked(opening)
         if self._logs_animation is not None:
             self._logs_animation.stop()
-        target_width = min(400, max(292, int(self.width() * 0.36))) if opening else 0
+        target_width = self._logs_drawer_width() if opening else 0
         animation = QPropertyAnimation(self.logs_widget, b"maximumWidth", self)
         animation.setDuration(240)
         animation.setEasingCurve(
@@ -1024,6 +1126,7 @@ class ProxyWindow(QWidget):
         animation.setStartValue(self.logs_widget.maximumWidth())
         animation.setEndValue(target_width)
         animation.finished.connect(lambda: self.logs_widget.setMaximumWidth(target_width))
+        animation.finished.connect(self._update_home_responsive_layout)
         self._logs_animation = animation
         animation.start()
 
@@ -1038,6 +1141,7 @@ class ProxyWindow(QWidget):
         text = "#e8edf3" if dark else "#253041"
         self.home_content.setStyleSheet(f"""
             QWidget#homeContent {{ background: transparent; }}
+            QScrollArea#homeScrollArea {{ background: transparent; border: none; }}
             QPushButton#connectPulseButton {{ background: transparent; border: none; padding: 0; margin: 0; }}
             QPushButton#connectPulseButton:hover, QPushButton#connectPulseButton:pressed, QPushButton#connectPulseButton:focus {{ background: transparent; border: none; }}
             QLabel#connectionStatus {{
