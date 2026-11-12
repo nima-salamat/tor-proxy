@@ -4,6 +4,10 @@ All notable changes are recorded here. Dates and release numbers are added only 
 
 ## Unreleased
 
+- Added per-service Developer Tor traffic accounting through transparent loopback TCP relays: incoming/outgoing byte totals, connection duration and bounded service-scoped Activity history. Plaintext HTTP/1 exposes only the first request line/status per TCP connection with query strings removed; TLS remains opaque and is not decrypted.
+- Split service Activity from the single global Tor runtime log, added aggregate and per-service traffic summaries plus service search/state filters, and added an explicit stopped-service identity rotation action for generating a new cryptographic v3 Onion address.
+- Deleting an Onion Service also deletes its own traffic counters and Activity history; address rotation preserves its private client authorization key and local forwarding configuration.
+
 - Fixed Telegram/long-lived TCP connections being cut off while Tor was still attaching a SOCKS stream to a circuit: the failover gateway now has a shared 125-second destination-connect budget aligned with Tor's default 120-second `SocksTimeout`, and the HTTP proxy no longer imposes an earlier 30-second limit.
 - Prevent intermittent false SOCKS outages when the independent Tor Check endpoint is unavailable: if no worker passes the egress probe, TorProxy can still try bootstrap-ready, live Tor SOCKS workers. Requests remain Tor-routed; failed worker processes are never used, and the UI does not falsely mark the pool network-healthy.
 - Fix WebTunnel's Go TLS curve incompatibility by defaulting WebTunnel Bridge records to the documented `utls=none` option. Main Tor and Developer Tor expose independent toggles; bridge SNI and non-WebTunnel transports are preserved. The scoped `GODEBUG=tlssecpmlkem=0` compatibility environment remains active for Go's native TLS path.
