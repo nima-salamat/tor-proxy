@@ -8,7 +8,8 @@ class PulseButton(QPushButton):
 
     def __init__(self, text="CONNECT"):
         super().__init__(text)
-        self.setFixedSize(264, 264)
+        self._diameter = 264
+        self.setFixedSize(self._diameter, self._diameter)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._state = "disconnected"
@@ -40,6 +41,20 @@ class PulseButton(QPushButton):
     @property
     def state(self):
         return self._state
+
+    @property
+    def diameter(self) -> int:
+        return self._diameter
+
+    def set_diameter(self, diameter: int) -> None:
+        """Resize the animated Connect control while preserving its circular proportions."""
+        diameter = max(128, min(264, int(diameter)))
+        if diameter == self._diameter:
+            return
+        self._diameter = diameter
+        self.setFixedSize(diameter, diameter)
+        self.updateGeometry()
+        self.update()
 
     def _set_state(self, state, text):
         self._connected_feedback_timer.stop()
@@ -118,6 +133,7 @@ class PulseButton(QPushButton):
             highlight_color = highlight_color.lighter(108)
 
         # During startup the outer rings move faster and use a cool blue color.
+        scale = min(self.width(), self.height()) / 264.0
         for radius, alpha, width, low, high in (
             (self._halo_radius, 36, 2.0, 108.0, 127.0),
             (self._pulse_radius, 78, 2.4, 101.0, 124.0),
@@ -126,28 +142,34 @@ class PulseButton(QPushButton):
             progress = min(1.0, max(0.0, (radius - low) / (high - low)))
             ring_color.setAlpha(int(alpha * (1.0 - 0.78 * progress)))
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.setPen(QPen(ring_color, width))
-            painter.drawEllipse(center, int(radius), int(radius))
+            painter.setPen(QPen(ring_color, width * scale))
+            painter.drawEllipse(center, int(radius * scale), int(radius * scale))
 
-        main_radius = 100
-        gradient = QRadialGradient(center.x() - 30, center.y() - 37, main_radius * 2.0)
+        main_radius = 100 * scale
+        gradient = QRadialGradient(
+            center.x() - 30 * scale,
+            center.y() - 37 * scale,
+            main_radius * 2.0,
+        )
         gradient.setColorAt(0.0, highlight_color)
         gradient.setColorAt(0.62, base_color)
         gradient.setColorAt(1.0, QColor(edge))
-        painter.setPen(QPen(base_color.lighter(128), 1.4))
+        painter.setPen(QPen(base_color.lighter(128), 1.4 * scale))
         painter.setBrush(QBrush(gradient))
-        painter.drawEllipse(center, main_radius, main_radius)
+        painter.drawEllipse(center, int(main_radius), int(main_radius))
 
         outline = QColor("#ffffff")
         outline.setAlpha(45)
-        painter.setPen(QPen(outline, 1.2))
+        painter.setPen(QPen(outline, 1.2 * scale))
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawEllipse(center, 78, 78)
+        inner_radius = 78 * scale
+        painter.drawEllipse(center, int(inner_radius), int(inner_radius))
 
         painter.setPen(QColor("#ffffff"))
         font = painter.font()
         font.setBold(True)
-        font.setPointSize(13 if self._state in {"connecting", "stopping"} else 14)
+        base_font_size = 13 if self._state in {"connecting", "stopping"} else 14
+        font.setPointSize(max(10, int(round(base_font_size * min(1.0, scale * 1.25)))))
         painter.setFont(font)
         painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.text())
         painter.end()
