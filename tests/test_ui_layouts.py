@@ -832,6 +832,20 @@ def test_onion_service_dashboard_keeps_empty_label_alive_across_card_refreshes(q
         def services_snapshot(self):
             return []
 
+        def traffic_snapshot(self, service_id=None):
+            return {
+                "incoming_bytes": 0,
+                "outgoing_bytes": 0,
+                "connections": 0,
+                "http_requests": 0,
+                "errors": 0,
+                "active_connections": 0,
+                "last_activity": "",
+            }
+
+        def traffic_events(self, service_id, limit=250):
+            return []
+
     manager = FakeOnionManager()
 
     class FakeProxy:
@@ -2988,3 +3002,45 @@ def test_home_endpoint_cards_have_clear_copy_targets_and_consistent_exit_ip_summ
     assert 'http_proxy_bind_all_interfaces' in source
     assert 'tor_socks_bind_all_interfaces' in source
     assert 'LAN IP unavailable' in source
+
+
+
+def test_developer_tor_separates_runtime_logs_from_service_activity_and_exposes_traffic_tools():
+    repository = Path(__file__).resolve().parents[1]
+    page = (repository / "ui_/window/onion_hosting_page.py").read_text(encoding="utf-8")
+    manager = (repository / "src/torproxy/onion_hosting.py").read_text(encoding="utf-8")
+    traffic = (repository / "src/torproxy/onion_traffic.py").read_text(encoding="utf-8")
+
+    assert page.count("clicked.connect(self.open_runtime_logs)") == 1
+    assert "logs.clicked.connect(self.open_runtime_logs)" not in page
+    assert "self.open_service_activity(data)" in page
+    assert "def open_service_activity(self, service: dict)" in page
+    assert "def traffic_snapshot(self, service_id: str | None = None)" in manager
+    assert "def traffic_events(self, service_id: str, limit: int = 250)" in manager
+    assert '("incoming_bytes", "TOTAL IN")' in page
+    assert '("outgoing_bytes", "TOTAL OUT")' in page
+    assert "self._service_traffic_widgets" in page
+    assert "QFrame#onionTrafficSummary" in page
+    assert "def rotate_service_identity(self, profile_id: str)" in manager
+    assert "self._traffic_relays[profile_id] = relay" in manager
+    assert "OnionServiceRelay(profile_id, mappings, self._traffic_store)" in manager
+    assert "self.store.finish_connection(" in traffic
+    assert "self._request_buffer.find(b\"\\r\\n\")" in traffic
+    assert "self._safe_request_path" in traffic
+    assert "query strings are not stored" in page
+
+
+def test_developer_tor_service_cards_use_activity_and_rotatable_addresses():
+    repository = Path(__file__).resolve().parents[1]
+    page = (repository / "ui_/window/onion_hosting_page.py").read_text(encoding="utf-8")
+    card = page[page.index("    def _service_card("):]
+
+    assert 'QPushButton("Tor runtime logs", runtime)' in page
+    assert 'activity = QPushButton("Activity", card)' in card
+    assert 'activity.clicked.connect(' in card
+    assert 'new_address = QPushButton("New address", card)' in card
+    assert 'new_address.setEnabled(bool(service.get("address")) and not service.get("running"))' in card
+    assert 'new_address.clicked.connect(' in card
+    assert 'def rotate_service_address(self, service: dict)' in page
+    assert 'The current .onion address will stop working' in page
+    assert 'manager.rotate_service_identity(service_id)' in page
