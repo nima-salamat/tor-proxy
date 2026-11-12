@@ -120,11 +120,11 @@ class PulseButton(QPushButton):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         center = self.rect().center()
         colors = {
-            "disconnected": ("#2eae69", "#82e8ae", "#176942"),
-            "connecting": ("#328bd4", "#9bd1ff", "#1d4e89"),
-            "connected": ("#2cbb88", "#a6f4d3", "#146953"),
-            "disconnect": ("#ff526d", "#ff9caa", "#9d2941"),
-            "stopping": ("#e58a44", "#ffd0a5", "#8a4321"),
+            "disconnected": ("#258b5b", "#69d49a", "#13573b"),
+            "connecting": ("#317cb8", "#82bce8", "#1b4d78"),
+            "connected": ("#21966c", "#70d8ad", "#145b47"),
+            "disconnect": ("#cf455c", "#f08b99", "#752638"),
+            "stopping": ("#c7793d", "#e5b17f", "#71401f"),
         }
         base, highlight, edge = colors.get(self._state, colors["disconnected"])
         base_color = QColor(base)
