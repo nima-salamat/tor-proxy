@@ -174,9 +174,10 @@ class ProxyWindow(QWidget):
         self.connect_btn.setObjectName("connectPulseButton")
         self.connect_btn.clicked.connect(self._toggle)
 
-        connection_hero = QWidget(self.home_content)
-        connection_hero.setObjectName("connectionHero")
-        connection_hero_layout = QVBoxLayout(connection_hero)
+        # Keep the circular action directly on the Home canvas. A wrapper
+        # QWidget here picks up the application-wide panel background in some
+        # styles, creating an unintended rectangle behind the button.
+        connection_hero_layout = QVBoxLayout()
         connection_hero_layout.setContentsMargins(0, 0, 0, 0)
         connection_hero_layout.setSpacing(10)
         connection_hero_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -185,7 +186,7 @@ class ProxyWindow(QWidget):
         )
         self.connection_hint = QLabel(
             "Start Tor to enable your configured proxy listeners.",
-            connection_hero,
+            self.home_content,
         )
         self.connection_hint.setObjectName("connectionHint")
         self.connection_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -198,7 +199,7 @@ class ProxyWindow(QWidget):
         connect_row = QHBoxLayout()
         connect_row.setContentsMargins(0, 0, 0, 0)
         connect_row.addStretch(1)
-        connect_row.addWidget(connection_hero, 0, Qt.AlignmentFlag.AlignCenter)
+        connect_row.addLayout(connection_hero_layout)
         connect_row.addStretch(1)
         self.home_layout.addLayout(connect_row, 1)
 
