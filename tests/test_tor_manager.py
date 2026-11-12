@@ -234,9 +234,9 @@ def test_custom_sni_override_only_targets_webtunnel_and_preserves_explicit_value
     ))
 
     bridge_lines = [line for line in manager.render_torrc().splitlines() if line.startswith("Bridge ")]
-    assert bridge_lines[0].endswith("utls=none")
+    assert "utls=none" in bridge_lines[0].split()
     assert "sni-imitation=www.google.com" in bridge_lines[0]
-    assert bridge_lines[1].endswith("utls=none")
+    assert "utls=none" in bridge_lines[1].split()
     assert "sni-imitation=custom.example" in bridge_lines[1]
     assert "sni-imitation=" not in bridge_lines[2]
 
@@ -319,7 +319,7 @@ def test_bridge_torrc_infers_missing_webtunnel_label_from_url_and_ver(tmp_path):
         if line.startswith("Bridge ")
     ]
     assert bridge_lines == [
-        f"Bridge webtunnel {endpoint} {fingerprint} url=https://bridge.example/secret ver=0.0.1"
+        f"Bridge webtunnel {endpoint} {fingerprint} url=https://bridge.example/secret ver=0.0.1 utls=none"
     ]
 
 
@@ -375,7 +375,7 @@ def test_quoted_ipv6_webtunnel_bridge_is_normalized_for_torrc(tmp_path):
         if line.startswith("Bridge ")
     ]
     assert bridge_lines == [
-        "Bridge webtunnel [2001:db8:fe46:edd5:2139:2d5b:b732:854a]:443 A1B2C3D4E5F60718293A4B5C6D7E8F9012345678 url=https://bridge.example/ ver=0.0.1"
+        "Bridge webtunnel [2001:db8:fe46:edd5:2139:2d5b:b732:854a]:443 A1B2C3D4E5F60718293A4B5C6D7E8F9012345678 url=https://bridge.example/ ver=0.0.1 utls=none"
     ]
     assert '"[2001:db8:fe46:edd5:2139:2d5b:b732:854a]:443"' not in bridge_lines[0]
 
