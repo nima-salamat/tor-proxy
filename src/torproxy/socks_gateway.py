@@ -657,7 +657,7 @@ class SocksFailoverGateway:
 
             if last_reply is not None:
                 LOGGER.warning(
-                    "All %d available Tor SOCKS backend(s) rejected destination=%s:%s; "
+                    "After trying %d available Tor SOCKS backend(s), no connection was established for destination=%s:%s; "
                     "returning reply=0x%02x (%s) to the local client.",
                     attempted_backends,
                     destination_host,
