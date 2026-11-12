@@ -260,6 +260,12 @@ class OnionTrafficStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def delete_service(self, service_id: str) -> None:
+        """Remove the traffic history when its owning service is permanently deleted."""
+        with self._lock, self._database() as db:
+            db.execute("DELETE FROM service_events WHERE service_id=?", (service_id,))
+            db.execute("DELETE FROM service_totals WHERE service_id=?", (service_id,))
+
 
 class _HttpLineProbe:
     """Identify the first plaintext HTTP/1 request and response line only."""
@@ -280,12 +286,13 @@ class _HttpLineProbe:
 
     def observe(self, direction: str, data: bytes) -> None:
         if direction == "request" and not self._request_done:
-            if not self._request_buffer and self._is_tls(data):
+            self._request_buffer.extend(data[:8192])
+            if len(self._request_buffer) >= 3 and self._is_tls(bytes(self._request_buffer[:3])):
                 self.protocol = "TLS"
                 self._request_done = True
                 self._response_done = True
+                self._request_buffer.clear()
                 return
-            self._request_buffer.extend(data[:8192])
             end = self._request_buffer.find(b"\r\n")
             if end < 0 and len(self._request_buffer) < 8192:
                 return
@@ -370,8 +377,10 @@ class _TcpPortRelay:
         error = ""
         probe = _HttpLineProbe()
         upstream: socket.socket | None = None
-        self.store.begin_connection(self.service_id)
+        connection_started = False
         try:
+            self.store.begin_connection(self.service_id)
+            connection_started = True
             client.setblocking(True)
             target_host = str(self.mapping["local_host"])
             target_port = int(self.mapping["local_port"])
@@ -391,22 +400,23 @@ class _TcpPortRelay:
                         endpoint.close()
                     except OSError:
                         pass
-            try:
-                self.store.finish_connection(
-                    self.service_id,
-                    onion_port=int(self.mapping["onion_port"]),
-                    local_port=int(self.mapping["local_port"]),
-                    protocol=probe.protocol,
-                    method=probe.method,
-                    path=probe.path,
-                    status_code=probe.status_code,
-                    incoming_bytes=bytes_in,
-                    outgoing_bytes=bytes_out,
-                    duration_ms=int((time.monotonic() - started) * 1000),
-                    error=error,
-                )
-            except Exception:
-                LOGGER.exception("Could not store Onion Service traffic history.")
+            if connection_started:
+                try:
+                    self.store.finish_connection(
+                        self.service_id,
+                        onion_port=int(self.mapping["onion_port"]),
+                        local_port=int(self.mapping["local_port"]),
+                        protocol=probe.protocol,
+                        method=probe.method,
+                        path=probe.path,
+                        status_code=probe.status_code,
+                        incoming_bytes=bytes_in,
+                        outgoing_bytes=bytes_out,
+                        duration_ms=int((time.monotonic() - started) * 1000),
+                        error=error,
+                    )
+                except Exception:
+                    LOGGER.exception("Could not store Onion Service traffic history.")
             with self._active_lock:
                 self._connection_threads.discard(threading.current_thread())
 
