@@ -6,6 +6,37 @@ import torproxy.tor_manager as tor_manager_module
 from torproxy.tor_manager import TorManager, TorManagerError, TorSettings, TorState
 
 
+def test_webtunnel_child_environment_disables_only_go_126_secp_mlkem(monkeypatch, tmp_path):
+    monkeypatch.setenv("GODEBUG", "netdns=go,tlssecpmlkem=1,tracebacklabels=1")
+    manager = TorManager(TorSettings(
+        executable=tmp_path / "tor",
+        bridges_enabled=True,
+        bridges=(
+            "webtunnel 192.0.2.10:443 "
+            "A1B2C3D4E5F60718293A4B5C6D7E8F9012345678 "
+            "url=https://bridge.example/ ver=0.0.1"
+        ),
+        data_directory=tmp_path / "state",
+    ))
+
+    environment = manager._child_process_environment()
+
+    assert environment["GODEBUG"] == "netdns=go,tracebacklabels=1,tlssecpmlkem=0"
+    assert os.environ["GODEBUG"] == "netdns=go,tlssecpmlkem=1,tracebacklabels=1"
+
+
+def test_non_webtunnel_runtime_does_not_change_go_tls_environment(monkeypatch, tmp_path):
+    monkeypatch.setenv("GODEBUG", "netdns=go,tlssecpmlkem=1")
+    manager = TorManager(TorSettings(
+        executable=tmp_path / "tor",
+        bridges_enabled=True,
+        bridges="obfs4 192.0.2.4:443 A1B2C3D4E5F60718293A4B5C6D7E8F9012345678 cert=abc",
+        data_directory=tmp_path / "state",
+    ))
+
+    assert manager._child_process_environment()["GODEBUG"] == "netdns=go,tlssecpmlkem=1"
+
+
 def test_tor_configuration_restricts_listeners_and_enables_cookie_auth(tmp_path):
     executable = tmp_path / "tor"
     executable.write_text("fake")

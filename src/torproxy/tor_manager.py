@@ -378,6 +378,44 @@ class TorManager:
         """Return whether a configured bridge does not depend on WebTunnel TLS."""
         return any(transport != "webtunnel" for transport, _record in bridges)
 
+    def _child_process_environment(self) -> dict[str, str]:
+        """Build an isolated environment for Tor and its managed PT subprocesses.
+
+        Go 1.26 enables two additional SecP/ML-KEM TLS groups by default. Some
+        Lyrebird WebTunnel builds cannot handle the resulting negotiation and
+        log an unsupported CurvePreferences error. Go documents
+        GODEBUG=tlssecpmlkem=0 as the compatibility switch that restores the
+        pre-Go-1.26 default groups. Tor itself is not a Go process, but it
+        launches Lyrebird as a managed child which inherits this environment.
+
+        Only add the setting when this Tor instance uses WebTunnel. Keep all
+        unrelated GODEBUG entries and never mutate the parent application's
+        environment.
+        """
+        environment = os.environ.copy()
+        if not self.settings.bridges_enabled:
+            return environment
+        try:
+            bridge_records = self._parse_bridges(self.settings.bridges)
+        except TorManagerError:
+            return environment
+        if not any(transport == "webtunnel" for transport, _record in bridge_records):
+            return environment
+
+        existing = [
+            entry.strip()
+            for entry in environment.get("GODEBUG", "").split(",")
+            if entry.strip()
+            and entry.strip().split("=", 1)[0].strip() != "tlssecpmlkem"
+        ]
+        existing.append("tlssecpmlkem=0")
+        environment["GODEBUG"] = ",".join(existing)
+        LOGGER.info(
+            "Applied Go TLS compatibility setting tlssecpmlkem=0 to this Tor process "
+            "and its managed WebTunnel transport subprocesses."
+        )
+        return environment
+
     @staticmethod
     def _has_ambiguous_bridge_handshake_error(diagnostic: str) -> bool:
         """Detect bridge handshake errors that cannot prove the whole PT or bridge list is unusable."""
@@ -841,6 +879,9 @@ class TorManager:
                 "stderr": subprocess.STDOUT,
                 "close_fds": True,
             }
+            child_environment = self._child_process_environment()
+            if child_environment != os.environ:
+                kwargs["env"] = child_environment
             if os.name == "nt":
                 kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             else:

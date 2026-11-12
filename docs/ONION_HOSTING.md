@@ -29,6 +29,8 @@ The runtime card reports the selected connection mode, configured bridge transpo
 
 Changing network preferences while Developer Tor is running does not mutate the live process. Restart the Developer Tor runtime to apply them. The current version does not automatically prune Developer Tor bridges; bridge failures remain visible in its own Tor log and the saved list is preserved.
 
+When a configured bridge list includes WebTunnel, TorProxy adds the Go-documented `tlssecpmlkem=0` compatibility setting to the Tor child-process environment. This disables only the two SecP/ML-KEM groups enabled by Go 1.26 by default, restoring the pre-Go-1.26 default key-exchange set for Lyrebird. Other `GODEBUG` entries are preserved, the application environment is not modified, and the setting is not added for direct/obfs4-only runtimes. TorProxy does not disable the older X25519/ML-KEM group or classical TLS curves.
+
 WebTunnel peer-side TLS alerts such as `remote error: tls: illegal parameter` or an unrecognized handshake reply are treated as inconclusive connection attempts. Tor is allowed to try the configured bridges for the full startup window; a timeout does not classify all bridges as dead or delete records. The separate Go/TLS error `CurvePreferences includes unsupported curve` is a local Lyrebird runtime incompatibility: when every configured bridge uses WebTunnel, TorProxy reports it immediately rather than retrying the same failing transport. If another transport such as obfs4 or Snowflake is configured, bootstrap continues so Tor can try that alternative. Bridge-health probes preserve records for both categories of error.
 
 ## Onion Service model
