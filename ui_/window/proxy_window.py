@@ -163,6 +163,9 @@ class ProxyWindow(QWidget):
         self.home_scroll.setObjectName("homeScrollArea")
         self.home_scroll.setWidgetResizable(True)
         self.home_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.home_scroll.setStyleSheet(
+            "QScrollArea#homeScrollArea { background: transparent; border: none; }"
+        )
         self.home_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.home_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.home_scroll.setSizePolicy(
@@ -1159,7 +1162,6 @@ class ProxyWindow(QWidget):
         text = "#e8edf3" if dark else "#253041"
         self.home_content.setStyleSheet(f"""
             QWidget#homeContent {{ background: transparent; }}
-            QScrollArea#homeScrollArea {{ background: transparent; border: none; }}
             QPushButton#connectPulseButton {{ background: transparent; border: none; padding: 0; margin: 0; }}
             QPushButton#connectPulseButton:hover, QPushButton#connectPulseButton:pressed, QPushButton#connectPulseButton:focus {{ background: transparent; border: none; }}
             QLabel#connectionStatus {{
