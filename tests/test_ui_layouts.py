@@ -2975,6 +2975,15 @@ def test_home_endpoint_cards_have_clear_copy_targets_and_consistent_exit_ip_summ
     assert 'self.connection_hint.setMinimumHeight(38)' in source
     assert 'hint.setProperty("connectionState", state)' in source
     assert 'hint.updateGeometry()' in source
+    assert 'left_metrics_layout.setAlignment(' in source
+    assert 'Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter' in source
+    assert 'right_metrics_layout.setAlignment(' in source
+    assert 'Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter' in source
+    assert 'metrics.addWidget(left_metrics, 1)' in source
+    assert 'metrics.addWidget(separator, 0, Qt.AlignmentFlag.AlignCenter)' in source
+    assert 'metrics.addWidget(right_metrics, 1)' in source
+    assert 'separator.setFixedWidth(1)' in source
+    assert 'separator.setFixedHeight(36)' in source
     assert 'http_proxy_bind_all_interfaces' in source
     assert 'tor_socks_bind_all_interfaces' in source
     assert 'LAN IP unavailable' in source
