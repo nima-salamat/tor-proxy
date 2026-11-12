@@ -5,7 +5,7 @@ import logging
 
 import qtawesome as qta
 from PySide6.QtCore import Qt, QThreadPool, QTimer, Signal, QUrl, QObject, Slot
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
     QAbstractItemView,
@@ -694,8 +694,10 @@ class OnionHostingPage(QWidget):
         self._workers: dict[str, Worker] = {}
         self._worker_relays: dict[str, _WorkerResultRelay] = {}
         self._service_card_widgets: list[QWidget] = []
+        self._service_traffic_widgets: dict[str, dict[str, QLabel]] = {}
         self._last_snapshot = None
         self._last_services = None
+        self._last_visible_service_ids: tuple[str, ...] = ()
         self._thread_pool = QThreadPool(self)
         self._thread_pool.setMaxThreadCount(2)
         self.runtime_progress.connect(self._on_runtime_progress)
@@ -790,7 +792,7 @@ class OnionHostingPage(QWidget):
         self.restart_runtime_button.setIcon(qta.icon("fa6s.rotate"))
         self.restart_runtime_button.clicked.connect(self.restart_runtime)
         actions.addWidget(self.restart_runtime_button)
-        self.runtime_logs_button = QPushButton("Runtime logs", runtime)
+        self.runtime_logs_button = QPushButton("Tor runtime logs", runtime)
         self.runtime_logs_button.setObjectName("onionActionButton")
         self.runtime_logs_button.setIcon(qta.icon("fa6s.file-lines"))
         self.runtime_logs_button.clicked.connect(self.open_runtime_logs)
@@ -798,6 +800,34 @@ class OnionHostingPage(QWidget):
         actions.addStretch(1)
         runtime_layout.addLayout(actions)
         root.addWidget(runtime)
+
+        traffic_summary = QFrame(self)
+        traffic_summary.setObjectName("onionTrafficSummary")
+        traffic_summary_layout = QHBoxLayout(traffic_summary)
+        traffic_summary_layout.setContentsMargins(10, 7, 10, 7)
+        traffic_summary_layout.setSpacing(8)
+        self._global_traffic_labels: dict[str, QLabel] = {}
+        for key, title in (
+            ("incoming_bytes", "TOTAL IN"),
+            ("outgoing_bytes", "TOTAL OUT"),
+            ("http_requests", "HTTP REQUESTS"),
+            ("connections", "CONNECTIONS"),
+            ("active_connections", "ACTIVE"),
+        ):
+            metric = QFrame(traffic_summary)
+            metric.setObjectName("onionTrafficMetric")
+            metric_layout = QVBoxLayout(metric)
+            metric_layout.setContentsMargins(9, 4, 9, 4)
+            metric_layout.setSpacing(2)
+            caption = QLabel(title, metric)
+            caption.setObjectName("onionTrafficCaption")
+            value = QLabel("0", metric)
+            value.setObjectName("onionTrafficValue")
+            metric_layout.addWidget(caption)
+            metric_layout.addWidget(value)
+            traffic_summary_layout.addWidget(metric, 1)
+            self._global_traffic_labels[key] = value
+        root.addWidget(traffic_summary)
 
         service_header = QHBoxLayout()
         service_title = QLabel("Onion Services", self)
@@ -807,6 +837,25 @@ class OnionHostingPage(QWidget):
         self.services_count_label.setObjectName("onionCountPill")
         service_header.addWidget(self.services_count_label)
         service_header.addStretch(1)
+
+        self.service_search = QLineEdit(self)
+        self.service_search.setObjectName("onionServiceSearch")
+        self.service_search.setPlaceholderText("Filter services…")
+        self.service_search.setClearButtonEnabled(True)
+        self.service_search.setFixedWidth(190)
+        self.service_search.textChanged.connect(self.refresh_dashboard)
+        service_header.addWidget(self.service_search)
+
+        self.service_filter = QComboBox(self)
+        self.service_filter.setObjectName("onionServiceFilter")
+        self.service_filter.addItem("All states", "all")
+        self.service_filter.addItem("Running", "running")
+        self.service_filter.addItem("Stopped", "stopped")
+        self.service_filter.addItem("Errors", "error")
+        self.service_filter.setFixedWidth(112)
+        self.service_filter.currentIndexChanged.connect(self.refresh_dashboard)
+        service_header.addWidget(self.service_filter)
+
         self.add_service_button = QPushButton("Create Onion Service", self)
         self.add_service_button.setObjectName("onionActionPrimary")
         self.add_service_button.setIcon(qta.icon("fa6s.plus"))
@@ -872,8 +921,28 @@ class OnionHostingPage(QWidget):
         self.settings_button.setIcon(qta.icon("fa6s.sliders", color=text))
         self.setStyleSheet(f"""
             QWidget {{ color: {text}; background: transparent; }}
-            QFrame#onionPageHero, QFrame#onionRuntimeCard, QFrame#onionServiceCard {{
+            QFrame#onionPageHero, QFrame#onionRuntimeCard, QFrame#onionServiceCard,
+            QFrame#onionTrafficSummary {{
                 background: {panel}; border: 1px solid {border}; border-radius: 12px;
+            }}
+            QFrame#onionTrafficMetric {{
+                background: {field}; border: 1px solid {border}; border-radius: 8px;
+            }}
+            QLabel#onionTrafficCaption {{
+                color: {muted}; font-size: 8px; font-weight: 800; letter-spacing: 0.5px;
+            }}
+            QLabel#onionTrafficValue {{
+                color: {text}; font-size: 13px; font-weight: 800;
+            }}
+            QLabel#onionServiceTraffic {{
+                color: {muted}; font-size: 9px; padding: 2px 3px;
+            }}
+            QLineEdit#onionServiceSearch, QComboBox#onionServiceFilter {{
+                min-height: 30px; padding: 2px 8px; border: 1px solid {border};
+                border-radius: 8px; background: {field}; color: {text};
+            }}
+            QLineEdit#onionServiceSearch:focus, QComboBox#onionServiceFilter:focus {{
+                border-color: {accent};
             }}
             QLabel#onionHeroIcon {{
                 background: {accent}; border: 1px solid {accent}; border-radius: 10px;
@@ -925,6 +994,21 @@ class OnionHostingPage(QWidget):
             QLabel#onionStatusPill {{
                 color: {muted}; background: {field}; border: 1px solid {border};
                 border-radius: 7px; padding: 3px 8px; font-size: 8px; font-weight: 800;
+            }}
+            QTableWidget#onionActivityTable {{
+                background: {field}; alternate-background-color: {panel};
+                color: {text}; gridline-color: {border};
+                border: 1px solid {border}; border-radius: 8px;
+                selection-background-color: {accent}; selection-color: #ffffff;
+            }}
+            QHeaderView::section {{
+                background: {panel}; color: {muted}; border: none;
+                border-bottom: 1px solid {border}; padding: 7px 8px;
+                font-size: 9px; font-weight: 750;
+            }}
+            QLabel#onionActivitySummary {{
+                color: {accent}; background: {field}; border: 1px solid {border};
+                border-radius: 8px; padding: 8px 10px; font-size: 10px; font-weight: 800;
             }}
             QLineEdit, QComboBox, QSpinBox, QTextEdit {{
                 min-height: 30px; padding: 2px 8px; border: 1px solid {border};
