@@ -102,6 +102,8 @@ The Activity dialog is a connection history, not a packet capture or a replaceme
 
 Cumulative traffic totals and the latest 2,000 connection events per service are stored locally in `developer-tor/traffic.sqlite3`. On Unix, the data directory is mode `0700` and the database file is mode `0600`; Windows inherits the per-user application-data ACL. Totals survive a Developer Tor stop/restart. Deleting a service also deletes its traffic totals and event history. The top-level dashboard sums the retained totals of existing services.
 
+Each mapping rejects excess concurrent connections after 128 active sessions, and all Developer Tor mappings share a 512-connection process-wide ceiling. This bounds the number of relay worker threads. Connections rejected at these admission limits are closed before a worker is created; the counters do not count those rejected sockets as completed service connections.
+
 The counters measure bytes at the local relay boundary. They do not include Tor relay/protocol overhead and should not be interpreted as a byte-for-byte network-interface accounting figure. Local application logs remain the authoritative place for full request details, especially for TLS sites. Treat paths shown in plaintext HTTP Activity as potentially sensitive if an application embeds identifiers or secrets in path segments; query strings are omitted, but path segments are not guaranteed to be secret-free.
 
 ## Privacy and deployment warnings
