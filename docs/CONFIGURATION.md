@@ -25,11 +25,13 @@ Writes use a unique temporary file, restrictive permissions where supported, and
 | `bridge` | Enable bridge mode | `false` |
 | `auto_prune_bridges` | Independently test bridges before connecting and remove confirmed failures only when another bridge works | `false` |
 | `bridges` | User-provided bridge records | empty |
-| `tor_port` | Stable Main SOCKS gateway port (not a Tor worker listener) | automatically chosen when unset/disabled |\n| `tor_socks_bind_all_interfaces` | Bind the Main SOCKS gateway to `0.0.0.0` and require RFC 1929 authentication for remote clients | `false` |
+| `tor_port` | Stable Main SOCKS gateway port (not a Tor worker listener) | automatically chosen when unset/disabled |
+| `tor_socks_bind_all_interfaces` | Bind the Main SOCKS gateway to `0.0.0.0` and require RFC 1929 authentication for remote clients | `false` |
 | `control_port` | Optional ControlPort override | automatically chosen when unset/disabled |
 | `dns_port` | Optional DNS listener override | automatically chosen when unset/disabled |
 | `proxy_port` | Optional local HTTP proxy override | automatically chosen when unset/disabled |
-| `http_proxy_enabled` | Start the HTTP proxy with the primary Tor session | `true` |\n| `http_proxy_bind_all_interfaces` | Bind HTTP proxy to `0.0.0.0` for LAN clients instead of loopback | `false` |
+| `http_proxy_enabled` | Start the HTTP proxy with the primary Tor session | `true` |
+| `http_proxy_bind_all_interfaces` | Bind HTTP proxy to `0.0.0.0` for LAN clients instead of loopback | `false` |
 | `*_checked` | Whether a manual port override is enabled | `false` |
 | `tor_path` | Explicit local Tor executable or bundle directory | unset; discover managed bundles |
 | `MaxCircuitDirtiness` | Tor circuit dirtiness in seconds | `600` |

@@ -405,7 +405,8 @@ class ProxyWindow(QWidget):
             virtual_markers = (
                 "loopback", "torproxy", "sing-box", "wintun", "tun", "tap",
                 "virtual", "vmware", "virtualbox", "vbox", "hyper-v", "docker",
-                "wsl", "tailscale", "zerotier", "teredo", "bluetooth",
+                "wsl", "tailscale", "zerotier", "teredo", "bluetooth", "wireguard", "wg-",
+
             )
             preferred_markers = ("wi-fi", "wifi", "wlan", "wireless", "ethernet", "eth")
             lan_networks = tuple(

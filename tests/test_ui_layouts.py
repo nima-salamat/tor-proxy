@@ -2937,3 +2937,22 @@ def test_main_socks_gateway_settings_and_authentication_are_wired_safely():
     assert 'traffic_recorder=record_proxy_traffic' in tor_source
     assert 'hmac.compare_digest' in gateway
     assert 'record_traffic=(route == "direct")' in proxy_source
+
+
+
+def test_home_shows_compact_copyable_socks_and_http_endpoints_beside_exit_ip():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+
+    assert 'self._build_home_endpoint_card("SOCKS5", "socks")' in source
+    assert 'self._build_home_endpoint_card("HTTP", "http")' in source
+    assert 'endpoint_row.addWidget(endpoint_panel, 2)' in source
+    assert 'endpoint_row.addWidget(self.tor_ip_label, 1)' in source
+    assert 'controls["host"].clicked' not in source  # QToolButton.clicked is connected when the card is built.
+    assert '_copy_home_endpoint_part(endpoint, "host")' in source
+    assert '_copy_home_endpoint_part(endpoint, "port")' in source
+    assert '_copy_home_endpoint_full(endpoint)' in source
+    assert 'QApplication.clipboard().setText(f"{host}:{port}")' in source
+    assert 'http_proxy_bind_all_interfaces' in source
+    assert 'tor_socks_bind_all_interfaces' in source
+    assert 'LAN IP unavailable' in source

@@ -1184,6 +1184,9 @@ class SettingWindow(QWidget):
         runner = getattr(proxy_widget, "proxy", None)
         if runner is None:
             self._refresh_http_proxy_status()
+            refresh = getattr(proxy_widget, "refresh_home_endpoint_display", None)
+            if callable(refresh):
+                refresh()
             return
 
         self._http_proxy_toggle_pending = True
@@ -1205,6 +1208,10 @@ class SettingWindow(QWidget):
         self._refresh_http_proxy_status()
         if result:
             self.lbl_http_proxy_status.setText(str(result))
+        proxy_widget = getattr(self._parent, "proxyWidget", None)
+        refresh = getattr(proxy_widget, "refresh_home_endpoint_display", None)
+        if callable(refresh):
+            refresh()
 
     def _on_http_proxy_toggle_failed(self, error: str) -> None:
         self._http_proxy_toggle_pending = False
@@ -1223,6 +1230,10 @@ class SettingWindow(QWidget):
         logger.warning("Could not apply HTTP proxy preference: %s", detail)
         QMessageBox.warning(self, "HTTP proxy", detail)
         self._refresh_http_proxy_status()
+        proxy_widget = getattr(self._parent, "proxyWidget", None)
+        refresh = getattr(proxy_widget, "refresh_home_endpoint_display", None)
+        if callable(refresh):
+            refresh()
 
     def http_proxy_lan_access_changed(self, checked: bool) -> None:
         """Persist and immediately apply the explicit LAN exposure preference."""

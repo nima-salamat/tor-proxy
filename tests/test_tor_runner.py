@@ -29,6 +29,8 @@ def _runner(monkeypatch, tmp_path, bridge_text):
         "NewCircuitPeriod": 60,
         "auto_prune_bridges": True,
         "bridges": bridge_text,
+        "webtunnel_sni_imitation": "",
+        "webtunnel_use_default_tls": True,
     }
     monkeypatch.setattr(tor, "CONFIG", config)
     monkeypatch.setattr(tor, "_find_executable", lambda _candidate: (None, None))
