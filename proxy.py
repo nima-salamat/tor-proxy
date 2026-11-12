@@ -424,6 +424,10 @@ def _route_for_host(host: str) -> str:
         excluded = _excluded_rules
     if blocked.matches(normalized):
         return "blocked"
+    # Onion Services exist only inside Tor. Never let an Exclude rule send
+    # their names to the system resolver/direct socket path.
+    if normalized.endswith(".onion"):
+        return "tor"
     if excluded.matches(normalized):
         return "direct"
     return "tor"
