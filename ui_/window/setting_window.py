@@ -803,6 +803,25 @@ class SettingWindow(QWidget):
         self.chk_http_proxy_enabled.toggled.connect(self.http_proxy_enabled_changed)
         self.second_page_layout.addWidget(self.chk_http_proxy_enabled)
 
+        self.chk_http_proxy_lan_access = QCheckBox(
+            "Allow HTTP proxy connections from the local network (0.0.0.0)", self
+        )
+        self.chk_http_proxy_lan_access.setObjectName("httpProxyLanAccessPreference")
+        self.chk_http_proxy_lan_access.setToolTip(
+            "Exposes this unauthenticated HTTP proxy to devices that can reach this computer. "
+            "Use only on a trusted network and restrict access with your firewall."
+        )
+        self.chk_http_proxy_lan_access.setChecked(bool(CONFIG["http_proxy_bind_all_interfaces"]))
+        self.chk_http_proxy_lan_access.setEnabled(bool(CONFIG["http_proxy_enabled"]))
+        self.chk_http_proxy_lan_access.toggled.connect(self.http_proxy_lan_access_changed)
+        self.second_page_layout.addWidget(self.chk_http_proxy_lan_access)
+        self.lbl_http_proxy_lan_warning = self._description(
+            "Security: this proxy has no username/password authentication. When enabled, any reachable "
+            "device may send traffic through your Tor connection. Do not expose it to the public Internet."
+        )
+        self.lbl_http_proxy_lan_warning.setWordWrap(True)
+        self.second_page_layout.addWidget(self.lbl_http_proxy_lan_warning)
+
         proxy_test_row = QFrame(self)
         proxy_test_row.setObjectName("settingsRowCard")
         proxy_test_layout = QHBoxLayout(proxy_test_row)
@@ -917,10 +936,13 @@ class SettingWindow(QWidget):
             and getattr(proxy_widget, "connected", False)
             and not getattr(proxy_widget, "_stopping", False)
         )
+        bind_host = "0.0.0.0" if bool(CONFIG["http_proxy_bind_all_interfaces"]) else "127.0.0.1"
+        if hasattr(self, "chk_http_proxy_lan_access"):
+            self.chk_http_proxy_lan_access.setEnabled(enabled and not self._http_proxy_toggle_pending)
         if not enabled:
             status = "Disabled · Tor SOCKS and System Tunnel are unaffected."
         elif listener_ready and tor_ready:
-            status = f"Ready · 127.0.0.1:{getattr(runner, 'port', CONFIG['proxy_port'])} · HTTPS uses CONNECT."
+            status = f"Ready · {bind_host}:{getattr(runner, 'port', CONFIG['proxy_port'])} · HTTPS uses CONNECT."
         elif listener_ready:
             status = "Listening · waiting for a verified Tor network connection."
         elif getattr(proxy_widget, "running", False):
@@ -1018,6 +1040,44 @@ class SettingWindow(QWidget):
         self.lbl_http_proxy_status.setText("HTTP listener change failed · " + detail)
         logger.warning("Could not apply HTTP proxy preference: %s", detail)
         QMessageBox.warning(self, "HTTP proxy", detail)
+        self._refresh_http_proxy_status()
+
+    def http_proxy_lan_access_changed(self, checked: bool) -> None:
+        """Persist and immediately apply the explicit LAN exposure preference."""
+        enabled = bool(checked)
+        previous = bool(CONFIG["http_proxy_bind_all_interfaces"])
+        if enabled == previous:
+            self._refresh_http_proxy_status()
+            return
+        try:
+            CONFIG["http_proxy_bind_all_interfaces"] = enabled
+        except (ValueError, OSError, KeyError) as exc:
+            self.chk_http_proxy_lan_access.blockSignals(True)
+            self.chk_http_proxy_lan_access.setChecked(previous)
+            self.chk_http_proxy_lan_access.blockSignals(False)
+            QMessageBox.warning(self, "Settings could not be saved", str(exc))
+            return
+
+        proxy_widget = getattr(self._parent, "proxyWidget", None)
+        runner = getattr(proxy_widget, "proxy", None)
+        if runner is None:
+            self._refresh_http_proxy_status()
+            return
+        try:
+            result = runner.set_http_bind_all_interfaces(enabled)
+        except Exception as exc:
+            try:
+                CONFIG["http_proxy_bind_all_interfaces"] = previous
+            except (ValueError, OSError, KeyError):
+                logger.exception("Could not restore HTTP proxy LAN access preference.")
+            self.chk_http_proxy_lan_access.blockSignals(True)
+            self.chk_http_proxy_lan_access.setChecked(previous)
+            self.chk_http_proxy_lan_access.blockSignals(False)
+            QMessageBox.warning(self, "HTTP proxy LAN access", str(exc))
+            self._refresh_http_proxy_status()
+            return
+        if result:
+            self.lbl_http_proxy_status.setText(str(result))
         self._refresh_http_proxy_status()
 
     def test_http_connect(self) -> None:
