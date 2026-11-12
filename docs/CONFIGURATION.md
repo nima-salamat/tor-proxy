@@ -29,7 +29,7 @@ Writes use a unique temporary file, restrictive permissions where supported, and
 | `control_port` | Optional ControlPort override | automatically chosen when unset/disabled |
 | `dns_port` | Optional DNS listener override | automatically chosen when unset/disabled |
 | `proxy_port` | Optional local HTTP proxy override | automatically chosen when unset/disabled |
-| `http_proxy_enabled` | Start the local HTTP proxy with the primary Tor session | `true` |
+| `http_proxy_enabled` | Start the HTTP proxy with the primary Tor session | `true` |\n| `http_proxy_bind_all_interfaces` | Bind HTTP proxy to `0.0.0.0` for LAN clients instead of loopback | `false` |
 | `*_checked` | Whether a manual port override is enabled | `false` |
 | `tor_path` | Explicit local Tor executable or bundle directory | unset; discover managed bundles |
 | `MaxCircuitDirtiness` | Tor circuit dirtiness in seconds | `600` |
@@ -45,7 +45,7 @@ Unknown keys are ignored by the compatibility facade during loading. The newer t
 
 Tor's SOCKS, ControlPort, DNSPort, and TorProxy's HTTP proxy are configured for `127.0.0.1`. Listener ports must be valid and distinct. Do not configure a non-loopback proxy interface.
 
-The HTTP proxy is enabled by default and starts with the primary Tor session; it can be turned off in Settings → Ports without disabling the Tor SOCKS listener or System Tunnel. The listener is loopback-only at `127.0.0.1:<proxy_port>`. It supports HTTP requests and HTTPS/raw TCP tunneling through HTTP `CONNECT`. A listening port or successful TCP ping is not proof that Tor is ready: use Settings → Ports → Test HTTP CONNECT to verify an actual HTTPS request through Tor.
+The HTTP proxy is enabled by default and starts with the primary Tor session; it can be turned off in Settings → Ports without disabling the Tor SOCKS listener or System Tunnel. By default the listener is restricted to `127.0.0.1:<proxy_port>`. Settings → Ports → Allow HTTP proxy connections from the local network opts into binding `0.0.0.0:<proxy_port>` so other devices on the LAN can connect using this computer’s LAN IP (not `0.0.0.0` as the client address). This proxy has no authentication: enabling the option allows every device that can reach the port to relay traffic through Tor. Use only on a trusted private network and configure the OS firewall to restrict source devices; never expose the port to the public Internet. Disabling the option restores loopback-only binding immediately. It supports HTTP requests and HTTPS/raw TCP tunneling through HTTP `CONNECT`. A listening port or successful TCP ping is not proof that Tor is ready: use Settings → Ports → Test HTTP CONNECT to verify an actual HTTPS request through Tor.
 
 For Telegram Android, select HTTP Proxy and enable “Transparent TCP connection” so Telegram uses HTTP `CONNECT` for TCP streams. Telegram client support for HTTP proxy varies by app; Telegram generally lists SOCKS5 and MTProto as its common proxy types, with HTTP available in certain clients.
 
