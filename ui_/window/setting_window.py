@@ -790,14 +790,14 @@ class SettingWindow(QWidget):
         self.second_page_layout.addWidget(self._section_title("Local HTTP proxy"))
         self.second_page_layout.addWidget(
             self._description(
-                "When enabled, TorProxy starts a loopback HTTP proxy with the primary Tor session. "
+                "When enabled, TorProxy starts an HTTP proxy with the primary Tor session. It is loopback-only unless LAN access is explicitly enabled below. "
                 "HTTPS and raw TCP applications use HTTP CONNECT; the listener is not a direct Internet proxy."
             )
         )
         self.chk_http_proxy_enabled = QCheckBox("Enable local HTTP proxy", self)
         self.chk_http_proxy_enabled.setObjectName("httpProxyEnabledPreference")
         self.chk_http_proxy_enabled.setToolTip(
-            "Enabled by default. The listener is available on 127.0.0.1 and routes requests through Tor's verified SOCKS gateway."
+            "Enabled by default. The listener routes requests through Tor's verified SOCKS gateway; LAN exposure is a separate opt-in."
         )
         self.chk_http_proxy_enabled.setChecked(bool(CONFIG["http_proxy_enabled"]))
         self.chk_http_proxy_enabled.toggled.connect(self.http_proxy_enabled_changed)
