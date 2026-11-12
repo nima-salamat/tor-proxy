@@ -9,7 +9,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QComboBox,
     QSizePolicy,
-    QScrollArea,
     QBoxLayout,
 )
 
@@ -167,30 +166,18 @@ class ProxyWindow(QWidget):
         self.logs_widget.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         self.main_layout.addWidget(self.logs_widget, 0)
 
-        self.home_scroll = QScrollArea(self)
-        self.home_scroll.setObjectName("homeScrollArea")
-        self.home_scroll.setWidgetResizable(True)
-        self.home_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.home_scroll.setStyleSheet(
-            "QScrollArea#homeScrollArea { background: transparent; border: none; }"
-        )
-        self.home_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.home_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.home_scroll.setSizePolicy(
+        # Home is a single adaptive canvas. Its contents compress and reflow
+        # into the available geometry instead of introducing a scroll viewport.
+        self.home_content = QWidget(self)
+        self.home_content.setObjectName("homeContent")
+        self.home_content.setMinimumSize(0, 0)
+        self.home_content.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
-
-        self.home_content = QWidget()
-        self.home_content.setObjectName("homeContent")
-        self.home_content.setMinimumWidth(0)
-        self.home_content.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
-        )
-        self.home_scroll.setWidget(self.home_content)
-        self.main_layout.addWidget(self.home_scroll, 1)
+        self.main_layout.addWidget(self.home_content, 1)
         self.home_layout = QVBoxLayout(self.home_content)
-        self.home_layout.setContentsMargins(24, 18, 24, 16)
-        self.home_layout.setSpacing(12)
+        self.home_layout.setContentsMargins(20, 14, 20, 12)
+        self.home_layout.setSpacing(10)
 
         self._home_responsive_mode = None
 
@@ -210,8 +197,9 @@ class ProxyWindow(QWidget):
         # QWidget here picks up the application-wide panel background in some
         # styles, creating an unintended rectangle behind the button.
         connection_hero_layout = QVBoxLayout()
+        self._home_connection_hero_layout = connection_hero_layout
         connection_hero_layout.setContentsMargins(0, 0, 0, 0)
-        connection_hero_layout.setSpacing(10)
+        connection_hero_layout.setSpacing(8)
         connection_hero_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         connection_hero_layout.addWidget(
             self.connect_btn, 0, Qt.AlignmentFlag.AlignHCenter
@@ -226,7 +214,7 @@ class ProxyWindow(QWidget):
         self.connection_hint.setSizePolicy(
             QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
         )
-        self.connection_hint.setMinimumHeight(38)
+        self.connection_hint.setMinimumHeight(24)
         self.connection_hint.setMaximumWidth(440)
         self.connection_hint.setProperty("connectionState", "disconnected")
         connection_hero_layout.addWidget(
@@ -375,6 +363,7 @@ class ProxyWindow(QWidget):
         self._home_endpoint_controls = {}
         self._home_endpoint_values = {}
         self._home_endpoint_value_layouts = {}
+        self._home_endpoint_card_layouts = {}
         endpoint_row = QHBoxLayout()
         endpoint_row.setContentsMargins(0, 0, 0, 0)
         endpoint_row.setSpacing(12)
@@ -471,7 +460,7 @@ class ProxyWindow(QWidget):
         return min(360, max(160, int(max(0, self.width()) * 0.28)))
 
     def _update_home_responsive_layout(self) -> None:
-        """Reflow Home rows as the available viewport width changes."""
+        """Fit all Home controls into the visible page without a scroll bar."""
         required = (
             "_home_service_controls_layout",
             "_home_proxy_row",
@@ -485,19 +474,20 @@ class ProxyWindow(QWidget):
         if any(not hasattr(self, name) for name in required):
             return
 
-        viewport = getattr(self, "home_scroll", None)
-        width = viewport.viewport().width() if viewport is not None else self.width()
-        if width <= 0:
-            width = self.width()
-        compact = width < 820
-        stacked_endpoints = width < 820
-        stacked_metrics = width < 560
-        stacked_actions = width < 640
-        stacked_proxy_mode = width < 460
+        width = max(0, self.home_content.width() or self.width())
+        height = max(0, self.height())
+        very_compact = height < 490
+        compact = height < 570 or width < 820
+        stacked_service_controls = width < 680
+        stacked_endpoints = width < 680
+        stacked_metrics = width < 520
+        stacked_actions = width < 620
+        stacked_proxy_mode = width < 440
         stacked_endpoint_values = width < 300
         mode = (
-            compact, stacked_endpoints, stacked_metrics, stacked_actions,
-            stacked_proxy_mode, stacked_endpoint_values,
+            very_compact, compact, stacked_service_controls, stacked_endpoints,
+            stacked_metrics, stacked_actions, stacked_proxy_mode,
+            stacked_endpoint_values,
         )
         if mode == self._home_responsive_mode:
             return
@@ -505,28 +495,55 @@ class ProxyWindow(QWidget):
 
         horizontal = QBoxLayout.Direction.LeftToRight
         vertical = QBoxLayout.Direction.TopToBottom
-        self.home_layout.setContentsMargins(
-            12 if compact else 24,
-            10 if compact else 18,
-            12 if compact else 24,
-            10 if compact else 16,
-        )
-        self.home_layout.setSpacing(8 if compact else 12)
 
-        self._home_service_controls_layout.setDirection(vertical if compact else horizontal)
-        self._home_proxy_row.setDirection(vertical if stacked_proxy_mode else horizontal)
-        self._home_tunnel_hint_layout.setDirection(vertical if stacked_proxy_mode else horizontal)
-        self._home_endpoint_row.setDirection(vertical if compact else horizontal)
-        self._home_endpoint_layout.setDirection(vertical if stacked_endpoints else horizontal)
+        if height < 490:
+            margins, spacing, diameter = (8, 5, 8, 5), 4, 128
+        elif height < 530:
+            margins, spacing, diameter = (9, 6, 9, 6), 5, 140
+        elif height < 570:
+            margins, spacing, diameter = (10, 7, 10, 7), 6, 156
+        elif height < 630:
+            margins, spacing, diameter = (12, 8, 12, 8), 7, 180
+        elif height < 700:
+            margins, spacing, diameter = (16, 10, 16, 10), 8, 204
+        else:
+            margins, spacing, diameter = (20, 14, 20, 12), 10, 228
+
+        self.home_layout.setContentsMargins(*margins)
+        self.home_layout.setSpacing(spacing)
+        self._home_connection_hero_layout.setSpacing(4 if compact else 8)
+        self.connect_btn.set_diameter(diameter)
+        self.connection_hint.setMinimumHeight(20 if compact else 28)
+        self.connection_hint.setMaximumWidth(400 if compact else 440)
+        self.btn_status.setProperty("compact", "true" if compact else "false")
+        self.connection_hint.setProperty("compact", "true" if compact else "false")
+
+        self._home_service_controls_layout.setDirection(
+            vertical if stacked_service_controls else horizontal
+        )
+        self._home_proxy_row.setDirection(
+            vertical if stacked_proxy_mode else horizontal
+        )
+        self._home_tunnel_hint_layout.setDirection(
+            vertical if stacked_proxy_mode else horizontal
+        )
+        self._home_endpoint_row.setDirection(
+            vertical if stacked_endpoints else horizontal
+        )
+        self._home_endpoint_layout.setDirection(
+            vertical if stacked_endpoints else horizontal
+        )
         for value_layout in self._home_endpoint_value_layouts.values():
             value_layout.setDirection(vertical if stacked_endpoint_values else horizontal)
         self._home_utility_layout.setDirection(vertical if stacked_actions else horizontal)
-        self._home_metrics_layout.setDirection(vertical if stacked_metrics else horizontal)
-        self._home_metrics_layout.setSpacing(5 if stacked_metrics else 0)
 
+        self._home_metrics_layout.setDirection(
+            vertical if stacked_metrics else horizontal
+        )
+        self._home_metrics_layout.setSpacing(4 if stacked_metrics else 0)
         if stacked_metrics:
             self._home_metric_separator.setFrameShape(QFrame.Shape.HLine)
-            self._home_metric_separator.setFixedWidth(42)
+            self._home_metric_separator.setFixedWidth(36)
             self._home_metric_separator.setFixedHeight(1)
             self._home_metrics_left_layout.setContentsMargins(0, 0, 0, 0)
             self._home_metrics_left_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -535,12 +552,12 @@ class ProxyWindow(QWidget):
         else:
             self._home_metric_separator.setFrameShape(QFrame.Shape.VLine)
             self._home_metric_separator.setFixedWidth(1)
-            self._home_metric_separator.setFixedHeight(36)
-            self._home_metrics_left_layout.setContentsMargins(0, 0, 14, 0)
+            self._home_metric_separator.setFixedHeight(30 if compact else 36)
+            self._home_metrics_left_layout.setContentsMargins(0, 0, 10, 0)
             self._home_metrics_left_layout.setAlignment(
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
             )
-            self._home_metrics_right_layout.setContentsMargins(14, 0, 0, 0)
+            self._home_metrics_right_layout.setContentsMargins(10, 0, 0, 0)
             self._home_metrics_right_layout.setAlignment(
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
             )
@@ -552,22 +569,30 @@ class ProxyWindow(QWidget):
             self.btn_whatismyip,
             self.btn_open_browser,
         ):
+            button.setProperty("compact", "true" if compact else "false")
             button.setSizePolicy(
                 QSizePolicy.Policy.Expanding if stacked_actions else QSizePolicy.Policy.Preferred,
                 QSizePolicy.Policy.Fixed,
             )
+            button.style().unpolish(button)
+            button.style().polish(button)
 
-        self._home_endpoint_panel.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
-        )
-        self.home_content.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
-        )
-        self.exit_ip_card.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
-        )
+        self.system_proxy_mode.setProperty("compact", "true" if compact else "false")
+        self.system_proxy_mode.style().unpolish(self.system_proxy_mode)
+        self.system_proxy_mode.style().polish(self.system_proxy_mode)
+        for card_layout in self._home_endpoint_card_layouts.values():
+            card_layout.setContentsMargins(
+                8 if compact else 10,
+                5 if very_compact else 7,
+                8 if compact else 9,
+                5 if very_compact else 7,
+            )
+            card_layout.setSpacing(3 if compact else 4)
+        for controls in self._home_endpoint_controls.values():
+            copy_button = controls["copy"]
+            copy_button.setFixedSize(72 if compact else 84, 29 if compact else 32)
+
         self.home_content.updateGeometry()
-        self.home_scroll.updateGeometry()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -589,8 +614,9 @@ class ProxyWindow(QWidget):
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
         )
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(12, 9, 10, 9)
-        layout.setSpacing(5)
+        layout.setContentsMargins(10, 7, 9, 7)
+        layout.setSpacing(4)
+        self._home_endpoint_card_layouts[key] = layout
 
         title_label = QLabel(title, card)
         title_label.setObjectName("homeEndpointTitle")
@@ -1203,6 +1229,8 @@ class ProxyWindow(QWidget):
             QLabel#connectionHint[connectionState="connecting"] {{ color: {accent}; }}
             QLabel#connectionHint[connectionState="connected"] {{ color: #45c98b; }}
             QLabel#connectionHint[connectionState="disconnected"] {{ color: {muted}; }}
+            QLabel#connectionHint[compact="true"] {{ font-size: 9px; padding: 0 6px; min-height: 20px; }}
+            QLabel#connectionStatus[compact="true"] {{ font-size: 9px; padding: 3px 9px; border-radius: 8px; }}
             QLabel#homeMetricCaption {{ color: {muted}; background: transparent; border: none; font-size: 8px; font-weight: 800; letter-spacing: 0.8px; }}
             QLabel#bootstrapPercent {{ color: {accent}; background: transparent; border: none; font-size: 16px; font-weight: 750; padding: 3px; }}
             QLabel#trafficUsage, QLabel#proxyStatusLabel {{ color: {muted}; background: transparent; border: none; font-size: 11px; padding: 2px; }}
@@ -1241,12 +1269,14 @@ class ProxyWindow(QWidget):
             QPushButton#statisticsLink:hover {{ color: {text}; border-bottom: 1px solid {accent}; }}
             QLabel#systemProxyTitle {{ color: {muted}; background: transparent; border: none; font-size: 9px; font-weight: 800; letter-spacing: 0.9px; }}
             QFrame#homeMetricSeparator {{ color: {border}; background: {border}; max-width: 1px; }}
-            QComboBox#systemProxyMode {{ min-height: 36px; padding: 0 12px; border: 1px solid {border}; border-radius: 9px; background: transparent; color: {text}; }}
+            QComboBox#systemProxyMode {{ min-height: 32px; padding: 0 8px; border: 1px solid {border}; border-radius: 9px; background: transparent; color: {text}; }}
+            QComboBox#systemProxyMode[compact="true"] {{ min-height: 28px; padding: 0 6px; font-size: 9px; }}
             QComboBox#systemProxyMode:hover {{ border-color: {accent}; }}
             QComboBox#systemProxyMode QAbstractItemView {{ background: {surface}; color: {text}; selection-background-color: {accent}; selection-color: #ffffff; outline: none; border: 1px solid {border}; }}
             QComboBox#systemProxyMode QAbstractItemView::item {{ background: {surface}; color: {text}; padding: 8px 10px; min-height: 22px; }}
             QComboBox#systemProxyMode QAbstractItemView::item:selected {{ background: {accent}; color: #ffffff; }}
-            QPushButton#secondaryAction {{ min-height: 40px; padding: 0 14px; border-radius: 10px; background: transparent; color: {text}; border: 1px solid {border}; font-weight: 650; }}
+            QPushButton#secondaryAction {{ min-height: 34px; padding: 0 10px; border-radius: 9px; background: transparent; color: {text}; border: 1px solid {border}; font-weight: 650; }}
+            QPushButton#secondaryAction[compact="true"] {{ min-height: 29px; padding: 0 7px; font-size: 9px; border-radius: 7px; }}
             QPushButton#secondaryAction:hover {{ background: rgba(71, 163, 242, 0.12); border-color: {accent}; }}
             QPushButton#secondaryAction:disabled {{ color: {muted}; }}
             QPushButton#secondaryAction:checked {{ background: rgba(71, 163, 242, 0.18); border-color: {accent}; }}
