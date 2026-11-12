@@ -3115,33 +3115,42 @@ def test_home_page_uses_adaptive_compact_layout_without_scrollbars():
     assert "scale = min(self.width(), self.height()) / 264.0" in pulse
 
 
-def test_connection_status_pill_renders_antialiased_transparent_corners(qt_app):
-    from PySide6.QtCore import Qt
-    from PySide6.QtGui import QImage
+def test_connection_status_pill_renders_over_its_parent_background(qt_app):
+    from PySide6.QtGui import QColor
+    from PySide6.QtWidgets import QWidget
     from ui_.window.proxy_window import ConnectionStatusPill
 
-    pill = ConnectionStatusPill()
+    parent = QWidget()
+    parent_color = QColor("#314159")
+    palette = parent.palette()
+    palette.setColor(palette.ColorRole.Window, parent_color)
+    parent.setPalette(palette)
+    parent.setAutoFillBackground(True)
+
+    pill = ConnectionStatusPill(parent)
     try:
-        pill.resize(240, 38)
+        parent.resize(260, 58)
+        pill.setGeometry(10, 10, 240, 38)
         pill.set_theme_mode("dark")
         pill.set_connection_state("connected")
-        pill.show()
+        parent.show()
         qt_app.processEvents()
 
-        image = QImage(
-            pill.size(), QImage.Format.Format_ARGB32_Premultiplied
+        image = parent.grab().toImage()
+        # The capsule is visible in its centre, but its outer corner pixels
+        # show the actual parent surface rather than a black rectangle.
+        assert image.pixelColor(130, 29) != parent_color
+        assert image.pixelColor(10, 10) == parent_color
+        assert image.pixelColor(11, 11) == parent_color
+        assert not pill.testAttribute(
+            pill.WidgetAttribute.WA_TranslucentBackground
         )
-        image.fill(Qt.GlobalColor.transparent)
-        pill.render(image)
-
-        # The capsule paints its own centre, while the square widget corners
-        # remain transparent so the Home canvas is visible around the curve.
-        assert image.pixelColor(120, 19).alpha() > 0
-        assert image.pixelColor(0, 0).alpha() == 0
-        assert image.pixelColor(1, 1).alpha() == 0
+        assert not pill.testAttribute(
+            pill.WidgetAttribute.WA_NoSystemBackground
+        )
     finally:
-        pill.close()
-        pill.deleteLater()
+        parent.close()
+        parent.deleteLater()
         qt_app.processEvents()
 
 
