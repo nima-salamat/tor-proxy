@@ -25,7 +25,7 @@ Writes use a unique temporary file, restrictive permissions where supported, and
 | `bridge` | Enable bridge mode | `false` |
 | `auto_prune_bridges` | Independently test bridges before connecting and remove confirmed failures only when another bridge works | `false` |
 | `bridges` | User-provided bridge records | empty |
-| `tor_port` | Optional SOCKS listener override | automatically chosen when unset/disabled |
+| `tor_port` | Stable Main SOCKS gateway port (not a Tor worker listener) | automatically chosen when unset/disabled |\n| `tor_socks_bind_all_interfaces` | Bind the Main SOCKS gateway to `0.0.0.0` and require RFC 1929 authentication for remote clients | `false` |
 | `control_port` | Optional ControlPort override | automatically chosen when unset/disabled |
 | `dns_port` | Optional DNS listener override | automatically chosen when unset/disabled |
 | `proxy_port` | Optional local HTTP proxy override | automatically chosen when unset/disabled |
@@ -43,7 +43,7 @@ Unknown keys are ignored by the compatibility facade during loading. The newer t
 
 ## Listener defaults and safety
 
-Tor's SOCKS, ControlPort, DNSPort, and TorProxy's HTTP proxy are configured for `127.0.0.1`. Listener ports must be valid and distinct. Do not configure a non-loopback proxy interface.
+Main Tor's stable SOCKS endpoint is a TorProxy failover gateway on `tor_port`; the gateway does not launch a Tor process. Every managed Tor worker owns a separate private SOCKS listener on an automatically allocated port. Worker SOCKS listeners, ControlPorts and DNSPorts remain loopback-only. The Main gateway defaults to `127.0.0.1`; Settings → Ports → Allow Main SOCKS connections from the local network opts into binding it to `0.0.0.0`. Non-local clients must use SOCKS5 username/password authentication (RFC 1929); local loopback clients retain no-auth compatibility. Credentials are stored separately from `config.json`. RFC 1929 is not encrypted, so use only on a trusted private network, restrict source devices with the OS firewall, and never forward this port from a router to the public Internet.
 
 The HTTP proxy is enabled by default and starts with the primary Tor session; it can be turned off in Settings → Ports without disabling the Tor SOCKS listener or System Tunnel. By default the listener is restricted to `127.0.0.1:<proxy_port>`. Settings → Ports → Allow HTTP proxy connections from the local network opts into binding `0.0.0.0:<proxy_port>` so other devices on the LAN can connect using this computer’s LAN IP (not `0.0.0.0` as the client address). This proxy has no authentication: enabling the option allows every device that can reach the port to relay traffic through Tor. Use only on a trusted private network and configure the OS firewall to restrict source devices; never expose the port to the public Internet. Disabling the option restores loopback-only binding immediately. It supports HTTP requests and HTTPS/raw TCP tunneling through HTTP `CONNECT`. A listening port or successful TCP ping is not proof that Tor is ready: use Settings → Ports → Test HTTP CONNECT to verify an actual HTTPS request through Tor.
 

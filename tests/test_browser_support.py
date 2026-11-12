@@ -727,3 +727,25 @@ def test_dns_allocator_selects_an_available_udp_ephemeral_port_before_tcp(monkey
         (ports_module.socket.SOCK_DGRAM, 0, dns_udp_port),
         (ports_module.socket.SOCK_STREAM, dns_udp_port, dns_udp_port),
     ]
+
+
+
+def test_main_socks_gateway_port_allocator_probes_wildcard_when_lan_mode_enabled():
+    config = _port_config(tor_socks_bind_all_interfaces=True)
+    seen = []
+    candidates = iter((44101, 44102, 44103, 44104))
+
+    def available(host, port):
+        seen.append((host, port))
+        return True
+
+    allocated, _messages = resolve_listener_ports(
+        config,
+        available=available,
+        udp_available=lambda _host, _port: True,
+        candidate_provider=lambda: next(candidates),
+    )
+
+    assert allocated["tor_port"] == 44102
+    assert ("0.0.0.0", allocated["tor_port"]) in seen
+    assert ("127.0.0.1", allocated["proxy_port"]) in seen

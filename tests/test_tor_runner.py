@@ -422,7 +422,7 @@ def test_http_proxy_bind_preference_restarts_listener_between_loopback_and_lan(m
     try:
         message = runner.set_http_bind_all_interfaces(True)
         assert runner.server.server_address[0] == "0.0.0.0"
-        assert "no authentication" in message
+        assert "no proxy authentication" in message
         assert runner.is_running
 
         message = runner.set_http_bind_all_interfaces(False)
@@ -575,7 +575,7 @@ def test_http_proxy_runner_respects_disabled_preference_and_can_start_live(monke
     import tor
 
     class FakeServer:
-        def __init__(self, *_args):
+        def __init__(self, *_args, **_kwargs):
             self.stopped = threading.Event()
 
         def serve_forever(self):

@@ -344,3 +344,26 @@ def test_http_proxy_preference_survives_typed_legacy_migration():
     migrated = migrate_legacy_config({"http_proxy_enabled": False})
     assert migrated["http_proxy_enabled"] is False
     assert TorProxyConfig(**migrated).http_proxy_enabled is False
+
+
+
+def test_main_socks_gateway_lan_access_defaults_off_and_requires_boolean():
+    assert DEFAULT_DATA["tor_socks_bind_all_interfaces"] is False
+    data = dict(DEFAULT_DATA)
+    data["tor_socks_bind_all_interfaces"] = True
+    AppConfig._validate(data)
+    data["tor_socks_bind_all_interfaces"] = 1
+    with pytest.raises(AppConfigError, match="tor_socks_bind_all_interfaces"):
+        AppConfig._validate(data)
+
+
+def test_typed_configuration_requires_explicit_socks_remote_opt_in():
+    with pytest.raises(ConfigurationError, match="socks_host"):
+        TorProxyConfig(socks_host="0.0.0.0")
+    config = TorProxyConfig(socks_host="0.0.0.0", socks_allow_remote=True)
+    assert config.socks_allow_remote is True
+    migrated = migrate_legacy_config({"tor_socks_bind_all_interfaces": True})
+    assert migrated["socks_allow_remote"] is True
+    assert migrated["socks_host"] == "0.0.0.0"
+    with pytest.raises(ConfigurationError, match="socks_allow_remote"):
+        TorProxyConfig(socks_allow_remote=1)
