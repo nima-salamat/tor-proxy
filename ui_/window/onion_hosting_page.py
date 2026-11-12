@@ -1312,17 +1312,27 @@ class OnionHostingPage(QWidget):
         return result
 
     def _refresh_traffic_metrics(self, manager, services: list[dict]) -> None:
-        totals = manager.traffic_snapshot()
-        for key, label in self._global_traffic_labels.items():
-            value = totals.get(key, 0)
-            label.setText(_format_bytes(value) if key in {"incoming_bytes", "outgoing_bytes"} else f"{int(value):,}")
-        for service_id, labels in self._service_traffic_widgets.items():
-            snapshot = manager.traffic_snapshot(service_id)
-            labels["incoming_bytes"].setText(_format_bytes(snapshot["incoming_bytes"]))
-            labels["outgoing_bytes"].setText(_format_bytes(snapshot["outgoing_bytes"]))
-            labels["http_requests"].setText(f"{int(snapshot['http_requests']):,}")
-            labels["errors"].setText(f"{int(snapshot['errors']):,}")
-            labels["active_connections"].setText(f"{int(snapshot['active_connections']):,}")
+        try:
+            totals = manager.traffic_snapshot()
+            for key, label in self._global_traffic_labels.items():
+                value = totals.get(key, 0)
+                label.setText(
+                    _format_bytes(value)
+                    if key in {"incoming_bytes", "outgoing_bytes"}
+                    else f"{int(value):,}"
+                )
+            for service_id, labels in self._service_traffic_widgets.items():
+                snapshot = manager.traffic_snapshot(service_id)
+                labels["incoming_bytes"].setText(_format_bytes(snapshot["incoming_bytes"]))
+                labels["outgoing_bytes"].setText(_format_bytes(snapshot["outgoing_bytes"]))
+                labels["http_requests"].setText(f"{int(snapshot['http_requests']):,}")
+                labels["errors"].setText(f"{int(snapshot['errors']):,}")
+                labels["active_connections"].setText(f"{int(snapshot['active_connections']):,}")
+        except Exception:
+            logger.exception("Could not refresh Developer Tor traffic metrics.")
+            for label in self._global_traffic_labels.values():
+                if not label.text().strip():
+                    label.setText("—")
 
     def refresh_dashboard(self):
         try:
