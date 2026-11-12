@@ -3088,8 +3088,14 @@ def test_home_page_uses_adaptive_compact_layout_without_scrollbars():
     assert "self.connect_btn.set_diameter(diameter)" in source
     assert "self._home_connection_hero_layout.setSpacing(" in source
     assert 'self._home_metrics_panel.setFixedHeight(' in source
+    assert '50 if stacked_metrics else' in source
     assert 'QFrame#homeMetricsPanel' in source
+    assert 'font-size: 15px; font-weight: 620' in source
+    assert 'font-size: 9px; font-weight: 600' in source
     assert 'QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed' in source
+    assert 'self.btn_status.setWordWrap(False)' in source
+    assert 'self.btn_status.setMaximumWidth(900)' in source
+    assert 'background: transparent; border: none; border-radius: 0;' in source
     assert "self._home_service_controls_layout.setDirection(" in source
     assert "self._home_endpoint_row.setDirection(" in source
     assert "self._home_endpoint_layout.setDirection(" in source
@@ -3102,7 +3108,7 @@ def test_home_page_uses_adaptive_compact_layout_without_scrollbars():
     assert "card.setMinimumWidth(210)" not in source
     assert "self.exit_ip_card.setMinimumWidth(180)" not in source
     assert "self.tor_ip_label.setMinimumWidth(140)" not in source
-    assert "self.btn_status.setWordWrap(True)" in source
+    assert "self.btn_status.setWordWrap(False)" in source
     assert "def set_diameter(self, diameter: int) -> None:" in pulse
     assert "diameter = max(128, min(264, int(diameter)))" in pulse
     assert "scale = min(self.width(), self.height()) / 264.0" in pulse
