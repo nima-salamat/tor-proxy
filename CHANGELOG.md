@@ -6,6 +6,7 @@ All notable changes are recorded here. Dates and release numbers are added only 
 
 - Fixed the Developer Tor Onion Services dashboard deleting its permanent empty-state QLabel while rebuilding service cards. Worker completion, error, and cancellation signals now pass through GUI-thread QObject slots, preventing background callbacks from updating destroyed widgets.
 - Tor bundle discovery now hides alpha prereleases by default while keeping the explicit opt-in filter available.
+- Distinguished Lyrebird's local unsupported-TLS-curve runtime error from remote WebTunnel handshake alerts. A WebTunnel-only configuration now fails fast with stable-bundle guidance, while a configured non-WebTunnel alternative gets a chance to bootstrap.
 
 - Fixed Tor startup aborting on the first Lyrebird WebTunnel TLS handshake error. Tor now keeps trying configured bridges through its startup window; peer TLS alerts and malformed handshake replies remain inconclusive and are never auto-pruned as dead bridges.
 - Made explicit application Exit synchronize with Developer Tor startup: an in-flight bootstrap is cancelled and joined before cleanup completes, live process/DataDirectory ownership is retained on cleanup failure, and the lifecycle is reopened if another shutdown step forces TorProxy to remain running.

@@ -29,7 +29,7 @@ The runtime card reports the selected connection mode, configured bridge transpo
 
 Changing network preferences while Developer Tor is running does not mutate the live process. Restart the Developer Tor runtime to apply them. The current version does not automatically prune Developer Tor bridges; bridge failures remain visible in its own Tor log and the saved list is preserved.
 
-WebTunnel transport errors such as an unsupported TLS curve, a peer TLS `illegal parameter` alert, or an unrecognized handshake reply are treated as inconclusive connection attempts. Tor is allowed to keep trying the configured bridge records until the configured startup timeout. A timeout reports the recent PT diagnostics but does not label every bridge dead, declare the complete Expert Bundle unusable, or delete Bridge records. Isolated bridge-health probes also retain records when they see these ambiguous handshake errors.
+WebTunnel peer-side TLS alerts such as `remote error: tls: illegal parameter` or an unrecognized handshake reply are treated as inconclusive connection attempts. Tor is allowed to try the configured bridges for the full startup window; a timeout does not classify all bridges as dead or delete records. The separate Go/TLS error `CurvePreferences includes unsupported curve` is a local Lyrebird runtime incompatibility: when every configured bridge uses WebTunnel, TorProxy reports it immediately rather than retrying the same failing transport. If another transport such as obfs4 or Snowflake is configured, bootstrap continues so Tor can try that alternative. Bridge-health probes preserve records for both categories of error.
 
 ## Onion Service model
 

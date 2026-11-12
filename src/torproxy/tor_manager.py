@@ -894,17 +894,54 @@ class TorManager:
                             "Check the transport executable path and its file permissions. The bridge itself "
                             "has not been shown to be offline. Live Tor log details: " + diagnostic
                         )
-                    if self._has_ambiguous_bridge_handshake_error(diagnostic):
-                        # Lyrebird logs a failed connection attempt per bridge. One
-                        # peer's TLS alert (or one unsupported group in a handshake)
-                        # must not abort Tor while other configured bridges are still
-                        # being attempted. The final bootstrap deadline below is the
-                        # authority for deciding whether the runtime actually failed.
+                    if "tls: curvepreferences includes unsupported curve" in lowered_diagnostic:
+                        # This specific message is emitted inside Go's crypto/tls
+                        # when Lyrebird selects a CurveID unsupported by its TLS
+                        # runtime. It is a local transport/runtime incompatibility,
+                        # not a remote bridge refusal. If all configured bridges
+                        # need WebTunnel, waiting or cycling the same endpoints
+                        # cannot repair the local TLS configuration.
+                        try:
+                            configured_bridges = self._parse_bridges(self.settings.bridges)
+                        except TorManagerError:
+                            configured_bridges = []
+                        if not self._has_non_webtunnel_bridge_alternative(configured_bridges):
+                            bundle_hint = ""
+                            try:
+                                bundle_root = self.settings.executable.resolve().parents[1].name
+                                bundle_version = bundle_root.rsplit("-", 1)[-1]
+                                from updater import tor_version_channel
+
+                                if tor_version_channel(bundle_version).startswith("Alpha"):
+                                    bundle_hint = (
+                                        f" The selected Expert Bundle {bundle_version} is an alpha prerelease. "
+                                        "Install a current stable Expert Bundle from Home → Bundles, then select "
+                                        "Use as default; alpha builds are intentionally opt-in."
+                                    )
+                            except (AttributeError, IndexError, OSError, ValueError, RuntimeError):
+                                pass
+                            raise TorManagerError(
+                                "The bundled Lyrebird WebTunnel transport cannot negotiate TLS with its "
+                                "selected Go/TLS runtime ('CurvePreferences includes unsupported curve'). "
+                                "This is a local transport-bundle compatibility error, not evidence that the "
+                                "configured WebTunnel bridges are dead. TorProxy preserved all Bridge records "
+                                "and will not remove them. " + bundle_hint + " Live Tor log details: " + diagnostic
+                            )
                         if not handshake_warning_reported:
                             LOGGER.warning(
-                                "Lyrebird reported an ambiguous bridge TLS handshake failure. "
-                                "Continuing Tor bootstrap; this does not prove the remaining bridge "
-                                "records or the complete transport bundle are unusable."
+                                "Lyrebird's WebTunnel TLS runtime reported an unsupported curve, but a "
+                                "non-WebTunnel bridge transport is configured. Continuing bootstrap so Tor "
+                                "can try that independent transport; no bridge records will be pruned."
+                            )
+                            handshake_warning_reported = True
+                    elif self._has_ambiguous_bridge_handshake_error(diagnostic):
+                        # A peer TLS alert or malformed reply is an endpoint/
+                        # handshake outcome, not proof that the configured
+                        # transport implementation itself is unusable.
+                        if not handshake_warning_reported:
+                            LOGGER.warning(
+                                "Lyrebird reported an inconclusive remote TLS handshake failure. "
+                                "Continuing Tor bootstrap; this is not proof that bridge records are dead."
                             )
                             handshake_warning_reported = True
                     if "no configured transport called" in lowered_diagnostic:
@@ -969,16 +1006,25 @@ class TorManager:
                 time.sleep(0.5)
             if self.settings.bridges_enabled:
                 diagnostic = self._recent_tor_log_detail(max_lines=30)
+                if "tls: curvepreferences includes unsupported curve" in diagnostic.lower():
+                    raise TorManagerError(
+                        f"Tor did not reach verified readiness within {self.settings.startup_timeout_seconds:.0f}s. "
+                        "Lyrebird reported an unsupported TLS curve, but a non-WebTunnel alternative was present "
+                        "and Tor was allowed to try it. No usable Tor connection was verified. This is not proof "
+                        "that all configured bridges are offline. TorProxy preserved the entire Bridge list and "
+                        "did not prune any record. Select a verified stable Expert Bundle if the selected alpha "
+                        "transport bundle continues to report this runtime incompatibility. Live Tor log details: "
+                        + diagnostic
+                    )
                 if self._has_ambiguous_bridge_handshake_error(diagnostic):
                     raise TorManagerError(
                         f"Tor did not reach verified readiness within {self.settings.startup_timeout_seconds:.0f}s. "
-                        "Lyrebird recorded one or more inconclusive bridge TLS handshake failures "
-                        "(including a peer TLS alert or an unsupported TLS curve). Tor was allowed to continue "
-                        "trying the configured bridges for the full startup window, but no working Tor connection "
-                        "was verified. These messages do not prove that every bridge is offline or that the whole "
-                        "Expert Bundle is incompatible. TorProxy preserved the complete Bridge list and will not "
-                        "delete records based on these ambiguous handshake errors. Try fresh bridge lines or a "
-                        "different WebTunnel url=/servername/utls configuration, then inspect the live log. "
+                        "Lyrebird recorded one or more remote TLS alerts or unrecognized handshake replies. Tor "
+                        "was allowed to continue trying the configured bridges for the full startup window, but "
+                        "no working Tor connection was verified. These peer errors do not prove that the whole "
+                        "transport bundle is incompatible or that every bridge is offline. TorProxy preserved "
+                        "the complete Bridge list and did not prune records based on these ambiguous outcomes. "
+                        "Inspect the live log or try a different WebTunnel url=/servername/utls configuration. "
                         "Live Tor log details: " + diagnostic
                     )
             raise TorManagerError(f"Tor did not become ready within {self.settings.startup_timeout_seconds:.0f}s. Last status: {last_detail}")
