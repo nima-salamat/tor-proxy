@@ -189,6 +189,8 @@ class ProxyWindow(QWidget):
         self.btn_status = QLabel("NOT CONNECTED")
         self.btn_status.setObjectName("connectionStatus")
         self.btn_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.btn_status.setWordWrap(True)
+        self.btn_status.setMaximumWidth(640)
         self.set_btn_status_style("disconnected")
         self.home_layout.addWidget(self.btn_status, 0, Qt.AlignmentFlag.AlignHCenter)
 
@@ -484,7 +486,7 @@ class ProxyWindow(QWidget):
         stacked_metrics = width < 560
         stacked_actions = width < 640
         stacked_proxy_mode = width < 460
-        stacked_endpoint_values = width < 280
+        stacked_endpoint_values = width < 300
         mode = (
             compact, stacked_endpoints, stacked_metrics, stacked_actions,
             stacked_proxy_mode, stacked_endpoint_values,
