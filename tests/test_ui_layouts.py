@@ -2984,6 +2984,7 @@ def test_home_endpoint_cards_have_clear_copy_targets_and_consistent_exit_ip_summ
     assert 'metrics.addWidget(right_metrics, 1)' in source
     assert 'separator.setFixedWidth(1)' in source
     assert 'separator.setFixedHeight(36)' in source
+    assert 'QWidget#homeEndpointPanel, QWidget#homeMetricsLeft, QWidget#homeMetricsRight' in source
     assert 'http_proxy_bind_all_interfaces' in source
     assert 'tor_socks_bind_all_interfaces' in source
     assert 'LAN IP unavailable' in source
