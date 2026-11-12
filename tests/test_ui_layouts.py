@@ -3088,7 +3088,9 @@ def test_home_page_uses_adaptive_compact_layout_without_scrollbars():
     assert "class ConnectionStatusPill(QWidget):" in source
     assert "self.connection_status_frame.set_connection_state(stmt)" in source
     assert "self.connection_status_frame.set_theme_mode(CONFIG[\"mode\"])" in source
-    assert "Qt.WidgetAttribute.WA_TranslucentBackground" in source
+    assert "Qt.WidgetAttribute.WA_TranslucentBackground" not in source
+    assert "Qt.WidgetAttribute.WA_NoSystemBackground" not in source
+    assert "Paint only the rounded capsule." in source
     assert "QPainter.RenderHint.Antialiasing" in source
     assert "painter.drawRoundedRect(rect, radius, radius)" in source
     assert "QFrame#connectionStatusFrame" not in source
