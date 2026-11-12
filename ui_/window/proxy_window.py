@@ -20,6 +20,7 @@ from PySide6.QtCore import (
     QPropertyAnimation,
     QThreadPool,
     QTimer,
+    QSize,
     Qt,
 )
 from pathlib import Path
@@ -187,6 +188,9 @@ class ProxyWindow(QWidget):
         self.btn_status.setWordWrap(True)
         self.btn_status.setMaximumWidth(640)
         self.set_btn_status_style("disconnected")
+        # Move the flexible vertical gap above the status chip, not between the
+        # status chip and Connect. The lower Home controls stay visually grouped.
+        self.home_layout.addStretch(1)
         self.home_layout.addWidget(self.btn_status, 0, Qt.AlignmentFlag.AlignHCenter)
 
         self.connect_btn = PulseButton("Connect")
@@ -226,7 +230,8 @@ class ProxyWindow(QWidget):
         connect_row.addStretch(1)
         connect_row.addLayout(connection_hero_layout)
         connect_row.addStretch(1)
-        self.home_layout.addLayout(connect_row, 1)
+        self._home_connect_row = connect_row
+        self.home_layout.addLayout(connect_row)
 
         # Split the metric strip into equal-width halves so the divider stays
         # on the exact center line regardless of changing percentage/traffic text.
@@ -408,29 +413,53 @@ class ProxyWindow(QWidget):
         self.home_layout.addLayout(endpoint_row)
 
         utility_row = QHBoxLayout()
-        utility_row.setSpacing(8)
+        utility_row.setContentsMargins(0, 0, 0, 0)
+        utility_row.setSpacing(10)
         self._home_utility_layout = utility_row
-        self.btn_change_identity = QPushButton(qta.icon("fa6s.arrows-rotate"), "  New Identity")
+
+        self.btn_change_identity = QPushButton(qta.icon("fa6s.arrows-rotate"), "New Identity")
         self.btn_change_identity.setObjectName("secondaryAction")
+        self.btn_change_identity.setToolTip("Request a new Tor circuit identity.")
+        self.btn_change_identity.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_change_identity.clicked.connect(self.change_identity_)
-        utility_row.addWidget(self.btn_change_identity)
-        self.btn_log = QPushButton(qta.icon("fa6s.align-left"), "  Event Log")
+        utility_row.addWidget(self.btn_change_identity, 1)
+
+        self.btn_log = QPushButton(qta.icon("fa6s.list-ul"), "Event Log")
         self.btn_log.setObjectName("secondaryAction")
         self.btn_log.setCheckable(True)
+        self.btn_log.setToolTip("Show or hide the live Tor and proxy event log.")
+        self.btn_log.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_log.clicked.connect(self.show_logs)
-        utility_row.addWidget(self.btn_log)
-        self.btn_whatismyip = QPushButton(qta.icon("fa6s.globe"), "  Check Exit IP")
+        utility_row.addWidget(self.btn_log, 1)
+
+        self.btn_whatismyip = QPushButton(qta.icon("fa6s.globe"), "Check Exit IP")
         self.btn_whatismyip.setObjectName("secondaryAction")
+        self.btn_whatismyip.setToolTip("Check the public IP observed through the Tor HTTP proxy.")
+        self.btn_whatismyip.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_whatismyip.clicked.connect(self.whatismyip_clicked)
-        utility_row.addWidget(self.btn_whatismyip)
-        self.btn_open_browser = QPushButton(qta.icon("fa6s.globe"), "  Open Browser", self.home_content)
+        utility_row.addWidget(self.btn_whatismyip, 1)
+
+        self.btn_open_browser = QPushButton(
+            qta.icon("fa6s.arrow-up-right-from-square"), "Open Browser", self.home_content
+        )
         self.btn_open_browser.setObjectName("secondaryAction")
         self.btn_open_browser.setToolTip(
             "Connect to Tor and wait for the verified bootstrap to finish before opening a browser."
         )
+        self.btn_open_browser.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_open_browser.setEnabled(False)
         self.btn_open_browser.clicked.connect(self.open_browser_dialog)
-        utility_row.addWidget(self.btn_open_browser)
+        utility_row.addWidget(self.btn_open_browser, 1)
+
+        self._home_utility_buttons = (
+            self.btn_change_identity,
+            self.btn_log,
+            self.btn_whatismyip,
+            self.btn_open_browser,
+        )
+        for button in self._home_utility_buttons:
+            button.setIconSize(QSize(16, 16))
+            button.setMinimumWidth(0)
         self.home_layout.addLayout(utility_row)
 
         self.thread_pool = QThreadPool(self)
@@ -549,6 +578,9 @@ class ProxyWindow(QWidget):
         for value_layout in self._home_endpoint_value_layouts.values():
             value_layout.setDirection(vertical if stacked_endpoint_values else horizontal)
         self._home_utility_layout.setDirection(vertical if stacked_actions else horizontal)
+        for index, button in enumerate(self._home_utility_buttons):
+            self._home_utility_layout.setStretch(index, 0 if stacked_actions else 1)
+            button.setIconSize(QSize(14, 14) if compact else QSize(16, 16))
 
         self._home_metrics_layout.setDirection(
             vertical if stacked_metrics else horizontal
@@ -1292,11 +1324,26 @@ class ProxyWindow(QWidget):
             QComboBox#systemProxyMode QAbstractItemView {{ background: {surface}; color: {text}; selection-background-color: {accent}; selection-color: #ffffff; outline: none; border: 1px solid {border}; }}
             QComboBox#systemProxyMode QAbstractItemView::item {{ background: {surface}; color: {text}; padding: 8px 10px; min-height: 22px; }}
             QComboBox#systemProxyMode QAbstractItemView::item:selected {{ background: {accent}; color: #ffffff; }}
-            QPushButton#secondaryAction {{ min-height: 34px; padding: 0 10px; border-radius: 9px; background: transparent; color: {text}; border: 1px solid {border}; font-weight: 650; }}
-            QPushButton#secondaryAction[compact="true"] {{ min-height: 29px; padding: 0 7px; font-size: 9px; border-radius: 7px; }}
-            QPushButton#secondaryAction:hover {{ background: rgba(71, 163, 242, 0.12); border-color: {accent}; }}
-            QPushButton#secondaryAction:disabled {{ color: {muted}; }}
-            QPushButton#secondaryAction:checked {{ background: rgba(71, 163, 242, 0.18); border-color: {accent}; }}
+            QPushButton#secondaryAction {{
+                min-height: 40px; padding: 0 12px; border-radius: 10px;
+                background: {surface}; color: {text}; border: 1px solid {border};
+                font-size: 10px; font-weight: 700; text-align: center;
+            }}
+            QPushButton#secondaryAction[compact="true"] {{
+                min-height: 36px; padding: 0 8px; font-size: 9px; border-radius: 8px;
+            }}
+            QPushButton#secondaryAction:hover {{
+                background: {hover}; border-color: {accent};
+            }}
+            QPushButton#secondaryAction:pressed {{
+                background: rgba(71, 163, 242, 0.20); border-color: {accent};
+            }}
+            QPushButton#secondaryAction:checked {{
+                background: rgba(71, 163, 242, 0.14); border-color: {accent}; color: {accent};
+            }}
+            QPushButton#secondaryAction:disabled {{
+                background: {field}; color: {muted}; border-color: {border};
+            }}
             QFrame#systemProxyControls {{ background: {surface}; border: 1px solid {border}; border-radius: 12px; }}
             QFrame#systemTunnelHint {{ background: {surface}; border: 1px solid {border}; border-radius: 12px; }}
             QLabel#systemTunnelHintLabel {{ color: {muted}; background: transparent; border: none; font-size: 10px; }}
@@ -1309,9 +1356,11 @@ class ProxyWindow(QWidget):
         self.logs_widget.apply_theme(CONFIG["mode"])
         icon_color = "#eff1f4" if dark else "#202832"
         self.btn_change_identity.setIcon(qta.icon("fa6s.arrows-rotate", color=icon_color))
-        self.btn_log.setIcon(qta.icon("fa6s.align-left", color=icon_color))
+        self.btn_log.setIcon(qta.icon("fa6s.list-ul", color=icon_color))
         self.btn_whatismyip.setIcon(qta.icon("fa6s.globe", color=icon_color))
-        self.btn_open_browser.setIcon(qta.icon("fa6s.globe", color=icon_color))
+        self.btn_open_browser.setIcon(
+            qta.icon("fa6s.arrow-up-right-from-square", color=icon_color)
+        )
         self.btn_system_tunnel_action.set_theme_colors(text=text, muted=muted)
         self.btn_statistics.setIcon(qta.icon("fa6s.chart-line", color=accent))
         for controls in getattr(self, "_home_endpoint_controls", {}).values():
