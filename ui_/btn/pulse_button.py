@@ -48,7 +48,7 @@ class PulseButton(QPushButton):
 
     def set_diameter(self, diameter: int) -> None:
         """Resize the animated Connect control while preserving its circular proportions."""
-        diameter = max(128, min(264, int(diameter)))
+        diameter = max(96, min(420, int(diameter)))
         if diameter == self._diameter:
             return
         self._diameter = diameter
