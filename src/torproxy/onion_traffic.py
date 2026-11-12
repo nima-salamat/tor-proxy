@@ -7,6 +7,7 @@ inspected or logged.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import logging
 import os
@@ -21,8 +22,8 @@ from typing import Any
 from urllib.parse import urlsplit
 
 LOGGER = logging.getLogger(__name__)
-_REQUEST_LINE_RE = re.compile(rb"^([A-Z]{3,12})\\s+(\\S+)\\s+HTTP/\\d(?:\\.\\d)?$")
-_STATUS_LINE_RE = re.compile(rb"^HTTP/\\d(?:\\.\\d)?\\s+(\\d{3})(?:\\s|$)")
+_REQUEST_LINE_RE = re.compile(rb"^([A-Z]{3,12})\s+(\S+)\s+HTTP/\d(?:\.\d)?$")
+_STATUS_LINE_RE = re.compile(rb"^HTTP/\d(?:\.\d)?\s+(\d{3})(?:\s|$)")
 _MAX_EVENT_ROWS_PER_SERVICE = 2000
 
 
@@ -62,8 +63,18 @@ class OnionTrafficStore:
         connection.execute("PRAGMA busy_timeout=5000")
         return connection
 
+    @contextmanager
+    def _database(self):
+        """Provide a transaction and always close the short-lived SQLite handle."""
+        db = self._connect()
+        try:
+            with db:
+                yield db
+        finally:
+            db.close()
+
     def _initialize(self) -> None:
-        with self._lock, self._connect() as db:
+        with self._lock, self._database() as db:
             db.execute("PRAGMA journal_mode=WAL")
             db.execute(
                 """
@@ -112,7 +123,7 @@ class OnionTrafficStore:
                 pass
 
     def begin_connection(self, service_id: str) -> None:
-        with self._lock, self._connect() as db:
+        with self._lock, self._database() as db:
             db.execute(
                 "INSERT OR IGNORE INTO service_totals(service_id) VALUES (?)",
                 (service_id,),
@@ -140,7 +151,7 @@ class OnionTrafficStore:
         occurred_at = _timestamp()
         incoming_bytes = max(0, int(incoming_bytes))
         outgoing_bytes = max(0, int(outgoing_bytes))
-        with self._lock, self._connect() as db:
+        with self._lock, self._database() as db:
             db.execute(
                 "INSERT OR IGNORE INTO service_totals(service_id) VALUES (?)",
                 (service_id,),
@@ -202,7 +213,7 @@ class OnionTrafficStore:
             )
 
     def snapshot(self, service_id: str | None = None) -> dict[str, Any]:
-        with self._lock, self._connect() as db:
+        with self._lock, self._database() as db:
             if service_id is None:
                 row = db.execute(
                     """
@@ -236,7 +247,7 @@ class OnionTrafficStore:
 
     def events(self, service_id: str, limit: int = 250) -> list[dict[str, Any]]:
         bounded_limit = max(1, min(int(limit), 1000))
-        with self._lock, self._connect() as db:
+        with self._lock, self._database() as db:
             rows = db.execute(
                 """
                 SELECT id, occurred_at, onion_port, local_port, protocol,
@@ -275,7 +286,7 @@ class _HttpLineProbe:
                 self._response_done = True
                 return
             self._request_buffer.extend(data[:8192])
-            end = self._request_buffer.find(b"\\r\\n")
+            end = self._request_buffer.find(b"\r\n")
             if end < 0 and len(self._request_buffer) < 8192:
                 return
             line = bytes(self._request_buffer[:end if end >= 0 else 8192]).strip()
@@ -287,7 +298,7 @@ class _HttpLineProbe:
             self._request_done = True
         elif direction == "response" and self.protocol == "HTTP" and not self._response_done:
             self._response_buffer.extend(data[:4096])
-            end = self._response_buffer.find(b"\\r\\n")
+            end = self._response_buffer.find(b"\r\n")
             if end < 0 and len(self._response_buffer) < 4096:
                 return
             line = bytes(self._response_buffer[:end if end >= 0 else 4096]).strip()
