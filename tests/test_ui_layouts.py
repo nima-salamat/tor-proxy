@@ -3085,6 +3085,7 @@ def test_home_page_uses_adaptive_compact_layout_without_scrollbars():
     assert 'font-size: 9px; font-weight: 600' in source
     assert 'QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed' in source
     assert 'self.btn_status.setWordWrap(False)' in source
+    assert "status_frame_layout.setContentsMargins(20, 3, 20, 3)" in source
     assert "class ConnectionStatusPill(QWidget):" in source
     assert "self.connection_status_frame.set_connection_state(stmt)" in source
     assert "self.connection_status_frame.set_theme_mode(CONFIG[\"mode\"])" in source
