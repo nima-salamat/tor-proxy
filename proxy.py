@@ -36,6 +36,9 @@ BLOCKED_FILE = "blocked_hosts.json"
 EXCLUDE_FILE = "exclude_hosts.json"
 MAX_REQUEST_BODY_BYTES = 32 * 1024 * 1024
 SOCKET_TIMEOUT_SECONDS = 30.0
+# The Main Tor SOCKS gateway permits one shared 125-second backend-connect
+# window, matching Tor's default 120-second SocksTimeout with a small margin.
+TOR_SOCKS_CONNECT_TIMEOUT_SECONDS = 135.0
 REQUEST_READ_TIMEOUT_SECONDS = 30.0
 RELAY_IDLE_TIMEOUT_SECONDS = 120.0
 RELAY_SHUTDOWN_POLL_SECONDS = 0.25
@@ -617,7 +620,7 @@ def _connect_upstream(
 
     remote = socks.socksocket()
     remote.set_proxy(socks.SOCKS5, "127.0.0.1", tor_socks_port, rdns=True)
-    remote.settimeout(SOCKET_TIMEOUT_SECONDS)
+    remote.settimeout(TOR_SOCKS_CONNECT_TIMEOUT_SECONDS)
     try:
         # Register before SOCKS CONNECT: the Tor circuit/destination handshake
         # may still be in progress when the user disconnects the proxy.

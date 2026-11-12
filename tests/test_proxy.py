@@ -295,6 +295,29 @@ class _EchoHandler(socketserver.BaseRequestHandler):
             self.request.sendall(data)
 
 
+def test_tor_http_proxy_allows_the_full_gateway_connect_budget(monkeypatch):
+    class FakeSocksSocket:
+        def __init__(self):
+            self.proxy = None
+            self.timeout = None
+
+        def set_proxy(self, *args, **kwargs):
+            self.proxy = (args, kwargs)
+
+        def settimeout(self, timeout):
+            self.timeout = timeout
+
+    remote = FakeSocksSocket()
+    monkeypatch.setattr(proxy_module.socks, "socksocket", lambda: remote)
+    monkeypatch.setattr(proxy_module, "_connect_with_shutdown", lambda *_args: None)
+
+    result = proxy_module._connect_upstream("149.154.167.50", 443, "tor", 19050)
+
+    assert result is remote
+    assert remote.timeout == proxy_module.TOR_SOCKS_CONNECT_TIMEOUT_SECONDS
+    assert remote.timeout > 120.0
+
+
 def test_http_connect_tunnels_raw_tcp_and_preserves_early_payload(monkeypatch):
     monkeypatch.setattr(proxy_module, "_blocked_rules", HostRules())
     monkeypatch.setattr(proxy_module, "_excluded_rules", HostRules())

@@ -50,6 +50,7 @@ class SocksFailoverGateway:
         host: str = "127.0.0.1",
         connect_timeout: float = 8.0,
         handshake_timeout: float = 12.0,
+        backend_connect_timeout: float = 125.0,
         idle_timeout: float = 120.0,
         max_sessions: int = 256,
         host_router: Callable[[str], str] | None = None,
@@ -66,6 +67,9 @@ class SocksFailoverGateway:
         self._selection_mode = self._validate_selection_mode(selection_mode)
         self._connect_timeout = max(0.5, float(connect_timeout))
         self._handshake_timeout = max(1.0, float(handshake_timeout))
+        # Tor's default SocksTimeout is 120 seconds. Keep a small margin so
+        # Tor can finish circuit/stream attachment before the gateway gives up.
+        self._backend_connect_timeout = max(1.0, float(backend_connect_timeout))
         self._idle_timeout = max(5.0, float(idle_timeout))
         if type(max_sessions) is not int or not 1 <= max_sessions <= 4096:
             raise ValueError("The SOCKS gateway session limit must be between 1 and 4096.")
@@ -621,10 +625,14 @@ class SocksFailoverGateway:
 
             last_reply: bytes | None = None
             attempted_backends = 0
+            connect_deadline = time.monotonic() + self._backend_connect_timeout
 
             for endpoint in self._ordered_backends():
                 if self._stop.is_set():
                     return
+                remaining_budget = connect_deadline - time.monotonic()
+                if remaining_budget <= 0:
+                    break
                 if not self._reserve_backend(endpoint):
                     continue
                 attempted_backends += 1
@@ -634,15 +642,24 @@ class SocksFailoverGateway:
                 try:
                     candidate = socket.create_connection(
                         endpoint,
-                        timeout=self._connect_timeout,
+                        timeout=min(self._connect_timeout, remaining_budget),
                     )
                     if not self._track(candidate, True):
                         raise OSError("SOCKS gateway is stopping.")
-                    candidate.settimeout(self._handshake_timeout)
+                    # The local SOCKS greeting is quick; the following Tor
+                    # CONNECT reply may need time for circuit/stream attachment.
+                    candidate.settimeout(min(
+                        self._handshake_timeout,
+                        max(0.05, connect_deadline - time.monotonic()),
+                    ))
                     candidate.sendall(b"\x05\x01\x00")
                     if self._recv_exact(candidate, 2) != b"\x05\x00":
                         raise OSError("Tor SOCKS backend rejected no-auth negotiation.")
                     candidate.sendall(request)
+                    remaining_budget = connect_deadline - time.monotonic()
+                    if remaining_budget <= 0:
+                        raise TimeoutError("Shared Tor SOCKS CONNECT wait budget expired.")
+                    candidate.settimeout(remaining_budget)
                     reply = self._read_reply(candidate)
                     elapsed_ms = (time.monotonic() - attempt_started) * 1000.0
                     if reply[1] == 0:
@@ -679,6 +696,15 @@ class SocksFailoverGateway:
                     )
                 except (OSError, TimeoutError, ValueError):
                     self._record_backend_failure(endpoint)
+                    if time.monotonic() >= connect_deadline:
+                        LOGGER.warning(
+                            "The shared Tor SOCKS CONNECT wait budget expired after %.1f seconds "
+                            "while waiting for destination=%s:%s; no further backend will be tried.",
+                            self._backend_connect_timeout,
+                            destination_host,
+                            destination_port,
+                        )
+                        break
                     LOGGER.debug("A Tor SOCKS backend failed before CONNECT was established.", exc_info=True)
                 finally:
                     if candidate is not None:

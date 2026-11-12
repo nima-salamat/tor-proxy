@@ -19,7 +19,7 @@ def _recv_exact(sock: socket.socket, size: int) -> bytes:
     return bytes(data)
 
 
-def _start_echo_socks_backend():
+def _start_echo_socks_backend(*, connect_delay: float = 0.0):
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.bind(("127.0.0.1", 0))
     listener.listen(1)
@@ -41,6 +41,8 @@ def _start_echo_socks_backend():
                     length = _recv_exact(connection, 1)
                     _address = length + _recv_exact(connection, length[0])
                 _recv_exact(connection, 2)
+                if connect_delay:
+                    time.sleep(connect_delay)
                 connection.sendall(b"\x05\x00\x00\x01\x7f\x00\x00\x01\x00\x01")
                 payload = _recv_exact(connection, 4)
                 connection.sendall(payload)
@@ -193,6 +195,34 @@ def test_gateway_fails_over_to_next_ready_backend_before_connect_reply():
     finally:
         gateway.stop()
         backend_thread.join(timeout=2)
+    assert not backend_thread.is_alive()
+
+
+def test_gateway_waits_for_tor_connect_reply_after_frontend_handshake_timeout():
+    backend_port, backend_thread = _start_echo_socks_backend(connect_delay=0.3)
+    gateway_port = _free_port()
+    gateway = SocksFailoverGateway(
+        gateway_port,
+        lambda: [("127.0.0.1", backend_port)],
+        connect_timeout=1,
+        handshake_timeout=0.1,
+        backend_connect_timeout=1.5,
+        idle_timeout=5,
+    )
+    gateway.start()
+    try:
+        with socket.create_connection(("127.0.0.1", gateway_port), timeout=2) as client:
+            client.settimeout(2)
+            client.sendall(b"\x05\x01\x00")
+            assert _recv_exact(client, 2) == b"\x05\x00"
+            client.sendall(b"\x05\x01\x00\x03\x0bexample.com\x00\x50")
+            assert _recv_exact(client, 10) == b"\x05\x00\x00\x01\x7f\x00\x00\x01\x00\x01"
+            client.sendall(b"ping")
+            assert _recv_exact(client, 4) == b"ping"
+    finally:
+        gateway.stop()
+        backend_thread.join(timeout=2)
+
     assert not backend_thread.is_alive()
 
 

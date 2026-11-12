@@ -67,6 +67,12 @@ If the message coincides with failed page loads, compare the timestamp with **Ev
 
 Bootstrap completion does not guarantee every destination is reachable. Confirm the local HTTP proxy endpoint is correct, the app uses HTTP proxy for HTTP and HTTPS proxy/CONNECT for TLS destinations, the host is not blocked, and the configured SOCKS listener matches the managed Tor instance. A failed Tor route must not fall back to a direct route.
 
+## Telegram or other TCP applications remain on Connecting behind HTTP proxy
+
+The Main Tor SOCKS gateway now gives Tor one shared 125-second destination-connect window, and the HTTP proxy allows 135 seconds for the corresponding SOCKS request. This is intentional: Tor's default `SocksTimeout` is 120 seconds while it waits for a SOCKS stream to attach to a suitable circuit. A shorter proxy-layer timeout can cancel the request before Tor finishes its own circuit/stream work, even when the proxy listener and an earlier health probe were successful. The shared deadline prevents the timeout from multiplying by the number of Tor workers.
+
+After updating, reconnect TorProxy and retry Telegram. If it still remains on Connecting, inspect Event Log for a shared Tor SOCKS CONNECT timeout, a destination SOCKS refusal, or an HTTP CONNECT 502. Those results distinguish a slow Tor stream from an exit relay refusing the Telegram destination; the timeout adjustment cannot make a destination reachable when the exit policy or destination itself refuses it.
+
 ## Exit-IP check fails
 
 The action requires TorProxy to be connected and sends HTTPS through the local HTTP proxy. It will not retry without a proxy. Verify the proxy listener is ready and that the selected Tor exit can reach the IP-check service. A failure is reported as unverified rather than a Tor IP.
