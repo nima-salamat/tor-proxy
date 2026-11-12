@@ -1,4 +1,4 @@
-"""Loopback-only threaded HTTP proxy with consistent host policy and bounded accounting."""
+"""Threaded HTTP proxy with explicit opt-in LAN binding and bounded accounting."""
 from __future__ import annotations
 
 import ipaddress
