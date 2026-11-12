@@ -315,6 +315,44 @@ class Config:
             data_directory = profile.get("data_directory")
             if data_directory is not None and (not isinstance(data_directory, str) or len(data_directory) > 4096):
                 raise ConfigError(f"Tor service '{service_id}' data_directory must be a path or null.")
+            # New per-profile network options remain optional for old config files.
+            if {"upstream_proxy_username", "upstream_proxy_password"}.intersection(profile):
+                raise ConfigError(
+                    f"Tor service '{service_id}' contains proxy credentials; store them outside config.json."
+                )
+            proxy_type = profile.get("upstream_proxy_type", "none")
+            if not isinstance(proxy_type, str) or proxy_type not in {"none", "socks5", "https"}:
+                raise ConfigError(f"Tor service '{service_id}' upstream_proxy_type must be none, socks5, or https.")
+            proxy_host = profile.get("upstream_proxy_host", "")
+            if not isinstance(proxy_host, str) or len(proxy_host) > 253:
+                raise ConfigError(f"Tor service '{service_id}' upstream_proxy_host is invalid.")
+            if proxy_type != "none":
+                proxy_host = proxy_host.strip()
+                if (
+                    not proxy_host
+                    or not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?", proxy_host)
+                    or ".." in proxy_host
+                ):
+                    raise ConfigError(f"Tor service '{service_id}' upstream proxy host must be an IP address or DNS hostname.")
+            proxy_port = profile.get("upstream_proxy_port", 1080)
+            if type(proxy_port) is not int or not 1 <= proxy_port <= 65535:
+                raise ConfigError(f"Tor service '{service_id}' upstream_proxy_port must be between 1 and 65535.")
+            for key, default in (("client_use_ipv4", True), ("client_use_ipv6", True)):
+                if type(profile.get(key, default)) is not bool:
+                    raise ConfigError(f"Tor service '{service_id}' {key} must be true or false.")
+            if not profile.get("client_use_ipv4", True) and not profile.get("client_use_ipv6", True):
+                raise ConfigError(f"Tor service '{service_id}' must allow IPv4, IPv6, or both.")
+            for key, minimum, maximum, default in (
+                ("max_circuit_dirtiness_seconds", 10, 86400, 600),
+                ("new_circuit_period_seconds", 10, 86400, 60),
+                ("startup_timeout_seconds", 15, 900, 180),
+                ("shutdown_timeout_seconds", 1, 60, 5),
+            ):
+                value = profile.get(key, default)
+                if type(value) is not int or not minimum <= value <= maximum:
+                    raise ConfigError(
+                        f"Tor service '{service_id}' {key} must be between {minimum} and {maximum}."
+                    )
 
         onion_services = data.get("onion_hosting_services", [])
         if not isinstance(onion_services, list) or len(onion_services) > 32:
@@ -350,6 +388,59 @@ class Config:
                 port = service.get(key)
                 if type(port) is not int or not 1 <= port <= 65535:
                     raise ConfigError(f"Onion Service '{service_id}' has an invalid {key}.")
+            if "port_mappings" in service:
+                mappings = service["port_mappings"]
+                if not isinstance(mappings, list) or not 1 <= len(mappings) <= 16:
+                    raise ConfigError(
+                        f"Onion Service '{service_id}' port_mappings must contain between 1 and 16 entries."
+                    )
+                onion_ports: set[int] = set()
+                local_targets: set[tuple[str, int]] = set()
+                for mapping_index, mapping in enumerate(mappings, start=1):
+                    if not isinstance(mapping, dict):
+                        raise ConfigError(
+                            f"Onion Service '{service_id}' port mapping #{mapping_index} must be an object."
+                        )
+                    mapped_onion = mapping.get("onion_port")
+                    mapped_local = mapping.get("local_port")
+                    mapped_host = mapping.get("local_host")
+                    if type(mapped_onion) is not int or not 1 <= mapped_onion <= 65535:
+                        raise ConfigError(
+                            f"Onion Service '{service_id}' port mapping #{mapping_index} has an invalid onion_port."
+                        )
+                    if type(mapped_local) is not int or not 1 <= mapped_local <= 65535:
+                        raise ConfigError(
+                            f"Onion Service '{service_id}' port mapping #{mapping_index} has an invalid local_port."
+                        )
+                    try:
+                        mapped_ip = ipaddress.ip_address(str(mapped_host))
+                    except ValueError as exc:
+                        raise ConfigError(
+                            f"Onion Service '{service_id}' port mapping #{mapping_index} must use a literal loopback IP."
+                        ) from exc
+                    if not mapped_ip.is_loopback:
+                        raise ConfigError(
+                            f"Onion Service '{service_id}' port mapping #{mapping_index} may forward only to loopback."
+                        )
+                    target = (str(mapped_ip), mapped_local)
+                    if mapped_onion in onion_ports or target in local_targets:
+                        raise ConfigError(
+                            f"Onion Service '{service_id}' port mappings must use unique Onion ports and local targets."
+                        )
+                    onion_ports.add(mapped_onion)
+                    local_targets.add(target)
+                primary_mapping = (
+                    int(service["onion_port"]),
+                    str(host),
+                    int(service["local_port"]),
+                )
+                if primary_mapping not in {
+                    (int(item["onion_port"]), str(ipaddress.ip_address(str(item["local_host"]))), int(item["local_port"]))
+                    for item in mappings
+                }:
+                    raise ConfigError(
+                        f"Onion Service '{service_id}' port_mappings must include its primary local_host/local_port/onion_port mapping."
+                    )
             for key in ("persistent", "auto_start"):
                 if type(service.get(key)) is not bool:
                     raise ConfigError(f"Onion Service '{service_id}' {key} must be true or false.")

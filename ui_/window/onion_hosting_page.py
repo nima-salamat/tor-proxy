@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 from config import CONFIG
 from torproxy.paths import user_directories
 from torproxy.bridges import normalize_sni_hostname, parse_bridge_text
+from torproxy.onion_hosting import OnionHostingError, validate_loopback_target
 from ui_.worker.worker import Worker
 from ui_.window.dialogs import QMessageBox, StandardButton, _FramelessDialog
 from ui_.window.tor_log_dialog import TorLogDialog
@@ -99,6 +100,41 @@ class OnionServiceDialog(_FramelessDialog):
         self.onion_port_input.setRange(1, 65535)
         self.onion_port_input.setValue(int(self.service.get("onion_port", 80)))
 
+        # Older profiles contain only local_host/local_port/onion_port. Newer
+        # profiles may add mappings; show only the extra rows in this editor.
+        primary_mapping = (
+            str(self.service.get("local_host", "127.0.0.1")),
+            int(self.service.get("local_port", 8000)),
+            int(self.service.get("onion_port", 80)),
+        )
+        additional_lines = []
+        for mapping in self.service.get("port_mappings", []) or []:
+            try:
+                mapped_host = str(mapping.get("local_host", primary_mapping[0]))
+                mapped_port = int(mapping["local_port"])
+                mapped_onion = int(mapping["onion_port"])
+                if (mapped_host, mapped_port, mapped_onion) == primary_mapping:
+                    continue
+                endpoint = (
+                    f"[{mapped_host}]:{mapped_port}"
+                    if ":" in mapped_host
+                    else f"{mapped_host}:{mapped_port}"
+                )
+                if mapped_host == primary_mapping[0]:
+                    endpoint = str(mapped_port)
+                additional_lines.append(f"{mapped_onion}={endpoint}")
+            except (AttributeError, KeyError, TypeError, ValueError):
+                continue
+        self.additional_ports_input = QTextEdit(self.body_host)
+        self.additional_ports_input.setAcceptRichText(False)
+        self.additional_ports_input.setFixedHeight(76)
+        self.additional_ports_input.setPlaceholderText(
+            "Optional additional mappings, one per line:\n"
+            "443=8443  (same loopback host, local port 8443)\n"
+            "8443=127.0.0.1:9443  or  [::1]:9443"
+        )
+        self.additional_ports_input.setPlainText("\n".join(additional_lines))
+
         self.persistence_input = QComboBox(self.body_host)
         self.persistence_input.addItem("Persistent · keep the same Onion address", True)
         self.persistence_input.addItem("Temporary · remove when TorProxy exits", False)
@@ -123,6 +159,15 @@ class OnionServiceDialog(_FramelessDialog):
         form.addRow("Lifetime", self.persistence_input)
         form.addRow("Access", self.access_input)
         self.body_layout.addLayout(form)
+        mapping_hint = QLabel(
+            "One Onion address can expose several TCP ports, each forwarded to a local loopback service. "
+            "The additional rows are validated before Tor is asked to publish anything.",
+            self.body_host,
+        )
+        mapping_hint.setObjectName("dialogHint")
+        mapping_hint.setWordWrap(True)
+        self.body_layout.addWidget(mapping_hint)
+        self.body_layout.addWidget(self.additional_ports_input)
         self.body_layout.addWidget(self.auto_start_input)
 
         warning = QLabel(
@@ -165,11 +210,70 @@ class OnionServiceDialog(_FramelessDialog):
             QMessageBox.warning(self, "Local address required", "Enter 127.0.0.1 or ::1 as the local target.")
             self.host_input.setFocus()
             return
+        local_port = int(self.local_port_input.value())
+        onion_port = int(self.onion_port_input.value())
+        try:
+            normalized_host, _ = validate_loopback_target(host, local_port)
+            mappings = []
+            seen_onion = {onion_port}
+            seen_targets = {(normalized_host, local_port)}
+            raw_mappings = self.additional_ports_input.toPlainText()
+            for line_number, line in enumerate(raw_mappings.splitlines(), start=1):
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" not in line:
+                    raise ValueError(f"Additional mapping line {line_number} must use onion_port=local_port.")
+                left, right = (part.strip() for part in line.split("=", 1))
+                try:
+                    mapped_onion = int(left)
+                except ValueError as exc:
+                    raise ValueError(f"Additional mapping line {line_number} has an invalid Onion port.") from exc
+                if not 1 <= mapped_onion <= 65535 or mapped_onion in seen_onion:
+                    raise ValueError(f"Additional mapping line {line_number} must use a unique port from 1 to 65535.")
+                mapped_host = normalized_host
+                if right.isdecimal():
+                    mapped_port = int(right)
+                elif right.startswith("["):
+                    closing = right.find("]")
+                    if closing < 0 or right[closing + 1:closing + 2] != ":":
+                        raise ValueError(f"Additional mapping line {line_number} has an invalid IPv6 target.")
+                    mapped_host = right[1:closing]
+                    try:
+                        mapped_port = int(right[closing + 2:])
+                    except ValueError as exc:
+                        raise ValueError(f"Additional mapping line {line_number} has an invalid local port.") from exc
+                else:
+                    mapped_host, separator, raw_port = right.rpartition(":")
+                    if not separator:
+                        raise ValueError(f"Additional mapping line {line_number} must include a local port.")
+                    try:
+                        mapped_port = int(raw_port)
+                    except ValueError as exc:
+                        raise ValueError(f"Additional mapping line {line_number} has an invalid local port.") from exc
+                mapped_host, mapped_port = validate_loopback_target(mapped_host, mapped_port)
+                target = (mapped_host, mapped_port)
+                if target in seen_targets:
+                    raise ValueError(f"Additional mapping line {line_number} duplicates a local target.")
+                seen_onion.add(mapped_onion)
+                seen_targets.add(target)
+                mappings.append({
+                    "onion_port": mapped_onion,
+                    "local_host": mapped_host,
+                    "local_port": mapped_port,
+                })
+            if len(mappings) > 15:
+                raise ValueError("A single Onion Service can publish at most 16 port mappings.")
+        except (TypeError, ValueError, OnionHostingError) as exc:
+            QMessageBox.warning(self, "Invalid port mappings", str(exc))
+            self.additional_ports_input.setFocus()
+            return
         self._values = {
             "display_name": name,
-            "local_host": host,
-            "local_port": int(self.local_port_input.value()),
-            "onion_port": int(self.onion_port_input.value()),
+            "local_host": normalized_host,
+            "local_port": local_port,
+            "onion_port": onion_port,
+            "port_mappings": mappings,
             "persistent": bool(self.persistence_input.currentData()),
             "access_mode": str(self.access_input.currentData()),
             "auto_start": bool(self.auto_start_input.isChecked()),
@@ -987,8 +1091,17 @@ class OnionHostingPage(QWidget):
 
         lifetime = "Persistent" if service.get("persistent") else "Temporary"
         access = "Private access" if service.get("access_mode") == "private" else "Public access"
+        mappings = service.get("port_mappings") or [{
+            "onion_port": service["onion_port"],
+            "local_host": service["local_host"],
+            "local_port": service["local_port"],
+        }]
+        mapping_summary = " · ".join(
+            f"{item.get('onion_port')}→{item.get('local_host')}:{item.get('local_port')}"
+            for item in mappings
+        )
         detail = QLabel(
-            f"{service['local_host']}:{service['local_port']}  →  Onion port {service['onion_port']}  ·  {lifetime}  ·  {access}",
+            f"{mapping_summary}  ·  {lifetime}  ·  {access}",
             card,
         )
         detail.setObjectName("onionServiceDetail")

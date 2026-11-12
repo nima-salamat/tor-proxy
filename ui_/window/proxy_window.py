@@ -17,6 +17,7 @@ from torproxy.onion_hosting import OnionHostingManager
 from torproxy.bridges import parse_bridge_text
 from torproxy.ports import PortAllocationError, ephemeral_loopback_port, resolve_listener_ports
 from torproxy.service_pool import TorServicePool
+from torproxy.service_credentials import read_upstream_credentials
 from torproxy.tor_manager import TorManagerError, TorSettings
 from set_proxy import has_proxy_snapshot, manage_proxy
 from tor import TorRunner, Runner
@@ -352,6 +353,12 @@ class ProxyWindow(QWidget):
         bridges = str(self.tor.bridges or "") if use_primary_bridges else str(profile.get("bridges") or "")
         data_directory_value = profile.get("data_directory")
         dns_port_value = profile.get("dns_port")
+        proxy_type = str(profile.get("upstream_proxy_type", "none"))
+        credentials = (
+            read_upstream_credentials(str(profile["id"]))
+            if proxy_type != "none"
+            else {"upstream_proxy_username": "", "upstream_proxy_password": ""}
+        )
         return TorSettings(
             executable=Path(self.tor.tor_path),
             socks_port=int(profile["socks_port"]),
@@ -362,8 +369,18 @@ class ProxyWindow(QWidget):
             geoip6_path=Path(self.tor.geoip6_path) if self.tor.geoip6_path else None,
             bridges_enabled=bridges_enabled,
             bridges=bridges,
-            max_circuit_dirtiness_seconds=max(10, min(86400, int(self.tor.MaxCircuitDirtiness))),
-            new_circuit_period_seconds=max(10, min(86400, int(self.tor.NewCircuitPeriod))),
+            # Legacy custom profiles inherited these two values from Main Tor.
+            max_circuit_dirtiness_seconds=int(profile.get("max_circuit_dirtiness_seconds", self.tor.MaxCircuitDirtiness)),
+            new_circuit_period_seconds=int(profile.get("new_circuit_period_seconds", self.tor.NewCircuitPeriod)),
+            startup_timeout_seconds=float(profile.get("startup_timeout_seconds", 180)),
+            shutdown_timeout_seconds=float(profile.get("shutdown_timeout_seconds", 5)),
+            client_use_ipv4=bool(profile.get("client_use_ipv4", True)),
+            client_use_ipv6=bool(profile.get("client_use_ipv6", True)),
+            upstream_proxy_type=proxy_type,
+            upstream_proxy_host=str(profile.get("upstream_proxy_host") or ""),
+            upstream_proxy_port=int(profile.get("upstream_proxy_port", 1080)),
+            upstream_proxy_username=credentials["upstream_proxy_username"],
+            upstream_proxy_password=credentials["upstream_proxy_password"],
             webtunnel_sni_imitation=str(CONFIG["webtunnel_sni_imitation"] or ""),
             webtunnel_use_default_tls=bool(CONFIG["webtunnel_use_default_tls"]),
         )

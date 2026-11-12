@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QTextEdit,
+    QToolButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -29,6 +30,11 @@ from PySide6.QtWidgets import (
 from config import CONFIG
 from torproxy.bridges import parse_bridge_text
 from torproxy.service_pool import TorServicePoolError
+from torproxy.service_credentials import (
+    read_upstream_credentials,
+    write_upstream_credentials,
+    delete_upstream_credentials,
+)
 from ui_.worker.worker import Worker
 from ui_.window.dialogs import QMessageBox, _FramelessDialog
 from ui_.window.tor_log_dialog import TorLogDialog
@@ -334,6 +340,9 @@ class TorServiceEditorDialog(_FramelessDialog):
         )
         self._source_profile = dict(profile or {})
         self.profile: dict | None = None
+        primary_tor = getattr(parent, "_primary_tor", None)
+        self._legacy_max_circuit_dirtiness = int(getattr(primary_tor, "MaxCircuitDirtiness", 600) or 600)
+        self._legacy_new_circuit_period = int(getattr(primary_tor, "NewCircuitPeriod", 60) or 60)
         layout = self.body_layout
         intro = QLabel(
             "Each profile runs its own Tor process with a separate DataDirectory, "
@@ -421,6 +430,102 @@ class TorServiceEditorDialog(_FramelessDialog):
         path_layout.addWidget(self.btn_browse_data)
         form.addRow("Data directory", path_row)
 
+        self.btn_advanced_network = QToolButton(self)
+        self.btn_advanced_network.setText("Advanced network options")
+        self.btn_advanced_network.setCheckable(True)
+        self.btn_advanced_network.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.btn_advanced_network.setIcon(qta.icon("fa6s.sliders"))
+        layout.addWidget(self.btn_advanced_network)
+        self.network_options_container = QWidget(self)
+        network_options_layout = QVBoxLayout(self.network_options_container)
+        network_options_layout.setContentsMargins(10, 2, 0, 2)
+        network_options_layout.setSpacing(8)
+        network_title = QLabel("Network options")
+        network_title.setObjectName("settingsSectionTitle")
+        network_options_layout.addWidget(network_title)
+        self.inp_upstream_proxy_type = QComboBox(self)
+        self.inp_upstream_proxy_type.addItem("Direct · no upstream proxy", "none")
+        self.inp_upstream_proxy_type.addItem("SOCKS5 proxy", "socks5")
+        self.inp_upstream_proxy_type.addItem("HTTP CONNECT proxy", "https")
+        self.inp_upstream_proxy_type.setCurrentIndex(max(0, self.inp_upstream_proxy_type.findData(
+            self._source_profile.get("upstream_proxy_type", "none")
+        )))
+        self.inp_upstream_proxy_host = QLineEdit(str(self._source_profile.get("upstream_proxy_host", "")))
+        self.inp_upstream_proxy_host.setPlaceholderText("127.0.0.1 or proxy.example.net")
+        self.inp_upstream_proxy_port = self._port_spin(self._source_profile.get("upstream_proxy_port", 1080), minimum=1)
+        try:
+            saved_credentials = read_upstream_credentials(str(self._source_profile.get("id", "pending")))
+        except Exception:
+            saved_credentials = {"upstream_proxy_username": "", "upstream_proxy_password": ""}
+        self.inp_upstream_proxy_username = QLineEdit(saved_credentials["upstream_proxy_username"])
+        self.inp_upstream_proxy_password = QLineEdit(saved_credentials["upstream_proxy_password"])
+        self.inp_upstream_proxy_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.inp_upstream_proxy_password.setPlaceholderText("Stored outside config.json")
+        network_form = QFormLayout()
+        network_form.setHorizontalSpacing(14)
+        network_form.setVerticalSpacing(8)
+        network_form.addRow("Upstream proxy", self.inp_upstream_proxy_type)
+        network_form.addRow("Proxy host", self.inp_upstream_proxy_host)
+        network_form.addRow("Proxy port", self.inp_upstream_proxy_port)
+        network_form.addRow("Proxy username", self.inp_upstream_proxy_username)
+        network_form.addRow("Proxy password", self.inp_upstream_proxy_password)
+        network_options_layout.addLayout(network_form)
+
+        self.chk_client_ipv4 = QCheckBox("Allow IPv4")
+        self.chk_client_ipv4.setChecked(bool(self._source_profile.get("client_use_ipv4", True)))
+        self.chk_client_ipv6 = QCheckBox("Allow IPv6")
+        self.chk_client_ipv6.setChecked(bool(self._source_profile.get("client_use_ipv6", True)))
+        family_row = QHBoxLayout()
+        family_row.addWidget(self.chk_client_ipv4)
+        family_row.addWidget(self.chk_client_ipv6)
+        family_row.addStretch(1)
+        network_options_layout.addLayout(family_row)
+
+        timing_form = QFormLayout()
+        self.spin_max_circuit_dirtiness = QSpinBox(self)
+        self.spin_max_circuit_dirtiness.setRange(10, 86400)
+        self.spin_max_circuit_dirtiness.setSuffix(" sec")
+        self.spin_max_circuit_dirtiness.setValue(int(self._source_profile.get("max_circuit_dirtiness_seconds", self._legacy_max_circuit_dirtiness)))
+        self.spin_new_circuit_period = QSpinBox(self)
+        self.spin_new_circuit_period.setRange(10, 86400)
+        self.spin_new_circuit_period.setSuffix(" sec")
+        self.spin_new_circuit_period.setValue(int(self._source_profile.get("new_circuit_period_seconds", self._legacy_new_circuit_period)))
+        self.spin_startup_timeout = QSpinBox(self)
+        self.spin_startup_timeout.setRange(15, 900)
+        self.spin_startup_timeout.setSuffix(" sec")
+        self.spin_startup_timeout.setValue(int(self._source_profile.get("startup_timeout_seconds", 180)))
+        self.spin_shutdown_timeout = QSpinBox(self)
+        self.spin_shutdown_timeout.setRange(1, 60)
+        self.spin_shutdown_timeout.setSuffix(" sec")
+        self.spin_shutdown_timeout.setValue(int(self._source_profile.get("shutdown_timeout_seconds", 5)))
+        timing_form.addRow("Max circuit dirtiness", self.spin_max_circuit_dirtiness)
+        timing_form.addRow("New circuit period", self.spin_new_circuit_period)
+        timing_form.addRow("Startup timeout", self.spin_startup_timeout)
+        timing_form.addRow("Shutdown timeout", self.spin_shutdown_timeout)
+        network_options_layout.addLayout(timing_form)
+
+        network_hint = QLabel(
+            "Network settings are isolated per profile. Proxy credentials are stored in a permission-restricted file, "
+            "not in config.json. Changing these values requires the profile to be stopped and restarted.",
+            self,
+        )
+        network_hint.setObjectName("settingsDescription")
+        network_hint.setWordWrap(True)
+        network_options_layout.addWidget(network_hint)
+        layout.addWidget(self.network_options_container)
+        advanced_options_used = (
+            self.inp_upstream_proxy_type.currentData() != "none"
+            or not self.chk_client_ipv4.isChecked()
+            or not self.chk_client_ipv6.isChecked()
+            or self.spin_max_circuit_dirtiness.value() != self._legacy_max_circuit_dirtiness
+            or self.spin_new_circuit_period.value() != self._legacy_new_circuit_period
+            or self.spin_startup_timeout.value() != 180
+            or self.spin_shutdown_timeout.value() != 5
+        )
+        self.btn_advanced_network.setChecked(advanced_options_used)
+        self.btn_advanced_network.toggled.connect(self._toggle_network_options)
+        self._toggle_network_options(advanced_options_used)
+
         self.lbl_error = QLabel("")
         self.lbl_error.setObjectName("settingsDescription")
         self.lbl_error.setWordWrap(True)
@@ -430,6 +535,8 @@ class TorServiceEditorDialog(_FramelessDialog):
         self.add_button("Cancel", primary=False, callback=self.reject)
         self.add_button("Save changes" if editing else "Create service", primary=True, callback=self.accept)
         self.resize(620, 680)
+        if self.btn_advanced_network.isChecked():
+            self.adjustSize()
         self._remember_preferred_size()
         self.setStyleSheet(self.styleSheet() + f"""
             QLineEdit, QTextEdit, QSpinBox {{
@@ -442,7 +549,27 @@ class TorServiceEditorDialog(_FramelessDialog):
 
         self.chk_use_primary_bridges.toggled.connect(self._sync_bridge_controls)
         self.chk_bridges_enabled.toggled.connect(self._sync_bridge_controls)
+        self.inp_upstream_proxy_type.currentIndexChanged.connect(self._sync_network_controls)
         self._sync_bridge_controls()
+        self._sync_network_controls()
+
+    def _toggle_network_options(self, expanded: bool) -> None:
+        self.network_options_container.setVisible(bool(expanded))
+        self.btn_advanced_network.setText(
+            "Hide advanced network options" if expanded else "Advanced network options"
+        )
+        self.adjustSize()
+        self._remember_preferred_size()
+
+    def _sync_network_controls(self, *_args) -> None:
+        enabled = self.inp_upstream_proxy_type.currentData() != "none"
+        for widget in (
+            self.inp_upstream_proxy_host,
+            self.inp_upstream_proxy_port,
+            self.inp_upstream_proxy_username,
+            self.inp_upstream_proxy_password,
+        ):
+            widget.setEnabled(enabled)
 
     def _suggest_listener_ports(self) -> tuple[int, int]:
         """Suggest a free adjacent SOCKS/ControlPort pair for a new profile."""
@@ -531,6 +658,28 @@ class TorServiceEditorDialog(_FramelessDialog):
         if directory:
             directory = str(Path(directory).expanduser().resolve(strict=False))
 
+        proxy_type = str(self.inp_upstream_proxy_type.currentData())
+        proxy_host = self.inp_upstream_proxy_host.text().strip()
+        proxy_username = self.inp_upstream_proxy_username.text()
+        proxy_password = self.inp_upstream_proxy_password.text()
+        if proxy_type != "none" and not proxy_host:
+            raise ValueError("Enter the upstream proxy host or choose Direct.")
+        if proxy_type == "none":
+            proxy_host = ""
+            proxy_username = proxy_password = ""
+        elif bool(proxy_username) != bool(proxy_password):
+            raise ValueError("Enter both upstream proxy username and password, or leave both empty.")
+        elif proxy_username and (
+            len(proxy_username) > 255
+            or len(proxy_password) > 255
+            or any(ord(char) < 32 or ord(char) == 127 for char in proxy_username + proxy_password)
+        ):
+            raise ValueError("Upstream proxy credentials must be 1–255 printable characters.")
+        if proxy_type == "https" and (":" in proxy_username or ":" in proxy_password):
+            raise ValueError("HTTP CONNECT proxy credentials cannot contain a colon.")
+        if not self.chk_client_ipv4.isChecked() and not self.chk_client_ipv6.isChecked():
+            raise ValueError("At least one of IPv4 or IPv6 must be allowed.")
+
         return {
             "id": service_id,
             "display_name": display_name,
@@ -541,6 +690,19 @@ class TorServiceEditorDialog(_FramelessDialog):
             "bridge_enabled": bridge_enabled,
             "bridges": "\n".join(parsed.records),
             "data_directory": directory or None,
+            "upstream_proxy_type": proxy_type,
+            "upstream_proxy_host": proxy_host,
+            "upstream_proxy_port": int(self.inp_upstream_proxy_port.value()),
+            # These two values are transient form data. _save_profile removes
+            # them before config persistence and writes them to protected storage.
+            "upstream_proxy_username": proxy_username,
+            "upstream_proxy_password": proxy_password,
+            "client_use_ipv4": bool(self.chk_client_ipv4.isChecked()),
+            "client_use_ipv6": bool(self.chk_client_ipv6.isChecked()),
+            "max_circuit_dirtiness_seconds": int(self.spin_max_circuit_dirtiness.value()),
+            "new_circuit_period_seconds": int(self.spin_new_circuit_period.value()),
+            "startup_timeout_seconds": int(self.spin_startup_timeout.value()),
+            "shutdown_timeout_seconds": int(self.spin_shutdown_timeout.value()),
         }
 
     def accept(self) -> None:
@@ -1029,7 +1191,17 @@ class TorServicesPage(QWidget):
 
     def _save_profile(self, profile: dict, *, old_profile: dict | None = None) -> bool:
         profiles = self._profiles()
+        profile = dict(profile)
         service_id = profile["id"]
+        credentials = {
+            "username": profile.pop("upstream_proxy_username", ""),
+            "password": profile.pop("upstream_proxy_password", ""),
+        }
+        try:
+            previous_credentials = read_upstream_credentials(service_id)
+        except Exception as exc:
+            QMessageBox.warning(self, "Proxy credentials unavailable", str(exc))
+            return False
         pool = self._pool(create=False)
         old_registered = bool(pool is not None and service_id in pool.service_ids)
         old_was_unregistered = False
@@ -1052,7 +1224,12 @@ class TorServicesPage(QWidget):
                 QMessageBox.warning(self, "Cannot edit active service", str(exc))
                 return False
 
+        credentials_updated = False
         try:
+            # Credentials must be available before _register_profile builds the
+            # immutable TorSettings snapshot; they never enter profile metadata.
+            write_upstream_credentials(service_id, credentials["username"], credentials["password"])
+            credentials_updated = True
             if pool is None:
                 # Creating a profile is still useful before a bundle is installed.
                 # It will be registered automatically when a compatible bundle exists.
@@ -1087,6 +1264,15 @@ class TorServicesPage(QWidget):
                 updated.append(dict(profile))
             CONFIG.update_many({"tor_services": updated})
         except Exception as exc:
+            if credentials_updated:
+                try:
+                    write_upstream_credentials(
+                        service_id,
+                        previous_credentials["upstream_proxy_username"],
+                        previous_credentials["upstream_proxy_password"],
+                    )
+                except Exception:
+                    logger.exception("Could not restore previous Custom Tor proxy credentials.")
             if new_registered and pool is not None and service_id in pool.service_ids:
                 try:
                     pool.unregister(service_id)
@@ -1143,9 +1329,13 @@ class TorServicesPage(QWidget):
         except Exception as exc:
             QMessageBox.warning(self, "Profile could not be removed", str(exc))
             return
+        try:
+            delete_upstream_credentials(service_id)
+        except Exception:
+            logger.exception("Could not remove saved proxy credentials for deleted profile '%s'.", service_id)
         if self._proxy is not None:
             getattr(self._proxy, "tor_service_profile_errors", {}).pop(service_id, None)
-        self.lbl_runtime_status.setText(f"Removed profile '{service_id}'. Its files were preserved.")
+        self.lbl_runtime_status.setText(f"Removed profile '{service_id}'. Its DataDirectory and logs were preserved.")
         self.refresh_services()
 
     def _run_operation(self, operation_key: str, function, *args) -> None:

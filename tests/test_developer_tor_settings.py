@@ -179,3 +179,99 @@ def test_tor_settings_require_complete_proxy_authentication(tmp_path):
             upstream_proxy_port=1080,
             upstream_proxy_username="only-user",
         )
+
+
+def _valid_custom_service_profile():
+    return {
+        "id": "work",
+        "display_name": "Work",
+        "socks_port": 19155,
+        "control_port": 19156,
+        "dns_port": None,
+        "use_primary_bridges": False,
+        "bridge_enabled": False,
+        "bridges": "",
+        "data_directory": None,
+    }
+
+
+def test_custom_profile_accepts_per_profile_network_and_timeout_settings():
+    data = deepcopy(DEFAULT_DATA)
+    profile = _valid_custom_service_profile()
+    profile.update({
+        "upstream_proxy_type": "socks5",
+        "upstream_proxy_host": "127.0.0.1",
+        "upstream_proxy_port": 1080,
+        "client_use_ipv4": False,
+        "client_use_ipv6": True,
+        "max_circuit_dirtiness_seconds": 900,
+        "new_circuit_period_seconds": 120,
+        "startup_timeout_seconds": 240,
+        "shutdown_timeout_seconds": 8,
+    })
+    data["tor_services"] = [profile]
+
+    Config._validate(data)
+
+
+def test_custom_profile_rejects_plaintext_proxy_credentials_in_config():
+    data = deepcopy(DEFAULT_DATA)
+    profile = _valid_custom_service_profile()
+    profile["upstream_proxy_password"] = "must-not-be-in-json"
+    data["tor_services"] = [profile]
+
+    with pytest.raises(ConfigError, match="outside config.json"):
+        Config._validate(data)
+
+
+def test_custom_profile_requires_at_least_one_address_family():
+    data = deepcopy(DEFAULT_DATA)
+    profile = _valid_custom_service_profile()
+    profile.update({"client_use_ipv4": False, "client_use_ipv6": False})
+    data["tor_services"] = [profile]
+
+    with pytest.raises(ConfigError, match="IPv4, IPv6"):
+        Config._validate(data)
+
+
+def test_onion_service_config_accepts_multiple_loopback_port_mappings():
+    data = deepcopy(DEFAULT_DATA)
+    data["onion_hosting_services"] = [{
+        "id": "webapp",
+        "display_name": "Web application",
+        "local_host": "127.0.0.1",
+        "local_port": 8080,
+        "onion_port": 80,
+        "persistent": True,
+        "access_mode": "public",
+        "auto_start": True,
+        "service_id": "",
+        "port_mappings": [
+            {"onion_port": 80, "local_host": "127.0.0.1", "local_port": 8080},
+            {"onion_port": 443, "local_host": "::1", "local_port": 8443},
+        ],
+    }]
+
+    Config._validate(data)
+
+
+def test_onion_service_config_rejects_non_loopback_additional_mapping():
+    data = deepcopy(DEFAULT_DATA)
+    data["onion_hosting_services"] = [{
+        "id": "webapp",
+        "display_name": "Web application",
+        "local_host": "127.0.0.1",
+        "local_port": 8080,
+        "onion_port": 80,
+        "persistent": True,
+        "access_mode": "public",
+        "auto_start": True,
+        "service_id": "",
+        "port_mappings": [
+            {"onion_port": 80, "local_host": "127.0.0.1", "local_port": 8080},
+            {"onion_port": 443, "local_host": "10.0.0.8", "local_port": 8443},
+        ],
+    }]
+
+    with pytest.raises(ConfigError, match="loopback"):
+        Config._validate(data)

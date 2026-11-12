@@ -79,6 +79,49 @@ def validate_loopback_target(host: str, port: int) -> tuple[str, int]:
     return str(address), port
 
 
+def _normalize_port_mappings(
+    local_host: str,
+    local_port: int,
+    onion_port: int,
+    additional: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Build a bounded set of v3 Onion port forwards, all pinned to loopback."""
+    host, target_port = validate_loopback_target(local_host, local_port)
+    if type(onion_port) is not int or not 1 <= onion_port <= 65535:
+        raise OnionHostingError("The Onion port must be between 1 and 65535.")
+    if additional is None:
+        additional = []
+    if not isinstance(additional, list):
+        raise OnionHostingError("Additional Onion port mappings must be a list.")
+    if len(additional) > 15:
+        raise OnionHostingError("An Onion Service can publish at most 16 port mappings.")
+    result = [{"onion_port": onion_port, "local_host": host, "local_port": target_port}]
+    seen_onion_ports = {onion_port}
+    seen_targets = {(host, target_port)}
+    for index, mapping in enumerate(additional, start=2):
+        if not isinstance(mapping, dict):
+            raise OnionHostingError(f"Port mapping #{index} must be an object.")
+        mapped_onion = mapping.get("onion_port")
+        mapped_host = mapping.get("local_host", host)
+        mapped_port = mapping.get("local_port")
+        mapped_host, mapped_port = validate_loopback_target(mapped_host, mapped_port)
+        if type(mapped_onion) is not int or not 1 <= mapped_onion <= 65535:
+            raise OnionHostingError(f"Port mapping #{index} has an invalid Onion port.")
+        if mapped_onion in seen_onion_ports:
+            raise OnionHostingError("Each Onion Service port mapping must use a unique Onion port.")
+        target = (mapped_host, mapped_port)
+        if target in seen_targets:
+            raise OnionHostingError("The same local loopback target cannot be mapped more than once.")
+        seen_onion_ports.add(mapped_onion)
+        seen_targets.add(target)
+        result.append({
+            "onion_port": mapped_onion,
+            "local_host": mapped_host,
+            "local_port": mapped_port,
+        })
+    return result
+
+
 class OnionHostingManager:
     """Owns a Tor process used only for publishing v3 Onion Services."""
 
@@ -684,6 +727,7 @@ class OnionHostingManager:
         local_host: str,
         local_port: int,
         onion_port: int = 80,
+        port_mappings: list[dict[str, Any]] | None = None,
         persistent: bool = True,
         access_mode: str = "public",
         auto_start: bool = True,
@@ -692,8 +736,7 @@ class OnionHostingManager:
         if not name or len(name) > 80:
             raise OnionHostingError("Service name is required and must contain at most 80 characters.")
         host, local_port = validate_loopback_target(local_host, local_port)
-        if type(onion_port) is not int or not 1 <= onion_port <= 65535:
-            raise OnionHostingError("The Onion port must be between 1 and 65535.")
+        mappings = _normalize_port_mappings(host, local_port, onion_port, port_mappings)
         if type(persistent) is not bool or type(auto_start) is not bool:
             raise OnionHostingError("Persistent and Auto Start must be true or false.")
         if access_mode not in {"public", "private"}:
@@ -712,6 +755,7 @@ class OnionHostingManager:
             "id": service_id, "display_name": name, "local_host": host, "local_port": local_port,
             "onion_port": onion_port, "persistent": persistent, "access_mode": access_mode,
             "auto_start": auto_start, "service_id": "",
+            "port_mappings": mappings,
         }
         key_material: dict[str, str] = {}
         if access_mode == "private":
@@ -734,7 +778,7 @@ class OnionHostingManager:
         return service_id
 
     def update_service(self, service_id: str, **changes) -> None:
-        allowed = {"display_name", "local_host", "local_port", "onion_port", "persistent", "access_mode", "auto_start"}
+        allowed = {"display_name", "local_host", "local_port", "onion_port", "port_mappings", "persistent", "access_mode", "auto_start"}
         if set(changes) - allowed:
             raise OnionHostingError("Unsupported Onion Service setting.")
         with self._lock:
@@ -743,22 +787,56 @@ class OnionHostingManager:
         current = self._find_service(service_id)
         merged = dict(current)
         merged.update(changes)
-        host, port = validate_loopback_target(merged["local_host"], int(merged["local_port"]))
+        host, port = validate_loopback_target(merged["local_host"], merged["local_port"])
         merged["local_host"], merged["local_port"] = host, port
         merged["display_name"] = str(merged["display_name"]).strip()
         if not merged["display_name"] or len(merged["display_name"]) > 80:
             raise OnionHostingError("Service name is required and must contain at most 80 characters.")
+        if type(merged["onion_port"]) is not int or not 1 <= merged["onion_port"] <= 65535:
+            raise OnionHostingError("The Onion port must be between 1 and 65535.")
+        old_primary = (
+            str(current["local_host"]), int(current["local_port"]), int(current["onion_port"])
+        )
+        if "port_mappings" in changes:
+            additional_mappings = changes.get("port_mappings") or []
+        else:
+            stored_mappings = current.get("port_mappings") or [{
+                "onion_port": current["onion_port"],
+                "local_host": current["local_host"],
+                "local_port": current["local_port"],
+            }]
+            additional_mappings = [
+                item for item in stored_mappings
+                if (
+                    str(item.get("local_host", current["local_host"])),
+                    int(item.get("local_port", current["local_port"])),
+                    int(item.get("onion_port", current["onion_port"])),
+                ) != old_primary
+            ]
+        mappings = _normalize_port_mappings(host, port, merged["onion_port"], additional_mappings)
+        merged["port_mappings"] = mappings
+        mapping_keys = {
+            (item["local_host"], item["local_port"], item["onion_port"])
+            for item in mappings
+        }
         for other in self._all_services():
             if other["id"] == service_id:
                 continue
-            if (
-                other["local_host"] == host
-                and int(other["local_port"]) == port
-                and int(other["onion_port"]) == int(merged["onion_port"])
-            ):
-                raise OnionHostingError("Another Onion Service already uses this local target and Onion port.")
-        if type(merged["onion_port"]) is not int or not 1 <= merged["onion_port"] <= 65535:
-            raise OnionHostingError("The Onion port must be between 1 and 65535.")
+            other_mappings = other.get("port_mappings") or [{
+                "onion_port": other["onion_port"],
+                "local_host": other["local_host"],
+                "local_port": other["local_port"],
+            }]
+            other_keys = {
+                (
+                    str(item.get("local_host", other["local_host"])),
+                    int(item.get("local_port", other["local_port"])),
+                    int(item.get("onion_port", other["onion_port"])),
+                )
+                for item in other_mappings
+            }
+            if mapping_keys.intersection(other_keys):
+                raise OnionHostingError("Another Onion Service already uses one of these local target and Onion port mappings.")
         if type(merged["persistent"]) is not bool or type(merged["auto_start"]) is not bool:
             raise OnionHostingError("Persistent and Auto Start must be true or false.")
         if merged["access_mode"] not in {"public", "private"}:
@@ -837,16 +915,37 @@ class OnionHostingManager:
             self._temporary_services.pop(service_id, None)
             self._temporary_keys.pop(service_id, None)
 
+    def _service_port_mappings(self, service: dict[str, Any]) -> list[dict[str, Any]]:
+        mappings = service.get("port_mappings")
+        if mappings:
+            return _normalize_port_mappings(
+                service["local_host"],
+                int(service["local_port"]),
+                int(service["onion_port"]),
+                [
+                    item for item in mappings
+                    if not (
+                        str(item.get("local_host", service["local_host"])) == str(service["local_host"])
+                        and int(item.get("local_port", service["local_port"])) == int(service["local_port"])
+                        and int(item.get("onion_port", service["onion_port"])) == int(service["onion_port"])
+                    )
+                ],
+            )
+        return _normalize_port_mappings(
+            service["local_host"], int(service["local_port"]), int(service["onion_port"])
+        )
+
     def _check_local_target(self, service: dict[str, Any]) -> None:
-        host, port = validate_loopback_target(service["local_host"], int(service["local_port"]))
-        try:
-            with socket.create_connection((host, port), timeout=2.5):
-                pass
-        except OSError as exc:
-            raise OnionHostingError(
-                f"Local service {host}:{port} is not accepting TCP connections. "
-                "Start the web server first, then retry."
-            ) from exc
+        for mapping in self._service_port_mappings(service):
+            host, port = validate_loopback_target(mapping["local_host"], int(mapping["local_port"]))
+            try:
+                with socket.create_connection((host, port), timeout=2.5):
+                    pass
+            except OSError as exc:
+                raise OnionHostingError(
+                    f"Local target {host}:{port} for Onion port {mapping['onion_port']} is not accepting TCP connections. "
+                    "Start every mapped local service before publishing the Onion Service."
+                ) from exc
 
     def start_service(self, profile_id: str) -> str:
         with self._lock:
@@ -887,9 +986,16 @@ class OnionHostingManager:
                 command_key = key_material["tor_private_key"]
         if access_mode == "private":
             self._validate_client_authorization(service, key_material)
-        target_host = service["local_host"]
-        target = f"[{target_host}]:{service['local_port']}" if ":" in target_host else f"{target_host}:{service['local_port']}"
-        command = f"ADD_ONION {command_key} Flags={','.join(flags)} Port={service['onion_port']},{target}"
+        port_arguments = []
+        for mapping in self._service_port_mappings(service):
+            target_host = mapping["local_host"]
+            target = (
+                f"[{target_host}]:{mapping['local_port']}"
+                if ":" in target_host
+                else f"{target_host}:{mapping['local_port']}"
+            )
+            port_arguments.append(f"Port={mapping['onion_port']},{target}")
+        command = f"ADD_ONION {command_key} Flags={','.join(flags)} " + " ".join(port_arguments)
         if client_public:
             command += f" ClientAuthV3={client_public.upper()}"
         response = self._control(command)

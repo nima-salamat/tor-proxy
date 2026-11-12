@@ -358,3 +358,107 @@ def test_mismatched_private_client_key_is_not_published(hosting):
     with pytest.raises(OnionHostingError, match="do not match"):
         manager.start_service(profile_id)
     assert not any(command.startswith("ADD_ONION") for command in tor.commands)
+
+
+def test_multiple_onion_ports_publish_through_one_service_and_preflight_each_target(hosting, monkeypatch):
+    manager, _config, tor = hosting
+    checked_targets = []
+
+    def check_target(address, timeout):
+        checked_targets.append((address, timeout))
+        return nullcontext()
+
+    monkeypatch.setattr(onion_module.socket, "create_connection", check_target)
+    profile_id = manager.create_service(
+        display_name="Web application",
+        local_host="127.0.0.1",
+        local_port=8080,
+        onion_port=80,
+        port_mappings=[
+            {"onion_port": 443, "local_host": "127.0.0.1", "local_port": 8443},
+        ],
+    )
+
+    address = manager.start_service(profile_id)
+
+    command = next(item for item in tor.commands if item.startswith("ADD_ONION"))
+    assert address == ("a" * 56) + ".onion"
+    assert "Port=80,127.0.0.1:8080" in command
+    assert "Port=443,127.0.0.1:8443" in command
+    assert checked_targets == [
+        (("127.0.0.1", 8080), 2.5),
+        (("127.0.0.1", 8443), 2.5),
+    ]
+    saved = manager.services_snapshot()[0]
+    assert [item["onion_port"] for item in saved["port_mappings"]] == [80, 443]
+
+
+def test_onion_port_mappings_reject_duplicate_virtual_ports_and_non_loopback(hosting):
+    manager, _config, _tor = hosting
+
+    with pytest.raises(OnionHostingError, match="unique Onion port"):
+        manager.create_service(
+            display_name="Duplicate virtual port",
+            local_host="127.0.0.1",
+            local_port=8000,
+            onion_port=80,
+            port_mappings=[
+                {"onion_port": 80, "local_host": "127.0.0.1", "local_port": 8443},
+            ],
+        )
+
+    with pytest.raises(OnionHostingError, match="loopback"):
+        manager.create_service(
+            display_name="Unsafe target",
+            local_host="127.0.0.1",
+            local_port=8000,
+            onion_port=80,
+            port_mappings=[
+                {"onion_port": 443, "local_host": "192.168.1.10", "local_port": 8443},
+            ],
+        )
+
+
+def test_legacy_single_port_service_keeps_single_port_control_command(hosting):
+    manager, _config, tor = hosting
+    profile_id = manager.create_service(
+        display_name="Legacy-compatible site",
+        local_host="127.0.0.1",
+        local_port=9000,
+        onion_port=8080,
+    )
+
+    manager.start_service(profile_id)
+
+    command = next(item for item in tor.commands if item.startswith("ADD_ONION"))
+    assert "Port=8080,127.0.0.1:9000" in command
+    assert command.count("Port=") == 1
+
+
+def test_editing_port_mappings_preserves_the_persistent_onion_identity(hosting):
+    manager, _config, tor = hosting
+    profile_id = manager.create_service(
+        display_name="Editable website",
+        local_host="127.0.0.1",
+        local_port=8080,
+        onion_port=80,
+        port_mappings=[
+            {"onion_port": 443, "local_host": "127.0.0.1", "local_port": 8443},
+        ],
+    )
+    first_address = manager.start_service(profile_id)
+    manager.stop_service(profile_id)
+
+    manager.update_service(
+        profile_id,
+        port_mappings=[
+            {"onion_port": 9443, "local_host": "::1", "local_port": 9443},
+        ],
+    )
+    second_address = manager.start_service(profile_id)
+
+    assert second_address == first_address
+    command = next(item for item in reversed(tor.commands) if item.startswith("ADD_ONION"))
+    assert "Port=80,127.0.0.1:8080" in command
+    assert "Port=9443,[::1]:9443" in command
+    assert "Port=443,127.0.0.1:8443" not in command
