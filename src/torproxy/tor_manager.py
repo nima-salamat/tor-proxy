@@ -59,6 +59,7 @@ class TorSettings:
     shutdown_timeout_seconds: float = 5.0
     log_path: Path | None = None
     webtunnel_sni_imitation: str = ""
+    webtunnel_use_default_tls: bool = True
     bridge_source: str = "custom"
     client_use_ipv4: bool = True
     client_use_ipv6: bool = True
@@ -93,6 +94,8 @@ class TorSettings:
             normalize_sni_hostname(self.webtunnel_sni_imitation or "")
         except (TypeError, ValueError) as exc:
             raise TorManagerError(f"Invalid WebTunnel SNI imitation hostname: {exc}") from exc
+        if type(self.webtunnel_use_default_tls) is not bool:
+            raise TorManagerError("WebTunnel Go-native TLS preference must be true or false.")
         if type(self.client_use_ipv4) is not bool or type(self.client_use_ipv6) is not bool:
             raise TorManagerError("Client IPv4 and IPv6 preferences must be true or false.")
         if not self.client_use_ipv4 and not self.client_use_ipv6:
@@ -534,6 +537,15 @@ class TorManager:
                 )
             sni_imitation = normalize_sni_hostname(settings.webtunnel_sni_imitation or "")
             for bridge_transport, record in bridge_records:
+                if bridge_transport.casefold() == "webtunnel" and settings.webtunnel_use_default_tls:
+                    # The documented utls=none option selects Go crypto/tls
+                    # instead of Lyrebird's uTLS ClientHello impersonation.
+                    tokens = [
+                        token for token in record.split()
+                        if not token.casefold().startswith("utls=")
+                    ]
+                    tokens.append("utls=none")
+                    record = " ".join(tokens)
                 if bridge_transport.casefold() == "webtunnel" and sni_imitation:
                     has_explicit_sni = any(
                         token.casefold().startswith("sni-imitation=")
@@ -966,7 +978,15 @@ class TorManager:
                                 "selected Go/TLS runtime ('CurvePreferences includes unsupported curve'). "
                                 "This is a local transport-bundle compatibility error, not evidence that the "
                                 "configured WebTunnel bridges are dead. TorProxy preserved all Bridge records "
-                                "and will not remove them. " + bundle_hint + " Live Tor log details: " + diagnostic
+                                "and will not remove them. " +
+                                (
+                                    "TorProxy configured utls=none to use Go's native TLS stack; if this error "
+                                    "persists, verify that the selected Lyrebird build supports the documented "
+                                    "WebTunnel utls=none bridge option and inspect the generated torrc. "
+                                    if self.settings.webtunnel_use_default_tls else
+                                    "Enable the WebTunnel Go-native TLS compatibility option (utls=none) in "
+                                    "Settings → Bridges and restart Tor. "
+                                ) + bundle_hint + " Live Tor log details: " + diagnostic
                             )
                         if not handshake_warning_reported:
                             LOGGER.warning(

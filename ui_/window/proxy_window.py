@@ -379,6 +379,7 @@ class ProxyWindow(QWidget):
             max_circuit_dirtiness_seconds=max(10, min(86400, int(self.tor.MaxCircuitDirtiness))),
             new_circuit_period_seconds=max(10, min(86400, int(self.tor.NewCircuitPeriod))),
             webtunnel_sni_imitation=str(CONFIG["webtunnel_sni_imitation"] or ""),
+            webtunnel_use_default_tls=bool(CONFIG["webtunnel_use_default_tls"]),
         )
 
     def _register_tor_service_profile(self, profile: dict, *, pool=None):
@@ -527,6 +528,7 @@ class ProxyWindow(QWidget):
             bridges=bridges,
             bridge_source=bridge_mode,
             webtunnel_sni_imitation=str(preferences.get("webtunnel_sni_imitation") or ""),
+            webtunnel_use_default_tls=bool(preferences.get("webtunnel_use_default_tls", True)),
             max_circuit_dirtiness_seconds=int(preferences.get("max_circuit_dirtiness_seconds", 600)),
             new_circuit_period_seconds=int(preferences.get("new_circuit_period_seconds", 60)),
             startup_timeout_seconds=float(preferences.get("startup_timeout_seconds", 180)),

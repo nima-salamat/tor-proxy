@@ -485,6 +485,18 @@ class SettingWindow(QWidget):
         self.webtunnel_sni_status.setObjectName("bridgeInputStatus")
         self.webtunnel_sni_status.setWordWrap(True)
         sni_layout.addWidget(self.webtunnel_sni_status)
+
+        self.chk_webtunnel_default_tls = QCheckBox(
+            "Use Go's native TLS fingerprint (WebTunnel compatibility mode)", sni_row
+        )
+        self.chk_webtunnel_default_tls.setObjectName("webtunnelDefaultTlsPreference")
+        self.chk_webtunnel_default_tls.setChecked(bool(CONFIG["webtunnel_use_default_tls"]))
+        self.chk_webtunnel_default_tls.setToolTip(
+            "Adds utls=none to WebTunnel Bridge records. This disables uTLS ClientHello impersonation "
+            "and uses Go's native TLS fingerprint. It does not change obfs4 or Snowflake bridges."
+        )
+        self.chk_webtunnel_default_tls.toggled.connect(self.save_webtunnel_default_tls)
+        sni_layout.addWidget(self.chk_webtunnel_default_tls)
         self.bridges_page_layout.addWidget(sni_row)
 
         self.btn_bridge = QCheckBox("Use Tor bridges", self)
@@ -1472,6 +1484,27 @@ class SettingWindow(QWidget):
             self.webtunnel_sni_status.setText(
                 "SNI override disabled. Lyrebird will use each WebTunnel bridge's url= hostname."
             )
+        return True
+
+    def save_webtunnel_default_tls(self, enabled: bool):
+        """Persist the documented utls=none compatibility setting for Main Tor."""
+        value = bool(enabled)
+        try:
+            CONFIG["webtunnel_use_default_tls"] = value
+        except (TypeError, ValueError, OSError, KeyError):
+            logger.exception("Could not save the WebTunnel TLS compatibility preference.")
+            self.chk_webtunnel_default_tls.blockSignals(True)
+            self.chk_webtunnel_default_tls.setChecked(bool(CONFIG["webtunnel_use_default_tls"]))
+            self.chk_webtunnel_default_tls.blockSignals(False)
+            self.webtunnel_sni_status.setText(
+                "WebTunnel TLS preference could not be saved. The previous setting remains active."
+            )
+            return False
+        self.webtunnel_sni_status.setText(
+            "Go-native TLS mode saved (utls=none). Applies after restarting Main Tor."
+            if value else
+            "Go-native TLS compatibility mode disabled. Explicit utls= Bridge options are preserved."
+        )
         return True
 
     def bridge_state_changed(self, state):

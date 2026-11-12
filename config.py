@@ -39,6 +39,7 @@ DEFAULT_DATA: dict[str, Any] = {
     "bridge": False,
     "auto_prune_bridges": False,
     "webtunnel_sni_imitation": "",
+    "webtunnel_use_default_tls": True,
     "mode": "dark",
     "theme_preference": "system",
     "tor_port": None,
@@ -71,6 +72,7 @@ DEFAULT_DATA: dict[str, Any] = {
         "bridge_mode": "direct",
         "bridges": "",
         "webtunnel_sni_imitation": "",
+        "webtunnel_use_default_tls": True,
         "max_circuit_dirtiness_seconds": 600,
         "new_circuit_period_seconds": 60,
         "startup_timeout_seconds": 180,
@@ -141,7 +143,8 @@ class Config:
         data["global_shortcut"] = parsed_shortcut.text
         for name in ("bridge", "proxy_port_checked", "tor_port_checked", "control_port_checked",
                      "dns_port_checked", "system_proxy_auto", "verify_tor_signatures", "confirm_exit",
-                     "auto_prune_bridges", "kill_switch_enabled", "http_proxy_enabled"):
+                     "auto_prune_bridges", "kill_switch_enabled", "http_proxy_enabled",
+                      "webtunnel_use_default_tls"):
             if name in data and type(data[name]) is not bool:
                 raise ConfigError(f"{name} must be true or false.")
         ports = []
@@ -211,6 +214,8 @@ class Config:
             value = developer_settings.get(key)
             if type(value) is not int or not minimum <= value <= maximum:
                 raise ConfigError(f"Developer Tor {key} must be an integer between {minimum} and {maximum}.")
+        if type(developer_settings.get("webtunnel_use_default_tls")) is not bool:
+            raise ConfigError("Developer Tor webtunnel_use_default_tls must be true or false.")
         for key in ("client_use_ipv4", "client_use_ipv6"):
             if type(developer_settings.get(key)) is not bool:
                 raise ConfigError(f"Developer Tor {key} must be true or false.")

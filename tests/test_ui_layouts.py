@@ -1145,11 +1145,16 @@ def test_webtunnel_sni_setting_defaults_to_url_host_and_supports_custom_presets(
     bridge_source = (repository / "src/torproxy/bridges.py").read_text(encoding="utf-8")
 
     assert '"webtunnel_sni_imitation": ""' in config_source
+    assert '"webtunnel_use_default_tls": True' in config_source
+    assert "webtunnelDefaultTlsPreference" in settings_source
+    assert "def save_webtunnel_default_tls(self, enabled: bool):" in settings_source
     assert '"Use the hostname in url= (default; no override)", ""' in settings_source
     assert '"www.google.com"' in settings_source
     assert "def save_webtunnel_sni_imitation(self):" in settings_source
     assert 'webtunnel_sni_imitation=str(CONFIG["webtunnel_sni_imitation"] or "")' in runner_source
     assert "normalize_sni_hostname(settings.webtunnel_sni_imitation or \"\")" in manager_source
+    assert 'tokens.append("utls=none")' in manager_source
+    assert 'webtunnel_use_default_tls=bool(CONFIG["webtunnel_use_default_tls"])' in runner_source
     assert 'record += " sni-imitation=" + sni_imitation' in manager_source
     assert "def normalize_sni_hostname(value: str) -> str:" in bridge_source
     assert "sni-imitation=" in bridge_source

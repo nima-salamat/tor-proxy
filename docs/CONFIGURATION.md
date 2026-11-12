@@ -12,6 +12,10 @@ Runtime state and downloaded Tor bundles use per-user data/state directories. Lo
 
 Writes use a unique temporary file, restrictive permissions where supported, and atomic replacement. Malformed JSON or invalid values produce a diagnostic instead of being silently treated as valid configuration.
 
+## WebTunnel TLS compatibility
+
+`webtunnel_use_default_tls` defaults to `true` and adds the documented `utls=none` option to WebTunnel Bridge records, selecting Go's native TLS fingerprint instead of uTLS impersonation. Main Tor and Developer Tor have independent settings. It can be disabled when a specific uTLS fingerprint is intentionally required.
+
 ## Legacy keys retained
 
 | Key | Meaning | Default |

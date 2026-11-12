@@ -31,6 +31,7 @@ _DEVELOPER_SETTINGS_DEFAULTS = {
     "bridge_mode": "direct",
     "bridges": "",
     "webtunnel_sni_imitation": "",
+    "webtunnel_use_default_tls": True,
     "max_circuit_dirtiness_seconds": 600,
     "new_circuit_period_seconds": 60,
     "startup_timeout_seconds": 180,

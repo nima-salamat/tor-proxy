@@ -234,9 +234,66 @@ def test_custom_sni_override_only_targets_webtunnel_and_preserves_explicit_value
     ))
 
     bridge_lines = [line for line in manager.render_torrc().splitlines() if line.startswith("Bridge ")]
-    assert bridge_lines[0].endswith("sni-imitation=www.google.com")
-    assert bridge_lines[1].endswith("sni-imitation=custom.example")
+    assert bridge_lines[0].endswith("utls=none")
+    assert "sni-imitation=www.google.com" in bridge_lines[0]
+    assert bridge_lines[1].endswith("utls=none")
+    assert "sni-imitation=custom.example" in bridge_lines[1]
     assert "sni-imitation=" not in bridge_lines[2]
+
+
+def test_webtunnel_default_tls_mode_adds_utls_none_and_overrides_custom_fingerprint(tmp_path):
+    executable = tmp_path / "tor" / "tor.exe"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("fake tor", encoding="utf-8")
+    transport_dir = executable.parent / "pluggable_transports"
+    transport_dir.mkdir()
+    (transport_dir / "lyrebird.exe").write_text("fake transport", encoding="utf-8")
+
+    web_fp = "A1B2C3D4E5F60718293A4B5C6D7E8F9012345678"
+    obfs_fp = "B1B2C3D4E5F60718293A4B5C6D7E8F9012345678"
+    manager = TorManager(TorSettings(
+        executable=executable,
+        bridges_enabled=True,
+        bridges="\n".join((
+            f"webtunnel 192.0.2.10:443 {web_fp} url=https://bridge.example/ "
+            "ver=0.0.1 utls=chrome",
+            f"obfs4 192.0.2.12:443 {obfs_fp} cert=abc",
+        )),
+        data_directory=tmp_path / "state",
+        webtunnel_use_default_tls=True,
+        webtunnel_sni_imitation="www.example.com",
+    ))
+
+    bridge_lines = [line for line in manager.render_torrc().splitlines() if line.startswith("Bridge ")]
+    assert "utls=none" in bridge_lines[0]
+    assert "utls=chrome" not in bridge_lines[0]
+    assert "sni-imitation=www.example.com" in bridge_lines[0]
+    assert "utls=" not in bridge_lines[1]
+
+
+def test_webtunnel_default_tls_mode_can_be_disabled_to_preserve_explicit_utls(tmp_path):
+    executable = tmp_path / "tor" / "tor.exe"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("fake tor", encoding="utf-8")
+    transport_dir = executable.parent / "pluggable_transports"
+    transport_dir.mkdir()
+    (transport_dir / "lyrebird.exe").write_text("fake transport", encoding="utf-8")
+
+    fingerprint = "A1B2C3D4E5F60718293A4B5C6D7E8F9012345678"
+    manager = TorManager(TorSettings(
+        executable=executable,
+        bridges_enabled=True,
+        bridges=(
+            f"webtunnel 192.0.2.10:443 {fingerprint} "
+            "url=https://bridge.example/ ver=0.0.1 utls=chrome"
+        ),
+        data_directory=tmp_path / "state",
+        webtunnel_use_default_tls=False,
+    ))
+
+    bridge_lines = [line for line in manager.render_torrc().splitlines() if line.startswith("Bridge ")]
+    assert "utls=chrome" in bridge_lines[0]
+    assert "utls=none" not in bridge_lines[0]
 
 
 def test_bridge_torrc_infers_missing_webtunnel_label_from_url_and_ver(tmp_path):

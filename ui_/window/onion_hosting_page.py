@@ -248,6 +248,26 @@ class DeveloperTorSettingsDialog(_FramelessDialog):
         sni_note.setWordWrap(True)
         content_layout.addWidget(sni_note)
 
+        self.webtunnel_default_tls = QCheckBox(
+            "Use Go's native TLS fingerprint (WebTunnel compatibility mode)", content
+        )
+        self.webtunnel_default_tls.setObjectName("developerWebtunnelDefaultTls")
+        self.webtunnel_default_tls.setChecked(bool(values.get("webtunnel_use_default_tls", True)))
+        self.webtunnel_default_tls.setToolTip(
+            "Adds utls=none to WebTunnel Bridge records, replacing uTLS ClientHello impersonation "
+            "with Go's native TLS fingerprint. Recommended for Lyrebird unsupported-curve errors."
+        )
+        content_layout.addWidget(self.webtunnel_default_tls)
+        webtunnel_tls_note = QLabel(
+            "Compatibility workaround for Lyrebird's unsupported TLS curve error. Only WebTunnel records "
+            "are changed; obfs4, Snowflake and vanilla bridges are unaffected. SNI is retained. "
+            "Applies after restarting Developer Tor.",
+            content,
+        )
+        webtunnel_tls_note.setObjectName("dialogHint")
+        webtunnel_tls_note.setWordWrap(True)
+        content_layout.addWidget(webtunnel_tls_note)
+
         advanced_title = QLabel("Advanced network", content)
         advanced_title.setObjectName("shortcutCategory")
         content_layout.addWidget(advanced_title)
@@ -410,6 +430,7 @@ class DeveloperTorSettingsDialog(_FramelessDialog):
             "bridge_mode": mode,
             "bridges": "\n".join(parsed.records) if parsed and parsed.records else raw_bridges.strip(),
             "webtunnel_sni_imitation": sni,
+            "webtunnel_use_default_tls": bool(self.webtunnel_default_tls.isChecked()),
             "max_circuit_dirtiness_seconds": int(self.max_dirtiness.value()),
             "new_circuit_period_seconds": int(self.circuit_period.value()),
             "startup_timeout_seconds": int(self.startup_timeout.value()),

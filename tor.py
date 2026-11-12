@@ -280,6 +280,7 @@ class TorRunner(QObject):
             bridges_enabled=bool(self.bridge),
             bridges=str(self.bridges or ""),
             webtunnel_sni_imitation=str(CONFIG["webtunnel_sni_imitation"] or ""),
+            webtunnel_use_default_tls=bool(CONFIG["webtunnel_use_default_tls"]),
             max_circuit_dirtiness_seconds=max(10, min(86400, int(self.MaxCircuitDirtiness))),
             new_circuit_period_seconds=max(10, min(86400, int(self.NewCircuitPeriod))),
         ))

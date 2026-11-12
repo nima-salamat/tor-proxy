@@ -42,6 +42,21 @@ def test_developer_tor_defaults_are_isolated_and_direct():
     assert settings["client_use_ipv4"] is True
     assert settings["client_use_ipv6"] is True
     assert settings["upstream_proxy_type"] == "none"
+    assert settings["webtunnel_use_default_tls"] is True
+
+
+@pytest.mark.parametrize(
+    ("scope", "invalid_value"),
+    [("main", "yes"), ("developer", 1)],
+)
+def test_config_rejects_non_boolean_webtunnel_tls_mode(scope, invalid_value):
+    data = deepcopy(DEFAULT_DATA)
+    if scope == "main":
+        data["webtunnel_use_default_tls"] = invalid_value
+    else:
+        data["developer_tor_settings"]["webtunnel_use_default_tls"] = invalid_value
+    with pytest.raises(ConfigError, match="webtunnel_use_default_tls"):
+        Config._validate(data)
 
 
 def test_config_accepts_valid_custom_developer_bridges():
@@ -124,6 +139,33 @@ def test_torrc_renders_isolated_bridge_ip_family_and_upstream_proxy_options(tmp_
     assert 'Socks5Proxy "127.0.0.1:1080"' in torrc
     assert 'Socks5ProxyUsername "proxy-user"' in torrc
     assert 'Socks5ProxyPassword "proxy-password"' in torrc
+
+
+def test_developer_tor_webtunnel_adds_utls_none_by_default(tmp_path):
+    executable = tmp_path / "tor" / "tor.exe"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("fake tor", encoding="utf-8")
+    transport_dir = executable.parent / "pluggable_transports"
+    transport_dir.mkdir()
+    (transport_dir / "lyrebird.exe").write_text("fake transport", encoding="utf-8")
+    fingerprint = "A1B2C3D4E5F60718293A4B5C6D7E8F9012345678"
+
+    torrc = TorManager(TorSettings(
+        executable=executable,
+        socks_port=0,
+        control_port=19053,
+        bridges_enabled=True,
+        bridges=(
+            f"webtunnel 192.0.2.10:443 {fingerprint} "
+            "url=https://bridge.example/path ver=0.0.1"
+        ),
+        data_directory=tmp_path / "developer-tor",
+        webtunnel_use_default_tls=True,
+    )).render_torrc()
+
+    bridge_line = next(line for line in torrc.splitlines() if line.startswith("Bridge "))
+    assert "utls=none" in bridge_line
+    assert "url=https://bridge.example/path" in bridge_line
 
 
 def test_tor_settings_require_complete_proxy_authentication(tmp_path):
