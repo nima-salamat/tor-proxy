@@ -2977,19 +2977,16 @@ def test_home_endpoint_cards_have_clear_copy_targets_and_consistent_exit_ip_summ
     assert 'QFrame#homeEndpointCard, QFrame#homeExitIpCard' in source
     assert 'QFrame#systemProxyControls' in source
     assert 'QFrame#homeMetricsPanel' in source
-    assert 'QLabel#connectionHint' in source
     assert 'connection_hero_layout = QVBoxLayout()' in source
     assert 'connect_row.addLayout(connection_hero_layout)' in source
+    assert 'self.home_layout.addLayout(connect_row, 1)' in source
+    assert 'def _resize_home_connect_button(self, width: int | None = None)' in source
+    assert 'diameter = min(420, available_width, available_height)' in source
+    assert 'connection_hint' not in source
+    assert 'connectionHint' not in source
     assert 'connectionHero' not in source
     assert 'QLabel("BOOTSTRAP", metrics_panel)' in source
     assert 'QLabel#homeMetricCaption' in source
-    assert '"connecting": "Connecting to Tor…\\nProxy becomes available after bootstrap."' in source
-    assert '"connected": "Tor connection verified.\\nYour proxy listeners are ready."' in source
-    assert 'self.connection_hint.setWordWrap(True)' in source
-    assert 'QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed' in source
-    assert 'self.connection_hint.setMinimumHeight(22)' in source
-    assert 'hint.setProperty("connectionState", state)' in source
-    assert 'hint.updateGeometry()' in source
     assert 'left_metrics_layout.setAlignment(' in source
     assert 'Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter' in source
     assert 'right_metrics_layout.setAlignment(' in source
@@ -3081,12 +3078,6 @@ def test_home_page_uses_adaptive_compact_layout_without_scrollbars():
     assert "height < 530" in source
     assert "height < 570" in source
     assert "height_band = (" in source
-    assert 'margins, spacing, diameter = (18, 8, 18, 8), 7, 128' in source
-    assert 'margins, spacing, diameter = (18, 10, 18, 10), 8, 148' in source
-    assert 'self._home_connection_hero_layout.setSpacing(' in source
-    assert '16 if very_compact else 20 if compact else 24' in source
-    assert "self.connect_btn.set_diameter(diameter)" in source
-    assert "self._home_connection_hero_layout.setSpacing(" in source
     assert 'self._home_metrics_panel.setFixedHeight(' in source
     assert '50 if stacked_metrics else' in source
     assert 'QFrame#homeMetricsPanel' in source
@@ -3094,6 +3085,7 @@ def test_home_page_uses_adaptive_compact_layout_without_scrollbars():
     assert 'font-size: 9px; font-weight: 600' in source
     assert 'QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed' in source
     assert 'self.btn_status.setWordWrap(False)' in source
+    assert 'self.home_layout.addLayout(connect_row, 1)' in source
     assert 'self.btn_status.setMaximumWidth(900)' in source
     assert 'background: transparent; border: none; border-radius: 0;' in source
     assert "self._home_service_controls_layout.setDirection(" in source
@@ -3110,7 +3102,7 @@ def test_home_page_uses_adaptive_compact_layout_without_scrollbars():
     assert "self.tor_ip_label.setMinimumWidth(140)" not in source
     assert "self.btn_status.setWordWrap(False)" in source
     assert "def set_diameter(self, diameter: int) -> None:" in pulse
-    assert "diameter = max(128, min(264, int(diameter)))" in pulse
+    assert "diameter = max(96, min(420, int(diameter)))" in pulse
     assert "scale = min(self.width(), self.height()) / 264.0" in pulse
 
 
@@ -3124,8 +3116,9 @@ def test_pulse_button_can_shrink_without_losing_its_animation_geometry(qt_app):
         assert button.size().width() == 144
         assert button.size().height() == 144
         assert button.diameter == 144
-        button.set_diameter(400)
-        assert button.diameter == 264
+        assert button.diameter == 420
+        button.set_diameter(70)
+        assert button.diameter == 96
     finally:
         button.close()
         button.deleteLater()
@@ -3140,7 +3133,7 @@ def test_home_keeps_status_at_top_with_a_minimum_gap_and_polishes_bottom_actions
     status_index = source.index(
         'self.home_layout.addWidget(self.btn_status, 0, Qt.AlignmentFlag.AlignHCenter)'
     )
-    connect_row_index = source.index("self.home_layout.addLayout(connect_row)", status_index)
+    connect_row_index = source.index("self.home_layout.addLayout(connect_row, 1)", status_index)
     metrics_index = source.index("self.home_layout.addWidget(metrics_panel)", connect_row_index)
     assert status_index < connect_row_index < metrics_index
     status_setup = source[source.index('self.btn_status = QLabel'):status_index]
@@ -3149,8 +3142,6 @@ def test_home_keeps_status_at_top_with_a_minimum_gap_and_polishes_bottom_actions
 
     assert 'margins, spacing, diameter = (18, 8, 18, 8), 7, 128' in source
     assert 'margins, spacing, diameter = (18, 10, 18, 10), 8, 148' in source
-    assert 'margins, spacing, diameter = (20, 12, 20, 12), 9, 164' in source
-    assert 'margins, spacing, diameter = (22, 14, 22, 14), 10, 182' in source
 
     assert 'utility_row.addWidget(self.btn_change_identity, 1)' in source
     assert 'utility_row.addWidget(self.btn_log, 1)' in source
