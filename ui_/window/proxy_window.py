@@ -503,24 +503,30 @@ class ProxyWindow(QWidget):
         horizontal = QBoxLayout.Direction.LeftToRight
         vertical = QBoxLayout.Direction.TopToBottom
 
+        # Preserve horizontal breathing room; reclaim vertical pixels first.
+        # This lets the Connect control stay substantially larger in short windows.
         if height < 490:
-            margins, spacing, diameter = (8, 5, 8, 5), 4, 128
+            margins, spacing, diameter = (20, 1, 20, 1), 2, 172
         elif height < 530:
-            margins, spacing, diameter = (9, 6, 9, 6), 5, 140
+            margins, spacing, diameter = (20, 2, 20, 2), 3, 188
         elif height < 570:
-            margins, spacing, diameter = (10, 7, 10, 7), 6, 156
+            margins, spacing, diameter = (20, 4, 20, 4), 4, 204
         elif height < 630:
-            margins, spacing, diameter = (12, 8, 12, 8), 7, 180
+            margins, spacing, diameter = (20, 7, 20, 7), 6, 220
         elif height < 700:
-            margins, spacing, diameter = (16, 10, 16, 10), 8, 204
+            margins, spacing, diameter = (20, 10, 20, 10), 8, 240
         else:
-            margins, spacing, diameter = (20, 14, 20, 12), 10, 228
+            margins, spacing, diameter = (20, 14, 20, 12), 10, 256
 
         self.home_layout.setContentsMargins(*margins)
         self.home_layout.setSpacing(spacing)
-        self._home_connection_hero_layout.setSpacing(4 if compact else 8)
+        self._home_connection_hero_layout.setSpacing(
+            1 if very_compact else 3 if compact else 8
+        )
         self.connect_btn.set_diameter(diameter)
-        self.connection_hint.setMinimumHeight(20 if compact else 28)
+        self.connection_hint.setMinimumHeight(
+            16 if very_compact else 20 if compact else 28
+        )
         self.connection_hint.setMaximumWidth(400 if compact else 440)
         self.btn_status.setProperty("compact", "true" if compact else "false")
         self.connection_hint.setProperty("compact", "true" if compact else "false")
