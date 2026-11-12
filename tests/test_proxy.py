@@ -77,7 +77,7 @@ def test_proxy_server_allows_wildcard_bind_only_with_explicit_lan_opt_in():
 
 @pytest.mark.parametrize("address", ["192.0.2.1", "::"])
 def test_proxy_server_rejects_non_loopback_listeners(address):
-    with pytest.raises(ValueError, match="only bind to loopback"):
+    with pytest.raises(ValueError, match="only to 0.0.0.0"):
         proxy_module.ThreadedHTTPServer((address, 0), proxy_module.ProxyHandler, 9050)
 
 
