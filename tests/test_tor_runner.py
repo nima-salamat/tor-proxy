@@ -407,6 +407,32 @@ def test_http_proxy_keeps_service_reference_when_server_thread_does_not_stop():
     assert runner.thread is not None
 
 
+def test_http_proxy_bind_preference_restarts_listener_between_loopback_and_lan(monkeypatch):
+    monkeypatch.setattr(
+        tor,
+        "CONFIG",
+        {
+            "http_proxy_enabled": True,
+            "http_proxy_bind_all_interfaces": False,
+        },
+    )
+    runner = tor.Runner(0, 19480, app_window=None)
+    runner._started = True
+    runner.http_enabled = True
+    try:
+        message = runner.set_http_bind_all_interfaces(True)
+        assert runner.server.server_address[0] == "0.0.0.0"
+        assert "no authentication" in message
+        assert runner.is_running
+
+        message = runner.set_http_bind_all_interfaces(False)
+        assert runner.server.server_address[0] == "127.0.0.1"
+        assert "restricted to this device" in message
+        assert runner.is_running
+    finally:
+        runner.stop()
+
+
 def _ready_fake_backend(port: int):
     return SimpleNamespace(
         state="ready",
