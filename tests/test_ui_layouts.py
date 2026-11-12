@@ -122,8 +122,10 @@ def test_settings_navigation_icons_follow_the_selected_page_and_theme(monkeypatc
         page_setting=_PageStack(),
         settings_nav_buttons=buttons,
         settings_nav_icon_names=(
-            "fa6s.sliders", "fa6s.link", "fa6s.network-wired", "fa6s.shield-halved"
+            "fa6s.sliders", "fa6s.link", "fa6s.network-wired", "fa6s.server"
         ),
+        BLOCKED_HOSTS_PAGE_INDEX=4,
+        EXCLUDED_HOSTS_PAGE_INDEX=5,
     )
     fake._sync_settings_nav_icons = MethodType(
         settings.SettingWindow._sync_settings_nav_icons, fake
