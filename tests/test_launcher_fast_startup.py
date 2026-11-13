@@ -55,7 +55,7 @@ def test_startup_stylesheet_is_reused_by_window_theme_setup():
 def test_tor_connection_only_dependencies_are_imported_on_demand():
     repository = Path(__file__).resolve().parents[1]
     source = (repository / "tor.py").read_text(encoding="utf-8")
-    module_imports = source.split("class TorRunner(", 1)[0]
+    module_imports = source.split('logger = logging.getLogger(__name__)', 1)[0]
 
     for optional_module in (
         "torproxy.bridge_distribution",

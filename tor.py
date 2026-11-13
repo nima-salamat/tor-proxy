@@ -21,6 +21,22 @@ from utils import resource_path
 logger = logging.getLogger(__name__)
 
 
+def probe_tor_socks(*args, **kwargs):
+    """Load the health-probe implementation only when a Tor pool is checking readiness."""
+    from torproxy.health import probe_tor_socks as implementation
+
+    return implementation(*args, **kwargs)
+
+
+def read_socks_gateway_credentials():
+    """Load separate LAN SOCKS credentials only when that optional listener is requested."""
+    from torproxy.socks_gateway_credentials import (
+        read_socks_gateway_credentials as implementation,
+    )
+
+    return implementation()
+
+
 def _bundle_root_for_path(path: Path, managed_root: Path) -> Path | None:
     """Return the managed bundle directory containing a path, if any."""
     try:
@@ -241,8 +257,6 @@ class TorRunner(QObject):
         if not bool(CONFIG.get("tor_socks_bind_all_interfaces", False)):
             return ("127.0.0.1", "", "")
         try:
-            from torproxy.socks_gateway_credentials import read_socks_gateway_credentials
-
             credentials = read_socks_gateway_credentials()
         except Exception as exc:
             raise TorManagerError(f"Could not load Main SOCKS gateway credentials: {exc}") from exc
@@ -645,7 +659,7 @@ class TorRunner(QObject):
 
     def _probe_ready_backends(self) -> bool:
         """Probe each bootstrapped worker through its own SOCKS listener in parallel."""
-        from torproxy.health import TorProbeResult, probe_tor_socks
+        from torproxy.health import TorProbeResult
         from torproxy.network_quality import NetworkQualityWindow
 
         candidates = self._process_ready_managers()
