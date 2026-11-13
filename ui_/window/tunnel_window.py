@@ -51,6 +51,11 @@ class TunnelManagerWindow(QWidget):
         self._latest_worker = None
         self._latest_info: dict | None = None
         self._upstream_unpinned_version: str | None = None
+        self._versions_populated = False
+        self._integrity_check_in_progress = False
+        self._integrity_check_version: str | None = None
+        self._integrity_check_result: bool | None = None
+        self._integrity_check_worker = None
         self._selected_release_asset: dict | None = None
         self._style_icon_color = "#dce8f4" if CONFIG.get("mode", "dark") == "dark" else "#334155"
 
@@ -208,12 +213,29 @@ class TunnelManagerWindow(QWidget):
         root.addLayout(content, 1)
 
         self.progress_changed.connect(self._on_progress)
-        self._populate_versions()
         self._apply_local_styles(CONFIG.get("mode", "dark"))
         self._state_refresh_timer = QTimer(self)
-        self._state_refresh_timer.setInterval(1000)
+        self._state_refresh_timer.setInterval(2500)
         self._state_refresh_timer.timeout.connect(self._refresh_state)
-        self._state_refresh_timer.start()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if not self._state_refresh_timer.isActive():
+            self._state_refresh_timer.start()
+        if not self._versions_populated:
+            QTimer.singleShot(0, self._populate_versions_when_visible)
+        else:
+            self._refresh_state()
+
+    def hideEvent(self, event) -> None:
+        self._state_refresh_timer.stop()
+        super().hideEvent(event)
+
+    def _populate_versions_when_visible(self) -> None:
+        if not self.isVisible() or self._versions_populated:
+            return
+        self._versions_populated = True
+        self._populate_versions()
 
     def _populate_versions(self) -> None:
         if self.manager is None:
@@ -343,14 +365,29 @@ class TunnelManagerWindow(QWidget):
             self.btn_test_connection.setEnabled(False)
             self.btn_start_stop.setIcon(qta.icon("fa6s.triangle-exclamation"))
             return
+
         selected_version = self._selected_version()
-        try:
-            selected_installed = self.manager.is_installed()
-        except SystemTunnelError:
-            selected_installed = False
-        # The first install-state check may import the verified sing-box
-        # archive shipped in With-Tor packages; refresh the version afterward.
-        installed_version = self.manager.installed_version
+        if self._integrity_check_version != selected_version:
+            self._integrity_check_version = selected_version
+            self._integrity_check_result = None
+        if self._integrity_check_result is None:
+            self.installed_state.setText("Verifying the local sing-box archive and engine files…")
+            self.btn_install.setEnabled(False)
+            self.btn_start_stop.setEnabled(False)
+            self.btn_test_connection.setEnabled(False)
+            self.versions_list.setEnabled(False)
+            if not self._integrity_check_in_progress:
+                self._integrity_check_in_progress = True
+                self._integrity_check_worker = Worker(self.manager.is_installed)
+                self._integrity_check_worker.signals.finished.connect(
+                    self._on_integrity_check_finished
+                )
+                self._integrity_check_worker.signals.error.connect(
+                    self._on_integrity_check_failed
+                )
+                self._pool.start(self._integrity_check_worker)
+            return
+        selected_installed = bool(self._integrity_check_result)
 
         if status.get("active"):
             self.installed_state.setText(
@@ -424,6 +461,22 @@ class TunnelManagerWindow(QWidget):
             action_icon = "fa6s.play"
         self.btn_start_stop.setIcon(qta.icon(action_icon, color=self._style_icon_color))
         self.btn_test_connection.setIcon(qta.icon("fa6s.flask", color=self._style_icon_color))
+
+    def _on_integrity_check_finished(self, result: str) -> None:
+        self._integrity_check_in_progress = False
+        self._integrity_check_worker = None
+        self._integrity_check_result = str(result).strip().lower() == "true"
+        if self.isVisible():
+            self._refresh_state()
+
+    def _on_integrity_check_failed(self, error: str) -> None:
+        self._integrity_check_in_progress = False
+        self._integrity_check_worker = None
+        self._integrity_check_result = False
+        self.status.setText(f"Could not verify the local sing-box installation: {error}")
+        logger.warning("Background sing-box integrity check failed: %s", error)
+        if self.isVisible():
+            self._refresh_state()
 
     def _resolve_network_route(self, purpose: str) -> tuple[str | None, bool] | None:
         """Prefer the ready Tor SOCKS listener; direct bootstrap always needs consent."""
@@ -641,6 +694,9 @@ class TunnelManagerWindow(QWidget):
 
     def _on_operation_finished(self, result) -> None:
         operation = self._operation
+        if operation == "install":
+            self._integrity_check_version = None
+            self._integrity_check_result = None
         self._finish_operation()
         if operation == "check-latest":
             self._apply_latest_result(result)
@@ -654,6 +710,9 @@ class TunnelManagerWindow(QWidget):
     def _on_operation_cancelled(self, reason: str) -> None:
         """Restore the live tunnel state without presenting a declined UAC prompt as an error."""
         operation = self._operation
+        if operation == "install":
+            self._integrity_check_version = None
+            self._integrity_check_result = None
         self._finish_operation()
         messages = {
             "start": "Start cancelled · administrator approval was not granted; the tunnel was not started.",
@@ -672,6 +731,9 @@ class TunnelManagerWindow(QWidget):
 
     def _on_operation_failed(self, error: str) -> None:
         operation = self._operation
+        if operation == "install":
+            self._integrity_check_version = None
+            self._integrity_check_result = None
         self._finish_operation()
         detail = str(error or "Unknown system tunnel error.")
         self.status.setText(f"{operation.title()} failed: {detail}")
