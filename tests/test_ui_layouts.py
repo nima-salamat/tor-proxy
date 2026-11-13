@@ -209,6 +209,8 @@ def test_settings_and_main_window_construct_without_duplicate_layout_warning(qt_
         assert window.settingWidget is None
         window._show_setting()
         assert window.stack.currentWidget() is window.settingWidget
+        assert window.stack.currentIndex() == ui.Window.PAGE_SETTINGS
+        assert window.stack.count() == ui.Window.PAGE_DEVELOPER_TOR + 1
         assert window.settingWidget.block_hosts_page is None
         assert window.settingWidget.exclude_hosts_page is None
         assert window.settingWidget.page_setting.widget(4).objectName() == "deferredBlockedHostsPage"
@@ -735,6 +737,9 @@ def test_navigation_labels_frameless_pages_and_custom_shortcuts_dialog():
     assert "page_area" not in ui_source
     assert "self.main_layout.addWidget(self.stack, 1)" in ui_source
     assert "QStackedWidget#pageStack {{ border: none; outline: none;" in ui_source
+    assert ".replaceWidget(" not in ui_source
+    assert "self.stack.removeWidget(placeholder)" in ui_source
+    assert "self.stack.insertWidget(index, page)" in ui_source
     assert "from ui_.window.shortcuts_window import ShortcutsWindow" in ui_source
     assert "PAGE_HELP = 4" in ui_source
     assert "self._ensure_page_created(index)" in ui_source
