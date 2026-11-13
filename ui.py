@@ -1,3 +1,4 @@
+from collections import deque
 from contextlib import contextmanager
 import ctypes
 import time
@@ -46,14 +47,7 @@ from torproxy.hotkeys import HotkeyManager, parse_hotkey
 from ui_.worker.worker import Worker
 from ui_.window.proxy_window import ProxyWindow
 from ui_.window.custom_titlebar import CustomTitleBar
-from ui_.window.setting_window import SettingWindow
-from ui_.window.updater_window import UpdaterWindow
-from ui_.window.tunnel_window import TunnelManagerWindow
 from ui_.window.dialogs import QMessageBox, ExitConfirmDialog
-from ui_.window.shortcuts_window import ShortcutsWindow
-from ui_.window.onion_hosting_page import OnionHostingPage
-from ui_.window.statistics_window import StatisticsWindow
-from ui_.window.tor_services_page import TorServicesPage
 logger = logging.getLogger(__name__)
 
 _THEME_STYLESHEET_CACHE = {}
@@ -289,6 +283,15 @@ class HoverIconButton(QPushButton):
 
 
 class Window(QMainWindow):
+    PAGE_HOME = 0
+    PAGE_SETTINGS = 1
+    PAGE_BUNDLES = 2
+    PAGE_SYSTEM_TUNNEL = 3
+    PAGE_HELP = 4
+    PAGE_STATISTICS = 5
+    PAGE_CUSTOM_TOR = 6
+    PAGE_DEVELOPER_TOR = 7
+
     toggle_visibility_signal = Signal()
     hotkey_error_signal = Signal(str)
     def __init__(self):
@@ -304,7 +307,9 @@ class Window(QMainWindow):
         self.resize(1080, 720)
         self.setMinimumSize(780, 560)
 
-        # Existing feature pages remain the authoritative widgets and controllers.
+        # Home is the only feature page required for the first frame. Lightweight
+        # placeholders reserve stable indices while page imports and heavyweight
+        # widget/service work are deferred until the user first opens each page.
         self.stack = QStackedWidget()
         self.stack.setObjectName("pageStack")
         self.stack.setFrameShape(QFrame.Shape.NoFrame)
@@ -319,24 +324,23 @@ class Window(QMainWindow):
         self._native_max_button_hovered = False
         self.proxyWidget = ProxyWindow(self)
         self.stack.addWidget(self.proxyWidget)
-        self.settingWidget = SettingWindow(self)
-        self.stack.addWidget(self.settingWidget)
-        # Preserve the established controller attributes while hosting both
-        # editors inside the Settings page stack.
-        self.block_host_window = self.settingWidget.block_hosts_page
-        self.exclude_host_window = self.settingWidget.exclude_hosts_page
-        self.updater_window = UpdaterWindow(self)
-        self.stack.addWidget(self.updater_window)
-        self.tunnel_window = TunnelManagerWindow(self)
-        self.stack.addWidget(self.tunnel_window)
-        self.shortcutsWidget = ShortcutsWindow(self)
-        self.stack.addWidget(self.shortcutsWidget)
-        self.statisticsWidget = StatisticsWindow(self.proxyWidget, self)
-        self.stack.addWidget(self.statisticsWidget)
-        self.customTorWidget = TorServicesPage(self, app_window=self, management_only=True)
-        self.stack.addWidget(self.customTorWidget)
-        self.developerTorWidget = OnionHostingPage(self.proxyWidget, self)
-        self.stack.addWidget(self.developerTorWidget)
+        self._page_placeholders = {}
+        for page_index in range(self.PAGE_SETTINGS, self.PAGE_DEVELOPER_TOR + 1):
+            placeholder = QWidget(self.stack)
+            placeholder.setObjectName("deferredPagePlaceholder")
+            self.stack.addWidget(placeholder)
+            self._page_placeholders[page_index] = placeholder
+
+        self.settingWidget = None
+        self.block_host_window = None
+        self.exclude_host_window = None
+        self.updater_window = None
+        self.tunnel_window = None
+        self.shortcutsWidget = None
+        self.statisticsWidget = None
+        self.customTorWidget = None
+        self.developerTorWidget = None
+        self._traffic_session_state = self._create_traffic_session_state()
 
         if IS_WINDOWS:
             self.title_bar = CustomTitleBar(self)
@@ -348,8 +352,7 @@ class Window(QMainWindow):
         # Settings, or the other stacked pages.
         self.main_layout.addWidget(self.stack, 1)
         # Select the first page after the stack has real geometry in the root layout.
-        self._show_page(0)
-        self._apply_shell_styles()
+        self._show_page(self.PAGE_HOME)
 
         self._state_timer = QTimer(self)
         self._state_timer.setInterval(1000)
@@ -367,9 +370,8 @@ class Window(QMainWindow):
         except (AttributeError, RuntimeError):
             self._system_theme_hints = None
             logger.debug("Live system theme notifications are unavailable.", exc_info=True)
-        # Warm the alternate look while the top-level window is still hidden.
-        # This moves lazy QSS parsing and child-widget repolishing out of the first click.
-        self._prewarm_theme_stylesheets()
+        # Cache stylesheet strings only. Reapplying alternate QSS to the hidden
+        # widget tree would repolish every descendant before the first frame.
 
         self._exit_authorized = False
         self._exit_request_pending = False
@@ -470,6 +472,97 @@ class Window(QMainWindow):
         # Create the HWND while hidden and advertise the native sizing/maximize
         # capabilities before the first frame is shown to Windows.
         self._enable_native_snap_support()
+
+    def _create_traffic_session_state(self):
+        """Capture the initial traffic-counter baseline for this application run."""
+        started_at = time.monotonic()
+        try:
+            directions = self.proxyWidget.traffic_direction_snapshot()
+        except Exception:
+            directions = {"upload": 0, "download": 0}
+            logger.debug("Could not read initial traffic counters.", exc_info=True)
+        return {
+            "started_at": started_at,
+            "last_sample_at": started_at,
+            "last_directions": dict(directions),
+            "session_upload": 0,
+            "session_download": 0,
+            "current_rate": 0.0,
+            "peak_rate": 0.0,
+            "samples": deque([(started_at, 0, 0, 0, 0.0)], maxlen=3600),
+        }
+
+    def _sample_traffic_session(self):
+        """Sample cumulative counters even while Statistics is not open."""
+        state = getattr(self, "_traffic_session_state", None)
+        proxy_widget = getattr(self, "proxyWidget", None)
+        if state is None or proxy_widget is None:
+            return
+        timestamp = time.monotonic()
+        elapsed = timestamp - float(state["last_sample_at"])
+        if elapsed < 0.75:
+            return
+        try:
+            directions = proxy_widget.traffic_direction_snapshot()
+        except Exception:
+            logger.debug("Could not sample traffic counters.", exc_info=True)
+            return
+        previous = state["last_directions"]
+        upload_delta = max(0, int(directions.get("upload", 0)) - int(previous.get("upload", 0)))
+        download_delta = max(0, int(directions.get("download", 0)) - int(previous.get("download", 0)))
+        transfer_delta = upload_delta + download_delta
+        rate = transfer_delta / max(0.001, elapsed)
+        state["session_upload"] += upload_delta
+        state["session_download"] += download_delta
+        state["current_rate"] = rate
+        state["peak_rate"] = max(float(state["peak_rate"]), rate)
+        state["samples"].append((timestamp, transfer_delta, upload_delta, download_delta, rate))
+        state["last_sample_at"] = timestamp
+        state["last_directions"] = dict(directions)
+
+    def _ensure_page_created(self, index):
+        """Create a feature page only when navigation first requests it."""
+        if index not in self._page_placeholders:
+            return self.stack.widget(index) if 0 <= index < self.stack.count() else None
+
+        if index == self.PAGE_SETTINGS:
+            from ui_.window.setting_window import SettingWindow
+            page = SettingWindow(self)
+            self.settingWidget = page
+            self.block_host_window = page.block_hosts_page
+            self.exclude_host_window = page.exclude_hosts_page
+        elif index == self.PAGE_BUNDLES:
+            from ui_.window.updater_window import UpdaterWindow
+            page = UpdaterWindow(self)
+            self.updater_window = page
+        elif index == self.PAGE_SYSTEM_TUNNEL:
+            from ui_.window.tunnel_window import TunnelManagerWindow
+            page = TunnelManagerWindow(self)
+            self.tunnel_window = page
+        elif index == self.PAGE_HELP:
+            from ui_.window.shortcuts_window import ShortcutsWindow
+            page = ShortcutsWindow(self)
+            self.shortcutsWidget = page
+        elif index == self.PAGE_STATISTICS:
+            from ui_.window.statistics_window import StatisticsWindow
+            page = StatisticsWindow(self.proxyWidget, self)
+            self.statisticsWidget = page
+        elif index == self.PAGE_CUSTOM_TOR:
+            from ui_.window.tor_services_page import TorServicesPage
+            page = TorServicesPage(self, app_window=self, management_only=True)
+            self.customTorWidget = page
+        elif index == self.PAGE_DEVELOPER_TOR:
+            from ui_.window.onion_hosting_page import OnionHostingPage
+            page = OnionHostingPage(self.proxyWidget, self)
+            self.developerTorWidget = page
+        else:
+            return self.stack.widget(index)
+
+        placeholder = self.stack.replaceWidget(index, page)
+        self._page_placeholders.pop(index, None)
+        if placeholder is not None:
+            placeholder.deleteLater()
+        return page
 
     def _create_window_system_menu(self):
         """Create the app-themed equivalent of the Windows caption system menu."""
@@ -1373,14 +1466,14 @@ class Window(QMainWindow):
 
         actions = [
             ("Home", "Home", "Ctrl+H", "fa6s.house", self._show_home, self.stack.indexOf(self.proxyWidget)),
-            ("Settings", "Settings", "Ctrl+S", "fa6s.gear", self._show_setting, self.stack.indexOf(self.settingWidget)),
+            ("Settings", "Settings", "Ctrl+S", "fa6s.gear", self._show_setting, self.PAGE_SETTINGS),
             (
                 "Developer Tor",
                 "Host Onion Services with an isolated Tor runtime",
                 "Ctrl+Alt+D",
                 "fa6s.code",
                 self._show_developer_tor,
-                self.stack.indexOf(self.developerTorWidget),
+                self.PAGE_DEVELOPER_TOR,
             ),
             (
                 "Custom Tor",
@@ -1388,7 +1481,7 @@ class Window(QMainWindow):
                 "Ctrl+Alt+T",
                 "fa6s.server",
                 self._show_custom_tor,
-                self.stack.indexOf(self.customTorWidget),
+                self.PAGE_CUSTOM_TOR,
             ),
             (
                 "Help",
@@ -1396,7 +1489,7 @@ class Window(QMainWindow):
                 "F1",
                 "fa6s.circle-question",
                 self._show_help,
-                self.stack.indexOf(self.shortcutsWidget),
+                self.PAGE_HELP,
             ),
         ]
         self.page_action_group = QActionGroup(self)
@@ -1903,10 +1996,10 @@ class Window(QMainWindow):
 
     def _show_page(self, index):
         if 0 <= index < self.stack.count():
-            # Defer expensive page-local QSS and icon refreshes until this page
-            # is actually requested, rather than styling every hidden page on
-            # each global theme change.
-            self._ensure_page_theme(self.stack.widget(index))
+            page = self._ensure_page_created(index)
+            # Apply local page styling only after the lazy page exists and just
+            # before it becomes visible. Subsequent visits reuse that instance.
+            self._ensure_page_theme(page)
             self.stack.setCurrentIndex(index)
             if hasattr(self, "page_actions"):
                 self.page_action_group.setExclusive(False)
@@ -1915,8 +2008,8 @@ class Window(QMainWindow):
                 self.page_action_group.setExclusive(True)
                 if hasattr(self, "updates_nav_button"):
                     updates_pages = {
-                        self.stack.indexOf(self.updater_window),
-                        self.stack.indexOf(self.tunnel_window),
+                        self.PAGE_BUNDLES,
+                        self.PAGE_SYSTEM_TUNNEL,
                     }
                     self.updates_nav_button.setChecked(index in updates_pages)
                     self._sync_updates_nav_icon()
@@ -1941,6 +2034,7 @@ class Window(QMainWindow):
         if proxy_widget is None:
             self.global_state.setText("● Initializing")
             return
+        self._sample_traffic_session()
         refresh_tunnel = getattr(proxy_widget, "_update_tunnel_hint", None)
         if callable(refresh_tunnel):
             refresh_tunnel()
@@ -1975,24 +2069,9 @@ class Window(QMainWindow):
         )
 
     def _prewarm_theme_stylesheets(self):
-        """Prime both theme styles against the hidden widget tree before first use."""
-        app = QApplication.instance()
-        if app is None:
-            return
-
-        active_mode = CONFIG.get("mode", "dark")
-        alternate_mode = "light" if active_mode == "dark" else "dark"
-        _theme_stylesheet(active_mode)
-        _theme_stylesheet(alternate_mode)
-
-        try:
-            app.setStyleSheet(_theme_stylesheet(alternate_mode))
-            self._apply_local_theme_styles(alternate_mode)
-        except Exception:
-            logger.debug("Could not prewarm the alternate theme.", exc_info=True)
-        finally:
-            app.setStyleSheet(_theme_stylesheet(active_mode))
-            self._apply_local_theme_styles(active_mode)
+        """Compatibility hook: warm QSS strings without touching the widget tree."""
+        _theme_stylesheet(CONFIG.get("mode", "dark"))
+        _theme_stylesheet("light" if CONFIG.get("mode", "dark") == "dark" else "dark")
 
     def _ensure_page_theme(self, page, mode=None):
         """Apply a page's local theme once, immediately before it becomes visible."""
@@ -2221,9 +2300,13 @@ class Window(QMainWindow):
 
         app_stylesheet_ms = 0.0
         if app is not None:
-            stylesheet_started = time.perf_counter()
-            app.setStyleSheet(_theme_stylesheet(mode))
-            app_stylesheet_ms = (time.perf_counter() - stylesheet_started) * 1000.0
+            stylesheet = _theme_stylesheet(mode)
+            # main.py has already installed the startup theme. Skip the second
+            # QApplication-wide repolish when the requested mode is unchanged.
+            if app.styleSheet() != stylesheet:
+                stylesheet_started = time.perf_counter()
+                app.setStyleSheet(stylesheet)
+                app_stylesheet_ms = (time.perf_counter() - stylesheet_started) * 1000.0
 
         if hasattr(self, "settingWidget"):
             sync_theme = getattr(self.settingWidget, "set_theme_mode", None)
@@ -2346,27 +2429,22 @@ class Window(QMainWindow):
             
     
     def _show_help(self):
-        self._show_page(self.stack.indexOf(self.shortcutsWidget))
+        self._show_page(self.PAGE_HELP)
 
     def _show_statistics(self):
-        self._show_page(self.stack.indexOf(self.statisticsWidget))
-        refresh_history = getattr(self.statisticsWidget, "refresh_persistent_history", None)
-        if callable(refresh_history):
-            refresh_history()
+        self._show_page(self.PAGE_STATISTICS)
 
     def _show_custom_tor(self):
-        self._show_page(self.stack.indexOf(self.customTorWidget))
-        self.customTorWidget.refresh_services()
+        self._show_page(self.PAGE_CUSTOM_TOR)
 
     def _show_developer_tor(self):
-        self._show_page(self.stack.indexOf(self.developerTorWidget))
-        self.developerTorWidget.refresh_dashboard()
+        self._show_page(self.PAGE_DEVELOPER_TOR)
 
     def _show_home(self):
-        self._show_page(0)
+        self._show_page(self.PAGE_HOME)
 
     def _show_setting(self):
-        self._show_page(1)
+        self._show_page(self.PAGE_SETTINGS)
 
     def _show_block_host(self):
         self._show_setting()
@@ -2377,10 +2455,10 @@ class Window(QMainWindow):
         self.settingWidget.show_excluded_hosts()
 
     def _show_updater(self):
-        self._show_page(self.stack.indexOf(self.updater_window))
+        self._show_page(self.PAGE_BUNDLES)
 
     def _show_tunnel_page(self):
-        self._show_page(self.stack.indexOf(self.tunnel_window))
+        self._show_page(self.PAGE_SYSTEM_TUNNEL)
 
     def _notify(self, title, message):
         self.tray_icon.showMessage(title, message, QSystemTrayIcon.Information, 2000)
