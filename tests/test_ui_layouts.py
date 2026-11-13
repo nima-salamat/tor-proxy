@@ -3942,6 +3942,9 @@ def test_settings_tabs_are_constructed_only_when_first_selected():
     assert "self.initialize_tor_services_page()" not in constructor
     assert "self.initialize_advanced_page()" not in constructor
     assert "def _ensure_settings_page_initialized(self, index: int)" in source
+    assert "self.page_setting.replaceWidget(" not in source
+    assert source.count("self.page_setting.removeWidget(placeholder)") == 2
+    assert source.count("self.page_setting.insertWidget(index, page)") == 2
     assert "BlcokHostsWindow(self)" in source
     assert "ExcludeHostsWindow(self)" in source
     assert "self._bridge_normalize_timer" in constructor
