@@ -1449,7 +1449,7 @@ class OnionHostingPage(QWidget):
             self._last_rendered_services = [dict(item) for item in visible]
             self._last_visible_service_ids = visible_ids
             self._rebuild_service_cards(visible, total_count=len(self._last_services))
-            self._refresh_traffic_metrics(self._last_traffic_snapshots)
+        self._refresh_traffic_metrics(self._last_traffic_snapshots)
 
     def _rebuild_service_cards(self, services: list[dict], *, total_count: int = 0):
         # The empty-state label is permanent. Only remove cards created by the
