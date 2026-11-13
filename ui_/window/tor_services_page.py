@@ -1618,6 +1618,7 @@ class TorServicesPage(QWidget):
         if self._proxy is None or self._pool_restore_in_progress:
             return
         self._pool_restore_in_progress = True
+        self._update_global_actions()
         worker = Worker(self._proxy._ensure_tor_service_pool)
         worker.signals.finished.connect(self._on_pool_restore_finished)
         worker.signals.error.connect(self._on_pool_restore_failed)
@@ -1633,6 +1634,7 @@ class TorServicesPage(QWidget):
     def _on_pool_restore_failed(self, error: str) -> None:
         self._pool_restore_worker = None
         self._pool_restore_in_progress = False
+        self._update_global_actions()
         self.lbl_runtime_status.setText(f"Could not restore saved Tor profiles: {error}")
         logger.warning("Could not restore saved Custom Tor profiles: %s", error)
 
@@ -1721,7 +1723,7 @@ class TorServicesPage(QWidget):
 
     def _refresh_live_service_health(self) -> None:
         """Refresh health labels without rebuilding cards or disturbing scroll position."""
-        if not self.isVisible():
+        if not self.isVisible() or self._pool_restore_in_progress:
             return
         if self._primary_tor is not None:
             snapshot = getattr(self._primary_tor, "pool_health_snapshot", None)
