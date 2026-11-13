@@ -137,3 +137,31 @@ def test_service_relay_forwards_http_and_records_directional_bytes_and_request_h
         if application_thread.is_alive():
             application.close()
             application_thread.join(timeout=1.0)
+
+
+def test_batched_traffic_snapshot_returns_global_and_selected_service_totals(tmp_path):
+    store = OnionTrafficStore(tmp_path)
+    for service_id, incoming, outgoing in (
+        ("service-a", 120, 45),
+        ("service-b", 300, 80),
+    ):
+        store.begin_connection(service_id)
+        store.finish_connection(
+            service_id,
+            onion_port=80,
+            local_port=8080,
+            protocol="HTTP",
+            method="GET",
+            path="/health",
+            status_code=200,
+            incoming_bytes=incoming,
+            outgoing_bytes=outgoing,
+        )
+
+    snapshot = store.snapshot_many(["service-a", "service-b", "missing", "service-a"])
+    assert snapshot["global"]["incoming_bytes"] == 420
+    assert snapshot["global"]["outgoing_bytes"] == 125
+    assert snapshot["global"]["connections"] == 2
+    assert snapshot["services"]["service-a"]["incoming_bytes"] == 120
+    assert snapshot["services"]["service-b"]["outgoing_bytes"] == 80
+    assert snapshot["services"]["missing"]["connections"] == 0
