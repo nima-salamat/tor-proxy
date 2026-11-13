@@ -63,6 +63,7 @@ class UpdaterWindow(QWidget):
         self._available_versions: list[str] = []
         self._verified_bundles_cache: list[str] = []
         self._bundle_scan_in_progress = False
+        self._bundle_scan_completed = False
         self._bundle_scan_worker = None
         self._last_download: tuple[str, str, bool] | None = None
         self._operation_route: tuple[str | None, bool] | None = None
@@ -269,8 +270,12 @@ class UpdaterWindow(QWidget):
 
         self.progress_event.connect(self._on_progress)
         self._apply_local_styles()
-        self.refresh_version()
         self._update_install_state()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._bundle_scan_in_progress and not self._bundle_scan_completed:
+            self.refresh_version()
 
     def _platform_summary(self) -> str:
         import platform
@@ -492,6 +497,7 @@ class UpdaterWindow(QWidget):
         if self._bundle_scan_in_progress:
             return
         self._bundle_scan_in_progress = True
+        self._bundle_scan_completed = False
         self.btn_refresh_version.setEnabled(False)
         self.list_tor_versions.setEnabled(False)
         self.updates_list.setEnabled(False)
@@ -506,6 +512,7 @@ class UpdaterWindow(QWidget):
         bundles = self._parse_result(data, list)
         self._verified_bundles_cache = [item for item in bundles if isinstance(item, str)]
         self._bundle_scan_in_progress = False
+        self._bundle_scan_completed = True
         self.btn_refresh_version.setEnabled(not self._busy)
         self.list_tor_versions.setEnabled(not self._busy)
         self.updates_list.setEnabled(not self._busy)
@@ -545,6 +552,7 @@ class UpdaterWindow(QWidget):
     def _on_bundle_scan_failed(self, error: str) -> None:
         logger.error("Could not inspect installed Tor bundles: %s", error)
         self._bundle_scan_in_progress = False
+        self._bundle_scan_completed = True
         self.btn_refresh_version.setEnabled(not self._busy)
         self.list_tor_versions.setEnabled(not self._busy)
         self.updates_list.setEnabled(not self._busy)
