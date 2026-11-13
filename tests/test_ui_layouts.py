@@ -2575,6 +2575,7 @@ def test_custom_titlebar_snap_flyout_uses_a_deliberate_hover_dwell(qt_app):
     from ui_.window.custom_titlebar import SNAP_LAYOUT_HOVER_DELAY_MS, CustomTitleBar
 
     window = QMainWindow()
+    window.hide_to_tray = lambda: None
     titlebar = CustomTitleBar(window)
     try:
         assert SNAP_LAYOUT_HOVER_DELAY_MS == 650
@@ -2636,13 +2637,12 @@ def test_native_resize_hit_testing_covers_all_window_edges_and_corners(qt_app):
     assert _native_resize_hit_test(QPoint(510, 150), bounds) is None
 
 
-def test_native_titlebar_hit_testing_enables_snap_and_system_menu():
+def test_native_titlebar_hit_testing_enables_system_menu_without_stealing_maximize_clicks():
     from PySide6.QtCore import QPoint, QRect
 
     from ui import (
         _HTCAPTION,
         _HTCLIENT,
-        _HTMAXBUTTON,
         _WS_OVERLAPPEDWINDOW,
         _WS_SYSMENU,
         _native_titlebar_hit_test,
@@ -2654,13 +2654,12 @@ def test_native_titlebar_hit_testing_enables_snap_and_system_menu():
     close = QRect(492, 5, 36, 30)
     other_buttons = (minimize, close)
 
-    # Windows receives the actual maximize hit-test code only while the pointer
-    # is inside that control. The shell, not a Qt timer, applies its normal hover dwell.
+    # Maximize remains a Qt client control; the delayed Qt flyout handles Snap.
     assert _native_titlebar_hit_test(
         QPoint(469, 20), titlebar, maximize, other_buttons
-    ) == _HTMAXBUTTON
+    ) == _HTCLIENT
 
-    # Minimize and Close remain Qt client controls.
+    # Minimize and Close remain Qt client controls too.
     assert _native_titlebar_hit_test(
         QPoint(428, 20), titlebar, maximize, other_buttons
     ) == _HTCLIENT
@@ -2668,8 +2667,7 @@ def test_native_titlebar_hit_testing_enables_snap_and_system_menu():
         QPoint(505, 20), titlebar, maximize, other_buttons
     ) == _HTCLIENT
 
-    # Empty title-bar space stays caption hit area, allowing the native
-    # Alt+Space and right-click system menu while retaining drag behavior.
+    # Empty title-bar space remains caption area for drag and native system menu.
     assert _native_titlebar_hit_test(
         QPoint(200, 20), titlebar, maximize, other_buttons
     ) == _HTCAPTION
@@ -3189,6 +3187,51 @@ def test_developer_tor_activity_exposes_per_port_events_and_error_counters():
     assert "one first request line per TCP connection" in page
     assert "_MAX_CONNECTIONS_PER_PORT = 128" in store
 
+
+
+def test_home_connect_button_sizing_waits_for_valid_row_geometry(qt_app):
+    from types import SimpleNamespace
+    from PySide6.QtCore import QRect
+
+    from ui_.window.proxy_window import ProxyWindow
+
+    class FakeLayout:
+        def __init__(self, geometry):
+            self._geometry = geometry
+
+        def geometry(self):
+            return self._geometry
+
+    class FakeConnectButton:
+        def __init__(self):
+            self.diameter = 264
+            self.calls = []
+
+        def set_diameter(self, diameter):
+            self.diameter = diameter
+            self.calls.append(diameter)
+
+    button = FakeConnectButton()
+    fake = SimpleNamespace(
+        _home_connect_row=FakeLayout(QRect(0, 0, 0, 0)),
+        connect_btn=button,
+    )
+
+    # A minimized/not-yet-laid-out page must not guess a size from its old window height.
+    ProxyWindow._resize_home_connect_button(fake)
+    assert button.calls == []
+    assert button.diameter == 264
+
+    # Once Qt has allocated a real row, derive the circle from that exact space.
+    fake._home_connect_row = FakeLayout(QRect(0, 0, 400, 300))
+    ProxyWindow._resize_home_connect_button(fake)
+    assert button.calls == [280]
+    assert button.diameter == 280
+
+    # The 420px ceiling still applies on a large screen.
+    fake._home_connect_row = FakeLayout(QRect(0, 0, 1200, 900))
+    ProxyWindow._resize_home_connect_button(fake)
+    assert button.diameter == 420
 
 
 def test_home_resize_work_is_coalesced_and_avoids_forced_layout_activation():
