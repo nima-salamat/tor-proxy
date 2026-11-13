@@ -3788,3 +3788,86 @@ def test_custom_titlebar_controls_use_square_edges_and_full_strip_dimensions():
     assert "border-radius: 0px;" in ui_source
     assert "QPushButton#titleBarCloseButton:pressed" in ui_source
 
+def test_system_move_positions_pointer_at_titlebar_center_before_posting(monkeypatch):
+    import ui
+
+    events = []
+
+    class _NativeFunction:
+        def __init__(self, callback):
+            self.callback = callback
+            self.argtypes = None
+            self.restype = None
+
+        def __call__(self, *args):
+            return self.callback(*args)
+
+    class _TitleBar:
+        def rect(self):
+            from PySide6.QtCore import QRect
+            return QRect(0, 0, 900, 40)
+
+        def mapToGlobal(self, point):
+            from PySide6.QtCore import QPoint
+            return QPoint(120, 240) + point
+
+    fake_user32 = SimpleNamespace(
+        PostMessageW=_NativeFunction(
+            lambda *_args: events.append(("post", *_args[1:])) or 1
+        )
+    )
+    fake = SimpleNamespace(
+        _native_snap_hwnd=1234,
+        _native_user32=fake_user32,
+        title_bar=_TitleBar(),
+        winId=lambda: 1234,
+    )
+    monkeypatch.setattr(ui, "IS_WINDOWS", True)
+    monkeypatch.setattr(
+        ui,
+        "QCursor",
+        SimpleNamespace(setPos=lambda point: events.append(("cursor", point))),
+    )
+
+    ui.Window._post_native_system_command(fake, ui._SC_MOVE)
+
+    assert len(events) == 2
+    assert events[0][0] == "cursor"
+    assert events[0][1].x() == 120 + 900 // 2
+    assert events[0][1].y() == 240 + 40 // 2
+    assert events[1][0] == "post"
+    assert events[1][0:2] == ("post", ui._WM_SYSCOMMAND)
+    assert events[1][2] == ui._SC_MOVE
+
+
+def test_system_size_command_does_not_reposition_pointer(monkeypatch):
+    import ui
+
+    posted = []
+
+    class _NativeFunction:
+        def __init__(self):
+            self.argtypes = None
+            self.restype = None
+
+        def __call__(self, *args):
+            posted.append(args)
+            return 1
+
+    fake = SimpleNamespace(
+        _native_snap_hwnd=1234,
+        _native_user32=SimpleNamespace(PostMessageW=_NativeFunction()),
+        title_bar=object(),
+        winId=lambda: 1234,
+    )
+    monkeypatch.setattr(ui, "IS_WINDOWS", True)
+    monkeypatch.setattr(
+        ui,
+        "QCursor",
+        SimpleNamespace(setPos=lambda _point: pytest.fail("Size must not move the cursor")),
+    )
+
+    ui.Window._post_native_system_command(fake, ui._SC_SIZE)
+    assert len(posted) == 1
+    assert posted[0][2] == ui._SC_SIZE
+

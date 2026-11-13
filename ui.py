@@ -600,7 +600,7 @@ class Window(QMainWindow):
                 action.setIcon(qta.icon(icon_name, color=color))
 
     def _post_native_system_command(self, command):
-        """Let Windows perform its native keyboard Move/Size interaction."""
+        """Let Windows perform its native Move/Size interaction."""
         if not IS_WINDOWS:
             return
         hwnd = int(getattr(self, "_native_snap_hwnd", 0) or self.winId())
@@ -608,6 +608,15 @@ class Window(QMainWindow):
         if not hwnd or user32 is None:
             return
         try:
+            if command == _SC_MOVE:
+                # SC_MOVE starts its drag from the current pointer position.
+                # Place that pointer at the title bar's center first, instead
+                # of leaving it at the edge where the system menu was opened.
+                titlebar = getattr(self, "title_bar", None)
+                if titlebar is not None:
+                    center = titlebar.rect().center()
+                    QCursor.setPos(titlebar.mapToGlobal(center))
+
             post_message = user32.PostMessageW
             post_message.argtypes = (
                 wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM
