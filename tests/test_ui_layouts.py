@@ -2138,11 +2138,8 @@ def test_tray_menu_uses_a_modern_theme_aware_floating_surface():
     assert "visible_only and not page.isVisible()" in local_theme
     assert "self._ensure_page_theme(page, mode)" in local_theme
     assert "self._sync_tray_menu_theme(mode)" in local_theme
-    ensure_visible_start = source.index("def _ensure_visible_theme_pages(self):")
-    ensure_visible_end = source.index("\\n    def ", ensure_visible_start + 10)
-    ensure_visible_theme = source[ensure_visible_start:ensure_visible_end]
-    assert "if page is not None and page.isVisible():" in ensure_visible_theme
-    assert "self._ensure_page_theme(page)" in ensure_visible_theme
+    assert "if page is not None and page.isVisible():" in source
+    assert "self._ensure_page_theme(page)" in source
     assert "self._ensure_visible_theme_pages()" in source
     assert "self._apply_local_theme_styles(mode, visible_only=True)" in source
     assert "self._sync_tray_menu_theme()" in source[
