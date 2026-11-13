@@ -3694,6 +3694,7 @@ def test_exit_requests_are_deferred_and_coalesced(monkeypatch):
     assert fake._exit_request_pending is False
     assert fake._exit_request_in_progress is False
 
+
 def test_custom_titlebar_window_controls_fill_right_edge_without_gaps(qt_app):
     from PySide6.QtCore import QPoint, QRect
     from PySide6.QtWidgets import QMainWindow
