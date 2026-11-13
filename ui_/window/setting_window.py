@@ -46,9 +46,6 @@ from ui_.window.dialogs import QMessageBox
 from ui_.worker.worker import Worker
 from ui_.window.qrcode_widget import QrCodeFloatingWindow
 from ui_.window.theme import resolve_system_theme
-from ui_.window.tor_services_page import TorServicesSettingsPage
-from ui_.window.block_host_window import BlcokHostsWindow
-from ui_.window.exclude_host_window import ExcludeHostsWindow
 from ui_.emojis import WRONG, CORRECT
 
 class _BridgeTextEdit(QTextEdit):
@@ -207,6 +204,7 @@ class SettingWindow(QWidget):
         if initializer is not None:
             initializer()
         elif index == self.BLOCKED_HOSTS_PAGE_INDEX:
+            from ui_.window.block_host_window import BlcokHostsWindow
             page = BlcokHostsWindow(self)
             page.setObjectName("settingsBlockedHostsPage")
             placeholder = self.page_setting.replaceWidget(index, page)
@@ -216,6 +214,7 @@ class SettingWindow(QWidget):
             if placeholder is not None:
                 placeholder.deleteLater()
         elif index == self.EXCLUDED_HOSTS_PAGE_INDEX:
+            from ui_.window.exclude_host_window import ExcludeHostsWindow
             page = ExcludeHostsWindow(self)
             page.setObjectName("settingsExcludedHostsPage")
             placeholder = self.page_setting.replaceWidget(index, page)
@@ -1386,6 +1385,7 @@ class SettingWindow(QWidget):
 
     def initialize_tor_services_page(self):
         """Expose only the persistent resource/concurrency preferences in Settings."""
+        from ui_.window.tor_services_page import TorServicesSettingsPage
         self.tor_services_panel = TorServicesSettingsPage(self, app_window=self._parent)
         self.services_page_layout.addWidget(self.tor_services_panel)
         self.services_page_layout.addStretch(1)
