@@ -97,7 +97,10 @@ def _find_executable(
                 else _verified_managed_bundles(managed_root, verify=False)
             )
             if managed_bundle is None or managed_bundle not in verified:
-                logger.error("Selected managed Tor bundle is missing or has not passed integrity/structure checks.")
+                logger.error(
+                    "Selected managed Tor bundle is missing or has not passed the requested "
+                    "metadata/integrity and structure checks."
+                )
                 return None, managed_bundle or resolved
             if resolved.is_file():
                 expected = managed_bundle / "tor" / executable_name
@@ -849,6 +852,9 @@ class TorRunner(QObject):
                 raise TorManagerError(
                     "A compatible Tor Expert Bundle must pass integrity and platform checks before Tor can start."
                 )
+        # Consume the one-launch preflight result. A later direct start must
+        # validate again; the normal Home flow refreshes it in its Worker.
+        self._bundle_preflight_verified = False
         self._stopping.clear()
         self._last_report = None
         self._last_bridge_usage_report = None
