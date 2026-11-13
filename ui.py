@@ -71,6 +71,7 @@ _HTBOTTOMLEFT = 16
 _HTBOTTOMRIGHT = 17
 _WM_NCCALCSIZE = 0x0083
 _WM_NCHITTEST = 0x0084
+_WM_DPICHANGED = 0x02E0
 _WM_NCMOUSEMOVE = 0x00A0
 _WM_NCMOUSEMOVE = 0x00A0
 _WM_NCLBUTTONDOWN = 0x00A1
@@ -81,7 +82,6 @@ _WM_LBUTTONUP = 0x0202
 _WM_CAPTURECHANGED = 0x0215
 _WM_NCMOUSELEAVE = 0x02A2
 _WM_MOVING = 0x0216
-_WM_SIZING = 0x0214
 _WM_ENTERSIZEMOVE = 0x0231
 _WM_EXITSIZEMOVE = 0x0232
 
@@ -301,6 +301,9 @@ class Window(QMainWindow):
         self.stack.setLineWidth(0)
         self._constraining_move = False
         self._native_snap_hwnd = 0
+        self._native_user32 = None
+        self._native_map_window_points = None
+        self._native_dpi_scale = 1.0
         self._native_move_loop_active = False
         self._native_max_button_pressed = False
         self._native_max_button_hovered = False
@@ -466,6 +469,27 @@ class Window(QMainWindow):
                 return
 
             user32 = ctypes.WinDLL("user32", use_last_error=True)
+            # Cache APIs used by WM_NCHITTEST. That message is frequent while
+            # resizing/hovering near the frame; DLL lookup and ctypes signature
+            # setup must not happen in the interactive hit-test path.
+            self._native_user32 = user32
+            map_window_points = user32.MapWindowPoints
+            map_window_points.argtypes = (
+                wintypes.HWND, wintypes.HWND,
+                ctypes.POINTER(wintypes.POINT), wintypes.UINT
+            )
+            map_window_points.restype = ctypes.c_int
+            self._native_map_window_points = map_window_points
+
+            self._native_dpi_scale = max(1.0, float(self.devicePixelRatioF()))
+            get_dpi_for_window = getattr(user32, "GetDpiForWindow", None)
+            if get_dpi_for_window is not None:
+                get_dpi_for_window.argtypes = (wintypes.HWND,)
+                get_dpi_for_window.restype = wintypes.UINT
+                native_dpi = int(get_dpi_for_window(wintypes.HWND(hwnd)))
+                if native_dpi > 0:
+                    self._native_dpi_scale = max(1.0, native_dpi / 96.0)
+
             get_window_long = getattr(
                 user32, "GetWindowLongPtrW", user32.GetWindowLongW
             )
@@ -561,6 +585,12 @@ class Window(QMainWindow):
         try:
             native_message = wintypes.MSG.from_address(int(message))
 
+            if native_message.message == _WM_DPICHANGED:
+                dpi_x = int(native_message.wParam) & 0xFFFF
+                if dpi_x > 0:
+                    self._native_dpi_scale = max(1.0, dpi_x / 96.0)
+                return super().nativeEvent(event_type, message)
+
             # The OS uses HTMAXBUTTON for the native Snap Layouts dwell. These
             # non-client messages do not reach QPushButton normally, so bridge them
             # to the existing Qt widget rather than drawing a second native control.
@@ -588,7 +618,7 @@ class Window(QMainWindow):
                 and max_button.rect().contains(max_button.mapFromGlobal(QCursor.pos()))
             ):
                 self._native_max_button_pressed = True
-                user32 = ctypes.WinDLL("user32", use_last_error=True)
+                user32 = self._native_user32 or ctypes.WinDLL("user32", use_last_error=True)
                 set_capture = user32.SetCapture
                 set_capture.argtypes = (wintypes.HWND,)
                 set_capture.restype = wintypes.HWND
@@ -618,7 +648,7 @@ class Window(QMainWindow):
                     Qt.MouseButton.LeftButton,
                     Qt.MouseButton.NoButton,
                 )
-                user32 = ctypes.WinDLL("user32", use_last_error=True)
+                user32 = self._native_user32 or ctypes.WinDLL("user32", use_last_error=True)
                 user32.ReleaseCapture.argtypes = ()
                 user32.ReleaseCapture.restype = wintypes.BOOL
                 user32.ReleaseCapture()
@@ -633,15 +663,23 @@ class Window(QMainWindow):
 
             if native_message.message == _WM_ENTERSIZEMOVE:
                 self._native_move_loop_active = True
+                proxy_page = getattr(self, "proxyWidget", None)
+                if proxy_page is not None:
+                    proxy_page.set_live_resize_active(True)
                 return super().nativeEvent(event_type, message)
             if native_message.message == _WM_EXITSIZEMOVE:
                 self._native_move_loop_active = False
+                proxy_page = getattr(self, "proxyWidget", None)
+                if proxy_page is not None:
+                    proxy_page.set_live_resize_active(False)
                 return super().nativeEvent(event_type, message)
-            if native_message.message in (_WM_MOVING, _WM_SIZING):
-                # WM_MOVING / WM_SIZING provide the proposed screen-space RECT
-                # before Windows commits a new position or size. Adjust it in
-                # place instead of fighting the native sizing loop with move().
-                user32 = ctypes.WinDLL("user32", use_last_error=True)
+            if native_message.message == _WM_MOVING:
+                # Keep the off-screen guard for window dragging only. Windows
+                # owns WM_SIZING and its live size loop; querying monitor/DPI
+                # information on every sizing tick was adding avoidable latency.
+                user32 = self._native_user32
+                if user32 is None:
+                    return super().nativeEvent(event_type, message)
                 moving_rect = ctypes.cast(
                     int(native_message.lParam),
                     ctypes.POINTER(wintypes.RECT),
@@ -724,15 +762,11 @@ class Window(QMainWindow):
                     ctypes.c_short(native_message.lParam & 0xFFFF).value,
                     ctypes.c_short((native_message.lParam >> 16) & 0xFFFF).value,
                 )
-                user32 = ctypes.WinDLL("user32", use_last_error=True)
-                # WM_NCHITTEST provides physical screen coordinates. Follow
-                # Microsoft's desktop -> HWND mapping and then convert to Qt DIPs.
-                map_window_points = user32.MapWindowPoints
-                map_window_points.argtypes = (
-                    wintypes.HWND, wintypes.HWND,
-                    ctypes.POINTER(wintypes.POINT), wintypes.UINT
-                )
-                map_window_points.restype = ctypes.c_int
+                map_window_points = self._native_map_window_points
+                if map_window_points is None:
+                    return super().nativeEvent(event_type, message)
+                # WM_NCHITTEST provides physical screen coordinates. Reuse the
+                # cached desktop -> HWND mapping and the last known monitor DPI.
                 map_window_points(
                     wintypes.HWND(0),
                     wintypes.HWND(native_message.hWnd),
@@ -740,16 +774,7 @@ class Window(QMainWindow):
                     1,
                 )
 
-                ratio = max(1.0, float(self.devicePixelRatioF()))
-                get_dpi_for_window = getattr(user32, "GetDpiForWindow", None)
-                if get_dpi_for_window is not None:
-                    get_dpi_for_window.argtypes = (wintypes.HWND,)
-                    get_dpi_for_window.restype = wintypes.UINT
-                    native_dpi = int(
-                        get_dpi_for_window(wintypes.HWND(native_message.hWnd))
-                    )
-                    if native_dpi > 0:
-                        ratio = max(1.0, native_dpi / 96.0)
+                ratio = self._native_dpi_scale
 
                 point = QPoint(
                     round(screen_point.x / ratio),

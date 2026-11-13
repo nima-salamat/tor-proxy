@@ -1,5 +1,8 @@
 from PySide6.QtWidgets import QPushButton, QWidget, QSizePolicy
-from PySide6.QtCore import Qt, QPoint, QEasingCurve, QPropertyAnimation, Property, QTimer
+from PySide6.QtCore import (
+    Qt, QPoint, QEasingCurve, QAbstractAnimation,
+    QPropertyAnimation, Property, QTimer
+)
 from PySide6.QtGui import QPainter, QColor, QBrush, QPen, QRadialGradient
 
 
@@ -19,13 +22,6 @@ class PulseButtonHost(QWidget):
         self.button.setParent(self)
         self.button.show()
 
-        # Coalesce native resize bursts without waiting until the drag ends:
-        # one sizing pass per display frame keeps the circle visually smooth.
-        self._resize_timer = QTimer(self)
-        self._resize_timer.setSingleShot(True)
-        self._resize_timer.setInterval(16)
-        self._resize_timer.timeout.connect(self._sync_button_geometry)
-
     @staticmethod
     def diameter_for_size(width: int, height: int) -> int | None:
         width = int(width)
@@ -36,13 +32,11 @@ class PulseButtonHost(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if not self._resize_timer.isActive():
-            self._resize_timer.start()
+        self._sync_button_geometry()
 
     def showEvent(self, event):
         super().showEvent(event)
-        if not self._resize_timer.isActive():
-            self._resize_timer.start()
+        self._sync_button_geometry()
 
     def _sync_button_geometry(self):
         available = self.contentsRect()
@@ -91,6 +85,7 @@ class PulseButton(QPushButton):
         self._connected_feedback_timer = QTimer(self)
         self._connected_feedback_timer.setSingleShot(True)
         self._connected_feedback_timer.timeout.connect(self._finish_connected_feedback)
+        self._resize_paused_animations = ()
         self.outer_anim.start()
         self.halo_anim.start()
 
@@ -112,6 +107,25 @@ class PulseButton(QPushButton):
         self.setFixedSize(diameter, diameter)
         # PulseButtonHost positions this child directly; it is not a layout item.
         # Avoid a parent layout negotiation every time the circle changes size.
+        self.update()
+
+    def set_live_resize_active(self, active: bool) -> None:
+        """Pause decorative pulses during live resizing without resetting their phase."""
+        if active:
+            if self._resize_paused_animations:
+                return
+            paused = []
+            for animation in (self.outer_anim, self.halo_anim):
+                if animation.state() == QAbstractAnimation.State.Running:
+                    animation.pause()
+                    paused.append(animation)
+            self._resize_paused_animations = tuple(paused)
+            return
+
+        paused, self._resize_paused_animations = self._resize_paused_animations, ()
+        for animation in paused:
+            if animation.state() == QAbstractAnimation.State.Paused:
+                animation.resume()
         self.update()
 
     def _set_state(self, state, text):

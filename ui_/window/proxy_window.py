@@ -280,13 +280,6 @@ class ProxyWindow(QWidget):
         self.home_layout.setSpacing(10)
 
         self._home_responsive_mode = None
-        # Coalesce high-frequency WM_SIZE messages and update Home at most
-        # once per display frame while the user is continuously resizing.
-        self._home_resize_timer = QTimer(self)
-        self._home_resize_timer.setSingleShot(True)
-        self._home_resize_timer.setInterval(16)
-        self._home_resize_timer.timeout.connect(self._apply_home_resize_update)
-
         self.connection_status_frame = ConnectionStatusPill(self.home_content)
         self.connection_status_frame.setMinimumHeight(32)
         self.connection_status_frame.setMaximumHeight(42)
@@ -789,13 +782,18 @@ class ProxyWindow(QWidget):
             if self.logs_widget.maximumWidth() != target_width:
                 self.logs_widget.setMaximumWidth(target_width)
 
+    def set_live_resize_active(self, active: bool) -> None:
+        """Suspend Connect's decorative animations while Windows is in its size/move loop."""
+        button = getattr(self, "connect_btn", None)
+        if button is not None:
+            button.set_live_resize_active(active)
+
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        # Do not rebuild/reflow the widget tree synchronously for every WM_SIZE.
-        # A single-shot frame timer consumes the latest geometry and coalesces
-        # bursts of native resize messages.
-        if not self._home_resize_timer.isActive():
-            self._home_resize_timer.start()
+        # Responsive reflow is breakpoint-driven, so checking it synchronously
+        # is cheap; Connect itself also follows the host's resize event directly.
+        if hasattr(self, "_home_responsive_mode"):
+            self._apply_home_resize_update()
 
     def _build_home_endpoint_card(self, title: str, key: str) -> QFrame:
         card = QFrame(self.home_content)
@@ -1914,22 +1912,30 @@ class ProxyWindow(QWidget):
         QMessageBox.warning(self, "Disconnect", detail)
 
     def _refresh_home_status_geometry(self) -> None:
-        """Recompute status-pill width after text, font, or Home geometry changes."""
+        """Reflow the status pill only when text/font changes or it no longer fits."""
         if not hasattr(self, "btn_status") or not hasattr(self, "connection_status_frame"):
             return
+
         home_width = max(0, self.home_content.width() or self.width())
-        if home_width <= 0:
-            max_frame_width = 900
-        else:
-            max_frame_width = min(900, max(96, home_width - 36))
-        self.connection_status_frame.setMaximumWidth(max_frame_width)
-        self.connection_status_frame.set_status_text(
-            self.btn_status,
-            getattr(self, "_home_status_full_text", self.btn_status.text()),
-            max_frame_width,
+        max_frame_width = 900 if home_width <= 0 else min(900, max(96, home_width - 36))
+        full_text = getattr(self, "_home_status_full_text", self.btn_status.text())
+        font_key = self.btn_status.font().toString()
+        text_or_font_changed = (
+            full_text != getattr(self, "_home_status_rendered_text", None)
+            or font_key != getattr(self, "_home_status_rendered_font", None)
         )
-        # updateGeometry() schedules Qt's normal layout pass. Do not invalidate
-        # and synchronously activate the entire Home tree for each resize pixel.
+        currently_elided = bool(full_text) and self.btn_status.toolTip() == full_text
+        must_shrink = max_frame_width < self.connection_status_frame.width()
+        if not (text_or_font_changed or currently_elided or must_shrink):
+            return
+
+        if self.connection_status_frame.maximumWidth() != max_frame_width:
+            self.connection_status_frame.setMaximumWidth(max_frame_width)
+        self.connection_status_frame.set_status_text(
+            self.btn_status, full_text, max_frame_width
+        )
+        self._home_status_rendered_text = full_text
+        self._home_status_rendered_font = font_key
 
     def _set_home_status_text(self, text: str) -> None:
         self._home_status_full_text = str(text or "")

@@ -2757,7 +2757,13 @@ def test_main_window_advertises_native_windows_snap_and_maximize_support():
     assert "DefWindowProc's own caption-button click loop." in source
     assert "Never run DefWindowProc's own caption-button click loop." in source
     assert "_WM_MOVING = 0x0216" in source
-    assert "_WM_SIZING = 0x0214" in source
+    assert "_WM_SIZING = 0x0214" not in source
+    assert "if native_message.message == _WM_MOVING:" in source
+    assert "if native_message.message == _WM_DPICHANGED:" in source
+    assert "self._native_map_window_points = map_window_points" in source
+    assert "ratio = self._native_dpi_scale" in source
+    assert "proxy_page.set_live_resize_active(True)" in source
+    assert "proxy_page.set_live_resize_active(False)" in source
     assert "_WM_ENTERSIZEMOVE = 0x0231" in source
     assert "_WM_EXITSIZEMOVE = 0x0232" in source
     assert "self._native_move_loop_active = True" in source
@@ -3232,6 +3238,49 @@ def test_pulse_button_host_sizes_from_independent_available_geometry(qt_app):
         qt_app.processEvents()
 
 
+def test_pulse_button_host_updates_connect_synchronously_on_resize(qt_app):
+    from PySide6.QtCore import QPoint
+    from ui_.btn.pulse_button import PulseButton, PulseButtonHost
+
+    button = PulseButton()
+    host = PulseButtonHost(button)
+    try:
+        host.resize(400, 300)
+        host.show()
+        qt_app.processEvents()
+
+        host.resize(620, 360)
+
+        # No processEvents(), QTimer wait, or manual sync between resize and assertion.
+        assert button.diameter == 340
+        assert button.pos() == QPoint(140, 10)
+    finally:
+        host.deleteLater()
+        qt_app.processEvents()
+
+
+def test_pulse_button_pauses_and_resumes_pulses_during_live_resize(qt_app):
+    from PySide6.QtCore import QAbstractAnimation
+    from ui_.btn.pulse_button import PulseButton
+
+    button = PulseButton()
+    try:
+        assert button.outer_anim.state() == QAbstractAnimation.State.Running
+        assert button.halo_anim.state() == QAbstractAnimation.State.Running
+
+        button.set_live_resize_active(True)
+        assert button.outer_anim.state() == QAbstractAnimation.State.Paused
+        assert button.halo_anim.state() == QAbstractAnimation.State.Paused
+
+        button.set_live_resize_active(False)
+        assert button.outer_anim.state() == QAbstractAnimation.State.Running
+        assert button.halo_anim.state() == QAbstractAnimation.State.Running
+    finally:
+        button.close()
+        button.deleteLater()
+        qt_app.processEvents()
+
+
 def test_pulse_button_host_ignores_unusable_geometry_without_jumping(qt_app):
     from ui_.btn.pulse_button import PulseButton, PulseButtonHost
 
@@ -3261,21 +3310,23 @@ def test_home_resize_work_is_coalesced_and_connect_geometry_is_host_owned():
         home_source.index("self._home_responsive_mode = None"):
         home_source.index("self.connection_status_frame")
     ]
-    assert "self._home_resize_timer.setSingleShot(True)" in initialization
-    assert "self._home_resize_timer.setInterval(16)" in initialization
-    assert "self._home_resize_timer.timeout.connect(self._apply_home_resize_update)" in initialization
+    assert "self._home_resize_timer" not in initialization
 
     resize_event = home_source[
         home_source.index("def resizeEvent(self, event) -> None:"):
         home_source.index("def _build_home_endpoint_card", home_source.index("def resizeEvent(self, event) -> None:"))
     ]
-    assert "self._home_resize_timer.start()" in resize_event
-    assert "_update_home_responsive_layout()" not in resize_event
+    assert "self._apply_home_resize_update()" in resize_event
+    assert "_home_resize_timer" not in resize_event
 
     assert "self._home_connect_host = PulseButtonHost(self.connect_btn, self.home_content)" in home_source
     assert "self.home_layout.addWidget(self._home_connect_host, 1)" in home_source
     assert "class PulseButtonHost(QWidget):" in button_source
-    assert "self._resize_timer.setInterval(16)" in button_source
+    assert "self._resize_timer" not in button_source
+    assert "self._sync_button_geometry()" in button_source
+    assert "def set_live_resize_active(self, active: bool) -> None:" in button_source
+    assert "animation.pause()" in button_source
+    assert "animation.resume()" in button_source
     assert "self.button.set_diameter(diameter)" in button_source
     assert "self.button.move(target_position)" in button_source
     set_diameter = button_source[
