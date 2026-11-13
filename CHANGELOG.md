@@ -4,6 +4,14 @@ All notable changes are recorded here. Dates and release numbers are added only 
 
 ## Unreleased
 
+## v1.4.0 — 2026-11-14
+
+- Improved first-window startup responsiveness by deferring global hotkey initialization until after the Home window is shown and moving the initialization off the GUI thread.
+- Moved strict Tor bundle archive-digest verification from synchronous startup discovery into the connection preflight worker. Tor launch still requires strict verification, including a one-launch guard for alternate launch paths.
+- Moved the Home System Tunnel status and installed-version reads to a background worker with a cached snapshot, avoiding repeated synchronous status checks during UI refresh.
+- Made the browser chooser a lazy import so its module is loaded only when the user opens the dialog.
+- Added regression coverage for deferred startup, background Tunnel status, lazy browser imports, and fast-versus-strict Tor bundle discovery.
+
 ## v1.3.0 — 2026-11-13
 
 - Added the pinned sing-box 1.14.4 release archive to both With-Tor portable packages (Windows x64 and Linux x86_64). The first **Updates → Tunnel** check verifies the bundled archive against TorProxy's pinned SHA-256, extracts and version-checks it, then installs it into per-user storage without another network download. The release smoke test now exercises both the bundled Tor executable and the sing-box import/launch path.
