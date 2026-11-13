@@ -106,12 +106,25 @@ class ConnectionStatusPill(QWidget):
             available_label_width,
             metrics.horizontalAdvance(display_text) + tracking + 2,
         )
-        label.setText(display_text)
-        label.setFixedWidth(max(1, label_width))
-        label.setToolTip(full_text if display_text != full_text else "")
-        self.setFixedWidth(max(1, label_width + horizontal_padding + 2))
-        self.updateGeometry()
-        label.updateGeometry()
+        target_label_width = max(1, label_width)
+        target_frame_width = max(1, label_width + horizontal_padding + 2)
+        geometry_changed = (
+            label.width() != target_label_width
+            or self.width() != target_frame_width
+        )
+
+        if label.text() != display_text:
+            label.setText(display_text)
+        if label.width() != target_label_width:
+            label.setFixedWidth(target_label_width)
+        tooltip = full_text if display_text != full_text else ""
+        if label.toolTip() != tooltip:
+            label.setToolTip(tooltip)
+        if self.width() != target_frame_width:
+            self.setFixedWidth(target_frame_width)
+        if geometry_changed:
+            self.updateGeometry()
+            label.updateGeometry()
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
@@ -267,6 +280,12 @@ class ProxyWindow(QWidget):
         self.home_layout.setSpacing(10)
 
         self._home_responsive_mode = None
+        # Coalesce high-frequency WM_SIZE messages and update Home at most
+        # once per display frame while the user is continuously resizing.
+        self._home_resize_timer = QTimer(self)
+        self._home_resize_timer.setSingleShot(True)
+        self._home_resize_timer.setInterval(16)
+        self._home_resize_timer.timeout.connect(self._apply_home_resize_update)
 
         self.connection_status_frame = ConnectionStatusPill(self.home_content)
         self.connection_status_frame.setMinimumHeight(32)
@@ -777,7 +796,8 @@ class ProxyWindow(QWidget):
         if not hasattr(self, "_home_connect_row") or not hasattr(self, "connect_btn"):
             return
 
-        self.home_layout.activate()
+        # Let Qt's parent layout propagate geometry; avoid a forced full-tree
+        # activation in the continuous resize path.
         available_width = max(96, int(width or self.home_content.width()) - 48)
         row_height = int(self._home_connect_row.geometry().height())
         if row_height <= 0:
@@ -787,8 +807,8 @@ class ProxyWindow(QWidget):
         diameter = min(420, available_width, available_height)
         self.connect_btn.set_diameter(diameter)
 
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
+    def _apply_home_resize_update(self) -> None:
+        """Apply the latest window geometry once per frame during live resizing."""
         self._update_home_responsive_layout()
         if getattr(self, "logs_open", False):
             animation = getattr(self, "_logs_animation", None)
@@ -797,7 +817,17 @@ class ProxyWindow(QWidget):
                 and animation.state() == QAbstractAnimation.State.Running
             ):
                 animation.stop()
-            self.logs_widget.setMaximumWidth(self._logs_drawer_width())
+            target_width = self._logs_drawer_width()
+            if self.logs_widget.maximumWidth() != target_width:
+                self.logs_widget.setMaximumWidth(target_width)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        # Do not rebuild/reflow the widget tree synchronously for every WM_SIZE.
+        # A single-shot frame timer consumes the latest geometry and coalesces
+        # bursts of native resize messages.
+        if not self._home_resize_timer.isActive():
+            self._home_resize_timer.start()
 
     def _build_home_endpoint_card(self, title: str, key: str) -> QFrame:
         card = QFrame(self.home_content)
@@ -1930,8 +1960,8 @@ class ProxyWindow(QWidget):
             getattr(self, "_home_status_full_text", self.btn_status.text()),
             max_frame_width,
         )
-        self.home_layout.invalidate()
-        self.home_layout.activate()
+        # updateGeometry() schedules Qt's normal layout pass. Do not invalidate
+        # and synchronously activate the entire Home tree for each resize pixel.
 
     def _set_home_status_text(self, text: str) -> None:
         self._home_status_full_text = str(text or "")

@@ -70,6 +70,9 @@ _HTBOTTOMLEFT = 16
 _HTBOTTOMRIGHT = 17
 _WM_NCCALCSIZE = 0x0083
 _WM_NCHITTEST = 0x0084
+_WM_MOVING = 0x0216
+_WM_ENTERSIZEMOVE = 0x0231
+_WM_EXITSIZEMOVE = 0x0232
 
 # A custom Qt title bar still needs an overlapped top-level HWND on Windows.
 # These styles let the shell perform native minimize/restore and taskbar effects.
@@ -84,6 +87,15 @@ _WS_OVERLAPPEDWINDOW = (
     | _WS_MINIMIZEBOX | _WS_MAXIMIZEBOX
 )
 
+
+
+class _MONITORINFO(ctypes.Structure):
+    _fields_ = (
+        ("cbSize", wintypes.DWORD),
+        ("rcMonitor", wintypes.RECT),
+        ("rcWork", wintypes.RECT),
+        ("dwFlags", wintypes.DWORD),
+    )
 
 
 def _native_resize_hit_test(point, window_rect, border=8):
@@ -129,6 +141,27 @@ def _native_titlebar_hit_test(point, titlebar_rect, maximize_rect, other_button_
         # system-menu behavior for this custom-drawn title bar.
         return _HTCAPTION
     return None
+
+
+def _clamp_window_rect_to_work_area(
+    window_rect, work_area, visible_width=88, visible_titlebar=28
+):
+    """Keep a useful grab area visible without issuing another window move."""
+    width = max(1, int(window_rect.width()))
+    height = max(1, int(window_rect.height()))
+    visible_width = min(max(1, int(visible_width)), width, max(1, work_area.width()))
+    visible_titlebar = min(
+        max(1, int(visible_titlebar)), height, max(1, work_area.height())
+    )
+
+    min_x = work_area.left() - width + visible_width
+    max_x = work_area.right() - visible_width + 1
+    min_y = work_area.top()
+    max_y = work_area.bottom() - visible_titlebar + 1
+
+    left = min(max(window_rect.left(), min_x), max_x)
+    top = min(max(window_rect.top(), min_y), max_y)
+    return QRect(left, top, width, height)
 
 
 def _native_main_window_style(style):
@@ -260,6 +293,7 @@ class Window(QMainWindow):
         self.stack.setLineWidth(0)
         self._constraining_move = False
         self._native_snap_hwnd = 0
+        self._native_move_loop_active = False
         self.proxyWidget = ProxyWindow(self)
         self.stack.addWidget(self.proxyWidget)
         self.settingWidget = SettingWindow(self)
@@ -482,6 +516,90 @@ class Window(QMainWindow):
 
         try:
             native_message = wintypes.MSG.from_address(int(message))
+            if native_message.message == _WM_ENTERSIZEMOVE:
+                self._native_move_loop_active = True
+                return super().nativeEvent(event_type, message)
+            if native_message.message == _WM_EXITSIZEMOVE:
+                self._native_move_loop_active = False
+                return super().nativeEvent(event_type, message)
+            if native_message.message == _WM_MOVING:
+                # WM_MOVING provides the proposed screen-space RECT before
+                # Windows commits a new position. Adjust it in place instead
+                # of fighting the native move loop with QWidget.move().
+                user32 = ctypes.WinDLL("user32", use_last_error=True)
+                moving_rect = ctypes.cast(
+                    int(native_message.lParam),
+                    ctypes.POINTER(wintypes.RECT),
+                ).contents
+                monitor_from_rect = user32.MonitorFromRect
+                monitor_from_rect.argtypes = (
+                    ctypes.POINTER(wintypes.RECT), wintypes.DWORD
+                )
+                monitor_from_rect.restype = wintypes.HANDLE
+                monitor = monitor_from_rect(
+                    ctypes.byref(moving_rect), 2  # MONITOR_DEFAULTTONEAREST
+                )
+                if monitor:
+                    info = _MONITORINFO()
+                    info.cbSize = ctypes.sizeof(info)
+                    get_monitor_info = user32.GetMonitorInfoW
+                    get_monitor_info.argtypes = (
+                        wintypes.HANDLE, ctypes.POINTER(_MONITORINFO)
+                    )
+                    get_monitor_info.restype = wintypes.BOOL
+                    if get_monitor_info(monitor, ctypes.byref(info)):
+                        work = info.rcWork
+                        work_area = QRect(
+                            work.left,
+                            work.top,
+                            work.right - work.left,
+                            work.bottom - work.top,
+                        )
+                        width = moving_rect.right - moving_rect.left
+                        height = moving_rect.bottom - moving_rect.top
+
+                        dpi = 96
+                        try:
+                            get_dpi_for_monitor = ctypes.WinDLL("shcore").GetDpiForMonitor
+                            get_dpi_for_monitor.argtypes = (
+                                wintypes.HANDLE,
+                                ctypes.c_int,
+                                ctypes.POINTER(wintypes.UINT),
+                                ctypes.POINTER(wintypes.UINT),
+                            )
+                            get_dpi_for_monitor.restype = ctypes.c_long
+                            dpi_x = wintypes.UINT()
+                            dpi_y = wintypes.UINT()
+                            if get_dpi_for_monitor(
+                                monitor, 0, ctypes.byref(dpi_x), ctypes.byref(dpi_y)
+                            ) == 0 and dpi_x.value:
+                                dpi = dpi_x.value
+                        except (AttributeError, OSError, TypeError):
+                            pass
+
+                        scale = max(1.0, float(dpi) / 96.0)
+                        logical_work_width = work_area.width() / scale
+                        logical_work_height = work_area.height() / scale
+                        visible_width = round(
+                            min(120, max(88, int(logical_work_width // 12))) * scale
+                        )
+                        visible_titlebar = round(
+                            min(40, max(28, int(logical_work_height // 12))) * scale
+                        )
+                        proposed = QRect(
+                            moving_rect.left, moving_rect.top, width, height
+                        )
+                        constrained = _clamp_window_rect_to_work_area(
+                            proposed,
+                            work_area,
+                            visible_width=visible_width,
+                            visible_titlebar=visible_titlebar,
+                        )
+                        moving_rect.left = constrained.left()
+                        moving_rect.top = constrained.top()
+                        moving_rect.right = constrained.left() + width
+                        moving_rect.bottom = constrained.top() + height
+                        return True, 1
             if native_message.message == _WM_NCCALCSIZE:
                 # Keep the custom Qt frame edge-to-edge while the native
                 # thick-frame style supplies resize and Snap behavior.
@@ -652,7 +770,13 @@ class Window(QMainWindow):
 
     def moveEvent(self, event):
         super().moveEvent(event)
-        if self._constraining_move or self.isMinimized() or self.isMaximized() or self.isFullScreen():
+        if (
+            self._constraining_move
+            or self._native_move_loop_active
+            or self.isMinimized()
+            or self.isMaximized()
+            or self.isFullScreen()
+        ):
             return
         screen = self._screen_for_geometry(self.frameGeometry())
         if screen is None:

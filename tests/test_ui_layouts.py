@@ -2657,6 +2657,32 @@ def test_native_titlebar_hit_testing_enables_snap_and_system_menu():
     assert _WS_OVERLAPPEDWINDOW & _WS_SYSMENU
 
 
+def test_clamp_window_rect_to_work_area_keeps_a_grabbable_strip_visible():
+    from PySide6.QtCore import QRect
+
+    from ui import _clamp_window_rect_to_work_area
+
+    # A secondary monitor can have a negative X origin. Keep 88 px visible
+    # without assuming the primary monitor starts at (0, 0).
+    work_area = QRect(-1920, 0, 1920, 1040)
+    window_rect = QRect(-3100, -180, 1080, 720)
+    constrained = _clamp_window_rect_to_work_area(
+        window_rect, work_area, visible_width=88, visible_titlebar=40
+    )
+
+    assert constrained.left() == work_area.left() - window_rect.width() + 88
+    assert constrained.top() == work_area.top()
+    assert constrained.width() == window_rect.width()
+    assert constrained.height() == window_rect.height()
+
+    # Moving below the work area keeps the title-bar strip reachable.
+    below = QRect(-1600, 1300, 1080, 720)
+    constrained_below = _clamp_window_rect_to_work_area(
+        below, work_area, visible_width=88, visible_titlebar=40
+    )
+    assert constrained_below.top() == work_area.bottom() - 40 + 1
+
+
 def test_native_main_window_style_restores_overlapped_windows_semantics():
     from ui import (
         _WS_CAPTION,
@@ -2701,6 +2727,12 @@ def test_main_window_advertises_native_windows_snap_and_maximize_support():
     assert "native_message.message == _WM_NCHITTEST" in source
     assert "_HTMAXBUTTON = 9" in source
     assert "return _HTMAXBUTTON" in source
+    assert "_WM_MOVING = 0x0216" in source
+    assert "_WM_ENTERSIZEMOVE = 0x0231" in source
+    assert "_WM_EXITSIZEMOVE = 0x0232" in source
+    assert "self._native_move_loop_active = True" in source
+    assert "_clamp_window_rect_to_work_area(" in source
+    assert "MonitorFromRect" in source and "GetMonitorInfoW" in source
     assert "Caption controls take priority over the 8px resize border." in source
     assert "Blank title-bar space remains native caption space." in source
     assert "return True, hit_test" in source
@@ -3134,6 +3166,39 @@ def test_developer_tor_activity_exposes_per_port_events_and_error_counters():
     assert "one first request line per TCP connection" in page
     assert "_MAX_CONNECTIONS_PER_PORT = 128" in store
 
+
+
+def test_home_resize_work_is_coalesced_and_avoids_forced_layout_activation():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+
+    initialization = source[
+        source.index("self._home_responsive_mode = None"):
+        source.index("self.connection_status_frame")
+    ]
+    assert "self._home_resize_timer.setSingleShot(True)" in initialization
+    assert "self._home_resize_timer.setInterval(16)" in initialization
+    assert "self._home_resize_timer.timeout.connect(self._apply_home_resize_update)" in initialization
+
+    resize_event = source[
+        source.index("def resizeEvent(self, event) -> None:"):
+        source.index("def _build_home_endpoint_card", source.index("def resizeEvent(self, event) -> None:"))
+    ]
+    assert "self._home_resize_timer.start()" in resize_event
+    assert "_update_home_responsive_layout()" not in resize_event
+
+    status_geometry = source[
+        source.index("def _refresh_home_status_geometry"):
+        source.index("def _set_home_status_text", source.index("def _refresh_home_status_geometry"))
+    ]
+    assert "home_layout.invalidate()" not in status_geometry
+    assert "home_layout.activate()" not in status_geometry
+
+    connect_resize = source[
+        source.index("def _resize_home_connect_button"):
+        source.index("def _apply_home_resize_update", source.index("def _resize_home_connect_button"))
+    ]
+    assert "home_layout.activate()" not in connect_resize
 
 
 def test_home_page_uses_adaptive_compact_layout_without_scrollbars():
