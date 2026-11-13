@@ -1136,6 +1136,10 @@ class OnionHostingManager:
     def traffic_snapshot(self, service_id: str | None = None) -> dict[str, Any]:
         return self._traffic_store.snapshot(service_id)
 
+    def traffic_snapshots(self, service_ids: list[str]) -> dict[str, Any]:
+        """Return global and per-service counters from one short-lived SQLite read."""
+        return self._traffic_store.snapshot_many(service_ids)
+
     def traffic_events(self, service_id: str, limit: int = 250) -> list[dict[str, Any]]:
         return self._traffic_store.events(service_id, limit=limit)
 
