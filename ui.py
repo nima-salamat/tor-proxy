@@ -482,7 +482,10 @@ class Window(QMainWindow):
         self._deferred_startup_started = True
         start_proxy_deferred = getattr(self.proxyWidget, "start_deferred_startup", None)
         if callable(start_proxy_deferred):
-            start_proxy_deferred()
+            try:
+                start_proxy_deferred()
+            except Exception:
+                logger.exception("Could not schedule the deferred system-tunnel status check.")
         self._start_hotkey_manager_async()
 
     def _start_hotkey_manager_async(self) -> None:
