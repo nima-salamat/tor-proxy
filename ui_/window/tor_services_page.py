@@ -1589,15 +1589,10 @@ class TorServicesPage(QWidget):
             self._request_pool_restore()
             self.lbl_runtime_status.setText("Restoring saved profiles before starting them…")
             return
-        try:
-            pool = self._pool(create=True)
-        except Exception as exc:
-            self.lbl_runtime_status.setText(str(exc))
-            QMessageBox.warning(self, "Tor service pool", str(exc))
-            self.refresh_services()
-            return
         if pool is None:
-            QMessageBox.warning(self, "Tor service pool", "Tor services are not available until a Tor bundle is installed.")
+            # The only pool creation path is the background restore worker.
+            self._request_pool_restore()
+            self.lbl_runtime_status.setText("Restoring saved profiles before starting them…")
             return
 
         def start_registered():
