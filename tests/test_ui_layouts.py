@@ -205,11 +205,14 @@ def test_settings_and_main_window_construct_without_duplicate_layout_warning(qt_
         window = ui.Window()
         qt_app.processEvents()
 
-        # Host-rule editors are nested Settings pages, not top-level stack entries.
-        assert window.stack.indexOf(window.block_host_window) == -1
-        assert window.stack.indexOf(window.exclude_host_window) == -1
-        assert window.settingWidget.page_setting.indexOf(window.block_host_window) == 4
-        assert window.settingWidget.page_setting.indexOf(window.exclude_host_window) == 5
+        # Settings itself is also deferred until its top-level destination opens.
+        assert window.settingWidget is None
+        window._show_setting()
+        assert window.stack.currentWidget() is window.settingWidget
+        assert window.settingWidget.block_hosts_page is None
+        assert window.settingWidget.exclude_hosts_page is None
+        assert window.settingWidget.page_setting.widget(4).objectName() == "deferredBlockedHostsPage"
+        assert window.settingWidget.page_setting.widget(5).objectName() == "deferredExcludedHostsPage"
 
         settings_labels = [
             button.text() for button in window.settingWidget.settings_nav_buttons
@@ -226,9 +229,13 @@ def test_settings_and_main_window_construct_without_duplicate_layout_warning(qt_
         window._show_block_host()
         assert window.stack.currentWidget() is window.settingWidget
         assert window.settingWidget.page_setting.currentIndex() == 4
+        assert window.block_host_window is not None
+        assert window.settingWidget.page_setting.indexOf(window.block_host_window) == 4
         window._show_exclude_host()
         assert window.stack.currentWidget() is window.settingWidget
         assert window.settingWidget.page_setting.currentIndex() == 5
+        assert window.exclude_host_window is not None
+        assert window.settingWidget.page_setting.indexOf(window.exclude_host_window) == 5
     finally:
         install_handler(previous)
         if window is not None:
