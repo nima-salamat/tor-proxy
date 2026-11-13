@@ -24,7 +24,7 @@ def test_log_reported_100_percent_does_not_mark_tor_connected_before_ready(monke
         import tor as tor_adapter
     except (ImportError, OSError) as exc:
         pytest.skip(f"Desktop native libraries are unavailable: {exc}")
-    monkeypatch.setattr(tor_adapter, "_find_executable", lambda _candidate: (None, None))
+    monkeypatch.setattr(tor_adapter, "_find_executable", lambda _candidate, **_kwargs: (None, None))
     runner = tor_adapter.TorRunner(19550, 19551, 19552)
     data = _FakeData()
     runner.app_window = SimpleNamespace(data=data)

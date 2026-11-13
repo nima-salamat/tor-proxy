@@ -33,7 +33,7 @@ def _runner(monkeypatch, tmp_path, bridge_text):
         "webtunnel_use_default_tls": True,
     }
     monkeypatch.setattr(tor, "CONFIG", config)
-    monkeypatch.setattr(tor, "_find_executable", lambda _candidate: (None, None))
+    monkeypatch.setattr(tor, "_find_executable", lambda _candidate, **_kwargs: (None, None))
     runner = tor.TorRunner(19450, 19451, None)
     runner.bridge = True
     runner.bridges = bridge_text

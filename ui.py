@@ -36,7 +36,7 @@ from PySide6.QtGui import (
 import qdarkstyle
 from qdarkstyle.dark.palette import DarkPalette
 from qdarkstyle.light.palette import LightPalette
-from PySide6.QtCore import QEvent, QTimer, Qt, Signal, QSize, QPoint, QPointF, QRect
+from PySide6.QtCore import QEvent, QThreadPool, QTimer, Qt, Signal, QSize, QPoint, QPointF, QRect
 import qtawesome as qta
 from ui_.window.theme_transition import CircularThemeReveal
 from ui_.window.theme import resolve_system_theme
@@ -378,6 +378,8 @@ class Window(QMainWindow):
         self._exit_request_in_progress = False
         self._shutdown_in_progress = False
         self._shutdown_complete = False
+        self._deferred_startup_started = False
+        self._hotkey_start_worker = None
         self.tray_icon = QSystemTrayIcon(self)
         self.tray_icon.setIcon(QIcon(resource_path("assets/icon.png")))
         self.tray_icon.setToolTip("TorProxy")
@@ -468,10 +470,50 @@ class Window(QMainWindow):
             str(CONFIG["global_shortcut"]),
             lambda: self.toggle_visibility_signal.emit(),
         )
-        self.hotkey_manager.start()
+        # Global hotkeys are started asynchronously after the first Home frame.
         # Create the HWND while hidden and advertise the native sizing/maximize
         # capabilities before the first frame is shown to Windows.
         self._enable_native_snap_support()
+
+    def start_deferred_startup(self) -> None:
+        """Start optional desktop services after the first Home frame is painted."""
+        if self._deferred_startup_started:
+            return
+        self._deferred_startup_started = True
+        start_proxy_deferred = getattr(self.proxyWidget, "start_deferred_startup", None)
+        if callable(start_proxy_deferred):
+            try:
+                start_proxy_deferred()
+            except Exception:
+                logger.exception("Could not schedule the deferred system-tunnel status check.")
+        self._start_hotkey_manager_async()
+
+    def _start_hotkey_manager_async(self) -> None:
+        """Initialize the global-hotkey backend away from the GUI thread."""
+        if (
+            self._hotkey_start_worker is not None
+            or getattr(self, "_closing", False)
+            or not hasattr(self, "hotkey_manager")
+        ):
+            return
+        worker = Worker(self.hotkey_manager.start)
+        worker.signals.finished.connect(self._on_hotkey_manager_started)
+        worker.signals.error.connect(self._on_hotkey_manager_start_failed)
+        self._hotkey_start_worker = worker
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_hotkey_manager_started(self, _result: str) -> None:
+        self._hotkey_start_worker = None
+        # A close can race with the queued startup task. Stop again after the
+        # backend confirms startup so no global shortcut survives application exit.
+        if getattr(self, "_closing", False):
+            self.hotkey_manager.stop()
+
+    def _on_hotkey_manager_start_failed(self, error: str) -> None:
+        self._hotkey_start_worker = None
+        logger.warning("Global hotkey initialization failed: %s", error)
+        if not getattr(self, "_closing", False):
+            self.hotkey_error_signal.emit(str(error))
 
     def _create_traffic_session_state(self):
         """Capture the initial traffic-counter baseline for this application run."""
@@ -2533,9 +2575,7 @@ class Window(QMainWindow):
             pass
         if hasattr(self, "_state_timer"):
             self._state_timer.start()
-        hotkey_start = getattr(getattr(self, "hotkey_manager", None), "start", None)
-        if callable(hotkey_start):
-            hotkey_start()
+        self._start_hotkey_manager_async()
         QMessageBox.warning(
             self,
             "Could not exit TorProxy",

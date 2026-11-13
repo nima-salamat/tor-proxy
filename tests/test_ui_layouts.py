@@ -2044,7 +2044,7 @@ def test_sing_box_manager_uses_bundle_manager_visual_language_and_live_state_ref
     assert 'QFrame#infoCard, QFrame#contentCard' in tunnel_source
     assert 'QListWidget#releaseList' in tunnel_source and 'QListWidget#releaseList' in bundle_source
     assert 'QPushButton#primaryButton' in bundle_source
-    assert 'self._state_refresh_timer.setInterval(1000)' in tunnel_source
+    assert 'self._state_refresh_timer.setInterval(2500)' in tunnel_source
     assert 'self._state_refresh_timer.timeout.connect(self._refresh_state)' in tunnel_source
     assert 'self.btn_start_stop.setIcon(qta.icon(action_icon' in tunnel_source
     assert 'self._refresh_state()' in tunnel_source
@@ -2138,7 +2138,8 @@ def test_tray_menu_uses_a_modern_theme_aware_floating_surface():
     assert "visible_only and not page.isVisible()" in local_theme
     assert "self._ensure_page_theme(page, mode)" in local_theme
     assert "self._sync_tray_menu_theme(mode)" in local_theme
-    assert "self._ensure_page_theme(self.stack.widget(index))" in source
+    assert "if page is not None and page.isVisible():" in source
+    assert "self._ensure_page_theme(page)" in source
     assert "self._ensure_visible_theme_pages()" in source
     assert "self._apply_local_theme_styles(mode, visible_only=True)" in source
     assert "self._sync_tray_menu_theme()" in source[
@@ -3978,3 +3979,40 @@ def test_background_page_work_is_started_only_after_navigation():
     assert "self._refresh_traffic_metrics(self._last_traffic_snapshots)" in card_refresh
     assert "Worker(" in stats and "self._load_history_snapshot" in stats
     assert "self._sync_session_tracker()" in stats
+
+
+
+def test_startup_defers_global_hotkeys_and_browser_dialog_import():
+    repository = Path(__file__).resolve().parents[1]
+    ui_source = (repository / "ui.py").read_text(encoding="utf-8")
+    proxy_source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+    main_source = (repository / "main.py").read_text(encoding="utf-8")
+
+    assert "self.hotkey_manager.start()" not in ui_source
+    assert "def start_deferred_startup" in ui_source
+    assert "QThreadPool.globalInstance().start(worker)" in ui_source
+    assert "win.start_deferred_startup()" in main_source
+    preflight = proxy_source[
+        proxy_source.index("    def _check_ports_worker(self):"):
+        proxy_source.index("    def _request_stop_services(", proxy_source.index("    def _check_ports_worker(self):"))
+    ]
+    assert 'self.tor.update_path(CONFIG["tor_path"], verify=True)' in preflight
+    module_source = proxy_source.split("class ProxyWindow(", 1)[0]
+    assert "from ui_.window.open_browser_dialog import OpenBrowserDialog" not in module_source
+    browser_method = proxy_source[
+        proxy_source.index("    def open_browser_dialog(self):"):
+        proxy_source.index("    def whatismyip_clicked(self):")
+    ]
+    assert "from ui_.window.open_browser_dialog import OpenBrowserDialog" in browser_method
+
+
+def test_home_tunnel_summary_uses_background_status_snapshot():
+    repository = Path(__file__).resolve().parents[1]
+    proxy_source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+    start = proxy_source.index("    def _update_tunnel_hint(self):")
+    end = proxy_source.index("    def toggle_system_tunnel(self):", start)
+    summary = proxy_source[start:end]
+
+    assert "manager.status()" not in summary
+    assert "_system_tunnel_home_snapshot" in summary
+    assert "_refresh_system_tunnel_status_async()" in summary
