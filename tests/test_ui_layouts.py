@@ -3991,7 +3991,13 @@ def test_startup_defers_global_hotkeys_and_browser_dialog_import():
     assert "def start_deferred_startup" in ui_source
     assert "QThreadPool.globalInstance().start(worker)" in ui_source
     assert "win.start_deferred_startup()" in main_source
-    assert "from ui_.window.open_browser_dialog import OpenBrowserDialog" not in proxy_source
+    preflight = proxy_source[
+        proxy_source.index("    def _check_ports_worker(self):"):
+        proxy_source.index("    def _request_stop_services(", proxy_source.index("    def _check_ports_worker(self):"))
+    ]
+    assert 'self.tor.update_path(CONFIG["tor_path"], verify=True)' in preflight
+    module_source = proxy_source.split("class ProxyWindow(", 1)[0]
+    assert "from ui_.window.open_browser_dialog import OpenBrowserDialog" not in module_source
     browser_method = proxy_source[
         proxy_source.index("    def open_browser_dialog(self):"):
         proxy_source.index("    def whatismyip_clicked(self):")
