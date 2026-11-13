@@ -35,7 +35,10 @@ def main() -> int:
     import tor
     import updater
 
-    with tempfile.TemporaryDirectory(prefix="torproxy-package-smoke-") as temporary:
+    with tempfile.TemporaryDirectory(
+        prefix="torproxy-package-smoke-",
+        ignore_cleanup_errors=(os.name == "nt"),
+    ) as temporary:
         user_bundle_root = Path(temporary) / "user-bundles"
         user_bundle_root.mkdir(parents=True)
         updater.BUNDLE_DIR = str(user_bundle_root)

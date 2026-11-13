@@ -43,7 +43,6 @@ from ui_.window.theme import resolve_system_theme
 from utils import resource_path
 import logging
 from config import CONFIG, IS_WINDOWS
-from torproxy.hotkeys import HotkeyManager, parse_hotkey
 from ui_.worker.worker import Worker
 from ui_.window.proxy_window import ProxyWindow
 from ui_.window.custom_titlebar import CustomTitleBar
@@ -464,12 +463,8 @@ class Window(QMainWindow):
 
         self.toggle_visibility_signal.connect(self._toggle_visibility)
         self.hotkey_error_signal.connect(self._on_hotkey_error)
-        self.hotkey_manager = HotkeyManager(on_error=self.hotkey_error_signal.emit)
-        self.hotkey_manager.register(
-            "window_visibility",
-            str(CONFIG["global_shortcut"]),
-            lambda: self.toggle_visibility_signal.emit(),
-        )
+        # The hotkey backend is imported and constructed after the first Home frame.
+        self.hotkey_manager = None
         # Global hotkeys are started asynchronously after the first Home frame.
         # Create the HWND while hidden and advertise the native sizing/maximize
         # capabilities before the first frame is shown to Windows.
@@ -488,15 +483,25 @@ class Window(QMainWindow):
                 logger.exception("Could not schedule the deferred system-tunnel status check.")
         self._start_hotkey_manager_async()
 
+    def _ensure_hotkey_manager(self):
+        """Import and configure the optional global-hotkey backend on demand."""
+        if self.hotkey_manager is None:
+            from torproxy.hotkeys import HotkeyManager
+
+            self.hotkey_manager = HotkeyManager(on_error=self.hotkey_error_signal.emit)
+            self.hotkey_manager.register(
+                "window_visibility",
+                str(CONFIG["global_shortcut"]),
+                lambda: self.toggle_visibility_signal.emit(),
+            )
+        return self.hotkey_manager
+
     def _start_hotkey_manager_async(self) -> None:
         """Initialize the global-hotkey backend away from the GUI thread."""
-        if (
-            self._hotkey_start_worker is not None
-            or getattr(self, "_closing", False)
-            or not hasattr(self, "hotkey_manager")
-        ):
+        if self._hotkey_start_worker is not None or getattr(self, "_closing", False):
             return
-        worker = Worker(self.hotkey_manager.start)
+        manager = self._ensure_hotkey_manager()
+        worker = Worker(manager.start)
         worker.signals.finished.connect(self._on_hotkey_manager_started)
         worker.signals.error.connect(self._on_hotkey_manager_start_failed)
         self._hotkey_start_worker = worker
@@ -506,7 +511,8 @@ class Window(QMainWindow):
         self._hotkey_start_worker = None
         # A close can race with the queued startup task. Stop again after the
         # backend confirms startup so no global shortcut survives application exit.
-        if getattr(self, "_closing", False):
+        manager = getattr(self, "hotkey_manager", None)
+        if getattr(self, "_closing", False) and self.hotkey_manager is not None:
             self.hotkey_manager.stop()
 
     def _on_hotkey_manager_start_failed(self, error: str) -> None:
@@ -1384,6 +1390,8 @@ class Window(QMainWindow):
 
     def _set_global_shortcut(self, shortcut):
         """Apply and persist a global shortcut as one transaction."""
+        from torproxy.hotkeys import parse_hotkey
+
         normalized = parse_hotkey(shortcut).text
         previous = str(CONFIG["global_shortcut"])
         if normalized == previous:
@@ -1391,6 +1399,7 @@ class Window(QMainWindow):
 
         # Register first. Native Windows registration is synchronous for edits,
         # so a conflicting key combination can be rejected before config changes.
+        self._ensure_hotkey_manager()
         self.hotkey_manager.update_shortcut("window_visibility", normalized)
         try:
             CONFIG["global_shortcut"] = normalized
@@ -2530,8 +2539,9 @@ class Window(QMainWindow):
         self._closing = True
         if hasattr(self, "_state_timer"):
             self._state_timer.stop()
-        if hasattr(self, "hotkey_manager"):
-            self.hotkey_manager.stop()
+        hotkey_manager = getattr(self, "hotkey_manager", None)
+        if hotkey_manager is not None:
+            hotkey_manager.stop()
         try:
             self.tray_icon.hide()
         except Exception:

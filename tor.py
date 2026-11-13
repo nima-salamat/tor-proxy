@@ -14,18 +14,27 @@ from PySide6.QtCore import QObject, Signal
 
 from config import BUNDLE_DIR, CONFIG, IS_WINDOWS
 from proxy import ProxyHandler, ThreadedHTTPServer, route_host, worker_data_usage_tracker, _record_bytes as record_proxy_traffic
-from torproxy.bridge_distribution import BridgeDistribution, distribute_bridge_records
-from torproxy.bridge_health import DEFAULT_MAX_WORKERS
-from torproxy.circuit_monitor import TorEventMonitor
-from torproxy.health import TorProbeResult, probe_tor_socks
-from torproxy.network_quality import NetworkQualityWindow
 from torproxy.paths import user_directories
-from torproxy.socks_gateway import SocksFailoverGateway
-from torproxy.socks_gateway_credentials import read_socks_gateway_credentials
 from torproxy.tor_manager import TorManager, TorManagerError, TorSettings, TorState
 from utils import resource_path
 
 logger = logging.getLogger(__name__)
+
+
+def probe_tor_socks(*args, **kwargs):
+    """Load the health-probe implementation only when a Tor pool is checking readiness."""
+    from torproxy.health import probe_tor_socks as implementation
+
+    return implementation(*args, **kwargs)
+
+
+def read_socks_gateway_credentials():
+    """Load separate LAN SOCKS credentials only when that optional listener is requested."""
+    from torproxy.socks_gateway_credentials import (
+        read_socks_gateway_credentials as implementation,
+    )
+
+    return implementation()
 
 
 def _bundle_root_for_path(path: Path, managed_root: Path) -> Path | None:
@@ -261,6 +270,8 @@ class TorRunner(QObject):
         return ("0.0.0.0", username, password)
 
     def _build_socks_gateway(self, access: tuple[str, str, str]) -> SocksFailoverGateway:
+        from torproxy.socks_gateway import SocksFailoverGateway
+
         host, username, password = access
         return SocksFailoverGateway(
             int(self.socks_port),
@@ -350,6 +361,8 @@ class TorRunner(QObject):
         if type(control_port) is not int or not 1 <= control_port <= 65535:
             return
         try:
+            from torproxy.circuit_monitor import TorEventMonitor
+
             monitor = TorEventMonitor(
                 control_port,
                 expected_pid=int(pid) if pid is not None else None,
@@ -646,6 +659,9 @@ class TorRunner(QObject):
 
     def _probe_ready_backends(self) -> bool:
         """Probe each bootstrapped worker through its own SOCKS listener in parallel."""
+        from torproxy.health import TorProbeResult
+        from torproxy.network_quality import NetworkQualityWindow
+
         candidates = self._process_ready_managers()
         if not candidates or self._stopping.is_set():
             return False
@@ -1169,6 +1185,8 @@ class TorRunner(QObject):
         if not self.bridge or not bool(CONFIG["auto_prune_bridges"]) or self._stopping.is_set():
             return manager
 
+        from torproxy.bridge_health import DEFAULT_MAX_WORKERS
+
         try:
             parsed = TorManager._parse_bridges(self.bridges)
         except Exception:
@@ -1463,6 +1481,8 @@ class TorRunner(QObject):
         if not self.bridge:
             self._bridge_distribution = None
             return None
+        from torproxy.bridge_distribution import BridgeDistribution, distribute_bridge_records
+
         if not managers:
             raise TorManagerError("The primary Tor pool has no workers for bridge assignment.")
 
@@ -1501,6 +1521,8 @@ class TorRunner(QObject):
 
     def _run(self):
         try:
+            from torproxy.network_quality import NetworkQualityWindow
+
             manager = self.manager or self._make_manager(0)
             manager = self._auto_prune_bridges_before_start(manager)
             if self._stopping.is_set():

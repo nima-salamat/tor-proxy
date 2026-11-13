@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 def _write_status_file(path_value: str, token: str, status: str, message: str) -> bool:
-    """Atomically publish a tiny status record for the dependency-free Windows launcher."""
+    """Atomically publish a tiny status record for the native splash launchers."""
     path = Path(path_value)
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
@@ -17,9 +17,13 @@ def _write_status_file(path_value: str, token: str, status: str, message: str) -
         # Hex keeps this wire format line-oriented and trivial to parse from Win32.
         payload = f"{token}\n{status}\n{str(message or '').encode('utf-8').hex()}\n"
         with temporary.open("x", encoding="ascii", newline="\n") as stream:
+            if os.name != "nt":
+                os.chmod(temporary, 0o600)
             stream.write(payload)
             stream.flush()
-            os.fsync(stream.fileno())
+        # This file contains transient launch progress, not durable user data.
+        # Atomic replacement protects readers from partial records without
+        # forcing the Python startup thread to wait for a storage flush.
         os.replace(temporary, path)
         return True
     except OSError:
@@ -34,9 +38,9 @@ def notify_launcher(status: str, message: str = "") -> bool:
     """Notify the native launcher about startup progress, readiness, or failure.
 
     Direct Python launches have no launcher environment and are intentionally
-    unaffected. Windows uses an authenticated atomic status file so the
-    launcher does not need Qt or another IPC runtime. Linux keeps its existing
-    authenticated QLocalSocket channel.
+    unaffected. Both native launchers can use an authenticated atomic status
+    file without waiting for a Qt local-socket handshake during Python imports.
+    QLocalSocket remains available as the Linux retry fallback.
     """
     if status not in {"starting", "ready", "failed"}:
         return False
