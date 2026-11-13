@@ -2656,15 +2656,15 @@ def test_native_titlebar_hit_testing_enables_system_menu_without_stealing_maximi
 
     # Windows receives HTMAXBUTTON, so it owns the Snap Layout hover delay and flyout.
     assert _native_titlebar_hit_test(
-        QPoint(431, 20), titlebar, maximize, other_buttons
+        maximize.center(), titlebar, maximize, other_buttons
     ) == _HTMAXBUTTON
 
     # Minimize and Close remain Qt client controls too.
     assert _native_titlebar_hit_test(
-        QPoint(428, 20), titlebar, maximize, other_buttons
+        minimize.center(), titlebar, maximize, other_buttons
     ) == _HTCLIENT
     assert _native_titlebar_hit_test(
-        QPoint(505, 20), titlebar, maximize, other_buttons
+        close.center(), titlebar, maximize, other_buttons
     ) == _HTCLIENT
 
     # Empty title-bar space remains caption area for drag and native system menu.
@@ -3800,6 +3800,8 @@ def test_custom_titlebar_controls_use_square_edges_and_full_strip_dimensions():
     assert "QPushButton#titleBarCloseButton:pressed" in ui_source
 
 def test_system_move_positions_pointer_at_titlebar_center_before_posting(monkeypatch):
+    from PySide6.QtCore import QPoint, QRect
+
     import ui
 
     events = []
@@ -3815,8 +3817,7 @@ def test_system_move_positions_pointer_at_titlebar_center_before_posting(monkeyp
 
     class _TitleBar:
         def rect(self):
-            from PySide6.QtCore import QRect
-            return QRect(0, 0, 900, 40)
+                return QRect(0, 0, 900, 40)
 
         def mapToGlobal(self, point):
             from PySide6.QtCore import QPoint
@@ -3844,11 +3845,11 @@ def test_system_move_positions_pointer_at_titlebar_center_before_posting(monkeyp
 
     assert len(events) == 2
     assert events[0][0] == "cursor"
-    assert events[0][1].x() == 120 + 900 // 2
-    assert events[0][1].y() == 240 + 40 // 2
+    expected_center = QPoint(120, 240) + QRect(0, 0, 900, 40).center()
+    assert events[0][1] == expected_center
     assert events[1][0] == "post"
-    assert events[1][0:2] == ("post", ui._WM_SYSCOMMAND)
-    assert events[1][2] == ui._SC_MOVE
+    assert events[1][1].value == ui._WM_SYSCOMMAND
+    assert events[1][2].value == ui._SC_MOVE
 
 
 def test_system_size_command_does_not_reposition_pointer(monkeypatch):
@@ -3880,7 +3881,7 @@ def test_system_size_command_does_not_reposition_pointer(monkeypatch):
 
     ui.Window._post_native_system_command(fake, ui._SC_SIZE)
     assert len(posted) == 1
-    assert posted[0][2] == ui._SC_SIZE
+    assert posted[0][2].value == ui._SC_SIZE
 
 def test_page_theme_is_applied_only_when_its_cached_mode_is_stale():
     import ui
@@ -3891,13 +3892,14 @@ def test_page_theme_is_applied_only_when_its_cached_mode_is_stale():
         apply_theme=lambda mode: applied.append(mode),
     )
 
-    assert ui.Window._ensure_page_theme(page, "dark") is False
+    owner = SimpleNamespace()
+    assert ui.Window._ensure_page_theme(owner, page, "dark") is False
     assert applied == []
 
-    assert ui.Window._ensure_page_theme(page, "light") is True
+    assert ui.Window._ensure_page_theme(owner, page, "light") is True
     assert applied == ["light"]
     assert page._torproxy_theme_mode == "light"
-    assert ui.Window._ensure_page_theme(page, "light") is False
+    assert ui.Window._ensure_page_theme(owner, page, "light") is False
     assert applied == ["light"]
 
 
