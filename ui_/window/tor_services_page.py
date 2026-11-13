@@ -821,6 +821,8 @@ class TorServicesPage(QWidget):
         self._stop_thread_pool = QThreadPool(self)
         self._stop_thread_pool.setMaxThreadCount(max(1, min(8, int(CONFIG["tor_service_workers"] or 4))))
         self._workers: dict[str, Worker] = {}
+        self._pool_restore_worker = None
+        self._pool_restore_in_progress = False
         self._busy_services: set[str] = set()
         self._stop_workers: dict[str, Worker] = {}
         self._force_stop_workers: dict[str, Worker] = {}
@@ -837,7 +839,6 @@ class TorServicesPage(QWidget):
         self._health_refresh_timer = QTimer(self)
         self._health_refresh_timer.setInterval(5000)
         self._health_refresh_timer.timeout.connect(self._refresh_live_service_health)
-        self._health_refresh_timer.start()
 
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(20, 12, 20, 12)
@@ -1050,7 +1051,15 @@ class TorServicesPage(QWidget):
             ):
                 widget.hide()
         self.apply_theme(CONFIG["mode"])
-        self.refresh_services()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._health_refresh_timer.start()
+        QTimer.singleShot(0, self.refresh_services)
+
+    def hideEvent(self, event) -> None:
+        self._health_refresh_timer.stop()
+        super().hideEvent(event)
 
     def set_stop_worker_limit(self, value: int) -> None:
         self._stop_thread_pool.setMaxThreadCount(max(1, min(8, int(value))))
@@ -1327,13 +1336,8 @@ class TorServicesPage(QWidget):
             # immutable TorSettings snapshot; they never enter profile metadata.
             write_upstream_credentials(service_id, credentials["username"], credentials["password"])
             credentials_updated = True
-            if pool is None:
-                # Creating a profile is still useful before a bundle is installed.
-                # It will be registered automatically when a compatible bundle exists.
-                try:
-                    pool = self._pool(create=True)
-                except Exception:
-                    pool = None
+            # Do not create/restore the service pool from this GUI callback.
+            # The next refresh restores persisted profiles in a background worker.
 
             # Pool creation may restore the old persisted version of this profile.
             # Detect and replace that late registration before writing the edited copy.
@@ -1571,6 +1575,14 @@ class TorServicesPage(QWidget):
         TorLogDialog(self, path, manager=manager).exec()
 
     def start_all(self) -> None:
+        if not self._profiles():
+            self.lbl_runtime_status.setText("Create an isolated Tor profile before using Start all.")
+            return
+        pool = self._pool()
+        if pool is None:
+            self._request_pool_restore()
+            self.lbl_runtime_status.setText("Restoring saved profiles before starting them…")
+            return
         try:
             pool = self._pool(create=True)
         except Exception as exc:
@@ -1601,6 +1613,28 @@ class TorServicesPage(QWidget):
         for service_id in pool.service_ids:
             self._request_service_stop(service_id)
 
+    def _request_pool_restore(self) -> None:
+        if self._proxy is None or self._pool_restore_in_progress:
+            return
+        self._pool_restore_in_progress = True
+        worker = Worker(self._proxy._ensure_tor_service_pool)
+        worker.signals.finished.connect(self._on_pool_restore_finished)
+        worker.signals.error.connect(self._on_pool_restore_failed)
+        self._pool_restore_worker = worker
+        self._thread_pool.start(worker)
+
+    def _on_pool_restore_finished(self, _result: str) -> None:
+        self._pool_restore_worker = None
+        self._pool_restore_in_progress = False
+        if self.isVisible():
+            self.refresh_services()
+
+    def _on_pool_restore_failed(self, error: str) -> None:
+        self._pool_restore_worker = None
+        self._pool_restore_in_progress = False
+        self.lbl_runtime_status.setText(f"Could not restore saved Tor profiles: {error}")
+        logger.warning("Could not restore saved Custom Tor profiles: %s", error)
+
     def refresh_services(self) -> None:
         if self._primary_tor is not None:
             snapshot = getattr(self._primary_tor, "pool_health_snapshot", None)
@@ -1617,11 +1651,9 @@ class TorServicesPage(QWidget):
         profiles = self._profiles()
         pool = self._pool()
         pool_error = ""
-        if pool is None and self._proxy is not None:
-            try:
-                pool = self._pool(create=True)
-            except Exception as exc:
-                pool_error = str(exc)
+        if pool is None and profiles and self._proxy is not None:
+            pool_error = "Restoring saved isolated Tor profiles…"
+            self._request_pool_restore()
 
         statuses = pool.status() if pool is not None else {}
         self._service_state_labels.clear()
