@@ -48,12 +48,12 @@ from ui_.window.dialogs import QMessageBox
 from torproxy.paths import user_directories
 from torproxy.system_tunnel import SystemTunnelCancelled, SystemTunnelManager
 from ui_.window.tor_log_dialog import TorLogDialog
-from ui_.window.open_browser_dialog import OpenBrowserDialog
 import ipaddress
 import json
 import logging
 import socket
 import threading
+import time
 import qtawesome as qta
 
 logger = logging.getLogger(__name__)
@@ -241,6 +241,18 @@ class ProxyWindow(QWidget):
         self.system_tunnel_manager = SystemTunnelManager()
         self._system_tunnel_busy = False
         self._system_tunnel_worker = None
+        self._deferred_startup_enabled = False
+        self._system_tunnel_status_worker = None
+        self._system_tunnel_status_checked_at = 0.0
+        self._system_tunnel_home_snapshot = {
+            "checked": False,
+            "installed_version": None,
+            "status": {
+                "active": False,
+                "verified": False,
+                "detail": "System tunnel status has not been checked yet.",
+            },
+        }
         self.tor.bridge = CONFIG["bridge"]
         self.tor.bridges = CONFIG["bridges"]
         self.tor.app_window = self
@@ -1301,6 +1313,8 @@ class ProxyWindow(QWidget):
             )
             return
         try:
+            from ui_.window.open_browser_dialog import OpenBrowserDialog
+
             dialog = OpenBrowserDialog(self, proxy_port=int(self.proxy.port))
             dialog.exec()
         except Exception as exc:
@@ -2115,7 +2129,6 @@ class ProxyWindow(QWidget):
                 raise
 
             try:
-                self.tor.update_path(CONFIG["tor_path"])
                 self.tor.start()
 
             except Exception as e:
@@ -2178,6 +2191,19 @@ class ProxyWindow(QWidget):
 
         messages.extend(port_messages)
         messages.append("All four persistent listener ports are available.")
+
+        # Verify the complete managed-bundle archive digest off the GUI thread.
+        # TorRunner.start() also guards alternative launch paths, but this is the
+        # normal Home preflight so the main thread never hashes a large archive.
+        try:
+            if not self.tor.update_path(CONFIG["tor_path"], verify=True):
+                raise TorManagerError(
+                    "No compatible Tor Expert Bundle passed integrity and platform validation."
+                )
+        except Exception as exc:
+            messages.append(f"Tor Expert Bundle validation failed: {exc}")
+            return json.dumps([False, {}, messages])
+        messages.append("Tor Expert Bundle integrity and platform checks passed.")
         return json.dumps([True, ports, messages])
 
     def _request_stop_services(self, *, final_status: str = "NOT CONNECTED") -> bool:
@@ -2434,6 +2460,67 @@ class ProxyWindow(QWidget):
             refresh_tunnel_page()
 
 
+    def start_deferred_startup(self) -> None:
+        """Start nonessential Home checks only after the first frame is visible."""
+        if self._deferred_startup_enabled:
+            return
+        self._deferred_startup_enabled = True
+        self._refresh_system_tunnel_status_async()
+        self._update_tunnel_hint()
+
+    def _read_system_tunnel_home_snapshot(self) -> str:
+        """Collect local Tunnel status off the GUI thread for the Home summary."""
+        manager = self.system_tunnel_manager
+        return json.dumps({
+            "checked": True,
+            "installed_version": manager.installed_version,
+            "status": manager.status(),
+        })
+
+    def _refresh_system_tunnel_status_async(self) -> None:
+        """Refresh the cached Home status without blocking Qt's event loop."""
+        if (
+            not self._deferred_startup_enabled
+            or self.system_tunnel_manager is None
+            or self._system_tunnel_status_worker is not None
+            or not hasattr(self, "thread_pool")
+        ):
+            return
+        worker = Worker(self._read_system_tunnel_home_snapshot)
+        worker.signals.finished.connect(self._on_system_tunnel_status_refreshed)
+        worker.signals.error.connect(self._on_system_tunnel_status_failed)
+        self._system_tunnel_status_worker = worker
+        self._system_tunnel_status_checked_at = time.monotonic()
+        self.thread_pool.start(worker)
+
+    def _on_system_tunnel_status_refreshed(self, result: str) -> None:
+        try:
+            snapshot = json.loads(str(result))
+            if not isinstance(snapshot, dict) or not isinstance(snapshot.get("status"), dict):
+                raise ValueError("The system tunnel status response is malformed.")
+            snapshot["checked"] = True
+            self._system_tunnel_home_snapshot = snapshot
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            self._on_system_tunnel_status_failed(str(exc))
+            return
+        self._system_tunnel_status_worker = None
+        self._system_tunnel_status_checked_at = time.monotonic()
+        self._update_tunnel_hint()
+
+    def _on_system_tunnel_status_failed(self, error: str) -> None:
+        self._system_tunnel_home_snapshot = {
+            "checked": True,
+            "installed_version": self._system_tunnel_home_snapshot.get("installed_version"),
+            "status": {
+                "active": False,
+                "verified": False,
+                "detail": str(error or "Could not verify system tunnel status."),
+            },
+        }
+        self._system_tunnel_status_worker = None
+        self._system_tunnel_status_checked_at = time.monotonic()
+        self._update_tunnel_hint()
+
     def _update_tunnel_hint(self):
         """Refresh the compact Home status and expose the correct tunnel action."""
         label = getattr(self, "system_tunnel_hint_label", None)
@@ -2443,6 +2530,13 @@ class ProxyWindow(QWidget):
         action_button = getattr(self, "btn_system_tunnel_action", None)
         manage_button = getattr(self, "btn_system_tunnel_manage", None)
         manager = getattr(self, "system_tunnel_manager", None)
+        if (
+            manager is not None
+            and self._deferred_startup_enabled
+            and self._system_tunnel_status_worker is None
+            and time.monotonic() - self._system_tunnel_status_checked_at >= 8.0
+        ):
+            self._refresh_system_tunnel_status_async()
         show_action = False
         show_manage = False
         action_text = "Start"
@@ -2457,8 +2551,9 @@ class ProxyWindow(QWidget):
         else:
             installed_version = None
             try:
-                installed_version = manager.installed_version
-                state = manager.status()
+                snapshot = self._system_tunnel_home_snapshot
+                installed_version = snapshot.get("installed_version")
+                state = snapshot.get("status", {"active": False, "verified": False})
                 tunnel_page = getattr(self._parent, "tunnel_window", None)
                 page_busy = bool(getattr(tunnel_page, "_busy", False))
                 busy = bool(
@@ -2469,7 +2564,14 @@ class ProxyWindow(QWidget):
                 )
                 tor_ready = bool(self.running and self.connected and not self._stopping)
 
-                if state.get("active"):
+                if not snapshot.get("checked"):
+                    message = "Checking system tunnel status…"
+                    action_text = "Checking…"
+                    action_icon = "fa6s.arrows-rotate"
+                    action_enabled = False
+                    action_tooltip = "System tunnel status is being checked in the background."
+                    show_action = True
+                elif state.get("active"):
                     message = (
                         f"System tunnel active · sing-box v{installed_version or 'verified'}"
                     )
