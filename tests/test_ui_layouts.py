@@ -2614,6 +2614,49 @@ def test_native_resize_hit_testing_covers_all_window_edges_and_corners(qt_app):
     assert _native_resize_hit_test(QPoint(510, 150), bounds) is None
 
 
+def test_native_titlebar_hit_testing_enables_snap_and_system_menu():
+    from PySide6.QtCore import QPoint, QRect
+
+    from ui import (
+        _HTCAPTION,
+        _HTCLIENT,
+        _HTMAXBUTTON,
+        _WS_OVERLAPPEDWINDOW,
+        _WS_SYSMENU,
+        _native_titlebar_hit_test,
+    )
+
+    titlebar = QRect(0, 0, 500, 40)
+    minimize = QRect(410, 5, 36, 30)
+    maximize = QRect(451, 5, 36, 30)
+    close = QRect(492, 5, 36, 30)
+    other_buttons = (minimize, close)
+
+    # Windows receives the actual maximize hit-test code only while the pointer
+    # is inside that control. The shell, not a Qt timer, applies its normal hover dwell.
+    assert _native_titlebar_hit_test(
+        QPoint(469, 20), titlebar, maximize, other_buttons
+    ) == _HTMAXBUTTON
+
+    # Minimize and Close remain Qt client controls.
+    assert _native_titlebar_hit_test(
+        QPoint(428, 20), titlebar, maximize, other_buttons
+    ) == _HTCLIENT
+    assert _native_titlebar_hit_test(
+        QPoint(505, 20), titlebar, maximize, other_buttons
+    ) == _HTCLIENT
+
+    # Empty title-bar space stays caption hit area, allowing the native
+    # Alt+Space and right-click system menu while retaining drag behavior.
+    assert _native_titlebar_hit_test(
+        QPoint(200, 20), titlebar, maximize, other_buttons
+    ) == _HTCAPTION
+    assert _native_titlebar_hit_test(
+        QPoint(200, 50), titlebar, maximize, other_buttons
+    ) is None
+    assert _WS_OVERLAPPEDWINDOW & _WS_SYSMENU
+
+
 def test_native_main_window_style_restores_overlapped_windows_semantics():
     from ui import (
         _WS_CAPTION,
@@ -2656,6 +2699,10 @@ def test_main_window_advertises_native_windows_snap_and_maximize_support():
     assert "def nativeEvent(self, event_type, message):" in source
     assert "native_message.message == _WM_NCCALCSIZE" in source
     assert "native_message.message == _WM_NCHITTEST" in source
+    assert "_HTMAXBUTTON = 9" in source
+    assert "return _HTMAXBUTTON" in source
+    assert "Caption controls take priority over the 8px resize border." in source
+    assert "Blank title-bar space remains native caption space." in source
     assert "return True, hit_test" in source
     assert "titlebar._sync_maximize_button()" in source
     assert "handle.startSystemMove()" in titlebar_source

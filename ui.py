@@ -59,6 +59,7 @@ _THEME_STYLESHEET_CACHE = {}
 # Native hit-test values used by custom Windows title bars and resize borders.
 _HTCLIENT = 1
 _HTCAPTION = 2
+_HTMAXBUTTON = 9
 _HTLEFT = 10
 _HTRIGHT = 11
 _HTTOP = 12
@@ -115,15 +116,17 @@ def _native_resize_hit_test(point, window_rect, border=8):
 
 
 def _native_titlebar_hit_test(point, titlebar_rect, maximize_rect, other_button_rects):
-    """Keep custom controls Qt-handled and expose only the title bar as draggable."""
+    """Expose the native maximize hit target and preserve draggable title-bar space."""
     if maximize_rect.contains(point):
-        # HTMAXBUTTON activates the Windows 11 Snap Layouts flyout on hover.
-        # This is a custom Qt button, so leave it in the client area and let
-        # QPushButton.clicked drive the app's explicit maximize/restore toggle.
-        return _HTCLIENT
+        # Let Windows 11 own the Snap Layouts hover dwell timer and flyout.
+        # A quick pointer pass therefore does not open the menu; no app timer
+        # or hand-built popup is needed.
+        return _HTMAXBUTTON
     if any(rect.contains(point) for rect in other_button_rects):
         return _HTCLIENT
     if titlebar_rect.contains(point):
+        # Windows uses HTCAPTION to provide the standard Alt+Space / right-click
+        # system-menu behavior for this custom-drawn title bar.
         return _HTCAPTION
     return None
 
@@ -505,16 +508,7 @@ class Window(QMainWindow):
                     round(screen_point.y / ratio),
                 )
 
-                # Native edge/corner hit tests let Windows perform the resize
-                # loop itself, including the correct cursor and min-size handling.
-                # Do not expose resize handles while maximized or in full-screen.
-                if not self.isMaximized() and not self.isFullScreen():
-                    resize_hit = _native_resize_hit_test(
-                        point, QRect(0, 0, self.width(), self.height())
-                    )
-                    if resize_hit is not None:
-                        return True, resize_hit
-
+                hit_test = None
                 if hasattr(self, "title_bar"):
                     titlebar = self.title_bar
                     titlebar_rect = QRect(
@@ -533,8 +527,27 @@ class Window(QMainWindow):
                     hit_test = _native_titlebar_hit_test(
                         point, titlebar_rect, maximize_rect, other_button_rects
                     )
-                    if hit_test is not None:
+                    # Caption controls take priority over the 8px resize border.
+                    # In particular, the top few pixels of Maximize must still be
+                    # HTMAXBUTTON or Windows cannot start the Snap hover timer there.
+                    if hit_test in (_HTMAXBUTTON, _HTCLIENT):
                         return True, hit_test
+
+                # Native edge/corner hit tests let Windows perform the resize
+                # loop itself, including the correct cursor and min-size handling.
+                # Do not expose resize handles while maximized or in full-screen.
+                if not self.isMaximized() and not self.isFullScreen():
+                    resize_hit = _native_resize_hit_test(
+                        point, QRect(0, 0, self.width(), self.height())
+                    )
+                    if resize_hit is not None:
+                        return True, resize_hit
+
+                # Blank title-bar space remains native caption space. Besides
+                # dragging and double-click maximize, this allows Windows to
+                # show its real system menu for Alt+Space and caption right-click.
+                if hit_test is not None:
+                    return True, hit_test
         except (AttributeError, OSError, TypeError, ValueError):
             logger.debug("Native title-bar hit testing failed.", exc_info=True)
 
