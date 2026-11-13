@@ -7,12 +7,16 @@ import qtawesome as qta
 from utils import resource_path
 
 
+_TITLE_BAR_HEIGHT = 40
+_WINDOW_CONTROL_BUTTON_WIDTH = 46
+
+
 class CustomTitleBar(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent_ = parent
         self.setObjectName("customTitleBar")
-        self.setFixedHeight(40)
+        self.setFixedHeight(_TITLE_BAR_HEIGHT)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         # Keep the app identity anchored to the left, using the high-resolution
@@ -30,9 +34,20 @@ class CustomTitleBar(QWidget):
         self.title.setObjectName("windowTitle")
         self.title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
-        self.btn_min = QPushButton(self)
-        self.btn_max = QPushButton(self)
-        self.btn_close = QPushButton(self)
+        # Keep the window controls in their own edge-to-edge strip. Its zero-
+        # margin layout makes the buttons meet one another and the titlebar edges.
+        self.window_controls = QWidget(self)
+        self.window_controls.setObjectName("titleBarWindowControls")
+        self.window_controls.setFixedSize(
+            3 * _WINDOW_CONTROL_BUTTON_WIDTH, _TITLE_BAR_HEIGHT
+        )
+        self.window_controls_layout = QHBoxLayout(self.window_controls)
+        self.window_controls_layout.setContentsMargins(0, 0, 0, 0)
+        self.window_controls_layout.setSpacing(0)
+
+        self.btn_min = QPushButton(self.window_controls)
+        self.btn_max = QPushButton(self.window_controls)
+        self.btn_close = QPushButton(self.window_controls)
         self._icon_color = "#eff1f4"
         self.btn_min.setIcon(qta.icon("fa6s.window-minimize", color=self._icon_color))
         self.btn_max.setIcon(qta.icon("fa6s.window-maximize", color=self._icon_color))
@@ -44,8 +59,14 @@ class CustomTitleBar(QWidget):
         self.btn_max.setToolTip("Maximize / restore")
         self.btn_close.setToolTip("Hide TorProxy to the system tray")
         for button in (self.btn_min, self.btn_max, self.btn_close):
-            button.setFixedSize(36, 30)
+            button.setFixedSize(_WINDOW_CONTROL_BUTTON_WIDTH, _TITLE_BAR_HEIGHT)
             button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            button.setAutoDefault(False)
+            button.setDefault(False)
+
+        self.window_controls_layout.addWidget(self.btn_min)
+        self.window_controls_layout.addWidget(self.btn_max)
+        self.window_controls_layout.addWidget(self.btn_close)
 
         self.btn_min.clicked.connect(parent.showMinimized)
         self.btn_max.clicked.connect(self._toggle_maximized)
@@ -55,16 +76,14 @@ class CustomTitleBar(QWidget):
         self.btn_max.setAccessibleName("Maximize or restore window")
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 5, 7, 5)
+        layout.setContentsMargins(12, 0, 0, 0)
         layout.setSpacing(5)
         layout.addWidget(self.app_icon, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(self.title, 0, Qt.AlignmentFlag.AlignVCenter)
         # The flexible gap belongs between the left-aligned branding and
         # right-aligned window controls, not before the branding.
         layout.addStretch(1)
-        layout.addWidget(self.btn_min)
-        layout.addWidget(self.btn_max)
-        layout.addWidget(self.btn_close)
+        layout.addWidget(self.window_controls, 0, Qt.AlignmentFlag.AlignRight)
         self._start_pos = None
         self._screen_signal_connected = False
 

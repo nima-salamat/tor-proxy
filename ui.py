@@ -1750,9 +1750,16 @@ class Window(QMainWindow):
             QWidget#menuBarCorner QPushButton:hover {{ background: {hover}; }}
             QWidget#customTitleBar {{ background: {menu_surface}; border-bottom: 1px solid {border}; }}
             QLabel#windowTitle {{ color: {text}; font-size: 13px; font-weight: 700; }}
-            QPushButton#titleBarButton, QPushButton#titleBarCloseButton {{ background: transparent; border: none; border-radius: 5px; }}
+            QWidget#titleBarWindowControls {{ background: transparent; border: none; }}
+            QPushButton#titleBarButton, QPushButton#titleBarCloseButton {{
+                min-width: 46px; max-width: 46px; min-height: 40px; max-height: 40px;
+                background: transparent; border: none; border-radius: 0px;
+                padding: 0px; margin: 0px;
+            }}
             QPushButton#titleBarButton:hover {{ background: {hover}; }}
+            QPushButton#titleBarButton:pressed {{ background: rgba(90, 105, 125, 0.24); }}
             QPushButton#titleBarCloseButton:hover {{ background: #c42b1c; }}
+            QPushButton#titleBarCloseButton:pressed {{ background: #a61f16; }}
             QPushButton#themeToggle, QPushButton#notificationButton {{ background: transparent; min-height: 28px; border: none; border-radius: 7px; padding: 0 7px; }}
             QPushButton#themeToggle:hover, QPushButton#notificationButton:hover {{ background: {hover}; }}
             QPushButton#notificationButton {{ font-weight: 700; }}

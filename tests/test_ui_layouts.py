@@ -2496,7 +2496,7 @@ def test_custom_titlebar_shows_high_resolution_app_icon_beside_title(qt_app):
     assert logo.objectName() == "customTitleBarAppIcon"
     assert pixmap is not None and not pixmap.isNull()
     assert titlebar.layout().indexOf(logo) < titlebar.layout().indexOf(titlebar.title)
-    assert titlebar.layout().indexOf(titlebar.title) < titlebar.layout().indexOf(titlebar.btn_min)
+    assert titlebar.layout().indexOf(titlebar.title) < titlebar.layout().indexOf(titlebar.window_controls)
     assert logo.width() == 24 and logo.height() == 24
 
 
@@ -2566,9 +2566,9 @@ def test_native_titlebar_hit_testing_uses_windows_snap_hit_code():
     from ui import _HTCAPTION, _HTCLIENT, _HTMAXBUTTON, _native_titlebar_hit_test
 
     titlebar = QRect(0, 0, 500, 40)
-    minimize = QRect(374, 5, 36, 30)
-    maximize = QRect(415, 5, 36, 30)
-    close = QRect(456, 5, 36, 30)
+    minimize = QRect(362, 0, 46, 40)
+    maximize = QRect(408, 0, 46, 40)
+    close = QRect(454, 0, 46, 40)
 
     assert _native_titlebar_hit_test(
         maximize.center(), titlebar, maximize, (minimize, close)
@@ -2641,9 +2641,9 @@ def test_native_titlebar_hit_testing_enables_system_menu_without_stealing_maximi
     )
 
     titlebar = QRect(0, 0, 500, 40)
-    minimize = QRect(410, 5, 36, 30)
-    maximize = QRect(451, 5, 36, 30)
-    close = QRect(492, 5, 36, 30)
+    minimize = QRect(362, 0, 46, 40)
+    maximize = QRect(408, 0, 46, 40)
+    close = QRect(454, 0, 46, 40)
     other_buttons = (minimize, close)
 
     # Windows receives HTMAXBUTTON, so it owns the Snap Layout hover delay and flyout.
@@ -3693,4 +3693,75 @@ def test_exit_requests_are_deferred_and_coalesced(monkeypatch):
     assert scheduled == []
     assert fake._exit_request_pending is False
     assert fake._exit_request_in_progress is False
+
+def test_custom_titlebar_window_controls_fill_right_edge_without_gaps(qt_app):
+    from PySide6.QtCore import QPoint, QRect
+    from ui import _HTCAPTION, _HTCLIENT, _HTMAXBUTTON, _native_titlebar_hit_test
+    from ui_.window.custom_titlebar import CustomTitleBar
+
+    class _TitleBarHost(QMainWindow):
+        def hide_to_tray(self):
+            self.hide()
+
+    parent = _TitleBarHost()
+    titlebar = CustomTitleBar(parent)
+    try:
+        titlebar.resize(900, 40)
+        titlebar.show()
+        titlebar.layout().activate()
+        qt_app.processEvents()
+
+        controls = titlebar.window_controls
+        buttons = (titlebar.btn_min, titlebar.btn_max, titlebar.btn_close)
+        assert controls.geometry() == QRect(900 - 3 * 46, 0, 3 * 46, 40)
+        assert controls.layout().getContentsMargins() == (0, 0, 0, 0)
+        assert controls.layout().spacing() == 0
+        assert titlebar.layout().getContentsMargins() == (12, 0, 0, 0)
+
+        for button in buttons:
+            assert button.height() == titlebar.height() == 40
+            assert button.y() == 0
+            assert button.width() == 46
+
+        assert buttons[0].x() == 0
+        assert buttons[1].x() == buttons[0].geometry().right() + 1
+        assert buttons[2].x() == buttons[1].geometry().right() + 1
+        assert buttons[-1].geometry().right() == controls.rect().right()
+        assert controls.geometry().right() == titlebar.rect().right()
+
+        def in_titlebar(button):
+            return QRect(button.mapTo(titlebar, QPoint(0, 0)), button.size())
+
+        minimize_rect, maximize_rect, close_rect = map(in_titlebar, buttons)
+        other_buttons = (minimize_rect, close_rect)
+        assert _native_titlebar_hit_test(
+            maximize_rect.center(), titlebar.rect(), maximize_rect, other_buttons
+        ) == _HTMAXBUTTON
+        assert _native_titlebar_hit_test(
+            close_rect.center(), titlebar.rect(), maximize_rect, other_buttons
+        ) == _HTCLIENT
+        assert _native_titlebar_hit_test(
+            QPoint(150, 20), titlebar.rect(), maximize_rect, other_buttons
+        ) == _HTCAPTION
+    finally:
+        titlebar.close()
+        parent.close()
+        titlebar.deleteLater()
+        parent.deleteLater()
+        qt_app.processEvents()
+
+
+def test_custom_titlebar_controls_use_square_edges_and_full_strip_dimensions():
+    repository = Path(__file__).resolve().parents[1]
+    titlebar = (repository / "ui_/window/custom_titlebar.py").read_text(encoding="utf-8")
+    ui_source = (repository / "ui.py").read_text(encoding="utf-8")
+    assert "_TITLE_BAR_HEIGHT = 40" in titlebar
+    assert "_WINDOW_CONTROL_BUTTON_WIDTH = 46" in titlebar
+    assert "button.setFixedSize(_WINDOW_CONTROL_BUTTON_WIDTH, _TITLE_BAR_HEIGHT)" in titlebar
+    assert "self.window_controls_layout.setContentsMargins(0, 0, 0, 0)" in titlebar
+    assert "self.window_controls_layout.setSpacing(0)" in titlebar
+    assert "layout.setContentsMargins(12, 0, 0, 0)" in titlebar
+    assert "QWidget#titleBarWindowControls" in ui_source
+    assert "border-radius: 0px;" in ui_source
+    assert "QPushButton#titleBarCloseButton:pressed" in ui_source
 
