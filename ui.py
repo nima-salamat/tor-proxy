@@ -488,13 +488,12 @@ class Window(QMainWindow):
         if self.hotkey_manager is None:
             from torproxy.hotkeys import HotkeyManager
 
-            manager = HotkeyManager(on_error=self.hotkey_error_signal.emit)
-            manager.register(
+            self.hotkey_manager = HotkeyManager(on_error=self.hotkey_error_signal.emit)
+            self.hotkey_manager.register(
                 "window_visibility",
                 str(CONFIG["global_shortcut"]),
                 lambda: self.toggle_visibility_signal.emit(),
             )
-            self.hotkey_manager = manager
         return self.hotkey_manager
 
     def _start_hotkey_manager_async(self) -> None:
@@ -513,8 +512,8 @@ class Window(QMainWindow):
         # A close can race with the queued startup task. Stop again after the
         # backend confirms startup so no global shortcut survives application exit.
         manager = getattr(self, "hotkey_manager", None)
-        if getattr(self, "_closing", False) and manager is not None:
-            manager.stop()
+        if getattr(self, "_closing", False) and self.hotkey_manager is not None:
+            self.hotkey_manager.stop()
 
     def _on_hotkey_manager_start_failed(self, error: str) -> None:
         self._hotkey_start_worker = None
@@ -1400,13 +1399,13 @@ class Window(QMainWindow):
 
         # Register first. Native Windows registration is synchronous for edits,
         # so a conflicting key combination can be rejected before config changes.
-        manager = self._ensure_hotkey_manager()
-        manager.update_shortcut("window_visibility", normalized)
+        self._ensure_hotkey_manager()
+        self.hotkey_manager.update_shortcut("window_visibility", normalized)
         try:
             CONFIG["global_shortcut"] = normalized
         except Exception:
             try:
-                manager.update_shortcut("window_visibility", previous)
+                self.hotkey_manager.update_shortcut("window_visibility", previous)
             except Exception:
                 logger.exception("Failed to roll back the previous global shortcut.")
             raise
