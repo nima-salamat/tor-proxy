@@ -2044,7 +2044,7 @@ def test_sing_box_manager_uses_bundle_manager_visual_language_and_live_state_ref
     assert 'QFrame#infoCard, QFrame#contentCard' in tunnel_source
     assert 'QListWidget#releaseList' in tunnel_source and 'QListWidget#releaseList' in bundle_source
     assert 'QPushButton#primaryButton' in bundle_source
-    assert 'self._state_refresh_timer.setInterval(1000)' in tunnel_source
+    assert 'self._state_refresh_timer.setInterval(2500)' in tunnel_source
     assert 'self._state_refresh_timer.timeout.connect(self._refresh_state)' in tunnel_source
     assert 'self.btn_start_stop.setIcon(qta.icon(action_icon' in tunnel_source
     assert 'self._refresh_state()' in tunnel_source
@@ -2138,7 +2138,11 @@ def test_tray_menu_uses_a_modern_theme_aware_floating_surface():
     assert "visible_only and not page.isVisible()" in local_theme
     assert "self._ensure_page_theme(page, mode)" in local_theme
     assert "self._sync_tray_menu_theme(mode)" in local_theme
-    assert "self._ensure_page_theme(self.stack.widget(index))" in source
+    ensure_visible_start = source.index("def _ensure_visible_theme_pages(self):")
+    ensure_visible_end = source.index("\\n    def ", ensure_visible_start + 10)
+    ensure_visible_theme = source[ensure_visible_start:ensure_visible_end]
+    assert "if page is not None and page.isVisible():" in ensure_visible_theme
+    assert "self._ensure_page_theme(page)" in ensure_visible_theme
     assert "self._ensure_visible_theme_pages()" in source
     assert "self._apply_local_theme_styles(mode, visible_only=True)" in source
     assert "self._sync_tray_menu_theme()" in source[
