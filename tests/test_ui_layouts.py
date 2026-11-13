@@ -2546,6 +2546,20 @@ def test_dropdown_header_copy_has_no_individual_background_or_border():
     ]
 
 
+def test_native_maximize_event_forwarding_preserves_button_and_pressed_state():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui.py").read_text(encoding="utf-8")
+    helper = source[
+        source.index("def _forward_native_max_button_mouse_event"):
+        source.index("def nativeEvent", source.index("def _forward_native_max_button_mouse_event"))
+    ]
+
+    assert "event_type, button, buttons" in helper
+    assert "            button," in helper
+    assert "            buttons," in helper
+    assert "Qt.MouseButton.LeftButton" not in helper
+
+
 def test_native_titlebar_hit_testing_uses_windows_snap_hit_code():
     from PySide6.QtCore import QPoint, QRect
 
@@ -2734,7 +2748,10 @@ def test_main_window_advertises_native_windows_snap_and_maximize_support():
     assert "return super().nativeEvent(event_type, message)" in source
     assert "QEvent.Type.MouseButtonPress" in source
     assert "QEvent.Type.MouseButtonRelease" in source
+    assert "QEvent.Type.MouseMove" in source
     assert "QEvent.Type.Enter if hovered else QEvent.Type.Leave" in source
+    assert "Consume the non-client press." in source
+    assert "Do not enter DefWindowProc's classic caption-button loop." in source
     assert "_WM_MOVING = 0x0216" in source
     assert "_WM_SIZING = 0x0214" in source
     assert "_WM_ENTERSIZEMOVE = 0x0231" in source

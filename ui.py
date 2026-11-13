@@ -71,6 +71,7 @@ _HTBOTTOMLEFT = 16
 _HTBOTTOMRIGHT = 17
 _WM_NCCALCSIZE = 0x0083
 _WM_NCHITTEST = 0x0084
+_WM_NCMOUSEMOVE = 0x00A0
 _WM_NCLBUTTONDOWN = 0x00A1
 _WM_NCLBUTTONUP = 0x00A2
 _WM_NCLBUTTONDBLCLK = 0x00A3
@@ -529,24 +530,24 @@ class Window(QMainWindow):
             )
             button.update()
 
-    def _forward_native_max_button_mouse_event(self, event_type, buttons):
-        """Deliver a Windows non-client caption press/release to the Qt maximize button."""
+    def _forward_native_max_button_mouse_event(self, event_type, button, buttons):
+        """Translate native non-client mouse messages to the existing Qt maximize button."""
         titlebar = getattr(self, "title_bar", None)
-        button = getattr(titlebar, "btn_max", None) if titlebar is not None else None
-        if button is None:
+        target = getattr(titlebar, "btn_max", None) if titlebar is not None else None
+        if target is None:
             return
 
         global_position = QCursor.pos()
-        local_position = button.mapFromGlobal(global_position)
+        local_position = target.mapFromGlobal(global_position)
         event = QMouseEvent(
             event_type,
             QPointF(local_position),
             QPointF(global_position),
-            Qt.MouseButton.LeftButton,
+            button,
             buttons,
             Qt.KeyboardModifier.NoModifier,
         )
-        QApplication.sendEvent(button, event)
+        QApplication.sendEvent(target, event)
 
     def nativeEvent(self, event_type, message):
         """Give Windows native drag and maximize hit-testing for the custom title bar."""
@@ -562,9 +563,22 @@ class Window(QMainWindow):
             titlebar = getattr(self, "title_bar", None)
             max_button = getattr(titlebar, "btn_max", None) if titlebar is not None else None
 
+            if native_message.message == _WM_NCMOUSEMOVE:
+                if self._native_max_button_hovered or self._native_max_button_pressed:
+                    self._forward_native_max_button_mouse_event(
+                        QEvent.Type.MouseMove,
+                        Qt.MouseButton.NoButton,
+                        Qt.MouseButton.LeftButton
+                        if self._native_max_button_pressed
+                        else Qt.MouseButton.NoButton,
+                    )
+                # Do not enter DefWindowProc's classic caption-button loop.
+                # HTMAXBUTTON is enough for Windows 11's native Snap flyout.
+                return True, 0
+
             if native_message.message == _WM_NCMOUSELEAVE:
                 self._set_native_max_button_hovered(False)
-                return super().nativeEvent(event_type, message)
+                return True, 0
 
             if (
                 native_message.message in (_WM_NCLBUTTONDOWN, _WM_NCLBUTTONDBLCLK)
@@ -573,9 +587,13 @@ class Window(QMainWindow):
             ):
                 self._native_max_button_pressed = True
                 self._forward_native_max_button_mouse_event(
-                    QEvent.Type.MouseButtonPress, Qt.MouseButton.LeftButton
+                    QEvent.Type.MouseButtonPress,
+                    Qt.MouseButton.LeftButton,
+                    Qt.MouseButton.LeftButton,
                 )
-                return super().nativeEvent(event_type, message)
+                # Consume the non-client press. DefWindowProc would draw/operate
+                # its own caption button over the existing Qt maximize widget.
+                return True, 0
 
             if (
                 native_message.message == _WM_NCLBUTTONUP
@@ -583,7 +601,9 @@ class Window(QMainWindow):
             ):
                 self._native_max_button_pressed = False
                 self._forward_native_max_button_mouse_event(
-                    QEvent.Type.MouseButtonRelease, Qt.MouseButton.NoButton
+                    QEvent.Type.MouseButtonRelease,
+                    Qt.MouseButton.LeftButton,
+                    Qt.MouseButton.NoButton,
                 )
                 return True, 0
 
