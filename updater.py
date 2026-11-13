@@ -460,12 +460,16 @@ def _verification_marker(bundle_dir: Path) -> Path:
     return bundle_dir / ".torproxy-verified.json"
 
 
-def check_bundle_compatibility(filename: str) -> bool:
-    """Accept intact managed installs with signed, HTTPS-only, or local-unverified provenance."""
+def _bundle_compatibility_metadata(filename: str | os.PathLike[str]) -> dict | None:
+    """Read and validate bundle provenance and layout without hashing its archive.
+
+    This is suitable only for responsive Startup discovery. A bundle discovered
+    through this fast path must pass check_bundle_compatibility() before Tor runs.
+    """
     path = Path(filename).resolve()
     name = path.name
     if not path.is_dir() or not name.startswith("tor-expert-bundle-"):
-        return False
+        return None
     try:
         metadata = json.loads(_verification_marker(path).read_text(encoding="utf-8"))
         signature_verified = (
@@ -481,43 +485,64 @@ def check_bundle_compatibility(filename: str) -> bool:
             and metadata.get("verification_method") == "local_unverified"
         )
         if not (signature_verified or https_only or local_unverified):
-            return False
+            return None
         expected_digest = metadata.get("archive_sha256", "")
-        if not re.fullmatch(r"[a-f0-9]{64}", expected_digest):
-            return False
+        if not isinstance(expected_digest, str) or not re.fullmatch(r"[a-f0-9]{64}", expected_digest):
+            return None
         archive = path.with_name(path.name + ".tar.gz")
-        if not archive.is_file() or sha256_file(archive) != expected_digest:
-            return False
+        if not archive.is_file():
+            return None
         if signature_verified and not archive.with_name(archive.name + ".asc").is_file():
-            return False
-    except (OSError, ValueError, AttributeError):
-        return False
-    try:
+            return None
         platform_name = _platform_name()
         arch = _architecture_name()
-    except BundleVerificationError:
-        return False
-    if not name.startswith("tor-expert-bundle-{}-{}-".format(platform_name, arch)):
-        return False
-    executable = path / "tor" / ("tor.exe" if platform_name == "windows" else "tor")
-    if not executable.is_file():
-        return False
-    return os.name == "nt" or os.access(executable, os.X_OK)
+        if not name.startswith("tor-expert-bundle-{}-{}-".format(platform_name, arch)):
+            return None
+        executable = path / "tor" / ("tor.exe" if platform_name == "windows" else "tor")
+        if not executable.is_file():
+            return None
+        if os.name != "nt" and not os.access(executable, os.X_OK):
+            return None
+        return metadata
+    except (OSError, ValueError, AttributeError, BundleVerificationError):
+        return None
 
 
-def get_own_bundles() -> list[str]:
-    """Return verified bundles installed in the user's writable data directory."""
+def check_bundle_compatibility(filename: str) -> bool:
+    """Accept only intact managed installs with supported provenance and executable layout."""
+    path = Path(filename).resolve()
+    metadata = _bundle_compatibility_metadata(path)
+    if metadata is None:
+        return False
+    archive = path.with_name(path.name + ".tar.gz")
+    try:
+        return sha256_file(archive) == metadata["archive_sha256"]
+    except (OSError, ValueError, BundleVerificationError):
+        return False
+
+
+def get_own_bundles(*, verify: bool = True) -> list[str]:
+    """Return managed user bundles; verify=False skips only the expensive archive hash.
+
+    The fast mode is for Startup discovery only. Tor launch must use the default
+    strict mode so the archive digest is checked before the executable is started.
+    """
     root = Path(resource_path(BUNDLE_DIR))
     if not root.is_dir():
         return []
+    validator = (
+        check_bundle_compatibility
+        if verify
+        else lambda path: _bundle_compatibility_metadata(path) is not None
+    )
     return [
         str(path) for path in sorted(root.glob("tor-expert-bundle-*"))
-        if path.is_dir() and check_bundle_compatibility(str(path))
+        if path.is_dir() and validator(path)
     ]
 
 
-def get_packaged_bundles() -> list[str]:
-    """Return verified, read-only bundles shipped next to a frozen application."""
+def get_packaged_bundles(*, verify: bool = True) -> list[str]:
+    """Return app-packaged bundles; verify=False skips only the archive hash for Startup."""
     if not getattr(sys, "frozen", False):
         return []
     try:
@@ -526,10 +551,15 @@ def get_packaged_bundles() -> list[str]:
         return []
     if not root.is_dir():
         return []
+    validator = (
+        check_bundle_compatibility
+        if verify
+        else lambda path: _bundle_compatibility_metadata(path) is not None
+    )
     return [
         str(path.resolve())
         for path in sorted(root.glob("tor-expert-bundle-*"))
-        if path.is_dir() and check_bundle_compatibility(str(path))
+        if path.is_dir() and validator(path)
     ]
 
 
