@@ -610,10 +610,12 @@ class TunnelManagerWindow(QWidget):
         if state.get("active") or not state.get("verified", True):
             self._run_operation("stop", self.manager.stop)
             return
-        if not self.manager.is_installed():
+        if self._integrity_check_result is not True:
+            # The full archive/engine digest check is already performed by the
+            # background verifier. Starting also revalidates inside its Worker.
             QMessageBox.information(
-                self, "Tunnel engine not installed",
-                "Open Updates → Tunnel and install a verified sing-box version first.",
+                self, "Tunnel engine not verified",
+                "Wait for the background integrity check to finish, then try again.",
             )
             return
         if not self.proxy.running or not self.proxy.connected:
