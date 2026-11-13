@@ -1481,7 +1481,7 @@ class TorServicesPage(QWidget):
         QMessageBox.warning(self, "Tor service operation failed", error)
 
     def _update_global_actions(self) -> None:
-        busy = self._busy_all or bool(self._workers)
+        busy = self._busy_all or bool(self._workers) or self._pool_restore_in_progress
         stopping = bool(self._pending_stops or self._pending_force_stops)
         pool = self._pool()
         self.btn_add.setEnabled(not busy and not stopping)
@@ -1493,8 +1493,14 @@ class TorServicesPage(QWidget):
         if operation in {"stop", "force_stop"}:
             self._request_service_stop(service_id, force=operation == "force_stop")
             return
+        pool = self._pool()
+        if pool is None:
+            self._request_pool_restore()
+            self.lbl_runtime_status.setText(
+                "Restoring saved isolated Tor profiles. Try Start again when the list is ready."
+            )
+            return
         try:
-            pool = self._pool(create=True)
             profile = next((item for item in self._profiles() if item.get("id") == service_id), None)
             if profile is None:
                 raise TorServicePoolError(f"Unknown saved Tor service '{service_id}'.")
