@@ -139,7 +139,7 @@ def main() -> int:
 
     from config import CONFIG
     from torproxy.paths import user_directories
-    from ui import Window
+    from ui import Window, _THEME_STYLESHEET_CACHE
     from ui_.window.dialogs import QMessageBox
     from ui_.window.theme import resolve_system_theme
     from utils import resource_path
@@ -204,9 +204,13 @@ def main() -> int:
         with portalocker.Lock(str(lock_path), mode="a", timeout=0):
             stylesheet_started = time.perf_counter()
             if CONFIG["mode"] == "light":
-                app.setStyleSheet(qdarkstyle.load_stylesheet(palette=LightPalette()))
+                stylesheet = qdarkstyle.load_stylesheet(palette=LightPalette())
             else:
-                app.setStyleSheet(qdarkstyle.load_stylesheet(palette=DarkPalette()))
+                stylesheet = qdarkstyle.load_stylesheet(palette=DarkPalette())
+            # Window._set_theme() runs during Home construction. Share the exact
+            # startup stylesheet so it does not regenerate the same large QSS.
+            _THEME_STYLESHEET_CACHE[CONFIG["mode"]] = stylesheet
+            app.setStyleSheet(stylesheet)
             LOGGER.info(
                 "Startup phase: stylesheet generation and install %.1f ms.",
                 (time.perf_counter() - stylesheet_started) * 1000.0,

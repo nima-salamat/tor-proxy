@@ -38,3 +38,14 @@ def test_windows_launcher_starts_application_before_optional_logo_decode():
     win_main = source[source.index("int WINAPI wWinMain"):source.rfind("#else\n#include <cerrno>")]
     assert win_main.index("createWindow(state, instance)") < win_main.index("startApp(state)")
     assert win_main.index("startApp(state)") < win_main.rindex("loadSplashLogo(state)")
+
+
+
+def test_startup_stylesheet_is_reused_by_window_theme_setup():
+    repository = Path(__file__).resolve().parents[1]
+    main_source = (repository / "main.py").read_text(encoding="utf-8")
+    ui_source = (repository / "ui.py").read_text(encoding="utf-8")
+
+    assert "from ui import Window, _THEME_STYLESHEET_CACHE" in main_source
+    assert "_THEME_STYLESHEET_CACHE[CONFIG[\"mode\"]] = stylesheet" in main_source
+    assert "cached = _THEME_STYLESHEET_CACHE.get(mode)" in ui_source
