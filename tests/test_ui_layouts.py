@@ -2724,6 +2724,7 @@ def test_main_window_advertises_native_windows_snap_and_maximize_support():
     assert "_HTMAXBUTTON = 9" in source
     assert "return _HTMAXBUTTON" in source
     assert "_WM_MOVING = 0x0216" in source
+    assert "_WM_SIZING = 0x0214" in source
     assert "_WM_ENTERSIZEMOVE = 0x0231" in source
     assert "_WM_EXITSIZEMOVE = 0x0232" in source
     assert "self._native_move_loop_active = True" in source

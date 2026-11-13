@@ -71,6 +71,7 @@ _HTBOTTOMRIGHT = 17
 _WM_NCCALCSIZE = 0x0083
 _WM_NCHITTEST = 0x0084
 _WM_MOVING = 0x0216
+_WM_SIZING = 0x0214
 _WM_ENTERSIZEMOVE = 0x0231
 _WM_EXITSIZEMOVE = 0x0232
 
@@ -522,10 +523,10 @@ class Window(QMainWindow):
             if native_message.message == _WM_EXITSIZEMOVE:
                 self._native_move_loop_active = False
                 return super().nativeEvent(event_type, message)
-            if native_message.message == _WM_MOVING:
-                # WM_MOVING provides the proposed screen-space RECT before
-                # Windows commits a new position. Adjust it in place instead
-                # of fighting the native move loop with QWidget.move().
+            if native_message.message in (_WM_MOVING, _WM_SIZING):
+                # WM_MOVING / WM_SIZING provide the proposed screen-space RECT
+                # before Windows commits a new position or size. Adjust it in
+                # place instead of fighting the native sizing loop with move().
                 user32 = ctypes.WinDLL("user32", use_last_error=True)
                 moving_rect = ctypes.cast(
                     int(native_message.lParam),
