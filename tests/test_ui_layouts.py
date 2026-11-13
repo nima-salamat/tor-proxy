@@ -3637,3 +3637,60 @@ def test_window_system_menu_does_not_call_unsupported_qmenu_icon_size_api():
     assert "window_system_menu.setIconSize(" not in construction
     assert "self.window_system_menu.setSeparatorsCollapsible(False)" in construction
     assert "action.setIcon(qta.icon(icon_name, color=color))" in source
+
+def test_window_system_menu_close_matches_alt_f4_and_uses_confirmed_exit():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui.py").read_text(encoding="utf-8")
+    construction = source[
+        source.index("def _create_window_system_menu(self):"):
+        source.index("def _sync_window_system_menu_actions(self):")
+    ]
+    assert 'close_action = QAction("Close", self)' in construction
+    assert 'close_action.setShortcut(QKeySequence("Alt+F4"))' in construction
+    assert "close_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)" in construction
+    assert "self.addAction(close_action)" in construction
+    assert "close_action.triggered.connect(self._request_exit)" in construction
+    assert 'self.window_system_actions["close"].triggered.connect(self.close)' not in construction
+
+    assert "_SC_CLOSE = 0xF060" in source
+    native_event = source[
+        source.index("def nativeEvent(self, event_type, message):"):
+        source.index("def ", source.index("def nativeEvent(self, event_type, message):") + 5)
+    ]
+    assert "system_command == _SC_CLOSE" in native_event
+    assert "self._request_exit()" in native_event
+
+
+def test_exit_requests_are_deferred_and_coalesced(monkeypatch):
+    import ui
+
+    scheduled = []
+    calls = []
+
+    def ask_close():
+        calls.append("exit")
+        # A duplicate Alt+F4/native SC_CLOSE arriving during the modal
+        # confirmation must not open a second confirmation dialog.
+        ui.Window._request_exit(fake)
+
+    fake = SimpleNamespace(
+        _exit_request_pending=False,
+        _exit_request_in_progress=False,
+        _exit_authorized=False,
+        _shutdown_in_progress=False,
+        _shutdown_complete=False,
+        ask_close=ask_close,
+    )
+    monkeypatch.setattr(ui.QTimer, "singleShot", lambda delay, callback: scheduled.append(callback))
+
+    ui.Window._request_exit(fake)
+    ui.Window._request_exit(fake)
+    assert len(scheduled) == 1
+    assert fake._exit_request_pending is True
+
+    scheduled.pop(0)()
+    assert calls == ["exit"]
+    assert scheduled == []
+    assert fake._exit_request_pending is False
+    assert fake._exit_request_in_progress is False
+

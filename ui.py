@@ -25,6 +25,7 @@ from PySide6.QtGui import (
     QCursor,
     QGuiApplication,
     QIcon,
+    QKeySequence,
     QPainter,
     QPainterPath,
     QPen,
@@ -77,6 +78,7 @@ _WM_NCRBUTTONUP = 0x00A5
 _SC_KEYMENU = 0xF100
 _SC_MOVE = 0xF010
 _SC_SIZE = 0xF000
+_SC_CLOSE = 0xF060
 _VK_SPACE = 0x20
 _WM_DPICHANGED = 0x02E0
 _WM_NCMOUSEMOVE = 0x00A0
@@ -369,6 +371,8 @@ class Window(QMainWindow):
         self._prewarm_theme_stylesheets()
 
         self._exit_authorized = False
+        self._exit_request_pending = False
+        self._exit_request_in_progress = False
         self._shutdown_in_progress = False
         self._shutdown_complete = False
         self.tray_icon = QSystemTrayIcon(self)
@@ -486,7 +490,12 @@ class Window(QMainWindow):
         self.window_system_actions["minimize"] = self.window_system_menu.addAction("Minimize")
         self.window_system_actions["maximize"] = self.window_system_menu.addAction("Maximize")
         self.window_system_menu.addSeparator()
-        self.window_system_actions["close"] = self.window_system_menu.addAction("Close")
+        close_action = QAction("Close", self)
+        close_action.setShortcut(QKeySequence("Alt+F4"))
+        close_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+        self.addAction(close_action)
+        self.window_system_menu.addAction(close_action)
+        self.window_system_actions["close"] = close_action
 
         self.window_system_actions["restore"].triggered.connect(self.showNormal)
         self.window_system_actions["move"].triggered.connect(
@@ -497,8 +506,8 @@ class Window(QMainWindow):
         )
         self.window_system_actions["minimize"].triggered.connect(self.showMinimized)
         self.window_system_actions["maximize"].triggered.connect(self.showMaximized)
-        # closeEvent intentionally routes an ordinary close to the system tray.
-        self.window_system_actions["close"].triggered.connect(self.close)
+        # Match Windows Alt+F4: Close must use the explicit, confirmed app-exit path.
+        close_action.triggered.connect(self._request_exit)
         self.window_system_menu.aboutToShow.connect(self._sync_window_system_menu_actions)
         self._window_system_menu_pending = False
 
@@ -795,13 +804,16 @@ class Window(QMainWindow):
                 self._queue_window_system_menu(keyboard=True)
                 return True, 0
 
-            if (
-                native_message.message == _WM_SYSCOMMAND
-                and (int(native_message.wParam) & 0xFFF0) == _SC_KEYMENU
-                and int(native_message.lParam) == _VK_SPACE
-            ):
-                self._queue_window_system_menu(keyboard=True)
-                return True, 0
+            if native_message.message == _WM_SYSCOMMAND:
+                system_command = int(native_message.wParam) & 0xFFF0
+                if system_command == _SC_CLOSE:
+                    # Alt+F4 arrives as SC_CLOSE on Windows. Keep it on the
+                    # same confirmed shutdown path as the themed menu action.
+                    self._request_exit()
+                    return True, 0
+                if system_command == _SC_KEYMENU and int(native_message.lParam) == _VK_SPACE:
+                    self._queue_window_system_menu(keyboard=True)
+                    return True, 0
 
             if native_message.message == _WM_DPICHANGED:
                 dpi_x = int(native_message.wParam) & 0xFFFF
@@ -2189,6 +2201,37 @@ class Window(QMainWindow):
         # departure from System mode that would be undone by the next OS event.
         mode = "light" if CONFIG["mode"] == "dark" else "dark"
         self._set_theme(mode, preference=mode)
+
+    def _request_exit(self):
+        """Coalesce menu and native Alt+F4 requests into one confirmed exit."""
+        if (
+            getattr(self, "_exit_request_pending", False)
+            or getattr(self, "_exit_request_in_progress", False)
+            or getattr(self, "_exit_authorized", False)
+            or getattr(self, "_shutdown_in_progress", False)
+            or getattr(self, "_shutdown_complete", False)
+        ):
+            return
+
+        self._exit_request_pending = True
+        QTimer.singleShot(0, self._dispatch_exit_request)
+
+    def _dispatch_exit_request(self):
+        """Run the potentially modal exit confirmation outside native message handling."""
+        self._exit_request_pending = False
+        if (
+            getattr(self, "_exit_request_in_progress", False)
+            or getattr(self, "_exit_authorized", False)
+            or getattr(self, "_shutdown_in_progress", False)
+            or getattr(self, "_shutdown_complete", False)
+        ):
+            return
+
+        self._exit_request_in_progress = True
+        try:
+            self.ask_close()
+        finally:
+            self._exit_request_in_progress = False
 
     def ask_close(self):
         """Perform a deliberate application exit from either Exit command."""
