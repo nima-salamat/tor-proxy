@@ -211,6 +211,15 @@ def main() -> int:
                 (time.perf_counter() - window_constructed) * 1000.0,
                 (time.perf_counter() - startup_started) * 1000.0,
             )
+            deferred_started = time.perf_counter()
+            try:
+                win.start_deferred_startup()
+            except Exception:
+                LOGGER.exception("Could not schedule deferred desktop startup tasks.")
+            LOGGER.info(
+                "Startup phase: deferred Home checks and global hotkeys scheduled in %.1f ms.",
+                (time.perf_counter() - deferred_started) * 1000.0,
+            )
             launcher_expected = bool(
                 os.environ.get("TORPROXY_LAUNCHER_STATUS_FILE")
                 or os.environ.get("TORPROXY_LAUNCHER_SERVER")
