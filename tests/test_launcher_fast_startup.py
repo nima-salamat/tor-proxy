@@ -49,3 +49,22 @@ def test_startup_stylesheet_is_reused_by_window_theme_setup():
     assert "from ui import Window, _THEME_STYLESHEET_CACHE" in main_source
     assert "_THEME_STYLESHEET_CACHE[CONFIG[\"mode\"]] = stylesheet" in main_source
     assert "cached = _THEME_STYLESHEET_CACHE.get(mode)" in ui_source
+
+
+
+def test_tor_connection_only_dependencies_are_imported_on_demand():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "tor.py").read_text(encoding="utf-8")
+    module_imports = source.split("class TorRunner(", 1)[0]
+
+    for optional_module in (
+        "torproxy.bridge_distribution",
+        "torproxy.bridge_health",
+        "torproxy.circuit_monitor",
+        "torproxy.health",
+        "torproxy.network_quality",
+        "torproxy.socks_gateway",
+        "torproxy.socks_gateway_credentials",
+    ):
+        assert f"from {optional_module} import" not in module_imports
+        assert f"from {optional_module} import" in source
