@@ -3964,7 +3964,7 @@ def test_background_page_work_is_started_only_after_navigation():
     assert "_pool(create=True)" not in service_operation
     assert "Worker(self._collect_dashboard_snapshot)" in developer
     assert "self._timer.stop()" in developer
-    dashboard_result = developer[developer.index("    def _on_dashboard_snapshot("):developer.index("    def _on_dashboard_snapshot_failed(")]
-    assert "self._refresh_traffic_metrics(traffic)" in dashboard_result
+    card_refresh = developer[developer.index("    def _refresh_cached_service_cards("):developer.index("    def _rebuild_service_cards(")]
+    assert "self._refresh_traffic_metrics(self._last_traffic_snapshots)" in card_refresh
     assert "Worker(" in stats and "self._load_history_snapshot" in stats
     assert "self._sync_session_tracker()" in stats
