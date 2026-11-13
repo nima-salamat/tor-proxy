@@ -59,7 +59,6 @@ _THEME_STYLESHEET_CACHE = {}
 # Native hit-test values used by custom Windows title bars and resize borders.
 _HTCLIENT = 1
 _HTCAPTION = 2
-_HTMAXBUTTON = 9
 _HTLEFT = 10
 _HTRIGHT = 11
 _HTTOP = 12
@@ -129,17 +128,17 @@ def _native_resize_hit_test(point, window_rect, border=8):
 
 
 def _native_titlebar_hit_test(point, titlebar_rect, maximize_rect, other_button_rects):
-    """Expose the native maximize hit target and preserve draggable title-bar space."""
+    """Keep every custom title-bar button under Qt's client-area event handling."""
     if maximize_rect.contains(point):
-        # Let Windows 11 own the Snap Layouts hover dwell timer and flyout.
-        # A quick pointer pass therefore does not open the menu; no app timer
-        # or hand-built popup is needed.
-        return _HTMAXBUTTON
+        # The custom QPushButton owns click/hover behavior. Returning the native
+        # maximize hit code here lets Windows paint and click a second caption
+        # button in a different coordinate space and can double-toggle the window.
+        return _HTCLIENT
     if any(rect.contains(point) for rect in other_button_rects):
         return _HTCLIENT
     if titlebar_rect.contains(point):
         # Windows uses HTCAPTION to provide the standard Alt+Space / right-click
-        # system-menu behavior for this custom-drawn title bar.
+        # system-menu behavior for blank space in this custom-drawn title bar.
         return _HTCAPTION
     return None
 
@@ -646,10 +645,9 @@ class Window(QMainWindow):
                     hit_test = _native_titlebar_hit_test(
                         point, titlebar_rect, maximize_rect, other_button_rects
                     )
-                    # Caption controls take priority over the 8px resize border.
-                    # In particular, the top few pixels of Maximize must still be
-                    # HTMAXBUTTON or Windows cannot start the Snap hover timer there.
-                    if hit_test in (_HTMAXBUTTON, _HTCLIENT):
+                    # Qt's custom minimize/maximize/close controls take priority
+                    # over the 8px resize border and remain client-area widgets.
+                    if hit_test == _HTCLIENT:
                         return True, hit_test
 
                 # Native edge/corner hit tests let Windows perform the resize

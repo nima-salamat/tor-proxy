@@ -2546,10 +2546,10 @@ def test_dropdown_header_copy_has_no_individual_background_or_border():
     ]
 
 
-def test_native_titlebar_hit_testing_keeps_controls_and_enables_snap():
+def test_native_titlebar_hit_testing_keeps_custom_maximize_button_clickable():
     from PySide6.QtCore import QPoint, QRect
 
-    from ui import _HTCAPTION, _HTCLIENT, _HTMAXBUTTON, _native_titlebar_hit_test
+    from ui import _HTCAPTION, _HTCLIENT, _native_titlebar_hit_test
 
     titlebar = QRect(0, 0, 500, 40)
     minimize = QRect(374, 5, 36, 30)
@@ -2561,19 +2561,45 @@ def test_native_titlebar_hit_testing_keeps_controls_and_enables_snap():
         QPoint(120, 20), titlebar, maximize, (minimize, close)
     ) == _HTCAPTION
 
-    # Windows 11 needs HTMAXBUTTON to start its native hover-dwell Snap flyout.
-    assert _native_titlebar_hit_test(
-        maximize.center(), titlebar, maximize, (minimize, close)
-    ) == _HTMAXBUTTON
+    # All custom controls stay in the client area; Windows must not draw a
+    # second, offset maximize button or handle a second click itself.
+    for point in (maximize.center(), minimize.center(), close.center()):
+        assert _native_titlebar_hit_test(
+            point, titlebar, maximize, (minimize, close)
+        ) == _HTCLIENT
 
-    # Minimize and Close remain Qt client controls.
-    assert _native_titlebar_hit_test(
-        minimize.center(), titlebar, maximize, (minimize, close)
-    ) == _HTCLIENT
-    assert _native_titlebar_hit_test(
-        close.center(), titlebar, maximize, (minimize, close)
-    ) == _HTCLIENT
 
+def test_custom_titlebar_snap_flyout_uses_a_deliberate_hover_dwell(qt_app):
+    from PySide6.QtWidgets import QMainWindow
+
+    from ui_.window.custom_titlebar import SNAP_LAYOUT_HOVER_DELAY_MS, CustomTitleBar
+
+    window = QMainWindow()
+    titlebar = CustomTitleBar(window)
+    try:
+        assert SNAP_LAYOUT_HOVER_DELAY_MS == 650
+        assert titlebar._snap_hover_timer.isSingleShot()
+        assert titlebar._snap_hover_timer.interval() == 650
+        assert len(titlebar._snap_actions) == 8
+        assert titlebar.snap_menu.parentWidget() is titlebar.btn_max
+    finally:
+        titlebar.deleteLater()
+        window.deleteLater()
+        qt_app.processEvents()
+
+
+def test_custom_snap_layout_rects_cover_the_available_work_area(qt_app):
+    from PySide6.QtCore import QRect
+
+    from ui_.window.custom_titlebar import _snap_layout_rect
+
+    area = QRect(-1600, 40, 1600, 900)
+    assert _snap_layout_rect(area, "left_half") == QRect(-1600, 40, 800, 900)
+    assert _snap_layout_rect(area, "right_half") == QRect(-800, 40, 800, 900)
+    assert _snap_layout_rect(area, "top_left") == QRect(-1600, 40, 800, 450)
+    assert _snap_layout_rect(area, "bottom_right") == QRect(-800, 490, 800, 450)
+    assert _snap_layout_rect(area, "left_two_thirds") == QRect(-1600, 40, 1066, 900)
+    assert _snap_layout_rect(area, "right_two_thirds") == QRect(-1066, 40, 1066, 900)
 
 
 def test_native_resize_hit_testing_covers_all_window_edges_and_corners(qt_app):
@@ -2721,8 +2747,8 @@ def test_main_window_advertises_native_windows_snap_and_maximize_support():
     assert "def nativeEvent(self, event_type, message):" in source
     assert "native_message.message == _WM_NCCALCSIZE" in source
     assert "native_message.message == _WM_NCHITTEST" in source
-    assert "_HTMAXBUTTON = 9" in source
-    assert "return _HTMAXBUTTON" in source
+    assert "_HTMAXBUTTON = 9" not in source
+    assert "return _HTCLIENT" in source
     assert "_WM_MOVING = 0x0216" in source
     assert "_WM_SIZING = 0x0214" in source
     assert "_WM_ENTERSIZEMOVE = 0x0231" in source
@@ -2730,7 +2756,7 @@ def test_main_window_advertises_native_windows_snap_and_maximize_support():
     assert "self._native_move_loop_active = True" in source
     assert "_clamp_window_rect_to_work_area(" in source
     assert "MonitorFromRect" in source and "GetMonitorInfoW" in source
-    assert "Caption controls take priority over the 8px resize border." in source
+    assert "Qt's custom minimize/maximize/close controls take priority" in source
     assert "Blank title-bar space remains native caption space." in source
     assert "return True, hit_test" in source
     assert "titlebar._sync_maximize_button()" in source

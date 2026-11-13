@@ -792,18 +792,24 @@ class ProxyWindow(QWidget):
         self._resize_home_connect_button(width)
 
     def _resize_home_connect_button(self, width: int | None = None) -> None:
-        """Use the available connection-row space without displacing other Home controls."""
+        """Size Connect from the allocated row geometry without feeding back into it."""
         if not hasattr(self, "_home_connect_row") or not hasattr(self, "connect_btn"):
             return
 
-        # Let Qt's parent layout propagate geometry; avoid a forced full-tree
-        # activation in the continuous resize path.
-        available_width = max(96, int(width or self.home_content.width()) - 48)
-        row_height = int(self._home_connect_row.geometry().height())
-        if row_height <= 0:
-            # Initial construction can happen before the first show/layout pass.
-            row_height = max(112, self.home_content.height() - 360)
-        available_height = max(96, row_height - 20)
+        # Before the first show, or while a minimized window has no usable
+        # layout geometry, keep the current size. Guessing from window height
+        # can cause a visible 96px/420px jump when the real layout arrives.
+        row_geometry = self._home_connect_row.geometry()
+        row_width = int(row_geometry.width())
+        row_height = int(row_geometry.height())
+        if row_width <= 0 or row_height <= 0:
+            return
+
+        available_width = row_width - 48
+        available_height = row_height - 20
+        if available_width < 96 or available_height < 96:
+            return
+
         diameter = min(420, available_width, available_height)
         self.connect_btn.set_diameter(diameter)
 

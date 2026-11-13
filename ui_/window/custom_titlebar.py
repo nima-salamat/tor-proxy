@@ -1,10 +1,40 @@
 """Compact Windows title bar with native multi-monitor window dragging."""
-from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QLabel, QWidget, QHBoxLayout, QPushButton, QSizePolicy
+from PySide6.QtCore import QEvent, Qt, QSize, QPoint, QRect, QTimer
+from PySide6.QtGui import QGuiApplication, QPixmap
+from PySide6.QtWidgets import QLabel, QWidget, QHBoxLayout, QPushButton, QSizePolicy, QMenu
 import qtawesome as qta
 
 from utils import resource_path
+
+
+SNAP_LAYOUT_HOVER_DELAY_MS = 650
+
+
+def _snap_layout_rect(work_area: QRect, layout: str) -> QRect:
+    """Return one snap region inside a screen's available work area."""
+    x, y = work_area.x(), work_area.y()
+    width, height = work_area.width(), work_area.height()
+    half_width = width // 2
+    half_height = height // 2
+    two_thirds = (width * 2) // 3
+
+    regions = {
+        "left_half": QRect(x, y, half_width, height),
+        "right_half": QRect(x + half_width, y, width - half_width, height),
+        "left_two_thirds": QRect(x, y, two_thirds, height),
+        "right_two_thirds": QRect(x + width - two_thirds, y, two_thirds, height),
+        "top_left": QRect(x, y, half_width, half_height),
+        "top_right": QRect(x + half_width, y, width - half_width, half_height),
+        "bottom_left": QRect(x, y + half_height, half_width, height - half_height),
+        "bottom_right": QRect(
+            x + half_width, y + half_height,
+            width - half_width, height - half_height
+        ),
+    }
+    try:
+        return QRect(regions[layout])
+    except KeyError as exc:
+        raise ValueError(f"Unknown snap layout: {layout}") from exc
 
 
 class CustomTitleBar(QWidget):
@@ -67,7 +97,157 @@ class CustomTitleBar(QWidget):
         layout.addWidget(self.btn_close)
         self._start_pos = None
         self._screen_signal_connected = False
+
+        # Do not return HTMAXBUTTON for this Qt-drawn button: it makes Windows
+        # paint a second non-client maximize control at a different screen rect.
+        # Use a delayed Qt flyout so the actual button remains clickable.
+        self.snap_menu = QMenu(self.btn_max)
+        self.snap_menu.setObjectName("snapLayoutMenu")
+        self.snap_menu.addSection("Split 50 / 50")
+        self._snap_actions = {}
+        for label, placement in (
+            ("Left half", "left_half"),
+            ("Right half", "right_half"),
+        ):
+            action = self.snap_menu.addAction(label)
+            action.triggered.connect(
+                lambda _checked=False, target=placement: self._apply_snap_layout(target)
+            )
+            self._snap_actions[placement] = action
+
+        self.snap_menu.addSection("Split 2 / 3 + 1 / 3")
+        for label, placement in (
+            ("Left two-thirds", "left_two_thirds"),
+            ("Right two-thirds", "right_two_thirds"),
+        ):
+            action = self.snap_menu.addAction(label)
+            action.triggered.connect(
+                lambda _checked=False, target=placement: self._apply_snap_layout(target)
+            )
+            self._snap_actions[placement] = action
+
+        self.snap_menu.addSection("Four corners")
+        for label, placement in (
+            ("Top-left quarter", "top_left"),
+            ("Top-right quarter", "top_right"),
+            ("Bottom-left quarter", "bottom_left"),
+            ("Bottom-right quarter", "bottom_right"),
+        ):
+            action = self.snap_menu.addAction(label)
+            action.triggered.connect(
+                lambda _checked=False, target=placement: self._apply_snap_layout(target)
+            )
+            self._snap_actions[placement] = action
+
+        self._snap_hover_timer = QTimer(self)
+        self._snap_hover_timer.setSingleShot(True)
+        self._snap_hover_timer.setInterval(SNAP_LAYOUT_HOVER_DELAY_MS)
+        self._snap_hover_timer.timeout.connect(self._show_snap_menu)
+        self.btn_max.installEventFilter(self)
+        self.btn_max.pressed.connect(self._cancel_snap_hover)
+        self._apply_snap_menu_theme()
         self._refresh_app_icon()
+
+    def eventFilter(self, watched, event):
+        if watched is self.btn_max:
+            if event.type() == QEvent.Type.Enter:
+                if not self.snap_menu.isVisible():
+                    self._snap_hover_timer.start()
+            elif event.type() == QEvent.Type.Leave:
+                self._snap_hover_timer.stop()
+            elif event.type() == QEvent.Type.MouseButtonPress:
+                self._cancel_snap_hover()
+        return super().eventFilter(watched, event)
+
+    def _cancel_snap_hover(self):
+        self._snap_hover_timer.stop()
+
+    def _show_snap_menu(self):
+        if (
+            not self.btn_max.underMouse()
+            or not self.parent_.isVisible()
+            or self.parent_.isMinimized()
+        ):
+            return
+
+        self.snap_menu.ensurePolished()
+        menu_size = self.snap_menu.sizeHint()
+        button_bottom_right = self.btn_max.mapToGlobal(
+            QPoint(self.btn_max.width(), self.btn_max.height() + 6)
+        )
+        screen = (
+            QGuiApplication.screenAt(button_bottom_right)
+            or QGuiApplication.primaryScreen()
+        )
+        if screen is None:
+            return
+
+        available = screen.availableGeometry()
+        x = button_bottom_right.x() - menu_size.width()
+        y = button_bottom_right.y()
+        if y + menu_size.height() > available.bottom() + 1:
+            y = self.btn_max.mapToGlobal(QPoint(0, -menu_size.height() - 6)).y()
+        x = min(max(x, available.left()), available.right() - menu_size.width() + 1)
+        y = min(max(y, available.top()), available.bottom() - menu_size.height() + 1)
+        self.snap_menu.popup(QPoint(x, y))
+
+    def _apply_snap_menu_theme(self):
+        dark = self._icon_color.lower() not in {"#243143", "#202832", "#253246"}
+        if dark:
+            surface, border, foreground, hover, muted = (
+                "#171e29", "#303b4c", "#e8edf6", "#29384d", "#94a2b5"
+            )
+        else:
+            surface, border, foreground, hover, muted = (
+                "#ffffff", "#dfe6ef", "#253246", "#edf3fb", "#7b8798"
+            )
+        self.snap_menu.setStyleSheet(f"""
+            QMenu#snapLayoutMenu {{
+                background-color: {surface};
+                color: {foreground};
+                border: 1px solid {border};
+                border-radius: 10px;
+                padding: 6px;
+            }}
+            QMenu#snapLayoutMenu::item {{
+                padding: 7px 18px;
+                margin: 1px 4px;
+                border-radius: 6px;
+            }}
+            QMenu#snapLayoutMenu::item:selected {{
+                background-color: {hover};
+                color: {foreground};
+            }}
+            QMenu#snapLayoutMenu::item:disabled {{
+                color: {muted};
+            }}
+            QMenu#snapLayoutMenu::separator {{
+                height: 1px;
+                background-color: {border};
+                margin: 4px 8px;
+            }}
+            QMenu#snapLayoutMenu::item:section {{
+                color: {muted};
+                font-size: 8pt;
+                font-weight: 700;
+            }}
+        """)
+
+    def _apply_snap_layout(self, placement):
+        window = self.parent_
+        if window is None:
+            return
+        center = window.frameGeometry().center()
+        screen = QGuiApplication.screenAt(center) or QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+
+        target = _snap_layout_rect(screen.availableGeometry(), placement)
+        if window.isMaximized() or window.isFullScreen():
+            window.showNormal()
+        window.setGeometry(target)
+        window.raise_()
+        window.activateWindow()
 
     def _refresh_app_icon(self, *_args):
         """Render the PNG at the current screen's device-pixel ratio."""
@@ -97,6 +277,7 @@ class CustomTitleBar(QWidget):
         self.btn_min.setIcon(qta.icon("fa6s.window-minimize", color=color))
         self.btn_close.setIcon(qta.icon("fa6s.xmark", color=color))
         self._sync_maximize_button()
+        self._apply_snap_menu_theme()
 
     def _sync_maximize_button(self):
         maximized = self.parent_.isMaximized()

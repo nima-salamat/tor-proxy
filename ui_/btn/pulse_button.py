@@ -52,6 +52,7 @@ class PulseButton(QPushButton):
         if diameter == self._diameter:
             return
         self._diameter = diameter
+        # Only update the layout constraint when the computed target changes.
         self.setFixedSize(diameter, diameter)
         self.updateGeometry()
         self.update()
