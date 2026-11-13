@@ -1011,6 +1011,17 @@ class Window(QMainWindow):
                     round(screen_point.y / ratio),
                 )
 
+                # Keep native resize handles available around the window perimeter.
+                # Full-height caption buttons visually reach these edges, but the
+                # thin frame strip still belongs to Windows' resize interaction.
+                if not self.isMaximized() and not self.isFullScreen():
+                    resize_hit = _native_resize_hit_test(
+                        point, QRect(0, 0, self.width(), self.height())
+                    )
+                    if resize_hit is not None:
+                        self._set_native_max_button_hovered(False)
+                        return True, resize_hit
+
                 hit_test = None
                 if hasattr(self, "title_bar"):
                     titlebar = self.title_bar
@@ -1031,21 +1042,11 @@ class Window(QMainWindow):
                         point, titlebar_rect, maximize_rect, other_button_rects
                     )
                     self._set_native_max_button_hovered(hit_test == _HTMAXBUTTON)
-                    # Caption controls take priority over edge resizing.
-                    # HTMAXBUTTON is deliberately returned to Windows so the OS
-                    # can display its native Snap Layouts flyout after its dwell.
+                    # Native frame resize handles take priority around the outer
+                    # edges; the remaining controls are handled by Qt. HTMAXBUTTON
+                    # is still returned to Windows for its native Snap Layouts flyout.
                     if hit_test in (_HTMAXBUTTON, _HTCLIENT):
                         return True, hit_test
-
-                # Native edge/corner hit tests let Windows perform the resize
-                # loop itself, including the correct cursor and min-size handling.
-                # Do not expose resize handles while maximized or in full-screen.
-                if not self.isMaximized() and not self.isFullScreen():
-                    resize_hit = _native_resize_hit_test(
-                        point, QRect(0, 0, self.width(), self.height())
-                    )
-                    if resize_hit is not None:
-                        return True, resize_hit
 
                 # Blank title-bar space remains native caption space. Besides
                 # dragging and double-click maximize, this allows Windows to

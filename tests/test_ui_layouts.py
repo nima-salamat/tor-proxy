@@ -2769,7 +2769,13 @@ def test_main_window_advertises_native_windows_snap_and_maximize_support():
     assert "self._native_move_loop_active = True" in source
     assert "_clamp_window_rect_to_work_area(" in source
     assert "MonitorFromRect" in source and "GetMonitorInfoW" in source
-    assert "Caption controls take priority over edge resizing." in source
+    assert "Native frame resize handles take priority around the outer" in source
+    native_event_start = source.index("def nativeEvent(self, event_type, message):")
+    native_event_end = source.index("def ", native_event_start + 5)
+    native_event = source[native_event_start:native_event_end]
+    assert native_event.index("_native_resize_hit_test(") < native_event.index(
+        "_native_titlebar_hit_test("
+    )
     assert "Blank title-bar space remains native caption space." in source
     assert "return True, hit_test" in source
     assert "titlebar._sync_maximize_button()" in source
@@ -3698,7 +3704,15 @@ def test_exit_requests_are_deferred_and_coalesced(monkeypatch):
 def test_custom_titlebar_window_controls_fill_right_edge_without_gaps(qt_app):
     from PySide6.QtCore import QPoint, QRect
     from PySide6.QtWidgets import QMainWindow
-    from ui import _HTCAPTION, _HTCLIENT, _HTMAXBUTTON, _native_titlebar_hit_test
+    from ui import (
+        _HTCAPTION,
+        _HTCLIENT,
+        _HTMAXBUTTON,
+        _HTRIGHT,
+        _HTTOPRIGHT,
+        _native_resize_hit_test,
+        _native_titlebar_hit_test,
+    )
     from ui_.window.custom_titlebar import CustomTitleBar
 
     class _TitleBarHost(QMainWindow):
@@ -3745,6 +3759,13 @@ def test_custom_titlebar_window_controls_fill_right_edge_without_gaps(qt_app):
         assert _native_titlebar_hit_test(
             QPoint(150, 20), titlebar.rect(), maximize_rect, other_buttons
         ) == _HTCAPTION
+
+        # Buttons visually occupy the outer corners, but Windows keeps the
+        # narrow native frame strip available for resizing before button hit tests.
+        assert close_rect.contains(QPoint(898, 2))
+        frame_rect = QRect(0, 0, titlebar.width(), titlebar.height())
+        assert _native_resize_hit_test(QPoint(898, 2), frame_rect) == _HTTOPRIGHT
+        assert _native_resize_hit_test(QPoint(898, 20), frame_rect) == _HTRIGHT
     finally:
         titlebar.close()
         parent.close()
