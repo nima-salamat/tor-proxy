@@ -42,8 +42,8 @@ def _bundle_root_for_path(path: Path, managed_root: Path) -> Path | None:
     return None
 
 
-def _verified_managed_bundles(managed_root: Path) -> list[Path]:
-    """List verified user-installed and application-packaged Tor bundles."""
+def _verified_managed_bundles(managed_root: Path, *, verify: bool = True) -> list[Path]:
+    """List managed Tor bundles, optionally deferring only the archive digest."""
     try:
         from updater import (
             get_own_bundles,
@@ -54,7 +54,10 @@ def _verified_managed_bundles(managed_root: Path) -> list[Path]:
 
         paths = list(dict.fromkeys(
             Path(item).resolve()
-            for item in (*get_own_bundles(), *get_packaged_bundles())
+            for item in (
+                *get_own_bundles(verify=verify),
+                *get_packaged_bundles(verify=verify),
+            )
         ))
         return sorted(
             paths,
@@ -66,7 +69,11 @@ def _verified_managed_bundles(managed_root: Path) -> list[Path]:
         return []
 
 
-def _find_executable(candidate: str | os.PathLike[str] | None) -> tuple[Path | None, Path | None]:
+def _find_executable(
+    candidate: str | os.PathLike[str] | None,
+    *,
+    verify_managed: bool = True,
+) -> tuple[Path | None, Path | None]:
     """Resolve Tor without implicitly trusting arbitrary files inside the managed bundle directory."""
     managed_root = Path(resource_path(BUNDLE_DIR)).resolve()
     executable_name = "tor.exe" if IS_WINDOWS else "tor"
@@ -84,7 +91,11 @@ def _find_executable(candidate: str | os.PathLike[str] | None) -> tuple[Path | N
         if resolved == managed_root or (managed_root in resolved.parents):
             # Managed content is never trusted from its filename alone: it must pass the
             # same marker/digest/signature/executable checks as the bundle manager.
-            verified = _verified_managed_bundles(managed_root)
+            verified = (
+                _verified_managed_bundles(managed_root)
+                if verify_managed
+                else _verified_managed_bundles(managed_root, verify=False)
+            )
             if managed_bundle is None or managed_bundle not in verified:
                 logger.error("Selected managed Tor bundle is missing or has not passed integrity/structure checks.")
                 return None, managed_bundle or resolved
@@ -124,7 +135,12 @@ def _find_executable(candidate: str | os.PathLike[str] | None) -> tuple[Path | N
         return None, resolved
 
     # Do not auto-select merely because an old/unverified folder contains tor.exe.
-    for bundle in _verified_managed_bundles(managed_root):
+    bundles = (
+        _verified_managed_bundles(managed_root)
+        if verify_managed
+        else _verified_managed_bundles(managed_root, verify=False)
+    )
+    for bundle in bundles:
         for executable in (
             bundle / "tor" / executable_name,
             bundle / executable_name,
@@ -208,7 +224,10 @@ class TorRunner(QObject):
         self._verified_bridge_records: tuple[str, ...] = ()
         self.state = "STOPPED"
         self.last_error: str | None = None
-        self.update_path(CONFIG["tor_path"])
+        self._bundle_preflight_verified = False
+        # Startup discovery checks only the saved marker and executable layout.
+        # The archive digest is verified in the connection preflight worker.
+        self.update_path(CONFIG["tor_path"], verify=False)
 
     def set_backend_selection_mode(self, mode: str) -> None:
         """Apply the primary-pool backend policy without restarting Tor workers."""
@@ -364,14 +383,15 @@ class TorRunner(QObject):
             except Exception:
                 logger.debug("Could not stop Tor event monitoring for instance %s.", index + 1, exc_info=True)
 
-    def update_path(self, base_path=None):
-        executable, root = _find_executable(base_path)
+    def update_path(self, base_path=None, *, verify=True):
+        executable, root = _find_executable(base_path, verify_managed=verify)
         if executable is None:
             self.path_set = False
             self.tor_path = None
             self.lyrebird_path = None
             self.geoip_path = None
             self.geoip6_path = None
+            self._bundle_preflight_verified = False
             if base_path:
                 logger.error("No compatible, structurally validated Tor executable was found under the selected path.")
             return False
@@ -382,6 +402,7 @@ class TorRunner(QObject):
             transport = root / "tor" / "pluggable_transports" / ("lyrebird.exe" if IS_WINDOWS else "lyrebird")
             self.lyrebird_path = str(transport)
         self.path_set = True
+        self._bundle_preflight_verified = bool(verify)
         return True
 
     @staticmethod
@@ -820,6 +841,14 @@ class TorRunner(QObject):
     def start(self):
         if self.thread and self.thread.is_alive():
             return
+        # Keep the strict integrity check on every launch path. The normal Home
+        # flow performs it in _check_ports_worker; this guard protects other callers.
+        if not self._bundle_preflight_verified:
+            selected_path = self.tor_path or CONFIG["tor_path"]
+            if not self.update_path(selected_path, verify=True):
+                raise TorManagerError(
+                    "A compatible Tor Expert Bundle must pass integrity and platform checks before Tor can start."
+                )
         self._stopping.clear()
         self._last_report = None
         self._last_bridge_usage_report = None
