@@ -558,10 +558,15 @@ class Window(QMainWindow):
         else:
             return self.stack.widget(index)
 
-        placeholder = self.stack.replaceWidget(index, page)
+        # QStackedWidget has no replaceWidget() API. Remove the placeholder
+        # and insert the real page at the same index to preserve navigation IDs.
+        placeholder = self.stack.widget(index)
+        if placeholder is None:
+            raise RuntimeError(f"Missing deferred page placeholder at index {index}.")
+        self.stack.removeWidget(placeholder)
+        self.stack.insertWidget(index, page)
         self._page_placeholders.pop(index, None)
-        if placeholder is not None:
-            placeholder.deleteLater()
+        placeholder.deleteLater()
         return page
 
     def _create_window_system_menu(self):
