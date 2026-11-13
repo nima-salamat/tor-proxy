@@ -2614,6 +2614,26 @@ def test_native_resize_hit_testing_covers_all_window_edges_and_corners(qt_app):
     assert _native_resize_hit_test(QPoint(510, 150), bounds) is None
 
 
+def test_native_main_window_style_restores_overlapped_windows_semantics():
+    from ui import (
+        _WS_CAPTION,
+        _WS_OVERLAPPEDWINDOW,
+        _WS_POPUP,
+        _native_main_window_style,
+    )
+
+    unrelated_styles = 0x10000000 | 0x02000000  # WS_VISIBLE | WS_CLIPCHILDREN
+    frameless_popup_style = _WS_POPUP | unrelated_styles
+
+    normalized = _native_main_window_style(frameless_popup_style)
+
+    assert normalized & _WS_POPUP == 0
+    assert normalized & _WS_CAPTION == _WS_CAPTION
+    assert normalized & _WS_OVERLAPPEDWINDOW == _WS_OVERLAPPEDWINDOW
+    assert normalized & unrelated_styles == unrelated_styles
+    assert _native_main_window_style(normalized) == normalized
+
+
 def test_main_window_advertises_native_windows_snap_and_maximize_support():
     repository = Path(__file__).resolve().parents[1]
     source = (repository / "ui.py").read_text(encoding="utf-8")
@@ -2622,10 +2642,13 @@ def test_main_window_advertises_native_windows_snap_and_maximize_support():
     )
 
     assert "def _enable_native_snap_support(self):" in source
-    assert "ws_thickframe = 0x00040000" in source
-    assert "ws_maximizebox = 0x00010000" in source
-    assert "ws_minimizebox = 0x00020000" in source
-    assert "ws_sysmenu = 0x00080000" in source
+    assert "_WS_POPUP = 0x80000000" in source
+    assert "_WS_CAPTION = 0x00C00000" in source
+    assert "_WS_OVERLAPPEDWINDOW = (" in source
+    assert "def _native_main_window_style(style):" in source
+    assert "native_style = _native_main_window_style(style)" in source
+    assert "if native_style != style:" in source
+    assert "self.btn_min.clicked.connect(parent.showMinimized)" in titlebar_source
     assert "def _native_resize_hit_test(point, window_rect, border=8):" in source
     assert "resize_hit = _native_resize_hit_test(" in source
     assert "if not self.isMaximized() and not self.isFullScreen():" in source

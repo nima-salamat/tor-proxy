@@ -70,6 +70,20 @@ _HTBOTTOMRIGHT = 17
 _WM_NCCALCSIZE = 0x0083
 _WM_NCHITTEST = 0x0084
 
+# A custom Qt title bar still needs an overlapped top-level HWND on Windows.
+# These styles let the shell perform native minimize/restore and taskbar effects.
+_WS_POPUP = 0x80000000
+_WS_CAPTION = 0x00C00000
+_WS_SYSMENU = 0x00080000
+_WS_THICKFRAME = 0x00040000
+_WS_MINIMIZEBOX = 0x00020000
+_WS_MAXIMIZEBOX = 0x00010000
+_WS_OVERLAPPEDWINDOW = (
+    _WS_CAPTION | _WS_SYSMENU | _WS_THICKFRAME
+    | _WS_MINIMIZEBOX | _WS_MAXIMIZEBOX
+)
+
+
 
 def _native_resize_hit_test(point, window_rect, border=8):
     """Return the Win32 resize hit-test code for an edge or corner."""
@@ -112,6 +126,12 @@ def _native_titlebar_hit_test(point, titlebar_rect, maximize_rect, other_button_
     if titlebar_rect.contains(point):
         return _HTCAPTION
     return None
+
+
+def _native_main_window_style(style):
+    """Keep a Qt custom frame while exposing normal Windows main-window semantics."""
+    current_style = int(style) & 0xFFFFFFFF
+    return (current_style & ~_WS_POPUP) | _WS_OVERLAPPEDWINDOW
 
 
 def _theme_stylesheet(mode):
@@ -389,7 +409,7 @@ class Window(QMainWindow):
         self._enable_native_snap_support()
 
     def _enable_native_snap_support(self):
-        """Expose a custom-framed window as resizable/maximizable to Windows."""
+        """Expose a custom frame as a native, resizable Windows main window."""
         if not IS_WINDOWS:
             return
 
@@ -412,31 +432,27 @@ class Window(QMainWindow):
             )
             set_window_long.restype = ctypes.c_ssize_t
 
-            # Keep the Qt-drawn title bar, but restore the native style bits
-            # Windows uses for Snap, Win+Arrow and maximize/restore handling.
-            # WS_CAPTION remains absent because this is still a custom frame.
+            # Qt's FramelessWindowHint initially creates a WS_POPUP window.
+            # Normalize it to WS_OVERLAPPEDWINDOW so Windows owns the normal
+            # taskbar minimize/restore transition and its configured animation.
+            # WM_NCCALCSIZE below keeps the entire client area available to our
+            # custom title bar, so no native caption is painted over the UI.
             style_index = -16  # GWL_STYLE
-            ws_thickframe = 0x00040000
-            ws_minimizebox = 0x00020000
-            ws_maximizebox = 0x00010000
-            ws_sysmenu = 0x00080000
-            required_styles = (
-                ws_thickframe | ws_minimizebox | ws_maximizebox | ws_sysmenu
-            )
-            style = get_window_long(wintypes.HWND(hwnd), style_index)
-            if (style & required_styles) != required_styles:
+            style = int(get_window_long(wintypes.HWND(hwnd), style_index)) & 0xFFFFFFFF
+            native_style = _native_main_window_style(style)
+            if native_style != style:
                 ctypes.set_last_error(0)
                 previous = set_window_long(
                     wintypes.HWND(hwnd),
                     style_index,
-                    ctypes.c_ssize_t(style | required_styles),
+                    ctypes.c_ssize_t(native_style),
                 )
                 error = ctypes.get_last_error()
                 if previous == 0 and error:
                     raise OSError(error, "SetWindowLongPtrW failed")
 
-                # Tell the non-client manager to recalculate the frame using
-                # the updated resize/maximize styles without moving the window.
+                # Recalculate the non-client frame after changing native styles.
+                # The WM_NCCALCSIZE handler preserves our custom client geometry.
                 set_window_pos = user32.SetWindowPos
                 set_window_pos.argtypes = (
                     wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
