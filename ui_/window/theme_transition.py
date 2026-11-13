@@ -11,11 +11,12 @@ from PySide6.QtCore import (
     QEasingCurve,
     QPoint,
     QPointF,
+    QRectF,
     Qt,
     QVariantAnimation,
     Signal,
 )
-from PySide6.QtGui import QPainter, QPainterPath, QPixmap, QRegion, QRectF
+from PySide6.QtGui import QPainter, QPainterPath, QPixmap, QRegion
 from PySide6.QtWidgets import QWidget
 
 logger = logging.getLogger(__name__)
