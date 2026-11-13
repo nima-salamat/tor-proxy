@@ -1354,13 +1354,19 @@ class OnionHostingPage(QWidget):
         manager = self._manager()
         runtime = manager.runtime_snapshot()
         services = manager.services_snapshot()
-        traffic = {
-            "global": manager.traffic_snapshot(),
-            "services": {
-                str(service["id"]): manager.traffic_snapshot(str(service["id"]))
-                for service in services
-            },
-        }
+        service_ids = [str(service["id"]) for service in services]
+        batch_snapshot = getattr(manager, "traffic_snapshots", None)
+        if callable(batch_snapshot):
+            traffic = batch_snapshot(service_ids)
+        else:
+            # Keep the page usable with older manager implementations and test doubles.
+            traffic = {
+                "global": manager.traffic_snapshot(),
+                "services": {
+                    service_id: manager.traffic_snapshot(service_id)
+                    for service_id in service_ids
+                },
+            }
         return json.dumps(
             {"runtime": runtime, "services": services, "traffic": traffic},
             separators=(",", ":"), default=str,
