@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import QPushButton, QWidget, QSizePolicy
-from PySide6.QtCore import Qt, QEasingCurve, QPropertyAnimation, Property, QTimer
+from PySide6.QtCore import Qt, QPoint, QEasingCurve, QPropertyAnimation, Property, QTimer
 from PySide6.QtGui import QPainter, QColor, QBrush, QPen, QRadialGradient
 
 
@@ -11,7 +11,7 @@ class PulseButtonHost(QWidget):
         self.setObjectName("connectButtonHost")
         self.setMinimumSize(0, 0)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.setStyleSheet("background: transparent; border: none;")
+        self.setStyleSheet("QWidget#connectButtonHost { background: transparent; border: none; }")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
         self.setAutoFillBackground(False)
 
@@ -54,7 +54,6 @@ class PulseButtonHost(QWidget):
         y = available.y() + (available.height() - diameter) // 2
         if self.button.diameter != diameter:
             self.button.set_diameter(diameter)
-        from PySide6.QtCore import QPoint
         target_position = QPoint(x, y)
         if self.button.pos() != target_position:
             self.button.move(target_position)
