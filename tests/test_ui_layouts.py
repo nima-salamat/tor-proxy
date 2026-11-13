@@ -2750,7 +2750,11 @@ def test_main_window_advertises_native_windows_snap_and_maximize_support():
     assert "QEvent.Type.MouseButtonRelease" in source
     assert "QEvent.Type.MouseMove" in source
     assert "QEvent.Type.Enter if hovered else QEvent.Type.Leave" in source
-    assert "Consume the non-client press." in source
+    assert "_WM_MOUSEMOVE = 0x0200" in source
+    assert "_WM_LBUTTONUP = 0x0202" in source
+    assert "_WM_CAPTURECHANGED = 0x0215" in source
+    assert "SetCapture" in source and "ReleaseCapture" in source
+    assert "DefWindowProc's own caption-button click loop." in source
     assert "Do not enter DefWindowProc's classic caption-button loop." in source
     assert "_WM_MOVING = 0x0216" in source
     assert "_WM_SIZING = 0x0214" in source

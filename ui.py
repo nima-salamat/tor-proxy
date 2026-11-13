@@ -72,9 +72,13 @@ _HTBOTTOMRIGHT = 17
 _WM_NCCALCSIZE = 0x0083
 _WM_NCHITTEST = 0x0084
 _WM_NCMOUSEMOVE = 0x00A0
+_WM_NCMOUSEMOVE = 0x00A0
 _WM_NCLBUTTONDOWN = 0x00A1
 _WM_NCLBUTTONUP = 0x00A2
 _WM_NCLBUTTONDBLCLK = 0x00A3
+_WM_MOUSEMOVE = 0x0200
+_WM_LBUTTONUP = 0x0202
+_WM_CAPTURECHANGED = 0x0215
 _WM_NCMOUSELEAVE = 0x02A2
 _WM_MOVING = 0x0216
 _WM_SIZING = 0x0214
@@ -564,17 +568,15 @@ class Window(QMainWindow):
             max_button = getattr(titlebar, "btn_max", None) if titlebar is not None else None
 
             if native_message.message == _WM_NCMOUSEMOVE:
-                if self._native_max_button_hovered or self._native_max_button_pressed:
+                if self._native_max_button_hovered:
                     self._forward_native_max_button_mouse_event(
                         QEvent.Type.MouseMove,
                         Qt.MouseButton.NoButton,
-                        Qt.MouseButton.LeftButton
-                        if self._native_max_button_pressed
-                        else Qt.MouseButton.NoButton,
+                        Qt.MouseButton.NoButton,
                     )
-                # Do not enter DefWindowProc's classic caption-button loop.
-                # HTMAXBUTTON is enough for Windows 11's native Snap flyout.
-                return True, 0
+                    # Deliver the movement to Qt, not DefWindowProc's classic
+                    # caption-button loop. The OS still sees HTMAXBUTTON in hit-test.
+                    return True, 0
 
             if native_message.message == _WM_NCMOUSELEAVE:
                 self._set_native_max_button_hovered(False)
@@ -586,26 +588,48 @@ class Window(QMainWindow):
                 and max_button.rect().contains(max_button.mapFromGlobal(QCursor.pos()))
             ):
                 self._native_max_button_pressed = True
+                user32 = ctypes.WinDLL("user32", use_last_error=True)
+                set_capture = user32.SetCapture
+                set_capture.argtypes = (wintypes.HWND,)
+                set_capture.restype = wintypes.HWND
+                set_capture(wintypes.HWND(native_message.hWnd))
                 self._forward_native_max_button_mouse_event(
                     QEvent.Type.MouseButtonPress,
                     Qt.MouseButton.LeftButton,
                     Qt.MouseButton.LeftButton,
                 )
-                # Consume the non-client press. DefWindowProc would draw/operate
-                # its own caption button over the existing Qt maximize widget.
+                # Use HWND capture so the same Qt button receives move/up even
+                # if the pointer leaves the non-client maximize rectangle.
+                # Never run DefWindowProc's own caption-button click loop.
                 return True, 0
 
-            if (
-                native_message.message == _WM_NCLBUTTONUP
-                and self._native_max_button_pressed
-            ):
+            if native_message.message == _WM_MOUSEMOVE and self._native_max_button_pressed:
+                self._forward_native_max_button_mouse_event(
+                    QEvent.Type.MouseMove,
+                    Qt.MouseButton.NoButton,
+                    Qt.MouseButton.LeftButton,
+                )
+                return True, 0
+
+            if native_message.message in (_WM_LBUTTONUP, _WM_NCLBUTTONUP) and self._native_max_button_pressed:
                 self._native_max_button_pressed = False
                 self._forward_native_max_button_mouse_event(
                     QEvent.Type.MouseButtonRelease,
                     Qt.MouseButton.LeftButton,
                     Qt.MouseButton.NoButton,
                 )
+                user32 = ctypes.WinDLL("user32", use_last_error=True)
+                user32.ReleaseCapture.argtypes = ()
+                user32.ReleaseCapture.restype = wintypes.BOOL
+                user32.ReleaseCapture()
                 return True, 0
+
+            if native_message.message == _WM_CAPTURECHANGED and self._native_max_button_pressed:
+                self._native_max_button_pressed = False
+                if max_button is not None:
+                    max_button.setDown(False)
+                self._set_native_max_button_hovered(False)
+                return super().nativeEvent(event_type, message)
 
             if native_message.message == _WM_ENTERSIZEMOVE:
                 self._native_move_loop_active = True
