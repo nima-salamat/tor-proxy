@@ -471,7 +471,6 @@ class Window(QMainWindow):
         self.window_system_menu = QMenu(self)
         self.window_system_menu.setObjectName("windowSystemMenu")
         self.window_system_menu.setMinimumWidth(208)
-        self.window_system_menu.setIconSize(QSize(16, 16))
         self.window_system_menu.setSeparatorsCollapsible(False)
         self.window_system_actions = {}
 

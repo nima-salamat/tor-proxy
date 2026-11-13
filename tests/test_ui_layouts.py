@@ -3622,3 +3622,18 @@ def test_window_system_menu_uses_current_dark_and_light_palette(monkeypatch):
     assert "border: 1px solid #dfe6ef;" in styles[-1]
     assert "background-color: #edf3fb;" in styles[-1]
     assert ("fa6s.xmark", "#c94343") in icons
+
+
+
+def test_window_system_menu_does_not_call_unsupported_qmenu_icon_size_api():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui.py").read_text(encoding="utf-8")
+    start = source.index("def _create_window_system_menu(self):")
+    end = source.index("def _sync_window_system_menu_actions(self):", start)
+    construction = source[start:end]
+
+    # QMenu has no setIconSize() in PySide6. Per-action icons already carry
+    # their own artwork and the menu uses the application style for sizing.
+    assert "window_system_menu.setIconSize(" not in construction
+    assert "self.window_system_menu.setSeparatorsCollapsible(False)" in construction
+    assert "action.setIcon(qta.icon(icon_name, color=color))" in source
