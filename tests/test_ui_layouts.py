@@ -2648,7 +2648,7 @@ def test_native_titlebar_hit_testing_enables_system_menu_without_stealing_maximi
 
     # Windows receives HTMAXBUTTON, so it owns the Snap Layout hover delay and flyout.
     assert _native_titlebar_hit_test(
-        QPoint(469, 20), titlebar, maximize, other_buttons
+        QPoint(431, 20), titlebar, maximize, other_buttons
     ) == _HTMAXBUTTON
 
     # Minimize and Close remain Qt client controls too.
@@ -3687,6 +3687,7 @@ def test_exit_requests_are_deferred_and_coalesced(monkeypatch):
         _shutdown_complete=False,
         ask_close=ask_close,
     )
+    fake._dispatch_exit_request = lambda: ui.Window._dispatch_exit_request(fake)
     monkeypatch.setattr(ui.QTimer, "singleShot", lambda delay, callback: scheduled.append(callback))
 
     ui.Window._request_exit(fake)
@@ -3728,6 +3729,8 @@ def test_custom_titlebar_window_controls_fill_right_edge_without_gaps(qt_app):
         qt_app.processEvents()
 
         controls = titlebar.window_controls
+        controls.layout().activate()
+        qt_app.processEvents()
         buttons = (titlebar.btn_min, titlebar.btn_max, titlebar.btn_close)
         assert controls.geometry() == QRect(900 - 3 * 46, 0, 3 * 46, 40)
         assert controls.layout().getContentsMargins() == (0, 0, 0, 0)

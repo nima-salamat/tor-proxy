@@ -34,9 +34,11 @@ def test_custom_titlebar_branding_is_left_aligned_and_controls_are_right_aligned
     assert layout.indexOf(titlebar.app_icon) == 0
     assert layout.indexOf(titlebar.title) == 1
     assert layout.itemAt(2).spacerItem() is not None
-    assert layout.indexOf(titlebar.btn_min) == 3
-    assert layout.indexOf(titlebar.btn_max) == 4
-    assert layout.indexOf(titlebar.btn_close) == 5
+    assert layout.indexOf(titlebar.window_controls) == 3
+    controls_layout = titlebar.window_controls.layout()
+    assert controls_layout.indexOf(titlebar.btn_min) == 0
+    assert controls_layout.indexOf(titlebar.btn_max) == 1
+    assert controls_layout.indexOf(titlebar.btn_close) == 2
 
     titlebar.deleteLater()
     parent.deleteLater()
