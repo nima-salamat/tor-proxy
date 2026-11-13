@@ -3848,8 +3848,8 @@ def test_system_move_positions_pointer_at_titlebar_center_before_posting(monkeyp
     expected_center = QPoint(120, 240) + QRect(0, 0, 900, 40).center()
     assert events[0][1] == expected_center
     assert events[1][0] == "post"
-    assert events[1][1].value == ui._WM_SYSCOMMAND
-    assert events[1][2].value == ui._SC_MOVE
+    assert int(getattr(events[1][1], "value", events[1][1])) == ui._WM_SYSCOMMAND
+    assert int(getattr(events[1][2], "value", events[1][2])) == ui._SC_MOVE
 
 
 def test_system_size_command_does_not_reposition_pointer(monkeypatch):
