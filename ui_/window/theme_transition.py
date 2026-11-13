@@ -1,7 +1,9 @@
-"""Opaque two-frame circular reveal for the application's color-theme transition."""
+"""Single-snapshot circular reveal for the application's color-theme transition."""
 from __future__ import annotations
 
+import logging
 import math
+import time
 
 from PySide6.QtCore import (
     QAbstractAnimation,
@@ -13,17 +15,19 @@ from PySide6.QtCore import (
     QVariantAnimation,
     Signal,
 )
-from PySide6.QtGui import QPainter, QPainterPath, QPixmap, QRegion
+from PySide6.QtGui import QPainter, QPainterPath, QPixmap, QRegion, QRectF
 from PySide6.QtWidgets import QWidget
+
+logger = logging.getLogger(__name__)
 
 
 class CircularThemeReveal(QWidget):
-    """Reveal a new widget snapshot inside a growing circle over the old snapshot.
+    """Reveal the live new theme through a growing hole in one old-frame snapshot.
 
-    Both frames are opaque pixmaps captured from the real widget tree. Drawing the
-    new frame underneath and clipping the old frame outside the circle makes the
-    individual widgets themselves change as the circular reveal passes over them.
-    It does not rely on translucent child-window composition.
+    The window is already themed when this overlay appears. It therefore needs
+    only one captured pixmap: draw that old frame outside the animated circle and
+    let the live themed widgets show through inside it. This avoids the second
+    full-window grab and halves the full-frame image blits per animation frame.
     """
 
     finished = Signal()
@@ -32,18 +36,19 @@ class CircularThemeReveal(QWidget):
         self,
         parent: QWidget,
         old_snapshot: QPixmap,
-        new_snapshot: QPixmap,
         center,
-        duration_ms: int = 460,
+        duration_ms: int = 300,
         live_widgets=(),
     ) -> None:
         super().__init__(parent)
         self._old_snapshot = old_snapshot
-        self._new_snapshot = new_snapshot
         self._center = QPointF(center)
         self._radius = 0.0
         self._duration_ms = max(1, int(duration_ms))
         self._live_widgets = tuple(widget for widget in live_widgets if widget is not None)
+        self._paint_frames = 0
+        self._paint_total_ms = 0.0
+        self._paint_max_ms = 0.0
 
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
@@ -94,6 +99,22 @@ class CircularThemeReveal(QWidget):
         self._radius = self._maximum_radius()
         self.update()
         self.hide()
+        if self._paint_frames:
+            average_ms = self._paint_total_ms / self._paint_frames
+            if self._paint_max_ms >= 16.0:
+                logger.info(
+                    "Theme reveal rendered %d frames; average paint %.1f ms, max %.1f ms.",
+                    self._paint_frames,
+                    average_ms,
+                    self._paint_max_ms,
+                )
+            else:
+                logger.debug(
+                    "Theme reveal rendered %d frames; average paint %.1f ms, max %.1f ms.",
+                    self._paint_frames,
+                    average_ms,
+                    self._paint_max_ms,
+                )
         self.finished.emit()
         self.deleteLater()
 
@@ -106,25 +127,24 @@ class CircularThemeReveal(QWidget):
 
     def paintEvent(self, event) -> None:
         del event
+        started = time.perf_counter()
         painter = QPainter(self)
         if not painter.isActive():
             return
 
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        # Draw the old UI in one pass, then reveal the new UI by clipping a
-        # single blit to the expanding circle. Avoid boolean path subtraction
-        # on every frame to keep the animation responsive on slower GPUs.
-        painter.drawPixmap(self.rect(), self._old_snapshot)
+        # Odd-even fill creates a hole in the full-window clip. Only the old
+        # snapshot is painted, so the updated widgets remain live underneath.
+        old_frame_region = QPainterPath()
+        old_frame_region.setFillRule(Qt.FillRule.OddEvenFill)
+        old_frame_region.addRect(QRectF(self.rect()))
         if self._radius > 0:
-            reveal_region = QPainterPath()
-            reveal_region.addEllipse(self._center, self._radius, self._radius)
-            painter.setClipPath(reveal_region)
-            painter.drawPixmap(self.rect(), self._new_snapshot)
-            painter.setClipping(False)
+            old_frame_region.addEllipse(self._center, self._radius, self._radius)
+        painter.setClipPath(old_frame_region)
+        painter.drawPixmap(self.rect(), self._old_snapshot)
+        painter.setClipping(False)
 
-        # Keep interactive animated controls live above the two frozen window
-        # snapshots. This lets the Settings thumb continue moving while the
-        # circular theme reveal passes behind it.
+        # Keep explicitly requested controls live above the old-frame overlay.
         for widget in self._live_widgets:
             if not widget.isVisible():
                 continue
@@ -136,3 +156,8 @@ class CircularThemeReveal(QWidget):
                 QWidget.RenderFlag.DrawWindowBackground | QWidget.RenderFlag.DrawChildren,
             )
         painter.end()
+
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        self._paint_frames += 1
+        self._paint_total_ms += elapsed_ms
+        self._paint_max_ms = max(self._paint_max_ms, elapsed_ms)

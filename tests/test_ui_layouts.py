@@ -1087,10 +1087,13 @@ def test_theme_reveal_uses_widget_snapshots_and_supports_live_widgets():
     # The current three-choice Settings selector commits directly; the main
     # window animates a circular reveal between snapshots of the real widget tree.
     assert "old_snapshot = self.grab()" in theme_source
-    assert "new_snapshot = self.grab()" in theme_source
+    assert theme_source.count("self.grab()") == 1
+    assert "new_snapshot = self.grab()" not in theme_source
     assert "CircularThemeReveal(" in theme_source
+    assert "duration_ms=300" in theme_source
     assert "self._old_snapshot = old_snapshot" in transition_source
-    assert "self._new_snapshot = new_snapshot" in transition_source
+    assert "self._new_snapshot" not in transition_source
+    assert "old_frame_region.setFillRule(Qt.FillRule.OddEvenFill)" in transition_source
     assert "widget.render(" in transition_source
     assert "self._live_widgets = tuple(widget for widget in live_widgets if widget is not None)" in transition_source
 
@@ -1516,12 +1519,10 @@ def test_circular_theme_reveal_transitions_between_opaque_widget_frames(qt_app):
 
     old_snapshot = QPixmap(parent.size())
     old_snapshot.fill(QColor("red"))
-    new_snapshot = QPixmap(parent.size())
-    new_snapshot.fill(QColor("blue"))
+    parent.setStyleSheet("background-color: rgb(0, 0, 255);")
     transition = CircularThemeReveal(
         parent,
         old_snapshot,
-        new_snapshot,
         QPoint(10, 12),
         duration_ms=400,
         live_widgets=(live_widget,),
@@ -1586,9 +1587,10 @@ def test_main_window_theme_changes_use_circular_reveal_for_visible_mode_switches
     assert "self._theme_reveal_origin()" in ui_source
     assert "overlay.start()" in ui_source
     assert "QVariantAnimation" in transition_source
-    assert "painter.setClipPath(reveal_region)" in transition_source
-    assert "painter.drawPixmap(self.rect(), self._new_snapshot)" in transition_source
+    assert "painter.setClipPath(old_frame_region)" in transition_source
     assert "painter.drawPixmap(self.rect(), self._old_snapshot)" in transition_source
+    assert "painter.drawPixmap(self.rect(), self._new_snapshot)" not in transition_source
+    assert "self._paint_max_ms" in transition_source
     assert "old_frame_region.subtracted(reveal_region)" not in transition_source
     assert "def _prewarm_theme_stylesheets(self)" in ui_source
     assert "_THEME_STYLESHEET_CACHE" in ui_source
@@ -2114,9 +2116,15 @@ def test_tray_menu_uses_a_modern_theme_aware_floating_surface():
     assert '"clear": "fa6s.link-slash"' in theme_sync
     assert 'qta.icon("fa6s.right-from-bracket", color=danger)' in theme_sync
 
-    local_theme_start = source.index("def _apply_local_theme_styles(self, mode):")
+    local_theme_start = source.index("def _apply_local_theme_styles(self, mode, *, visible_only=False):")
     local_theme_end = source.index("def _sync_tray_menu_theme", local_theme_start)
-    assert "self._sync_tray_menu_theme(mode)" in source[local_theme_start:local_theme_end]
+    local_theme = source[local_theme_start:local_theme_end]
+    assert "visible_only and not page.isVisible()" in local_theme
+    assert "self._ensure_page_theme(page, mode)" in local_theme
+    assert "self._sync_tray_menu_theme(mode)" in local_theme
+    assert "self._ensure_page_theme(self.stack.widget(index))" in source
+    assert "self._ensure_visible_theme_pages()" in source
+    assert "self._apply_local_theme_styles(mode, visible_only=True)" in source
     assert "self._sync_tray_menu_theme()" in source[
         source.index("self._sync_tray_system_proxy_actions()"):
         source.index("# Do not give the menu to the shell:")
@@ -3873,4 +3881,37 @@ def test_system_size_command_does_not_reposition_pointer(monkeypatch):
     ui.Window._post_native_system_command(fake, ui._SC_SIZE)
     assert len(posted) == 1
     assert posted[0][2] == ui._SC_SIZE
+
+def test_page_theme_is_applied_only_when_its_cached_mode_is_stale():
+    import ui
+
+    applied = []
+    page = SimpleNamespace(
+        _torproxy_theme_mode="dark",
+        apply_theme=lambda mode: applied.append(mode),
+    )
+
+    assert ui.Window._ensure_page_theme(page, "dark") is False
+    assert applied == []
+
+    assert ui.Window._ensure_page_theme(page, "light") is True
+    assert applied == ["light"]
+    assert page._torproxy_theme_mode == "light"
+    assert ui.Window._ensure_page_theme(page, "light") is False
+    assert applied == ["light"]
+
+
+def test_theme_switch_profiles_sync_stages_and_updates_only_visible_local_pages():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui.py").read_text(encoding="utf-8")
+    start = source.index("def _set_theme(self, mode, *, preference=None):")
+    end = source.index("def _set_theme_preference", start)
+    theme_switch = source[start:end]
+
+    assert "snapshot_ms" in theme_switch
+    assert "app_stylesheet_ms" in theme_switch
+    assert "local_styles_ms" in theme_switch
+    assert "logger.info(" in theme_switch
+    assert "new_snapshot" not in theme_switch
+    assert "visible_only=True" in theme_switch
 

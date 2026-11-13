@@ -196,6 +196,14 @@ class SettingWindow(QWidget):
     def _set_settings_page(self, index):
         if not 0 <= index < self.page_setting.count():
             return
+        if index == self.BLOCKED_HOSTS_PAGE_INDEX:
+            ensure_theme = getattr(self._parent, "_ensure_page_theme", None)
+            if callable(ensure_theme):
+                ensure_theme(self.block_hosts_page)
+        elif index == self.EXCLUDED_HOSTS_PAGE_INDEX:
+            ensure_theme = getattr(self._parent, "_ensure_page_theme", None)
+            if callable(ensure_theme):
+                ensure_theme(self.exclude_hosts_page)
         self.page_setting.setCurrentIndex(index)
         if index == 2 and hasattr(self, "chk_http_proxy_enabled"):
             self._refresh_http_proxy_status()

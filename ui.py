@@ -1,5 +1,6 @@
 from contextlib import contextmanager
 import ctypes
+import time
 from ctypes import wintypes
 
 from PySide6.QtWidgets import (
@@ -1087,6 +1088,8 @@ class Window(QMainWindow):
 
     def showEvent(self, event):
         super().showEvent(event)
+        # The OS theme may have changed while TorProxy was hidden in the tray.
+        self._ensure_visible_theme_pages()
         # Recheck in case Qt recreated the native HWND after a window-flag change.
         self._enable_native_snap_support()
         # DWM draws the subtle rounded frame itself, without changing our client area.
@@ -1900,6 +1903,10 @@ class Window(QMainWindow):
 
     def _show_page(self, index):
         if 0 <= index < self.stack.count():
+            # Defer expensive page-local QSS and icon refreshes until this page
+            # is actually requested, rather than styling every hidden page on
+            # each global theme change.
+            self._ensure_page_theme(self.stack.widget(index))
             self.stack.setCurrentIndex(index)
             if hasattr(self, "page_actions"):
                 self.page_action_group.setExclusive(False)
@@ -1987,12 +1994,29 @@ class Window(QMainWindow):
             app.setStyleSheet(_theme_stylesheet(active_mode))
             self._apply_local_theme_styles(active_mode)
 
-    def _apply_local_theme_styles(self, mode):
-        if hasattr(self, "updater_window"):
-            self.updater_window._apply_local_styles(mode)
-        if hasattr(self, "tunnel_window"):
-            self.tunnel_window._apply_local_styles(mode)
+    def _ensure_page_theme(self, page, mode=None):
+        """Apply a page's local theme once, immediately before it becomes visible."""
+        if page is None:
+            return False
+        mode = mode or CONFIG.get("mode", "dark")
+        if getattr(page, "_torproxy_theme_mode", None) == mode:
+            return False
+
+        apply_theme = getattr(page, "_apply_local_styles", None)
+        if not callable(apply_theme):
+            apply_theme = getattr(page, "apply_theme", None)
+        if not callable(apply_theme):
+            return False
+
+        apply_theme(mode)
+        page._torproxy_theme_mode = mode
+        return True
+
+    def _ensure_visible_theme_pages(self):
+        """Catch up pages after the app is restored from the system tray."""
         for page in (
+            getattr(self, "updater_window", None),
+            getattr(self, "tunnel_window", None),
             getattr(self, "settingWidget", None),
             getattr(self, "block_host_window", None),
             getattr(self, "exclude_host_window", None),
@@ -2001,9 +2025,32 @@ class Window(QMainWindow):
             getattr(self, "customTorWidget", None),
             getattr(self, "developerTorWidget", None),
         ):
-            apply_theme = getattr(page, "apply_theme", None)
-            if callable(apply_theme):
-                apply_theme(mode)
+            if page is not None and page.isVisible():
+                self._ensure_page_theme(page)
+
+    def _apply_local_theme_styles(self, mode, *, visible_only=False):
+        """Update visible pages now; hidden pages are themed as they are opened."""
+        pages = (
+            getattr(self, "updater_window", None),
+            getattr(self, "tunnel_window", None),
+            getattr(self, "settingWidget", None),
+            getattr(self, "block_host_window", None),
+            getattr(self, "exclude_host_window", None),
+            getattr(self, "shortcutsWidget", None),
+            getattr(self, "statisticsWidget", None),
+            getattr(self, "customTorWidget", None),
+            getattr(self, "developerTorWidget", None),
+        )
+        for page in pages:
+            if page is None or (visible_only and not page.isVisible()):
+                continue
+            started = time.perf_counter()
+            self._ensure_page_theme(page, mode)
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            if visible_only and elapsed_ms >= 8.0:
+                name = page.objectName() or type(page).__name__
+                logger.info("Theme page styling: %s took %.1f ms.", name, elapsed_ms)
+
         self._apply_shell_styles(mode)
         if hasattr(self, "window_system_menu"):
             self._sync_window_system_menu_theme(mode)
@@ -2138,6 +2185,7 @@ class Window(QMainWindow):
         if preference is not None and preference not in {"system", "dark", "light"}:
             return
 
+        theme_started = time.perf_counter()
         app = QApplication.instance()
         should_animate = (
             app is not None
@@ -2148,12 +2196,18 @@ class Window(QMainWindow):
         )
         old_snapshot = None
         reveal_origin = None
+        snapshot_ms = 0.0
         if should_animate:
-            # Hide any previous reveal before sampling the live old-theme UI.
+            # Keep one old frame only. The new theme is rendered live underneath
+            # the overlay; taking a second full-window snapshot adds a costly
+            # synchronous grab without adding useful information.
             self._cancel_theme_reveal()
+            capture_started = time.perf_counter()
             old_snapshot = self.grab()
+            snapshot_ms = (time.perf_counter() - capture_started) * 1000.0
             reveal_origin = self._theme_reveal_origin()
 
+        persist_started = time.perf_counter()
         try:
             if preference is None:
                 if CONFIG.get("mode") != mode:
@@ -2163,36 +2217,55 @@ class Window(QMainWindow):
         except (ValueError, OSError, KeyError):
             logger.exception("Could not persist the selected theme preference.")
             return
+        persist_ms = (time.perf_counter() - persist_started) * 1000.0
 
+        app_stylesheet_ms = 0.0
         if app is not None:
+            stylesheet_started = time.perf_counter()
             app.setStyleSheet(_theme_stylesheet(mode))
+            app_stylesheet_ms = (time.perf_counter() - stylesheet_started) * 1000.0
+
         if hasattr(self, "settingWidget"):
             sync_theme = getattr(self.settingWidget, "set_theme_mode", None)
             if callable(sync_theme):
                 sync_theme(mode)
-        self._apply_local_theme_styles(mode)
 
-        # Capture the actual widgets after the new palette and all page-local
-        # styles have been applied. The three-way selector commits immediately,
-        # so there is no animated thumb that needs to remain above the reveal.
+        local_started = time.perf_counter()
+        self._apply_local_theme_styles(mode, visible_only=True)
+        local_styles_ms = (time.perf_counter() - local_started) * 1000.0
+
+        overlay_ms = 0.0
         if should_animate and old_snapshot is not None and not old_snapshot.isNull():
-            new_snapshot = self.grab()
-            if not new_snapshot.isNull():
-                overlay = CircularThemeReveal(
-                    self,
-                    old_snapshot,
-                    new_snapshot,
-                    reveal_origin,
-                    duration_ms=460,
-                )
-                overlay.setGeometry(self.rect())
-                overlay.finished.connect(
-                    lambda current=overlay: self._finish_theme_reveal(current)
-                )
-                self._theme_reveal = overlay
-                overlay.show()
-                overlay.raise_()
-                overlay.start()
+            overlay_started = time.perf_counter()
+            overlay = CircularThemeReveal(
+                self,
+                old_snapshot,
+                reveal_origin,
+                duration_ms=300,
+            )
+            overlay.setGeometry(self.rect())
+            overlay.finished.connect(
+                lambda current=overlay: self._finish_theme_reveal(current)
+            )
+            self._theme_reveal = overlay
+            overlay.show()
+            overlay.raise_()
+            overlay.start()
+            overlay_ms = (time.perf_counter() - overlay_started) * 1000.0
+
+        total_ms = (time.perf_counter() - theme_started) * 1000.0
+        logger.info(
+            "Theme switch to %s: %.1f ms total "
+            "(snapshot %.1f, config %.1f, application QSS %.1f, "
+            "visible-page styles %.1f, reveal setup %.1f).",
+            mode,
+            total_ms,
+            snapshot_ms,
+            persist_ms,
+            app_stylesheet_ms,
+            local_styles_ms,
+            overlay_ms,
+        )
 
     def _set_theme_preference(self, preference):
         """Apply and persist one of the three supported theme preferences."""
