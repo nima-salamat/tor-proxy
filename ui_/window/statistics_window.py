@@ -1,6 +1,8 @@
 """Live proxy traffic statistics and session-local charts."""
 from __future__ import annotations
 
+import json
+import logging
 import math
 import time
 from datetime import datetime
@@ -8,7 +10,7 @@ from collections import deque
 from dataclasses import dataclass
 
 import qtawesome as qta
-from PySide6.QtCore import Qt, QTimer, QPointF, QRectF
+from PySide6.QtCore import Qt, QTimer, QThreadPool, QPointF, QRectF
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPalette, QPen
 from PySide6.QtWidgets import (
     QComboBox,
@@ -26,6 +28,9 @@ from PySide6.QtWidgets import (
 from config import CONFIG
 from proxy import get_traffic_direction_snapshot
 from torproxy.traffic_history import TrafficHistoryStore
+from ui_.worker.worker import Worker
+
+logger = logging.getLogger(__name__)
 
 
 def _safe_non_negative_int(value) -> int:
@@ -365,12 +370,24 @@ class StatisticsWindow(QWidget):
         self.proxy_widget = proxy_widget
         self._owner = parent
         self.history_store = history_store or TrafficHistoryStore(initialize=False)
+        self._history_pool = QThreadPool(self)
+        self._history_pool.setMaxThreadCount(1)
+        self._history_load_worker = None
+        self._history_refresh_pending = False
+        self._history_loaded = False
+        self._persistent_totals_cache = {
+            "total_bytes": 0, "upload_bytes": 0, "download_bytes": 0, "updated_at": 0
+        }
+        self._session_tracker = getattr(parent, "_traffic_session_state", None)
         self.setObjectName("statisticsPage")
         self._dark = CONFIG["mode"] == "dark"
-        self._started_at = time.monotonic()
+        self._started_at = (
+            float(self._session_tracker.get("started_at", time.monotonic()))
+            if isinstance(self._session_tracker, dict) else time.monotonic()
+        )
         self._last_sample_at = self._started_at
-        self._last_total_bytes = self._read_total_bytes()
-        self._last_directions = self._read_directions()
+        self._last_total_bytes = 0
+        self._last_directions = {"upload": 0, "download": 0}
         self._session_upload = 0
         self._session_download = 0
         self._current_rate = 0.0
@@ -487,15 +504,27 @@ class StatisticsWindow(QWidget):
 
         self._apply_theme_styles()
         self._refresh_metrics()
-        self.refresh_persistent_history()
         self.timer = QTimer(self)
         self.timer.setInterval(1000)
         self.timer.timeout.connect(self.sample_once)
-        self.timer.start()
         self.history_refresh_timer = QTimer(self)
         self.history_refresh_timer.setInterval(15000)
         self.history_refresh_timer.timeout.connect(self._refresh_history_if_visible)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self.timer.start()
         self.history_refresh_timer.start()
+        if not self._history_loaded:
+            self.refresh_persistent_history()
+        self.sample_once()
+
+    def hideEvent(self, event) -> None:
+        # Window continues collecting samples; only chart updates and database
+        # reads are paused while the Statistics page is hidden.
+        self.timer.stop()
+        self.history_refresh_timer.stop()
+        super().hideEvent(event)
 
     def _make_chart_panel(self, title: str, description: str, chart: TrafficChart) -> QFrame:
         panel = QFrame(self)
@@ -514,10 +543,8 @@ class StatisticsWindow(QWidget):
         return panel
 
     def _read_persistent_totals(self) -> dict[str, int]:
-        try:
-            return self.history_store.get_totals()
-        except (OSError, RuntimeError, TypeError, ValueError):
-            return {"total_bytes": 0, "upload_bytes": 0, "download_bytes": 0, "updated_at": 0}
+        # SQLite totals are refreshed asynchronously with the selected history range.
+        return dict(self._persistent_totals_cache)
 
     def _read_total_bytes(self) -> int:
         try:
@@ -542,23 +569,81 @@ class StatisticsWindow(QWidget):
         if self.isVisible():
             self.refresh_persistent_history()
 
+    def _load_history_snapshot(self, start_timestamp: int, end_timestamp: int, period_seconds: int) -> str:
+        totals = self.history_store.get_totals()
+        buckets = self.history_store.load_buckets(
+            start_timestamp, end_timestamp, bucket_count=60
+        )
+        return json.dumps({
+            "totals": totals,
+            "buckets": buckets,
+            "period_seconds": period_seconds,
+        }, separators=(",", ":"))
+
     def refresh_persistent_history(self, *_args) -> None:
+        if self._history_load_worker is not None:
+            self._history_refresh_pending = True
+            return
         period_seconds = int(self.history_range_combo.currentData() or 3600)
         end_timestamp = int(time.time())
         end_timestamp = end_timestamp - end_timestamp % 60 + 60
         start_timestamp = end_timestamp - period_seconds
+        worker = Worker(
+            self._load_history_snapshot, start_timestamp, end_timestamp, period_seconds
+        )
+        worker.signals.finished.connect(self._on_history_loaded)
+        worker.signals.error.connect(self._on_history_load_failed)
+        self._history_load_worker = worker
+        self._history_pool.start(worker)
+
+    def _on_history_loaded(self, result: str) -> None:
+        self._history_load_worker = None
         try:
-            buckets = self.history_store.load_buckets(
-                start_timestamp, end_timestamp, bucket_count=60
+            payload = json.loads(result)
+            self._persistent_totals_cache = dict(payload.get("totals") or {})
+            self.volume_chart.set_history(
+                payload.get("buckets") or [], int(payload.get("period_seconds") or 3600)
             )
-        except (OSError, RuntimeError, TypeError, ValueError):
-            buckets = []
-        self.volume_chart.set_history(buckets, period_seconds)
-        self._refresh_metrics()
+            self._history_loaded = True
+            self._refresh_metrics()
+        except (TypeError, ValueError, KeyError):
+            logger.exception("Could not apply the traffic history snapshot.")
+        if self._history_refresh_pending:
+            self._history_refresh_pending = False
+            if self.isVisible():
+                self.refresh_persistent_history()
+
+    def _on_history_load_failed(self, error: str) -> None:
+        self._history_load_worker = None
+        logger.warning("Could not load traffic history in the background: %s", error)
+        if self._history_refresh_pending:
+            self._history_refresh_pending = False
+            if self.isVisible():
+                self.refresh_persistent_history()
+
+    def _sync_session_tracker(self) -> bool:
+        tracker = self._session_tracker
+        if not isinstance(tracker, dict):
+            return False
+        self._session_upload = max(0, int(tracker.get("session_upload", 0)))
+        self._session_download = max(0, int(tracker.get("session_download", 0)))
+        self._current_rate = max(0.0, float(tracker.get("current_rate", 0.0)))
+        self._peak_rate = max(0.0, float(tracker.get("peak_rate", 0.0)))
+        self._last_sample_at = float(tracker.get("last_sample_at", self._last_sample_at))
+        self._samples = deque(
+            (_TrafficSample(*sample) for sample in tracker.get("samples", ())),
+            maxlen=3600,
+        )
+        return True
 
     def sample_once(self, *, now: float | None = None, total_bytes: int | None = None,
                     direction_totals: dict[str, int] | None = None) -> None:
-        """Sample counters. Optional arguments make accounting behavior deterministic in tests."""
+        """Render app-lifetime samples; explicit arguments preserve deterministic tests."""
+        if now is None and total_bytes is None and direction_totals is None and self._sync_session_tracker():
+            self._refresh_metrics(total_bytes=self._read_total_bytes())
+            self.rate_chart.set_samples(list(self._samples))
+            return
+
         timestamp = time.monotonic() if now is None else float(now)
         total = self._read_total_bytes() if total_bytes is None else _safe_non_negative_int(total_bytes)
         directions = self._read_directions() if direction_totals is None else {
