@@ -1417,9 +1417,6 @@ class OnionHostingPage(QWidget):
             f"{len(services)} service" + ("" if len(services) == 1 else "s")
         )
         self._refresh_cached_service_cards()
-        # Traffic keeps changing even when the service inventory is unchanged;
-        # update every snapshot instead of tying counters to card rebuilds.
-        self._refresh_traffic_metrics(traffic)
         state = str(runtime["state"]).lower()
         self.start_runtime_button.setEnabled(state in {"stopped", "failed"} and "runtime" not in self._workers)
         self.stop_runtime_button.setEnabled(state != "stopped" and "runtime" not in self._workers)
