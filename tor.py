@@ -89,8 +89,8 @@ def _find_executable(
             return None, path
         managed_bundle = _bundle_root_for_path(resolved, managed_root)
         if resolved == managed_root or (managed_root in resolved.parents):
-            # Managed content is never trusted from its filename alone: it must pass the
-            # same marker/digest/signature/executable checks as the bundle manager.
+            # Managed content is never trusted from its filename alone. Strict mode
+            # verifies the archive digest; Startup mode checks marker and layout only.
             verified = (
                 _verified_managed_bundles(managed_root)
                 if verify_managed
