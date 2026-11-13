@@ -3696,6 +3696,7 @@ def test_exit_requests_are_deferred_and_coalesced(monkeypatch):
 
 def test_custom_titlebar_window_controls_fill_right_edge_without_gaps(qt_app):
     from PySide6.QtCore import QPoint, QRect
+    from PySide6.QtWidgets import QMainWindow
     from ui import _HTCAPTION, _HTCLIENT, _HTMAXBUTTON, _native_titlebar_hit_test
     from ui_.window.custom_titlebar import CustomTitleBar
 
