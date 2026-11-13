@@ -71,7 +71,6 @@ _HTBOTTOMLEFT = 16
 _HTBOTTOMRIGHT = 17
 _WM_NCCALCSIZE = 0x0083
 _WM_NCHITTEST = 0x0084
-_WM_NCMOUSEMOVE = 0x00A0
 _WM_NCLBUTTONDOWN = 0x00A1
 _WM_NCLBUTTONUP = 0x00A2
 _WM_NCLBUTTONDBLCLK = 0x00A3
@@ -515,6 +514,21 @@ class Window(QMainWindow):
                 exc_info=True,
             )
 
+    def _set_native_max_button_hovered(self, hovered):
+        """Mirror the non-client hover state to the Qt maximize button."""
+        hovered = bool(hovered)
+        if hovered == self._native_max_button_hovered:
+            return
+        self._native_max_button_hovered = hovered
+        titlebar = getattr(self, "title_bar", None)
+        button = getattr(titlebar, "btn_max", None) if titlebar is not None else None
+        if button is not None:
+            QApplication.sendEvent(
+                button,
+                QEvent(QEvent.Type.Enter if hovered else QEvent.Type.Leave),
+            )
+            button.update()
+
     def _forward_native_max_button_mouse_event(self, event_type, buttons):
         """Deliver a Windows non-client caption press/release to the Qt maximize button."""
         titlebar = getattr(self, "title_bar", None)
@@ -548,26 +562,8 @@ class Window(QMainWindow):
             titlebar = getattr(self, "title_bar", None)
             max_button = getattr(titlebar, "btn_max", None) if titlebar is not None else None
 
-            if native_message.message == _WM_NCMOUSEMOVE:
-                hovered = False
-                if max_button is not None:
-                    hovered = max_button.rect().contains(
-                        max_button.mapFromGlobal(QCursor.pos())
-                    )
-                if hovered != self._native_max_button_hovered:
-                    self._native_max_button_hovered = hovered
-                    if max_button is not None:
-                        QApplication.sendEvent(
-                            max_button,
-                            QEvent(QEvent.Type.Enter if hovered else QEvent.Type.Leave),
-                        )
-                return True, 0
-
             if native_message.message == _WM_NCMOUSELEAVE:
-                if self._native_max_button_hovered:
-                    self._native_max_button_hovered = False
-                    if max_button is not None:
-                        QApplication.sendEvent(max_button, QEvent(QEvent.Type.Leave))
+                self._set_native_max_button_hovered(False)
                 return super().nativeEvent(event_type, message)
 
             if (
@@ -579,7 +575,7 @@ class Window(QMainWindow):
                 self._forward_native_max_button_mouse_event(
                     QEvent.Type.MouseButtonPress, Qt.MouseButton.LeftButton
                 )
-                return True, 0
+                return super().nativeEvent(event_type, message)
 
             if (
                 native_message.message == _WM_NCLBUTTONUP
@@ -735,6 +731,7 @@ class Window(QMainWindow):
                     hit_test = _native_titlebar_hit_test(
                         point, titlebar_rect, maximize_rect, other_button_rects
                     )
+                    self._set_native_max_button_hovered(hit_test == _HTMAXBUTTON)
                     # Caption controls take priority over edge resizing.
                     # HTMAXBUTTON is deliberately returned to Windows so the OS
                     # can display its native Snap Layouts flyout after its dwell.

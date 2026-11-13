@@ -2730,6 +2730,8 @@ def test_main_window_advertises_native_windows_snap_and_maximize_support():
     assert "_WM_NCLBUTTONDOWN = 0x00A1" in source
     assert "_WM_NCLBUTTONUP = 0x00A2" in source
     assert "self._forward_native_max_button_mouse_event(" in source
+    assert "self._set_native_max_button_hovered(hit_test == _HTMAXBUTTON)" in source
+    assert "return super().nativeEvent(event_type, message)" in source
     assert "QEvent.Type.MouseButtonPress" in source
     assert "QEvent.Type.MouseButtonRelease" in source
     assert "QEvent.Type.Enter if hovered else QEvent.Type.Leave" in source
@@ -3426,9 +3428,9 @@ def test_home_keeps_status_at_top_with_a_minimum_gap_and_polishes_bottom_actions
         'self.home_layout.addWidget('
         + '\n            self.connection_status_frame, 0, Qt.AlignmentFlag.AlignHCenter'
     )
-    connect_row_index = source.index("self.home_layout.addWidget(self._home_connect_host, 1)", status_index)
-    metrics_index = source.index("self.home_layout.addWidget(metrics_panel)", connect_row_index)
-    assert status_index < connect_row_index < metrics_index
+    connect_host_index = source.index("self.home_layout.addWidget(self._home_connect_host, 1)", status_index)
+    metrics_index = source.index("self.home_layout.addWidget(metrics_panel)", connect_host_index)
+    assert status_index < connect_host_index < metrics_index
     status_setup = source[source.index('self.btn_status = QLabel'):status_index]
     assert "self.home_layout.addStretch(1)" not in status_setup
     assert "Keep the connection status anchored at the top of Home." in status_setup
