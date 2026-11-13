@@ -189,3 +189,44 @@ def test_resolve_verified_bundle_rejects_missing_or_untrusted_version(monkeypatc
 
     with pytest.raises(BundleVerificationError, match="not installed"):
         updater.resolve_verified_bundle("99.0")
+
+
+
+def test_fast_bundle_discovery_defers_only_the_archive_digest(tmp_path, monkeypatch):
+    import hashlib
+    import json
+
+    import updater
+
+    platform_name = updater._platform_name()
+    architecture = updater._architecture_name()
+    root = tmp_path / "bundles"
+    bundle = root / f"tor-expert-bundle-{platform_name}-{architecture}-16.0"
+    executable = _make_executable(
+        bundle / "tor" / ("tor.exe" if platform_name == "windows" else "tor")
+    )
+    archive = bundle.with_name(bundle.name + ".tar.gz")
+    archive.write_bytes(b"archive contents do not match the saved digest")
+    marker = {
+        "signature_verified": False,
+        "verification_method": "https_only",
+        "archive_sha256": hashlib.sha256(b"original archive contents").hexdigest(),
+    }
+    (bundle / ".torproxy-verified.json").write_text(json.dumps(marker), encoding="utf-8")
+
+    monkeypatch.setattr(updater, "BUNDLE_DIR", str(root))
+    monkeypatch.setattr(updater, "resource_path", lambda _path: str(root))
+    hash_calls = []
+    real_hash = updater.sha256_file
+
+    def recording_hash(path):
+        hash_calls.append(Path(path))
+        return real_hash(path)
+
+    monkeypatch.setattr(updater, "sha256_file", recording_hash)
+
+    assert updater.get_own_bundles(verify=False) == [str(bundle)]
+    assert hash_calls == []
+    # Strict discovery still rejects a mismatched archive digest.
+    assert updater.get_own_bundles() == []
+    assert hash_calls == [archive]
