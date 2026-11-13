@@ -134,17 +134,18 @@ class SettingWindow(QWidget):
         self.second_page, self.second_page_layout = self._create_scroll_page()
         self.services_page, self.services_page_layout = self._create_scroll_page()
 
-        # Keep host-rule editors inside Settings instead of exposing them as
-        # separate top-level destinations. The existing widgets remain the
-        # source of truth for adding, searching and deleting rules.
-        self.block_hosts_page = BlcokHostsWindow(self)
-        self.block_hosts_page.setObjectName("settingsBlockedHostsPage")
-        self.page_setting.addWidget(self.block_hosts_page)
-        self.exclude_hosts_page = ExcludeHostsWindow(self)
-        self.exclude_hosts_page.setObjectName("settingsExcludedHostsPage")
-        self.page_setting.addWidget(self.exclude_hosts_page)
-
+        # Reserve the host-rule destinations without constructing their list
+        # widgets until the user opens the corresponding Settings section.
+        self._blocked_hosts_placeholder = QWidget(self.page_setting)
+        self._blocked_hosts_placeholder.setObjectName("deferredBlockedHostsPage")
+        self.page_setting.addWidget(self._blocked_hosts_placeholder)
+        self._excluded_hosts_placeholder = QWidget(self.page_setting)
+        self._excluded_hosts_placeholder.setObjectName("deferredExcludedHostsPage")
+        self.page_setting.addWidget(self._excluded_hosts_placeholder)
+        self.block_hosts_page = None
+        self.exclude_hosts_page = None
         self.advanced_page, self.advanced_page_layout = self._create_scroll_page()
+        self._settings_initialized: set[int] = set()
         self.settings_nav_buttons[0].setChecked(True)
         initial_bridges = parse_bridge_text(str(CONFIG["bridges"] or ""))
         self._saved_bridge_records = initial_bridges.records
@@ -169,13 +170,11 @@ class SettingWindow(QWidget):
         self._bridge_normalize_timer.setInterval(650)
         self._bridge_normalize_timer.timeout.connect(self._canonicalize_bridge_editor)
 
-        self.initialize_first_page()
-        self.initialize_bridges_page()
-        self.initialize_second_page()
-        self.initialize_tor_services_page()
-        self.initialize_advanced_page()
+        # General is the only Settings tab built on first navigation. Bridge
+        # cards, port controls, service preferences, host lists and advanced
+        # controls are created when their own tab is selected.
+        self._ensure_settings_page_initialized(0)
         self.apply_theme(CONFIG["mode"])
-        self.set_bridges()
 
     def _create_scroll_page(self):
         content = QWidget()
@@ -193,9 +192,53 @@ class SettingWindow(QWidget):
         self.page_setting.addWidget(scroll)
         return scroll, layout
 
+    def _ensure_settings_page_initialized(self, index: int) -> None:
+        """Build each Settings destination once, immediately before its first use."""
+        if index in self._settings_initialized:
+            return
+        initializers = {
+            0: self.initialize_first_page,
+            1: self.initialize_bridges_page,
+            2: self.initialize_second_page,
+            3: self.initialize_tor_services_page,
+            self.ADVANCED_PAGE_INDEX: self.initialize_advanced_page,
+        }
+        initializer = initializers.get(index)
+        if initializer is not None:
+            initializer()
+        elif index == self.BLOCKED_HOSTS_PAGE_INDEX:
+            page = BlcokHostsWindow(self)
+            page.setObjectName("settingsBlockedHostsPage")
+            placeholder = self.page_setting.replaceWidget(index, page)
+            self.block_hosts_page = page
+            if self._parent is not None:
+                self._parent.block_host_window = page
+            if placeholder is not None:
+                placeholder.deleteLater()
+        elif index == self.EXCLUDED_HOSTS_PAGE_INDEX:
+            page = ExcludeHostsWindow(self)
+            page.setObjectName("settingsExcludedHostsPage")
+            placeholder = self.page_setting.replaceWidget(index, page)
+            self.exclude_hosts_page = page
+            if self._parent is not None:
+                self._parent.exclude_host_window = page
+            if placeholder is not None:
+                placeholder.deleteLater()
+        else:
+            return
+
+        self._settings_initialized.add(index)
+        if index == 1:
+            self.set_bridges()
+        if index != 0:
+            self.apply_theme(CONFIG["mode"])
+
     def _set_settings_page(self, index):
         if not 0 <= index < self.page_setting.count():
             return
+        ensure_page = getattr(self, "_ensure_settings_page_initialized", None)
+        if callable(ensure_page):
+            ensure_page(index)
         if index == self.BLOCKED_HOSTS_PAGE_INDEX:
             ensure_theme = getattr(self._parent, "_ensure_page_theme", None)
             if callable(ensure_theme):
@@ -1693,6 +1736,13 @@ class SettingWindow(QWidget):
 
     def set_bridges(self):
         """Validate, canonicalize, save and render the bridge records as one transaction."""
+        if not hasattr(self, "inp_bridges"):
+            # Automatic bridge pruning can precede the first visit to the
+            # Bridges tab. Keep the saved snapshot coherent without creating UI.
+            self._saved_bridge_records = parse_bridge_text(
+                str(CONFIG["bridges"] or "")
+            ).records
+            return
         text = self.inp_bridges.toPlainText()
         parsed = parse_bridge_text(text)
         if text.strip() and parsed.invalid_records:
