@@ -728,10 +728,11 @@ def test_navigation_labels_frameless_pages_and_custom_shortcuts_dialog():
     assert "page_area" not in ui_source
     assert "self.main_layout.addWidget(self.stack, 1)" in ui_source
     assert "QStackedWidget#pageStack {{ border: none; outline: none;" in ui_source
-    assert "self.shortcutsWidget = ShortcutsWindow(self)" in ui_source
-    assert "self.stack.indexOf(self.shortcutsWidget)" in ui_source
+    assert "from ui_.window.shortcuts_window import ShortcutsWindow" in ui_source
+    assert "PAGE_HELP = 4" in ui_source
+    assert "self._ensure_page_created(index)" in ui_source
     assert "def _show_tunnel_page(self)" in ui_source
-    assert "self.stack.indexOf(self.tunnel_window)" in ui_source
+    assert "self._show_page(self.PAGE_SYSTEM_TUNNEL)" in ui_source
     assert "class ShortcutsWindow" in shortcuts_source
     assert 'QLabel#shortcutsKeycap' in shortcuts_source
     assert 'tuple(str(CONFIG["global_shortcut"]).split("+"))' in shortcuts_source
@@ -1062,7 +1063,7 @@ def test_theme_switch_thumb_can_be_dragged_in_both_directions(qt_app):
     qt_app.processEvents()
 
 
-def test_theme_switch_track_is_a_full_capsule_and_prewarms_the_alternate_theme():
+def test_theme_switch_track_is_a_full_capsule_without_startup_repolish():
     repository = Path(__file__).resolve().parents[1]
     switch_source = (repository / "ui_/btn/theme_switch.py").read_text(encoding="utf-8")
     ui_source = (repository / "ui.py").read_text(encoding="utf-8")
@@ -1072,9 +1073,10 @@ def test_theme_switch_track_is_a_full_capsule_and_prewarms_the_alternate_theme()
     assert "def mouseMoveEvent(self, event)" in switch_source
     assert "def mouseReleaseEvent(self, event)" in switch_source
     assert "self._warm_icon_pixmaps" in switch_source
-    assert "self._prewarm_theme_stylesheets()" in ui_source
-    assert "self._apply_local_theme_styles(alternate_mode)" in ui_source
-    assert "QTimer.singleShot(0, self._prewarm_theme_stylesheets)" not in ui_source
+    assert "self._prewarm_theme_stylesheets()" not in ui_source
+    assert "self._apply_local_theme_styles(alternate_mode)" not in ui_source
+    assert "app.setStyleSheet(_theme_stylesheet(alternate_mode))" not in ui_source
+    assert "app.styleSheet() != stylesheet" in ui_source
 
 
 def test_theme_reveal_uses_widget_snapshots_and_supports_live_widgets():
@@ -1610,8 +1612,10 @@ def test_statistics_page_is_reachable_from_proxy_traffic_and_uses_live_direction
     assert "self.btn_statistics = QPushButton(" in home_source
     assert 'self.btn_statistics.setObjectName("statisticsLink")' in home_source
     assert "self.btn_statistics.clicked.connect(self.open_statistics_page)" in home_source
-    assert "self.stack.addWidget(self.statisticsWidget)" in ui_source
-    assert "self._show_page(self.stack.indexOf(self.statisticsWidget))" in ui_source
+    assert "PAGE_STATISTICS = 5" in ui_source
+    assert "from ui_.window.statistics_window import StatisticsWindow" in ui_source
+    assert "self._show_page(self.PAGE_STATISTICS)" in ui_source
+    assert "def _create_traffic_session_state(self)" in ui_source
     assert "def get_traffic_direction_snapshot()" in proxy_source
     assert 'if direction in {"upload", "download"}' in proxy_source
     assert '("lifetime", "TOTAL TRAFFIC"' in stats_source
