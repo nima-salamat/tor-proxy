@@ -3522,3 +3522,103 @@ def test_home_keeps_status_at_top_with_a_minimum_gap_and_polishes_bottom_actions
     assert "QPushButton#secondaryAction:pressed" in source
     assert "QPushButton#secondaryAction:checked" in source
     assert "QPushButton#secondaryAction:disabled" in source
+
+
+
+def test_window_system_menu_native_shortcuts_and_caption_right_click_are_routed_to_qt():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui.py").read_text(encoding="utf-8")
+
+    assert "_WM_SYSKEYDOWN = 0x0104" in source
+    assert "_WM_NCRBUTTONUP = 0x00A5" in source
+    assert "_WM_SYSCOMMAND = 0x0112" in source
+    assert "native_message.message == _WM_NCRBUTTONUP" in source
+    assert "native_message.message == _WM_SYSKEYDOWN" in source
+    assert "native_message.message == _WM_SYSCOMMAND" in source
+    assert "self._queue_window_system_menu(keyboard=True)" in source
+    assert "self._queue_window_system_menu(QCursor.pos())" in source
+    assert "menu.popup(position)" in source
+
+
+def test_window_system_menu_actions_follow_maximized_and_minimized_state():
+    import ui
+
+    class _Action:
+        def __init__(self):
+            self.enabled = None
+
+        def setEnabled(self, enabled):
+            self.enabled = enabled
+
+    fake = SimpleNamespace(
+        window_system_actions={key: _Action() for key in (
+            "restore", "move", "size", "minimize", "maximize", "close"
+        )},
+        isMaximized=lambda: False,
+        isMinimized=lambda: False,
+    )
+    ui.Window._sync_window_system_menu_actions(fake)
+    assert {key: action.enabled for key, action in fake.window_system_actions.items()} == {
+        "restore": False,
+        "move": True,
+        "size": True,
+        "minimize": True,
+        "maximize": True,
+        "close": True,
+    }
+
+    fake.isMaximized = lambda: True
+    ui.Window._sync_window_system_menu_actions(fake)
+    assert {key: action.enabled for key, action in fake.window_system_actions.items()} == {
+        "restore": True,
+        "move": False,
+        "size": False,
+        "minimize": True,
+        "maximize": False,
+        "close": True,
+    }
+
+    fake.isMaximized = lambda: False
+    fake.isMinimized = lambda: True
+    ui.Window._sync_window_system_menu_actions(fake)
+    assert fake.window_system_actions["restore"].enabled is True
+    assert fake.window_system_actions["move"].enabled is False
+    assert fake.window_system_actions["size"].enabled is False
+    assert fake.window_system_actions["minimize"].enabled is False
+    assert fake.window_system_actions["maximize"].enabled is False
+    assert fake.window_system_actions["close"].enabled is True
+
+
+def test_window_system_menu_uses_current_dark_and_light_palette(monkeypatch):
+    import ui
+
+    styles = []
+    icons = []
+
+    class _Menu:
+        def setStyleSheet(self, stylesheet):
+            styles.append(stylesheet)
+
+    class _Action:
+        def setIcon(self, icon):
+            icons.append(icon)
+
+    fake = SimpleNamespace(
+        window_system_menu=_Menu(),
+        window_system_actions={key: _Action() for key in (
+            "restore", "move", "size", "minimize", "maximize", "close"
+        )},
+    )
+    monkeypatch.setattr(ui.qta, "icon", lambda name, color: (name, color))
+
+    ui.Window._sync_window_system_menu_theme(fake, "dark")
+    assert "background-color: #171e29;" in styles[-1]
+    assert "border: 1px solid #303b4c;" in styles[-1]
+    assert "background-color: #29384d;" in styles[-1]
+    assert ("fa6s.xmark", "#ef7777") in icons
+
+    ui.Window._sync_window_system_menu_theme(fake, "light")
+    assert "background-color: #ffffff;" in styles[-1]
+    assert "border: 1px solid #dfe6ef;" in styles[-1]
+    assert "background-color: #edf3fb;" in styles[-1]
+    assert ("fa6s.xmark", "#c94343") in icons

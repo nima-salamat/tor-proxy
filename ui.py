@@ -71,6 +71,13 @@ _HTBOTTOMLEFT = 16
 _HTBOTTOMRIGHT = 17
 _WM_NCCALCSIZE = 0x0083
 _WM_NCHITTEST = 0x0084
+_WM_SYSKEYDOWN = 0x0104
+_WM_SYSCOMMAND = 0x0112
+_WM_NCRBUTTONUP = 0x00A5
+_SC_KEYMENU = 0xF100
+_SC_MOVE = 0xF010
+_SC_SIZE = 0xF000
+_VK_SPACE = 0x20
 _WM_DPICHANGED = 0x02E0
 _WM_NCMOUSEMOVE = 0x00A0
 _WM_NCMOUSEMOVE = 0x00A0
@@ -332,6 +339,7 @@ class Window(QMainWindow):
             self.title_bar = CustomTitleBar(self)
             self.main_layout.addWidget(self.title_bar)
         self._createMenuBar()
+        self._create_window_system_menu()
 
         # Pages fill the central surface directly; no extra card/frame around Home,
         # Settings, or the other stacked pages.
@@ -457,6 +465,194 @@ class Window(QMainWindow):
         # Create the HWND while hidden and advertise the native sizing/maximize
         # capabilities before the first frame is shown to Windows.
         self._enable_native_snap_support()
+
+    def _create_window_system_menu(self):
+        """Create the app-themed equivalent of the Windows caption system menu."""
+        self.window_system_menu = QMenu(self)
+        self.window_system_menu.setObjectName("windowSystemMenu")
+        self.window_system_menu.setMinimumWidth(208)
+        self.window_system_menu.setIconSize(QSize(16, 16))
+        self.window_system_menu.setSeparatorsCollapsible(False)
+        self.window_system_actions = {}
+
+        action_specs = (
+            ("restore", "Restore"),
+            ("move", "Move"),
+            ("size", "Size"),
+        )
+        for key, label in action_specs:
+            self.window_system_actions[key] = self.window_system_menu.addAction(label)
+
+        self.window_system_menu.addSeparator()
+        self.window_system_actions["minimize"] = self.window_system_menu.addAction("Minimize")
+        self.window_system_actions["maximize"] = self.window_system_menu.addAction("Maximize")
+        self.window_system_menu.addSeparator()
+        self.window_system_actions["close"] = self.window_system_menu.addAction("Close")
+
+        self.window_system_actions["restore"].triggered.connect(self.showNormal)
+        self.window_system_actions["move"].triggered.connect(
+            lambda _checked=False: self._post_native_system_command(_SC_MOVE)
+        )
+        self.window_system_actions["size"].triggered.connect(
+            lambda _checked=False: self._post_native_system_command(_SC_SIZE)
+        )
+        self.window_system_actions["minimize"].triggered.connect(self.showMinimized)
+        self.window_system_actions["maximize"].triggered.connect(self.showMaximized)
+        # closeEvent intentionally routes an ordinary close to the system tray.
+        self.window_system_actions["close"].triggered.connect(self.close)
+        self.window_system_menu.aboutToShow.connect(self._sync_window_system_menu_actions)
+        self._window_system_menu_pending = False
+
+    def _sync_window_system_menu_actions(self):
+        """Enable only the window commands that make sense in its current state."""
+        actions = getattr(self, "window_system_actions", {})
+        maximized = self.isMaximized()
+        minimized = self.isMinimized()
+        enabled = {
+            "restore": maximized or minimized,
+            "move": not maximized and not minimized,
+            "size": not maximized and not minimized,
+            "minimize": not minimized,
+            "maximize": not maximized and not minimized,
+            "close": True,
+        }
+        for key, state in enabled.items():
+            action = actions.get(key)
+            if action is not None:
+                action.setEnabled(state)
+
+    def _sync_window_system_menu_theme(self, mode=None):
+        """Match the caption menu's surface, separators, hover and icons to the app theme."""
+        menu = getattr(self, "window_system_menu", None)
+        if menu is None:
+            return
+
+        dark = (mode or CONFIG.get("mode", "dark")) == "dark"
+        if dark:
+            surface = "#171e29"
+            border = "#303b4c"
+            text = "#e8edf6"
+            muted = "#94a2b5"
+            hover = "#29384d"
+            divider = "#303b4c"
+            danger = "#ef7777"
+            icon_color = "#edf2f9"
+        else:
+            surface = "#ffffff"
+            border = "#dfe6ef"
+            text = "#253246"
+            muted = "#7b8798"
+            hover = "#edf3fb"
+            divider = "#e7ecf2"
+            danger = "#c94343"
+            icon_color = "#344258"
+
+        menu.setStyleSheet(f"""
+            QMenu#windowSystemMenu {{
+                background-color: {surface};
+                color: {text};
+                border: 1px solid {border};
+                border-radius: 12px;
+                padding: 6px;
+            }}
+            QMenu#windowSystemMenu::item {{
+                color: {text};
+                background: transparent;
+                padding: 7px 18px 7px 10px;
+                margin: 1px 3px;
+                min-height: 19px;
+                border-radius: 7px;
+            }}
+            QMenu#windowSystemMenu::item:selected {{
+                color: {text};
+                background-color: {hover};
+            }}
+            QMenu#windowSystemMenu::item:disabled {{
+                color: {muted};
+            }}
+            QMenu#windowSystemMenu::separator {{
+                height: 1px;
+                background-color: {divider};
+                margin: 4px 10px;
+            }}
+        """)
+
+        icon_names = {
+            "restore": "fa6s.window-restore",
+            "move": "fa6s.arrows-up-down-left-right",
+            "size": "fa6s.expand",
+            "minimize": "fa6s.window-minimize",
+            "maximize": "fa6s.window-maximize",
+            "close": "fa6s.xmark",
+        }
+        for key, icon_name in icon_names.items():
+            action = self.window_system_actions.get(key)
+            if action is not None:
+                color = danger if key == "close" else icon_color
+                action.setIcon(qta.icon(icon_name, color=color))
+
+    def _post_native_system_command(self, command):
+        """Let Windows perform its native keyboard Move/Size interaction."""
+        if not IS_WINDOWS:
+            return
+        hwnd = int(getattr(self, "_native_snap_hwnd", 0) or self.winId())
+        user32 = getattr(self, "_native_user32", None)
+        if not hwnd or user32 is None:
+            return
+        try:
+            post_message = user32.PostMessageW
+            post_message.argtypes = (
+                wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM
+            )
+            post_message.restype = wintypes.BOOL
+            if not post_message(
+                wintypes.HWND(hwnd),
+                _WM_SYSCOMMAND,
+                wintypes.WPARAM(command),
+                wintypes.LPARAM(0),
+            ):
+                logger.debug("Could not post native window command 0x%X.", command)
+        except (AttributeError, OSError, TypeError, ValueError):
+            logger.debug("Native window command failed.", exc_info=True)
+
+    def _queue_window_system_menu(self, position=None, *, keyboard=False):
+        """Defer popup creation until the current native message has returned."""
+        if getattr(self, "_window_system_menu_pending", False):
+            return
+        self._window_system_menu_pending = True
+        anchor = QPoint(position) if position is not None else None
+        QTimer.singleShot(
+            0,
+            lambda current_anchor=anchor, from_keyboard=keyboard:
+                self._show_window_system_menu(current_anchor, keyboard=from_keyboard),
+        )
+
+    def _show_window_system_menu(self, position=None, *, keyboard=False):
+        self._window_system_menu_pending = False
+        menu = getattr(self, "window_system_menu", None)
+        if menu is None or not self.isVisible() or self.isMinimized():
+            return
+
+        if position is None:
+            titlebar = getattr(self, "title_bar", None)
+            if titlebar is None:
+                return
+            position = titlebar.app_icon.mapToGlobal(
+                QPoint(0, titlebar.app_icon.height())
+            )
+
+        self._sync_window_system_menu_actions()
+        menu.popup(position)
+        if keyboard:
+            first_enabled = next(
+                (
+                    action for action in menu.actions()
+                    if action.isEnabled() and not action.isSeparator()
+                ),
+                None,
+            )
+            if first_enabled is not None:
+                menu.setActiveAction(first_enabled)
 
     def _enable_native_snap_support(self):
         """Expose a custom frame as a native, resizable Windows main window."""
@@ -584,6 +780,29 @@ class Window(QMainWindow):
 
         try:
             native_message = wintypes.MSG.from_address(int(message))
+
+            if (
+                native_message.message == _WM_NCRBUTTONUP
+                and (int(native_message.wParam) & 0xFFFF) == _HTCAPTION
+            ):
+                self._queue_window_system_menu(QCursor.pos())
+                return True, 0
+
+            if (
+                native_message.message == _WM_SYSKEYDOWN
+                and int(native_message.wParam) == _VK_SPACE
+                and int(native_message.lParam) & 0x20000000
+            ):
+                self._queue_window_system_menu(keyboard=True)
+                return True, 0
+
+            if (
+                native_message.message == _WM_SYSCOMMAND
+                and (int(native_message.wParam) & 0xFFF0) == _SC_KEYMENU
+                and int(native_message.lParam) == _VK_SPACE
+            ):
+                self._queue_window_system_menu(keyboard=True)
+                return True, 0
 
             if native_message.message == _WM_DPICHANGED:
                 dpi_x = int(native_message.wParam) & 0xFFFF
@@ -1758,6 +1977,8 @@ class Window(QMainWindow):
             if callable(apply_theme):
                 apply_theme(mode)
         self._apply_shell_styles(mode)
+        if hasattr(self, "window_system_menu"):
+            self._sync_window_system_menu_theme(mode)
         if hasattr(self, "tray_menu"):
             self._sync_tray_menu_theme(mode)
 
