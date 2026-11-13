@@ -202,7 +202,7 @@ def test_fast_bundle_discovery_defers_only_the_archive_digest(tmp_path, monkeypa
     architecture = updater._architecture_name()
     root = tmp_path / "bundles"
     bundle = root / f"tor-expert-bundle-{platform_name}-{architecture}-16.0"
-    executable = _make_executable(
+    _make_executable(
         bundle / "tor" / ("tor.exe" if platform_name == "windows" else "tor")
     )
     archive = bundle.with_name(bundle.name + ".tar.gz")
