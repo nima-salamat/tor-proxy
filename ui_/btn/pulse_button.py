@@ -1,6 +1,63 @@
-from PySide6.QtWidgets import QPushButton
+from PySide6.QtWidgets import QPushButton, QWidget, QSizePolicy
 from PySide6.QtCore import Qt, QEasingCurve, QPropertyAnimation, Property, QTimer
 from PySide6.QtGui import QPainter, QColor, QBrush, QPen, QRadialGradient
+
+
+class PulseButtonHost(QWidget):
+    """Transparent expanding viewport that sizes Connect independently of page layouts."""
+
+    def __init__(self, button, parent=None):
+        super().__init__(parent)
+        self.setObjectName("connectButtonHost")
+        self.setMinimumSize(0, 0)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setStyleSheet("background: transparent; border: none;")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        self.setAutoFillBackground(False)
+
+        self.button = button
+        self.button.setParent(self)
+        self.button.show()
+
+        # Coalesce native resize bursts without waiting until the drag ends:
+        # one sizing pass per display frame keeps the circle visually smooth.
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.setInterval(16)
+        self._resize_timer.timeout.connect(self._sync_button_geometry)
+
+    @staticmethod
+    def diameter_for_size(width: int, height: int) -> int | None:
+        width = int(width)
+        height = int(height)
+        if width < 96 or height < 96:
+            return None
+        return min(420, max(96, width - 48), max(96, height - 20))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if not self._resize_timer.isActive():
+            self._resize_timer.start()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._resize_timer.isActive():
+            self._resize_timer.start()
+
+    def _sync_button_geometry(self):
+        available = self.contentsRect()
+        diameter = self.diameter_for_size(available.width(), available.height())
+        if diameter is None:
+            return
+
+        x = available.x() + (available.width() - diameter) // 2
+        y = available.y() + (available.height() - diameter) // 2
+        if self.button.diameter != diameter:
+            self.button.set_diameter(diameter)
+        from PySide6.QtCore import QPoint
+        target_position = QPoint(x, y)
+        if self.button.pos() != target_position:
+            self.button.move(target_position)
 
 
 class PulseButton(QPushButton):
@@ -54,7 +111,8 @@ class PulseButton(QPushButton):
         self._diameter = diameter
         # Only update the layout constraint when the computed target changes.
         self.setFixedSize(diameter, diameter)
-        self.updateGeometry()
+        # PulseButtonHost positions this child directly; it is not a layout item.
+        # Avoid a parent layout negotiation every time the circle changes size.
         self.update()
 
     def _set_state(self, state, text):

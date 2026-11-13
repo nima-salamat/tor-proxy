@@ -2546,61 +2546,38 @@ def test_dropdown_header_copy_has_no_individual_background_or_border():
     ]
 
 
-def test_native_titlebar_hit_testing_keeps_custom_maximize_button_clickable():
+def test_native_titlebar_hit_testing_uses_windows_snap_hit_code():
     from PySide6.QtCore import QPoint, QRect
 
-    from ui import _HTCAPTION, _HTCLIENT, _native_titlebar_hit_test
+    from ui import _HTCAPTION, _HTCLIENT, _HTMAXBUTTON, _native_titlebar_hit_test
 
     titlebar = QRect(0, 0, 500, 40)
     minimize = QRect(374, 5, 36, 30)
     maximize = QRect(415, 5, 36, 30)
     close = QRect(456, 5, 36, 30)
 
-    # Empty title-bar space remains native caption space for dragging/system menu.
+    assert _native_titlebar_hit_test(
+        maximize.center(), titlebar, maximize, (minimize, close)
+    ) == _HTMAXBUTTON
+    assert _native_titlebar_hit_test(
+        minimize.center(), titlebar, maximize, (minimize, close)
+    ) == _HTCLIENT
+    assert _native_titlebar_hit_test(
+        close.center(), titlebar, maximize, (minimize, close)
+    ) == _HTCLIENT
     assert _native_titlebar_hit_test(
         QPoint(120, 20), titlebar, maximize, (minimize, close)
     ) == _HTCAPTION
 
-    # All custom controls stay in the client area; Windows must not draw a
-    # second, offset maximize button or handle a second click itself.
-    for point in (maximize.center(), minimize.center(), close.center()):
-        assert _native_titlebar_hit_test(
-            point, titlebar, maximize, (minimize, close)
-        ) == _HTCLIENT
 
+def test_custom_titlebar_leaves_snap_layouts_to_windows():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/custom_titlebar.py").read_text(encoding="utf-8")
 
-def test_custom_titlebar_snap_flyout_uses_a_deliberate_hover_dwell(qt_app):
-    from PySide6.QtWidgets import QMainWindow
-
-    from ui_.window.custom_titlebar import SNAP_LAYOUT_HOVER_DELAY_MS, CustomTitleBar
-
-    window = QMainWindow()
-    window.hide_to_tray = lambda: None
-    titlebar = CustomTitleBar(window)
-    try:
-        assert SNAP_LAYOUT_HOVER_DELAY_MS == 650
-        assert titlebar._snap_hover_timer.isSingleShot()
-        assert titlebar._snap_hover_timer.interval() == 650
-        assert len(titlebar._snap_actions) == 8
-        assert titlebar.snap_menu.parentWidget() is titlebar.btn_max
-    finally:
-        titlebar.deleteLater()
-        window.deleteLater()
-        qt_app.processEvents()
-
-
-def test_custom_snap_layout_rects_cover_the_available_work_area(qt_app):
-    from PySide6.QtCore import QRect
-
-    from ui_.window.custom_titlebar import _snap_layout_rect
-
-    area = QRect(-1600, 40, 1600, 900)
-    assert _snap_layout_rect(area, "left_half") == QRect(-1600, 40, 800, 900)
-    assert _snap_layout_rect(area, "right_half") == QRect(-800, 40, 800, 900)
-    assert _snap_layout_rect(area, "top_left") == QRect(-1600, 40, 800, 450)
-    assert _snap_layout_rect(area, "bottom_right") == QRect(-800, 490, 800, 450)
-    assert _snap_layout_rect(area, "left_two_thirds") == QRect(-1600, 40, 1066, 900)
-    assert _snap_layout_rect(area, "right_two_thirds") == QRect(-1066, 40, 1066, 900)
+    assert "QMenu" not in source
+    assert "snap_menu" not in source
+    assert "SNAP_LAYOUT_HOVER_DELAY_MS" not in source
+    assert "self.btn_max.clicked.connect(self._toggle_maximized)" in source
 
 
 def test_native_resize_hit_testing_covers_all_window_edges_and_corners(qt_app):
@@ -2745,8 +2722,13 @@ def test_main_window_advertises_native_windows_snap_and_maximize_support():
     assert "def nativeEvent(self, event_type, message):" in source
     assert "native_message.message == _WM_NCCALCSIZE" in source
     assert "native_message.message == _WM_NCHITTEST" in source
-    assert "_HTMAXBUTTON = 9" not in source
-    assert "return _HTCLIENT" in source
+    assert "_HTMAXBUTTON = 9" in source
+    assert "return _HTMAXBUTTON" in source
+    assert "MapWindowPoints" in source
+    assert "GetDpiForWindow" in source
+    assert "_WM_NCLBUTTONDOWN = 0x00A1" in source
+    assert "_WM_NCLBUTTONUP = 0x00A2" in source
+    assert "titlebar.btn_max.click" in source
     assert "_WM_MOVING = 0x0216" in source
     assert "_WM_SIZING = 0x0214" in source
     assert "_WM_ENTERSIZEMOVE = 0x0231" in source
@@ -2754,7 +2736,7 @@ def test_main_window_advertises_native_windows_snap_and_maximize_support():
     assert "self._native_move_loop_active = True" in source
     assert "_clamp_window_rect_to_work_area(" in source
     assert "MonitorFromRect" in source and "GetMonitorInfoW" in source
-    assert "Qt's custom minimize/maximize/close controls take priority" in source
+    assert "Caption controls take priority over edge resizing." in source
     assert "Blank title-bar space remains native caption space." in source
     assert "return True, hit_test" in source
     assert "titlebar._sync_maximize_button()" in source
@@ -3189,82 +3171,94 @@ def test_developer_tor_activity_exposes_per_port_events_and_error_counters():
 
 
 
-def test_home_connect_button_sizing_waits_for_valid_row_geometry(qt_app):
-    from types import SimpleNamespace
-    from PySide6.QtCore import QRect
+def test_pulse_button_host_sizes_from_independent_available_geometry(qt_app):
+    from PySide6.QtCore import QPoint
+    from ui_.btn.pulse_button import PulseButton, PulseButtonHost
 
-    from ui_.window.proxy_window import ProxyWindow
+    button = PulseButton()
+    host = PulseButtonHost(button)
+    try:
+        host.resize(400, 300)
+        host.show()
+        qt_app.processEvents()
+        host._sync_button_geometry()
 
-    class FakeLayout:
-        def __init__(self, geometry):
-            self._geometry = geometry
+        assert button.diameter == 280
+        assert button.pos() == QPoint(60, 10)
+        assert host.size().width() == 400
+        assert host.size().height() == 300
 
-        def geometry(self):
-            return self._geometry
+        host.resize(800, 400)
+        qt_app.processEvents()
+        host._sync_button_geometry()
+        assert button.diameter == 380
+        assert button.pos() == QPoint(210, 10)
+        assert host.size().width() == 800
+        assert host.size().height() == 400
 
-    class FakeConnectButton:
-        def __init__(self):
-            self.diameter = 264
-            self.calls = []
-
-        def set_diameter(self, diameter):
-            self.diameter = diameter
-            self.calls.append(diameter)
-
-    button = FakeConnectButton()
-    fake = SimpleNamespace(
-        _home_connect_row=FakeLayout(QRect(0, 0, 0, 0)),
-        connect_btn=button,
-    )
-
-    # A minimized/not-yet-laid-out page must not guess a size from its old window height.
-    ProxyWindow._resize_home_connect_button(fake)
-    assert button.calls == []
-    assert button.diameter == 264
-
-    # Once Qt has allocated a real row, derive the circle from that exact space.
-    fake._home_connect_row = FakeLayout(QRect(0, 0, 400, 300))
-    ProxyWindow._resize_home_connect_button(fake)
-    assert button.calls == [280]
-    assert button.diameter == 280
-
-    # The 420px ceiling still applies on a large screen.
-    fake._home_connect_row = FakeLayout(QRect(0, 0, 1200, 900))
-    ProxyWindow._resize_home_connect_button(fake)
-    assert button.diameter == 420
+        host.resize(1200, 900)
+        qt_app.processEvents()
+        host._sync_button_geometry()
+        assert button.diameter == 420
+        assert button.pos() == QPoint(390, 240)
+        assert host.size().width() == 1200
+        assert host.size().height() == 900
+    finally:
+        host.deleteLater()
+        qt_app.processEvents()
 
 
-def test_home_resize_work_is_coalesced_and_avoids_forced_layout_activation():
+def test_pulse_button_host_ignores_unusable_geometry_without_jumping(qt_app):
+    from ui_.btn.pulse_button import PulseButton, PulseButtonHost
+
+    button = PulseButton()
+    host = PulseButtonHost(button)
+    try:
+        host.resize(0, 0)
+        host._sync_button_geometry()
+        assert button.diameter == 264
+
+        host.resize(80, 70)
+        host._sync_button_geometry()
+        assert button.diameter == 264
+        assert PulseButtonHost.diameter_for_size(400, 300) == 280
+        assert PulseButtonHost.diameter_for_size(80, 70) is None
+    finally:
+        host.deleteLater()
+        qt_app.processEvents()
+
+
+def test_home_resize_work_is_coalesced_and_connect_geometry_is_host_owned():
     repository = Path(__file__).resolve().parents[1]
-    source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+    home_source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+    button_source = (repository / "ui_/btn/pulse_button.py").read_text(encoding="utf-8")
 
-    initialization = source[
-        source.index("self._home_responsive_mode = None"):
-        source.index("self.connection_status_frame")
+    initialization = home_source[
+        home_source.index("self._home_responsive_mode = None"):
+        home_source.index("self.connection_status_frame")
     ]
     assert "self._home_resize_timer.setSingleShot(True)" in initialization
     assert "self._home_resize_timer.setInterval(16)" in initialization
     assert "self._home_resize_timer.timeout.connect(self._apply_home_resize_update)" in initialization
 
-    resize_event = source[
-        source.index("def resizeEvent(self, event) -> None:"):
-        source.index("def _build_home_endpoint_card", source.index("def resizeEvent(self, event) -> None:"))
+    resize_event = home_source[
+        home_source.index("def resizeEvent(self, event) -> None:"):
+        home_source.index("def _build_home_endpoint_card", home_source.index("def resizeEvent(self, event) -> None:"))
     ]
     assert "self._home_resize_timer.start()" in resize_event
     assert "_update_home_responsive_layout()" not in resize_event
 
-    status_geometry = source[
-        source.index("def _refresh_home_status_geometry"):
-        source.index("def _set_home_status_text", source.index("def _refresh_home_status_geometry"))
+    assert "self._home_connect_host = PulseButtonHost(self.connect_btn, self.home_content)" in home_source
+    assert "self.home_layout.addWidget(self._home_connect_host, 1)" in home_source
+    assert "class PulseButtonHost(QWidget):" in button_source
+    assert "self._resize_timer.setInterval(16)" in button_source
+    assert "self.button.set_diameter(diameter)" in button_source
+    assert "self.button.move(target_position)" in button_source
+    set_diameter = button_source[
+        button_source.index("def set_diameter"):
+        button_source.index("def _set_state")
     ]
-    assert "home_layout.invalidate()" not in status_geometry
-    assert "home_layout.activate()" not in status_geometry
-
-    connect_resize = source[
-        source.index("def _resize_home_connect_button"):
-        source.index("def _apply_home_resize_update", source.index("def _resize_home_connect_button"))
-    ]
-    assert "home_layout.activate()" not in connect_resize
+    assert "updateGeometry()" not in set_diameter
 
 
 def test_home_page_uses_adaptive_compact_layout_without_scrollbars():

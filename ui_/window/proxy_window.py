@@ -40,7 +40,7 @@ from proxy import load_blocked, load_exclude
 
 from whatismyip import what_is_my_ip
 from ui_.window.log_window import LogWindow
-from ui_.btn.pulse_button import PulseButton
+from ui_.btn.pulse_button import PulseButton, PulseButtonHost
 from ui_.worker.worker import Worker
 from ui_.worker.utils import Data
 from config import CONFIG
@@ -321,25 +321,11 @@ class ProxyWindow(QWidget):
         self.connect_btn.setObjectName("connectPulseButton")
         self.connect_btn.clicked.connect(self._toggle)
 
-        # Keep the circular action directly on the Home canvas. A wrapper
-        # QWidget here picks up the application-wide panel background in some
-        # styles, creating an unintended rectangle behind the button.
-        connection_hero_layout = QVBoxLayout()
-        self._home_connection_hero_layout = connection_hero_layout
-        connection_hero_layout.setContentsMargins(0, 0, 0, 0)
-        connection_hero_layout.setSpacing(0)
-        connection_hero_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        connection_hero_layout.addWidget(
-            self.connect_btn, 0, Qt.AlignmentFlag.AlignHCenter
-        )
-
-        connect_row = QHBoxLayout()
-        connect_row.setContentsMargins(0, 0, 0, 0)
-        connect_row.addStretch(1)
-        connect_row.addLayout(connection_hero_layout)
-        connect_row.addStretch(1)
-        self._home_connect_row = connect_row
-        self.home_layout.addLayout(connect_row, 1)
+        # The expanding host receives the row's available rectangle. The fixed
+        # circular child is resized inside it and cannot affect the parent's
+        # sizeHint, so maximizing/restoring cannot create a layout feedback loop.
+        self._home_connect_host = PulseButtonHost(self.connect_btn, self.home_content)
+        self.home_layout.addWidget(self._home_connect_host, 1)
 
         # Split the metric strip into equal-width halves so the divider stays
         # on the exact center line regardless of changing percentage/traffic text.
@@ -652,7 +638,6 @@ class ProxyWindow(QWidget):
         )
         if mode == self._home_responsive_mode:
             self._refresh_home_status_geometry()
-            self._resize_home_connect_button(width)
             return
         self._home_responsive_mode = mode
 
@@ -789,29 +774,6 @@ class ProxyWindow(QWidget):
 
         self.home_content.updateGeometry()
         self.home_layout.activate()
-        self._resize_home_connect_button(width)
-
-    def _resize_home_connect_button(self, width: int | None = None) -> None:
-        """Size Connect from the allocated row geometry without feeding back into it."""
-        if not hasattr(self, "_home_connect_row") or not hasattr(self, "connect_btn"):
-            return
-
-        # Before the first show, or while a minimized window has no usable
-        # layout geometry, keep the current size. Guessing from window height
-        # can cause a visible 96px/420px jump when the real layout arrives.
-        row_geometry = self._home_connect_row.geometry()
-        row_width = int(row_geometry.width())
-        row_height = int(row_geometry.height())
-        if row_width <= 0 or row_height <= 0:
-            return
-
-        available_width = row_width - 48
-        available_height = row_height - 20
-        if available_width < 96 or available_height < 96:
-            return
-
-        diameter = min(420, available_width, available_height)
-        self.connect_btn.set_diameter(diameter)
 
     def _apply_home_resize_update(self) -> None:
         """Apply the latest window geometry once per frame during live resizing."""

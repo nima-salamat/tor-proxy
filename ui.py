@@ -59,6 +59,7 @@ _THEME_STYLESHEET_CACHE = {}
 # Native hit-test values used by custom Windows title bars and resize borders.
 _HTCLIENT = 1
 _HTCAPTION = 2
+_HTMAXBUTTON = 9
 _HTLEFT = 10
 _HTRIGHT = 11
 _HTTOP = 12
@@ -69,6 +70,11 @@ _HTBOTTOMLEFT = 16
 _HTBOTTOMRIGHT = 17
 _WM_NCCALCSIZE = 0x0083
 _WM_NCHITTEST = 0x0084
+_WM_NCMOUSEMOVE = 0x00A0
+_WM_NCLBUTTONDOWN = 0x00A1
+_WM_NCLBUTTONUP = 0x00A2
+_WM_NCLBUTTONDBLCLK = 0x00A3
+_WM_NCMOUSELEAVE = 0x02A2
 _WM_MOVING = 0x0216
 _WM_SIZING = 0x0214
 _WM_ENTERSIZEMOVE = 0x0231
@@ -128,17 +134,14 @@ def _native_resize_hit_test(point, window_rect, border=8):
 
 
 def _native_titlebar_hit_test(point, titlebar_rect, maximize_rect, other_button_rects):
-    """Keep every custom title-bar button under Qt's client-area event handling."""
+    """Use Windows' native maximize hit target while keeping other Qt controls client-side."""
     if maximize_rect.contains(point):
-        # The custom QPushButton owns click/hover behavior. Returning the native
-        # maximize hit code here lets Windows paint and click a second caption
-        # button in a different coordinate space and can double-toggle the window.
-        return _HTCLIENT
+        # This Win32 hit code enables the operating system's own Snap Layouts flyout.
+        return _HTMAXBUTTON
     if any(rect.contains(point) for rect in other_button_rects):
         return _HTCLIENT
     if titlebar_rect.contains(point):
-        # Windows uses HTCAPTION to provide the standard Alt+Space / right-click
-        # system-menu behavior for blank space in this custom-drawn title bar.
+        # Blank caption space supports native dragging and the Alt+Space system menu.
         return _HTCAPTION
     return None
 
@@ -294,6 +297,7 @@ class Window(QMainWindow):
         self._constraining_move = False
         self._native_snap_hwnd = 0
         self._native_move_loop_active = False
+        self._native_max_button_pressed = False
         self.proxyWidget = ProxyWindow(self)
         self.stack.addWidget(self.proxyWidget)
         self.settingWidget = SettingWindow(self)
@@ -516,6 +520,49 @@ class Window(QMainWindow):
 
         try:
             native_message = wintypes.MSG.from_address(int(message))
+
+            # Windows routes HTMAXBUTTON through non-client mouse messages.
+            # Let the OS own its hover/capture logic, but forward a completed
+            # release to the Qt button so the existing maximize handler runs once.
+            if (
+                native_message.message in (_WM_NCLBUTTONDOWN, _WM_NCLBUTTONDBLCLK)
+                and int(native_message.wParam) == _HTMAXBUTTON
+            ):
+                self._native_max_button_pressed = True
+                return super().nativeEvent(event_type, message)
+
+            if (
+                native_message.message == _WM_NCLBUTTONUP
+                and self._native_max_button_pressed
+            ):
+                self._native_max_button_pressed = False
+                release_over_maximize = int(native_message.wParam) == _HTMAXBUTTON
+                titlebar = getattr(self, "title_bar", None)
+                if release_over_maximize and titlebar is not None:
+                    QTimer.singleShot(0, titlebar.btn_max.click)
+                return True, 0
+
+            if native_message.message in (_WM_NCMOUSEMOVE, _WM_NCMOUSELEAVE):
+                # Keep DWM's caption hover highlight in sync with the custom frame.
+                try:
+                    dwmapi = ctypes.WinDLL("dwmapi", use_last_error=True)
+                    dwm_def_window_proc = dwmapi.DwmDefWindowProc
+                    dwm_def_window_proc.argtypes = (
+                        wintypes.HWND, wintypes.UINT, wintypes.WPARAM,
+                        wintypes.LPARAM, ctypes.POINTER(ctypes.c_ssize_t)
+                    )
+                    dwm_def_window_proc.restype = wintypes.BOOL
+                    dwm_result = ctypes.c_ssize_t()
+                    if dwm_def_window_proc(
+                        wintypes.HWND(native_message.hWnd),
+                        native_message.message,
+                        native_message.wParam,
+                        native_message.lParam,
+                        ctypes.byref(dwm_result),
+                    ):
+                        return True, dwm_result.value
+                except (AttributeError, OSError, TypeError, ValueError):
+                    logger.debug("DWM non-client mouse handling is unavailable.", exc_info=True)
             if native_message.message == _WM_ENTERSIZEMOVE:
                 self._native_move_loop_active = True
                 return super().nativeEvent(event_type, message)
@@ -610,17 +657,32 @@ class Window(QMainWindow):
                     ctypes.c_short((native_message.lParam >> 16) & 0xFFFF).value,
                 )
                 user32 = ctypes.WinDLL("user32", use_last_error=True)
-                screen_to_client = user32.ScreenToClient
-                screen_to_client.argtypes = (
-                    wintypes.HWND, ctypes.POINTER(wintypes.POINT)
+                # WM_NCHITTEST provides physical screen coordinates. Follow
+                # Microsoft's desktop -> HWND mapping and then convert to Qt DIPs.
+                map_window_points = user32.MapWindowPoints
+                map_window_points.argtypes = (
+                    wintypes.HWND, wintypes.HWND,
+                    ctypes.POINTER(wintypes.POINT), wintypes.UINT
                 )
-                screen_to_client.restype = wintypes.BOOL
-                if not screen_to_client(
-                    wintypes.HWND(native_message.hWnd), ctypes.byref(screen_point)
-                ):
-                    return super().nativeEvent(event_type, message)
+                map_window_points.restype = ctypes.c_int
+                map_window_points(
+                    wintypes.HWND(0),
+                    wintypes.HWND(native_message.hWnd),
+                    ctypes.byref(screen_point),
+                    1,
+                )
 
                 ratio = max(1.0, float(self.devicePixelRatioF()))
+                get_dpi_for_window = getattr(user32, "GetDpiForWindow", None)
+                if get_dpi_for_window is not None:
+                    get_dpi_for_window.argtypes = (wintypes.HWND,)
+                    get_dpi_for_window.restype = wintypes.UINT
+                    native_dpi = int(
+                        get_dpi_for_window(wintypes.HWND(native_message.hWnd))
+                    )
+                    if native_dpi > 0:
+                        ratio = max(1.0, native_dpi / 96.0)
+
                 point = QPoint(
                     round(screen_point.x / ratio),
                     round(screen_point.y / ratio),
@@ -645,9 +707,10 @@ class Window(QMainWindow):
                     hit_test = _native_titlebar_hit_test(
                         point, titlebar_rect, maximize_rect, other_button_rects
                     )
-                    # Qt's custom minimize/maximize/close controls take priority
-                    # over the 8px resize border and remain client-area widgets.
-                    if hit_test == _HTCLIENT:
+                    # Caption controls take priority over edge resizing.
+                    # HTMAXBUTTON is deliberately returned to Windows so the OS
+                    # can display its native Snap Layouts flyout after its dwell.
+                    if hit_test in (_HTMAXBUTTON, _HTCLIENT):
                         return True, hit_test
 
                 # Native edge/corner hit tests let Windows perform the resize
