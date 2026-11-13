@@ -6,6 +6,7 @@ import logging
 import os
 import signal
 import sys
+import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -123,6 +124,7 @@ def configure_logging() -> None:
 
 
 def main() -> int:
+    startup_started = time.perf_counter()
     # Keep the splash informed while dependencies and the application UI load.
     from torproxy.launcher_ipc import notify_launcher
 
@@ -142,6 +144,7 @@ def main() -> int:
     from ui_.window.theme import resolve_system_theme
     from utils import resource_path
 
+    imports_finished = time.perf_counter()
     enable_crash_reporting()
     # Preserve each display's actual DPI ratio when moving between monitors.
     QApplication.setHighDpiScaleFactorRoundingPolicy(
@@ -168,6 +171,10 @@ def main() -> int:
         CONFIG["mode"] = startup_mode
 
     configure_logging()
+    LOGGER.info(
+        "Startup phase: Python, Qt and application modules imported in %.1f ms.",
+        (imports_finished - startup_started) * 1000.0,
+    )
     notify_launcher("starting", "Preparing TorProxy settings…")
     app.setApplicationName("TorProxy")
     app.setApplicationDisplayName("TorProxy")
@@ -189,13 +196,21 @@ def main() -> int:
                 app.setStyleSheet(qdarkstyle.load_stylesheet(palette=DarkPalette()))
             app.setWindowIcon(QIcon(resource_path("assets/icon.png")))
             notify_launcher("starting", "Building the TorProxy window…")
+            window_started = time.perf_counter()
             win = Window()
+            window_constructed = time.perf_counter()
             # Keep the normal Windows DWM presentation path. Display-affinity
             # restrictions are not needed for Tor operation and can interfere
             # with capture/restore behavior for frameless Qt windows.
             win.show()
             # Process the initial show/paint events before closing the external splash.
             app.processEvents()
+            LOGGER.info(
+                "Startup phase: Window.__init__ %.1f ms; first show/paint %.1f ms; total to first frame %.1f ms.",
+                (window_constructed - window_started) * 1000.0,
+                (time.perf_counter() - window_constructed) * 1000.0,
+                (time.perf_counter() - startup_started) * 1000.0,
+            )
             launcher_expected = bool(
                 os.environ.get("TORPROXY_LAUNCHER_STATUS_FILE")
                 or os.environ.get("TORPROXY_LAUNCHER_SERVER")
