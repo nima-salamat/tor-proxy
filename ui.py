@@ -28,11 +28,12 @@ from PySide6.QtGui import (
     QPainter,
     QPainterPath,
     QPen,
+    QMouseEvent,
 )
 import qdarkstyle
 from qdarkstyle.dark.palette import DarkPalette
 from qdarkstyle.light.palette import LightPalette
-from PySide6.QtCore import QEvent, QTimer, Qt, Signal, QSize, QPoint, QRect
+from PySide6.QtCore import QEvent, QTimer, Qt, Signal, QSize, QPoint, QPointF, QRect
 import qtawesome as qta
 from ui_.window.theme_transition import CircularThemeReveal
 from ui_.window.theme import resolve_system_theme
@@ -298,6 +299,7 @@ class Window(QMainWindow):
         self._native_snap_hwnd = 0
         self._native_move_loop_active = False
         self._native_max_button_pressed = False
+        self._native_max_button_hovered = False
         self.proxyWidget = ProxyWindow(self)
         self.stack.addWidget(self.proxyWidget)
         self.settingWidget = SettingWindow(self)
@@ -513,6 +515,25 @@ class Window(QMainWindow):
                 exc_info=True,
             )
 
+    def _forward_native_max_button_mouse_event(self, event_type, buttons):
+        """Deliver a Windows non-client caption press/release to the Qt maximize button."""
+        titlebar = getattr(self, "title_bar", None)
+        button = getattr(titlebar, "btn_max", None) if titlebar is not None else None
+        if button is None:
+            return
+
+        global_position = QCursor.pos()
+        local_position = button.mapFromGlobal(global_position)
+        event = QMouseEvent(
+            event_type,
+            QPointF(local_position),
+            QPointF(global_position),
+            Qt.MouseButton.LeftButton,
+            buttons,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        QApplication.sendEvent(button, event)
+
     def nativeEvent(self, event_type, message):
         """Give Windows native drag and maximize hit-testing for the custom title bar."""
         if not IS_WINDOWS or event_type != b"windows_generic_MSG":
@@ -521,48 +542,55 @@ class Window(QMainWindow):
         try:
             native_message = wintypes.MSG.from_address(int(message))
 
-            # Windows routes HTMAXBUTTON through non-client mouse messages.
-            # Let the OS own its hover/capture logic, but forward a completed
-            # release to the Qt button so the existing maximize handler runs once.
+            # The OS uses HTMAXBUTTON for the native Snap Layouts dwell. These
+            # non-client messages do not reach QPushButton normally, so bridge them
+            # to the existing Qt widget rather than drawing a second native control.
+            titlebar = getattr(self, "title_bar", None)
+            max_button = getattr(titlebar, "btn_max", None) if titlebar is not None else None
+
+            if native_message.message == _WM_NCMOUSEMOVE:
+                hovered = False
+                if max_button is not None:
+                    hovered = max_button.rect().contains(
+                        max_button.mapFromGlobal(QCursor.pos())
+                    )
+                if hovered != self._native_max_button_hovered:
+                    self._native_max_button_hovered = hovered
+                    if max_button is not None:
+                        QApplication.sendEvent(
+                            max_button,
+                            QEvent(QEvent.Type.Enter if hovered else QEvent.Type.Leave),
+                        )
+                return True, 0
+
+            if native_message.message == _WM_NCMOUSELEAVE:
+                if self._native_max_button_hovered:
+                    self._native_max_button_hovered = False
+                    if max_button is not None:
+                        QApplication.sendEvent(max_button, QEvent(QEvent.Type.Leave))
+                return super().nativeEvent(event_type, message)
+
             if (
                 native_message.message in (_WM_NCLBUTTONDOWN, _WM_NCLBUTTONDBLCLK)
-                and int(native_message.wParam) == _HTMAXBUTTON
+                and max_button is not None
+                and max_button.rect().contains(max_button.mapFromGlobal(QCursor.pos()))
             ):
                 self._native_max_button_pressed = True
-                return super().nativeEvent(event_type, message)
+                self._forward_native_max_button_mouse_event(
+                    QEvent.Type.MouseButtonPress, Qt.MouseButton.LeftButton
+                )
+                return True, 0
 
             if (
                 native_message.message == _WM_NCLBUTTONUP
                 and self._native_max_button_pressed
             ):
                 self._native_max_button_pressed = False
-                release_over_maximize = int(native_message.wParam) == _HTMAXBUTTON
-                titlebar = getattr(self, "title_bar", None)
-                if release_over_maximize and titlebar is not None:
-                    QTimer.singleShot(0, titlebar.btn_max.click)
+                self._forward_native_max_button_mouse_event(
+                    QEvent.Type.MouseButtonRelease, Qt.MouseButton.NoButton
+                )
                 return True, 0
 
-            if native_message.message in (_WM_NCMOUSEMOVE, _WM_NCMOUSELEAVE):
-                # Keep DWM's caption hover highlight in sync with the custom frame.
-                try:
-                    dwmapi = ctypes.WinDLL("dwmapi", use_last_error=True)
-                    dwm_def_window_proc = dwmapi.DwmDefWindowProc
-                    dwm_def_window_proc.argtypes = (
-                        wintypes.HWND, wintypes.UINT, wintypes.WPARAM,
-                        wintypes.LPARAM, ctypes.POINTER(ctypes.c_ssize_t)
-                    )
-                    dwm_def_window_proc.restype = wintypes.BOOL
-                    dwm_result = ctypes.c_ssize_t()
-                    if dwm_def_window_proc(
-                        wintypes.HWND(native_message.hWnd),
-                        native_message.message,
-                        native_message.wParam,
-                        native_message.lParam,
-                        ctypes.byref(dwm_result),
-                    ):
-                        return True, dwm_result.value
-                except (AttributeError, OSError, TypeError, ValueError):
-                    logger.debug("DWM non-client mouse handling is unavailable.", exc_info=True)
             if native_message.message == _WM_ENTERSIZEMOVE:
                 self._native_move_loop_active = True
                 return super().nativeEvent(event_type, message)

@@ -2620,6 +2620,7 @@ def test_native_titlebar_hit_testing_enables_system_menu_without_stealing_maximi
     from ui import (
         _HTCAPTION,
         _HTCLIENT,
+        _HTMAXBUTTON,
         _WS_OVERLAPPEDWINDOW,
         _WS_SYSMENU,
         _native_titlebar_hit_test,
@@ -2631,10 +2632,10 @@ def test_native_titlebar_hit_testing_enables_system_menu_without_stealing_maximi
     close = QRect(492, 5, 36, 30)
     other_buttons = (minimize, close)
 
-    # Maximize remains a Qt client control; the delayed Qt flyout handles Snap.
+    # Windows receives HTMAXBUTTON, so it owns the Snap Layout hover delay and flyout.
     assert _native_titlebar_hit_test(
         QPoint(469, 20), titlebar, maximize, other_buttons
-    ) == _HTCLIENT
+    ) == _HTMAXBUTTON
 
     # Minimize and Close remain Qt client controls too.
     assert _native_titlebar_hit_test(
@@ -2728,7 +2729,10 @@ def test_main_window_advertises_native_windows_snap_and_maximize_support():
     assert "GetDpiForWindow" in source
     assert "_WM_NCLBUTTONDOWN = 0x00A1" in source
     assert "_WM_NCLBUTTONUP = 0x00A2" in source
-    assert "titlebar.btn_max.click" in source
+    assert "self._forward_native_max_button_mouse_event(" in source
+    assert "QEvent.Type.MouseButtonPress" in source
+    assert "QEvent.Type.MouseButtonRelease" in source
+    assert "QEvent.Type.Enter if hovered else QEvent.Type.Leave" in source
     assert "_WM_MOVING = 0x0216" in source
     assert "_WM_SIZING = 0x0214" in source
     assert "_WM_ENTERSIZEMOVE = 0x0231" in source
@@ -3083,11 +3087,8 @@ def test_home_endpoint_cards_have_clear_copy_targets_and_consistent_exit_ip_summ
     assert 'QFrame#homeEndpointCard, QFrame#homeExitIpCard' in source
     assert 'QFrame#systemProxyControls' in source
     assert 'QFrame#homeMetricsPanel' in source
-    assert 'connection_hero_layout = QVBoxLayout()' in source
-    assert 'connect_row.addLayout(connection_hero_layout)' in source
-    assert 'self.home_layout.addLayout(connect_row, 1)' in source
-    assert 'def _resize_home_connect_button(self, width: int | None = None)' in source
-    assert 'diameter = min(420, available_width, available_height)' in source
+    assert 'self._home_connect_host = PulseButtonHost(self.connect_btn, self.home_content)' in source
+    assert 'self.home_layout.addWidget(self._home_connect_host, 1)' in source
     assert 'connection_hint' not in source
     assert 'connectionHint' not in source
     assert 'connectionHero' not in source
@@ -3298,7 +3299,7 @@ def test_home_page_uses_adaptive_compact_layout_without_scrollbars():
     assert "QPainter.RenderHint.Antialiasing" in source
     assert "painter.drawRoundedRect(rect, radius, radius)" in source
     assert "QFrame#connectionStatusFrame" not in source
-    assert 'self.home_layout.addLayout(connect_row, 1)' in source
+    assert 'self.home_layout.addWidget(self._home_connect_host, 1)' in source
     assert 'self.connection_status_frame.setMaximumWidth(900)' in source
     assert 'background: transparent; border: none; border-radius: 0;' in source
     assert "self._home_service_controls_layout.setDirection(" in source
@@ -3425,7 +3426,7 @@ def test_home_keeps_status_at_top_with_a_minimum_gap_and_polishes_bottom_actions
         'self.home_layout.addWidget('
         + '\n            self.connection_status_frame, 0, Qt.AlignmentFlag.AlignHCenter'
     )
-    connect_row_index = source.index("self.home_layout.addLayout(connect_row, 1)", status_index)
+    connect_row_index = source.index("self.home_layout.addWidget(self._home_connect_host, 1)", status_index)
     metrics_index = source.index("self.home_layout.addWidget(metrics_panel)", connect_row_index)
     assert status_index < connect_row_index < metrics_index
     status_setup = source[source.index('self.btn_status = QLabel'):status_index]
