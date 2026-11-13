@@ -1594,7 +1594,7 @@ def test_main_window_theme_changes_use_circular_reveal_for_visible_mode_switches
     assert "old_frame_region.subtracted(reveal_region)" not in transition_source
     assert "def _prewarm_theme_stylesheets(self)" in ui_source
     assert "_THEME_STYLESHEET_CACHE" in ui_source
-    assert "does not rely on translucent child-window composition" in transition_source
+    assert "only one captured pixmap" in transition_source
     assert "WA_TransparentForMouseEvents" in transition_source
 
 
