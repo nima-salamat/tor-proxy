@@ -36,7 +36,7 @@ from PySide6.QtGui import (
 import qdarkstyle
 from qdarkstyle.dark.palette import DarkPalette
 from qdarkstyle.light.palette import LightPalette
-from PySide6.QtCore import QEvent, QTimer, QThreadPool, Qt, Signal, QSize, QPoint, QPointF, QRect
+from PySide6.QtCore import QEvent, QThreadPool, QTimer, Qt, Signal, QSize, QPoint, QPointF, QRect
 import qtawesome as qta
 from ui_.window.theme_transition import CircularThemeReveal
 from ui_.window.theme import resolve_system_theme
