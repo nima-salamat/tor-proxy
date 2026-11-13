@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from PySide6.QtWidgets import (
     QApplication,
     QLabel,
@@ -28,17 +30,11 @@ from PySide6.QtCore import (
 )
 from pathlib import Path
 
-from torproxy.onion_hosting import OnionHostingManager
-from torproxy.bridges import parse_bridge_text
-from torproxy.ports import PortAllocationError, ephemeral_loopback_port, resolve_listener_ports
-from torproxy.service_pool import TorServicePool
-from torproxy.service_credentials import read_upstream_credentials
-from torproxy.tor_manager import TorManagerError, TorSettings
+from torproxy.ports import PortAllocationError, resolve_listener_ports
 from set_proxy import has_proxy_snapshot, manage_proxy
 from tor import TorRunner, Runner
 from proxy import get_traffic_direction_snapshot, load_blocked, load_exclude
 
-from whatismyip import what_is_my_ip
 from ui_.window.log_window import LogWindow
 from ui_.btn.pulse_button import PulseButton, PulseButtonHost
 from ui_.worker.worker import Worker
@@ -47,7 +43,6 @@ from config import CONFIG
 from ui_.window.dialogs import QMessageBox
 from torproxy.paths import user_directories
 from torproxy.system_tunnel import SystemTunnelCancelled, SystemTunnelManager
-from ui_.window.tor_log_dialog import TorLogDialog
 import ipaddress
 import json
 import logging
@@ -1061,6 +1056,9 @@ class ProxyWindow(QWidget):
 
     def _build_tor_service_settings(self, profile: dict) -> TorSettings:
         """Build an isolated manager configuration from a persisted profile."""
+        from torproxy.service_credentials import read_upstream_credentials
+        from torproxy.tor_manager import TorManagerError, TorSettings
+
         selected_bundle_version = str(profile.get("tor_bundle_version") or "").strip()
         if selected_bundle_version:
             from updater import resolve_verified_bundle
@@ -1126,6 +1124,9 @@ class ProxyWindow(QWidget):
 
     def _ensure_tor_service_pool(self) -> TorServicePool:
         """Create the pool once and restore saved profiles without failing app startup."""
+        from torproxy.service_pool import TorServicePool
+        from torproxy.tor_manager import TorManagerError
+
         with self._tor_service_pool_lock:
             configured_workers = max(1, min(8, int(CONFIG["tor_service_workers"] or 4)))
             if self.tor_service_pool is not None:
@@ -1182,6 +1183,8 @@ class ProxyWindow(QWidget):
 
     def open_tor_log_dialog(self):
         """Open a live, paginated view of the actual managed Tor log file."""
+        from ui_.window.tor_log_dialog import TorLogDialog
+
         manager = getattr(self.tor, "manager", None)
         path = getattr(manager, "log_path", None) or (user_directories().logs / "tor.log")
         dialog = TorLogDialog(self, path, manager=manager)
@@ -1227,6 +1230,10 @@ class ProxyWindow(QWidget):
 
     def _build_developer_tor_settings(self) -> TorSettings:
         """Build an isolated Developer Tor configuration from its own saved preferences."""
+        from torproxy.bridges import parse_bridge_text
+        from torproxy.ports import ephemeral_loopback_port
+        from torproxy.tor_manager import TorManagerError, TorSettings
+
         if not self.tor.path_set or not self.tor.tor_path:
             self.tor.update_path(CONFIG["tor_path"])
         if not self.tor.path_set or not self.tor.tor_path:
@@ -1294,6 +1301,8 @@ class ProxyWindow(QWidget):
 
     def _ensure_onion_hosting_manager(self) -> OnionHostingManager:
         """Keep Developer Tor owned by Home so hiding the window never stops hosting."""
+        from torproxy.onion_hosting import OnionHostingManager
+
         manager = getattr(self, "onion_hosting_manager", None)
         if manager is None:
             manager = OnionHostingManager(self._build_developer_tor_settings)
@@ -1353,6 +1362,8 @@ class ProxyWindow(QWidget):
     @staticmethod
     def _perform_exit_ip_check(proxy_url: str) -> str:
         """Request an exit IP through the explicit local proxy, never directly."""
+        from whatismyip import what_is_my_ip
+
         return what_is_my_ip(proxy=proxy_url, timeout=10)
 
     def _finish_exit_ip_check(self):
@@ -2166,6 +2177,8 @@ class ProxyWindow(QWidget):
     # ===== helper worker (runs in background) =====
     def _check_ports_worker(self):
         """Reconcile any previous TorProxy TUN session before starting Tor."""
+        from torproxy.tor_manager import TorManagerError
+
         messages = []
         try:
             recovery = self.system_tunnel_manager.cleanup_previous_session()
