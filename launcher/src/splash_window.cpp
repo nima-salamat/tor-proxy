@@ -237,7 +237,7 @@ void SplashWindow::rebuildBackgroundCache() {
     painter.drawPath(panelPath);
     painter.end();
 
-    m_backgroundCache = std::move(cache);
+    m_backgroundCache = cache;
 }
 
 void SplashWindow::paintEvent(QPaintEvent *event) {

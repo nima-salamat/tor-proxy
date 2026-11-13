@@ -159,6 +159,7 @@ def main() -> int:
         if not notify_launcher("failed", message):
             QMessageBox.critical(None, "TorProxy configuration error", str(exc))
         return 2
+    config_finished = time.perf_counter()
 
     # Resolve System before the first stylesheet is installed, so first-run
     # startup already matches the desktop appearance without a light/dark flash.
@@ -180,7 +181,7 @@ def main() -> int:
     )
     LOGGER.info(
         "Startup phase: configuration load and validation %.1f ms.",
-        (time.perf_counter() - config_started) * 1000.0,
+        (config_finished - config_started) * 1000.0,
     )
     LOGGER.info(
         "Startup phase: theme resolution %.1f ms.",
