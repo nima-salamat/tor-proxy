@@ -3921,3 +3921,38 @@ def test_theme_switch_profiles_sync_stages_and_updates_only_visible_local_pages(
     assert "new_snapshot" not in theme_switch
     assert "visible_only=True" in theme_switch
 
+
+
+def test_settings_tabs_are_constructed_only_when_first_selected():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
+    constructor = source[source.index("    def __init__(self, parent=None):"):source.index("    def _create_scroll_page(")]
+    assert "self._ensure_settings_page_initialized(0)" in constructor
+    assert "self.initialize_bridges_page()" not in constructor
+    assert "self.initialize_second_page()" not in constructor
+    assert "self.initialize_tor_services_page()" not in constructor
+    assert "self.initialize_advanced_page()" not in constructor
+    assert "def _ensure_settings_page_initialized(self, index: int)" in source
+    assert "BlcokHostsWindow(self)" in source
+    assert "ExcludeHostsWindow(self)" in source
+    assert "self._bridge_normalize_timer" in constructor
+
+
+def test_background_page_work_is_started_only_after_navigation():
+    repository = Path(__file__).resolve().parents[1]
+    updater = (repository / "ui_/window/updater_window.py").read_text(encoding="utf-8")
+    tunnel = (repository / "ui_/window/tunnel_window.py").read_text(encoding="utf-8")
+    custom = (repository / "ui_/window/tor_services_page.py").read_text(encoding="utf-8")
+    developer = (repository / "ui_/window/onion_hosting_page.py").read_text(encoding="utf-8")
+    stats = (repository / "ui_/window/statistics_window.py").read_text(encoding="utf-8")
+
+    assert "def showEvent(self, event):" in updater
+    assert "self._bundle_scan_completed" in updater
+    assert "Worker(self.manager.is_installed)" in tunnel
+    assert "self._state_refresh_timer.stop()" in tunnel
+    assert "Worker(self._proxy._ensure_tor_service_pool)" in custom
+    assert "self._health_refresh_timer.stop()" in custom
+    assert "Worker(self._collect_dashboard_snapshot)" in developer
+    assert "self._timer.stop()" in developer
+    assert "Worker(" in stats and "self._load_history_snapshot" in stats
+    assert "self._sync_session_tracker()" in stats
