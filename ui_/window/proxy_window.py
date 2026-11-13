@@ -36,7 +36,7 @@ from torproxy.service_credentials import read_upstream_credentials
 from torproxy.tor_manager import TorManagerError, TorSettings
 from set_proxy import has_proxy_snapshot, manage_proxy
 from tor import TorRunner, Runner
-from proxy import load_blocked, load_exclude
+from proxy import get_traffic_direction_snapshot, load_blocked, load_exclude
 
 from whatismyip import what_is_my_ip
 from ui_.window.log_window import LogWindow
@@ -1179,6 +1179,21 @@ class ProxyWindow(QWidget):
         self.lbl_data_usage.setText(
             f"Proxy traffic  ·  {max(0, int(CONFIG['data_usage'] or 0)) / 1024**2:.2f} MiB"
         )
+
+    def traffic_direction_snapshot(self) -> dict[str, int]:
+        """Return cumulative TorProxy traffic counters for the app-level sampler."""
+        try:
+            snapshot = get_traffic_direction_snapshot()
+        except Exception:
+            logger.debug("Could not read cumulative traffic counters.", exc_info=True)
+            snapshot = {}
+        result = {}
+        for direction in ("upload", "download"):
+            try:
+                result[direction] = max(0, int(snapshot.get(direction, 0)))
+            except (TypeError, ValueError, OverflowError):
+                result[direction] = 0
+        return result
 
     def open_statistics_page(self):
         owner = self._parent
