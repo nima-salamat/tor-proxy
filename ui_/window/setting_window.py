@@ -207,7 +207,13 @@ class SettingWindow(QWidget):
             from ui_.window.block_host_window import BlcokHostsWindow
             page = BlcokHostsWindow(self)
             page.setObjectName("settingsBlockedHostsPage")
-            placeholder = self.page_setting.replaceWidget(index, page)
+            # QStackedWidget does not expose replaceWidget(); keep the
+            # existing Settings index while swapping the lazy placeholder.
+            placeholder = self.page_setting.widget(index)
+            if placeholder is None:
+                raise RuntimeError(f"Missing Settings placeholder at index {index}.")
+            self.page_setting.removeWidget(placeholder)
+            self.page_setting.insertWidget(index, page)
             self.block_hosts_page = page
             if self._parent is not None:
                 self._parent.block_host_window = page
@@ -217,7 +223,13 @@ class SettingWindow(QWidget):
             from ui_.window.exclude_host_window import ExcludeHostsWindow
             page = ExcludeHostsWindow(self)
             page.setObjectName("settingsExcludedHostsPage")
-            placeholder = self.page_setting.replaceWidget(index, page)
+            # QStackedWidget does not expose replaceWidget(); keep the
+            # existing Settings index while swapping the lazy placeholder.
+            placeholder = self.page_setting.widget(index)
+            if placeholder is None:
+                raise RuntimeError(f"Missing Settings placeholder at index {index}.")
+            self.page_setting.removeWidget(placeholder)
+            self.page_setting.insertWidget(index, page)
             self.exclude_hosts_page = page
             if self._parent is not None:
                 self._parent.exclude_host_window = page
