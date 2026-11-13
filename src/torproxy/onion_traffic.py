@@ -249,6 +249,57 @@ class OnionTrafficStore:
             }
         return {key: row[key] for key in row.keys()}
 
+    def snapshot_many(self, service_ids: list[str]) -> dict[str, Any]:
+        """Read global and per-service counters with one SQLite connection."""
+        identifiers = tuple(dict.fromkeys(
+            str(service_id) for service_id in service_ids if str(service_id)
+        ))
+        empty_snapshot = {
+            "incoming_bytes": 0,
+            "outgoing_bytes": 0,
+            "connections": 0,
+            "http_requests": 0,
+            "errors": 0,
+            "active_connections": 0,
+            "last_activity": "",
+        }
+        with self._lock, self._database() as db:
+            total_row = db.execute(
+                """
+                SELECT
+                    COALESCE(SUM(incoming_bytes), 0) AS incoming_bytes,
+                    COALESCE(SUM(outgoing_bytes), 0) AS outgoing_bytes,
+                    COALESCE(SUM(connections), 0) AS connections,
+                    COALESCE(SUM(http_requests), 0) AS http_requests,
+                    COALESCE(SUM(errors), 0) AS errors,
+                    COALESCE(SUM(active_connections), 0) AS active_connections,
+                    COALESCE(MAX(last_activity), '') AS last_activity
+                FROM service_totals
+                """
+            ).fetchone()
+            rows = []
+            if identifiers:
+                placeholders = ",".join("?" for _ in identifiers)
+                rows = db.execute(
+                    f"""
+                    SELECT service_id, incoming_bytes, outgoing_bytes, connections,
+                           http_requests, errors, active_connections, last_activity
+                    FROM service_totals
+                    WHERE service_id IN ({placeholders})
+                    """,
+                    identifiers,
+                ).fetchall()
+
+        services = {service_id: dict(empty_snapshot) for service_id in identifiers}
+        for row in rows:
+            services[str(row["service_id"])] = {
+                key: row[key] for key in empty_snapshot
+            }
+        return {
+            "global": {key: total_row[key] for key in empty_snapshot},
+            "services": services,
+        }
+
     def events(self, service_id: str, limit: int = 250) -> list[dict[str, Any]]:
         bounded_limit = max(1, min(int(limit), 1000))
         with self._lock, self._database() as db:
