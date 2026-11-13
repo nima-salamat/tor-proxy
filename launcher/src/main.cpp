@@ -4,6 +4,7 @@
 #include <QCoreApplication>
 #include <QDesktopServices>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QIcon>
@@ -20,8 +21,14 @@
 #include <QTimer>
 #include <QUuid>
 #include <QUrl>
+#include <QThread>
 
+#include <cerrno>
+#include <csignal>
 #include <cstdio>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 namespace {
 constexpr int kStartupTimeoutMs = 180000;
@@ -137,6 +144,21 @@ class StartupController final : public QObject {
 public:
     explicit StartupController(SplashWindow *splash, QObject *parent = nullptr)
         : QObject(parent), m_splash(splash) {
+        // Linux bootstrap starts Python before execv() loads this Qt runtime.
+        // exec preserves the parent PID, so this process owns the child.
+        m_statusPath = qEnvironmentVariable("TORPROXY_LAUNCHER_STATUS_FILE");
+        m_token = qEnvironmentVariable("TORPROXY_LAUNCHER_TOKEN");
+        m_logPath = qEnvironmentVariable("TORPROXY_LAUNCHER_LOG");
+        bool pidOk = false;
+        const qlonglong childPid =
+            qEnvironmentVariable("TORPROXY_LAUNCHER_PID").toLongLong(&pidOk);
+        if (pidOk && childPid > 0) {
+            m_prestartedPid = static_cast<pid_t>(childPid);
+        }
+        m_statusPoll.setInterval(60);
+        connect(&m_statusPoll, &QTimer::timeout,
+                this, [this]() { pollPrestartedProcess(); });
+
         m_server.setSocketOptions(QLocalServer::UserAccessOption);
         m_server.setMaxPendingConnections(2);
         connect(&m_server, &QLocalServer::newConnection,
@@ -166,15 +188,34 @@ public:
         if (m_ready) {
             return;
         }
-        stopCurrentProcess();
+        if (m_startedOnce) {
+            stopCurrentProcess();
+            if (!m_statusPath.isEmpty()) {
+                QFile::remove(m_statusPath);
+            }
+            m_statusPath.clear();
+            m_token.clear();
+            qunsetenv("TORPROXY_LAUNCHER_STATUS_FILE");
+            qunsetenv("TORPROXY_LAUNCHER_TOKEN");
+            qunsetenv("TORPROXY_LAUNCHER_PID");
+        }
+        m_startedOnce = true;
         m_splash->beginLoading();
-
         m_errorShown = false;
-        m_server.close();
-        if (!m_serverName.isEmpty()) {
-            QLocalServer::removeServer(m_serverName);
+
+        const bool hasPrestartedChild =
+            m_prestartedPid > 0 && !m_statusPath.isEmpty() && !m_token.isEmpty();
+        if (hasPrestartedChild) {
+            m_splash->setStatus(QStringLiteral("Python is already starting…"));
+            m_timeout.start();
+            m_statusPoll.start();
+            pollPrestartedProcess();
+            return;
         }
 
+        // Keep a normal QProcess fallback for systems where private IPC or
+        // prelaunch setup failed before the Qt runtime was available.
+        stopCurrentProcess();
         const QString executable = mainApplicationPath();
         const QFileInfo executableInfo(executable);
         if (!executableInfo.isFile() || !executableInfo.isExecutable()) {
@@ -183,6 +224,10 @@ public:
             return;
         }
 
+        m_server.close();
+        if (!m_serverName.isEmpty()) {
+            QLocalServer::removeServer(m_serverName);
+        }
         m_serverName = QStringLiteral("torproxy-startup-") +
                        QUuid::createUuid().toString(QUuid::WithoutBraces);
         m_token = QUuid::createUuid().toString(QUuid::WithoutBraces);
@@ -201,17 +246,16 @@ public:
         }
         m_logPath = QDir(logDirectory).filePath(QStringLiteral("launcher-startup.log"));
         QFile::remove(m_logPath);
-
         m_splash->setStatus(QStringLiteral("Starting the TorProxy desktop process…"));
 
-        // Keep this QProcess unparented. When READY arrives, the launcher exits
-        // without destroying the still-running application process.
         m_process = new QProcess;
         m_process->setWorkingDirectory(applicationRoot());
         m_process->setProcessChannelMode(QProcess::MergedChannels);
         m_process->setStandardOutputFile(m_logPath, QIODevice::Append);
 
         QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+        environment.remove(QStringLiteral("TORPROXY_LAUNCHER_STATUS_FILE"));
+        environment.remove(QStringLiteral("TORPROXY_LAUNCHER_PID"));
         environment.insert(QStringLiteral("TORPROXY_LAUNCHER_SERVER"), m_serverName);
         environment.insert(QStringLiteral("TORPROXY_LAUNCHER_TOKEN"), m_token);
         environment.insert(QStringLiteral("TORPROXY_LAUNCHER_LOG"), m_logPath);
@@ -249,6 +293,74 @@ public:
     }
 
 private:
+    void pollPrestartedProcess() {
+        if (m_prestartedPid <= 0 || m_ready) {
+            m_statusPoll.stop();
+            return;
+        }
+
+        QFile statusFile(m_statusPath);
+        if (statusFile.open(QIODevice::ReadOnly) && statusFile.size() <= 16384) {
+            const QList<QByteArray> fields = statusFile.readAll().split('\n');
+            if (fields.size() >= 3 && fields.at(0) == m_token.toLatin1()) {
+                const QByteArray signature = fields.at(1) + QByteArray("\n") + fields.at(2);
+                if (signature != m_lastStatusPayload) {
+                    m_lastStatusPayload = signature;
+                    const QString status = QString::fromLatin1(fields.at(1));
+                    const QString detail = QString::fromUtf8(QByteArray::fromHex(fields.at(2)));
+                    if (status == QStringLiteral("starting")) {
+                        if (!detail.isEmpty()) {
+                            m_splash->setStatus(detail);
+                        }
+                        m_timeout.start();
+                    } else if (status == QStringLiteral("ready")) {
+                        onReady();
+                        return;
+                    } else if (status == QStringLiteral("failed")) {
+                        showError(detail.isEmpty()
+                            ? QStringLiteral("TorProxy reported a startup failure.")
+                            : detail);
+                    }
+                }
+            }
+        }
+
+        int childStatus = 0;
+        const pid_t child = m_prestartedPid;
+        const pid_t result = waitpid(child, &childStatus, WNOHANG);
+        if (result == 0 || (result < 0 && errno == EINTR)) {
+            return;
+        }
+        if (result == child || (result < 0 && errno == ECHILD)) {
+            const bool childWasReaped = result == child;
+            m_prestartedPid = -1;
+            m_statusPoll.stop();
+            if (!m_ready && !m_errorShown) {
+                QString reason;
+                if (!childWasReaped) {
+                    reason = QStringLiteral("The launcher could not verify ownership of the startup process.");
+                } else if (WIFEXITED(childStatus)) {
+                    reason = QStringLiteral("TorProxy exited before reporting READY (exit code %1).")
+                                 .arg(WEXITSTATUS(childStatus));
+                } else if (WIFSIGNALED(childStatus)) {
+                    reason = QStringLiteral("TorProxy stopped before reporting READY (signal %1).")
+                                 .arg(WTERMSIG(childStatus));
+                } else {
+                    reason = QStringLiteral("TorProxy exited before reporting READY.");
+                }
+                showError(reason);
+            }
+            return;
+        }
+        if (result < 0) {
+            m_prestartedPid = -1;
+            m_statusPoll.stop();
+            if (!m_ready && !m_errorShown) {
+                showError(QStringLiteral("The launcher lost supervision of the TorProxy startup process."));
+            }
+        }
+    }
+
     void acceptConnections() {
         while (m_server.hasPendingConnections()) {
             QLocalSocket *socket = m_server.nextPendingConnection();
@@ -321,6 +433,12 @@ private:
         }
         m_ready = true;
         m_timeout.stop();
+        m_statusPoll.stop();
+        m_prestartedPid = -1; // The desktop app continues after the splash exits.
+        if (!m_statusPath.isEmpty()) {
+            QFile::remove(m_statusPath);
+            m_statusPath.clear();
+        }
         m_server.close();
         QLocalServer::removeServer(m_serverName);
 
@@ -355,18 +473,42 @@ private:
 
     void stopCurrentProcess() {
         m_timeout.stop();
-        if (!m_process) {
-            return;
-        }
-        if (m_process->state() != QProcess::NotRunning) {
-            m_process->terminate();
-            if (!m_process->waitForFinished(1600)) {
-                m_process->kill();
-                m_process->waitForFinished(1600);
+        m_statusPoll.stop();
+        if (m_process) {
+            if (m_process->state() != QProcess::NotRunning) {
+                m_process->terminate();
+                if (!m_process->waitForFinished(1600)) {
+                    m_process->kill();
+                    m_process->waitForFinished(1600);
+                }
             }
+            delete m_process;
+            m_process = nullptr;
         }
-        delete m_process;
-        m_process = nullptr;
+
+        if (m_prestartedPid > 0) {
+            const pid_t child = m_prestartedPid;
+            kill(child, SIGTERM);
+            QElapsedTimer elapsed;
+            elapsed.start();
+            int childStatus = 0;
+            bool reaped = false;
+            while (elapsed.elapsed() < 500) {
+                const pid_t result = waitpid(child, &childStatus, WNOHANG);
+                if (result == child || (result < 0 && errno == ECHILD)) {
+                    reaped = true;
+                    break;
+                }
+                if (result < 0 && errno != EINTR) break;
+                QThread::msleep(10);
+            }
+            if (!reaped) {
+                kill(child, SIGKILL);
+                while (waitpid(child, &childStatus, 0) < 0 && errno == EINTR) {}
+            }
+            m_prestartedPid = -1;
+        }
+        if (!m_statusPath.isEmpty()) QFile::remove(m_statusPath);
     }
 
     void stopAndQuit() {
@@ -385,6 +527,11 @@ private:
     QString m_serverName;
     QString m_token;
     QString m_logPath;
+    QString m_statusPath;
+    QByteArray m_lastStatusPayload;
+    QTimer m_statusPoll;
+    pid_t m_prestartedPid = -1;
+    bool m_startedOnce = false;
     bool m_ready = false;
     bool m_errorShown = false;
 };
@@ -435,7 +582,9 @@ int main(int argc, char *argv[]) {
     splash.raise();
     splash.activateWindow();
     application.processEvents();
-    QTimer::singleShot(80, &controller, [&controller]() { controller.start(); });
+    // The first splash frame is already visible. Start immediately; the
+    // QProcess fallback is asynchronous and the Linux fast path is in flight.
+    controller.start();
 
     return application.exec();
 }

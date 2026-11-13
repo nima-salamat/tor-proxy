@@ -84,10 +84,10 @@ SplashWindow::SplashWindow(const QString &iconPath, QWidget *parent)
     updateActionGeometry();
 
     m_animationTimer = new QTimer(this);
-    m_animationTimer->setInterval(32);
+    m_animationTimer->setInterval(50);
     connect(m_animationTimer, &QTimer::timeout, this, [this]() {
-        m_spinnerAngle = (m_spinnerAngle + 11) % 360;
-        m_progressOffset = (m_progressOffset + 5) % 500;
+        m_spinnerAngle = (m_spinnerAngle + 17) % 360;
+        m_progressOffset = (m_progressOffset + 8) % 500;
         update();
     });
     m_animationTimer->start();
@@ -137,6 +137,7 @@ void SplashWindow::setThemeMode(const QString &mode) {
         m_errorCloseButton->setStyleSheet(actionButtonStyle(
             secondary, secondaryHover, foreground, pressed, border, hoverBorder));
     }
+    rebuildBackgroundCache();
     update();
 }
 
@@ -203,14 +204,19 @@ void SplashWindow::updateActionGeometry() {
 void SplashWindow::resizeEvent(QResizeEvent *event) {
     QWidget::resizeEvent(event);
     updateActionGeometry();
+    rebuildBackgroundCache();
 }
 
-void SplashWindow::paintEvent(QPaintEvent *event) {
-    Q_UNUSED(event)
+void SplashWindow::rebuildBackgroundCache() {
+    if (size().isEmpty()) {
+        m_backgroundCache = QPixmap();
+        return;
+    }
 
-    QPainter painter(this);
+    QPixmap cache(size());
+    cache.fill(Qt::transparent);
+    QPainter painter(&cache);
     painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
 
     const QRectF panel = QRectF(rect()).adjusted(1.0, 1.0, -1.0, -1.0);
     QPainterPath panelPath;
@@ -227,9 +233,25 @@ void SplashWindow::paintEvent(QPaintEvent *event) {
     tealGlow.setColorAt(0.0, dark ? QColor(20, 155, 144, 38) : QColor(20, 155, 144, 24));
     tealGlow.setColorAt(1.0, QColor(20, 155, 144, 0));
     painter.fillPath(panelPath, tealGlow);
-
     painter.setPen(QPen(dark ? QColor(140, 181, 195, 48) : QColor(83, 110, 124, 95), 1.0));
     painter.drawPath(panelPath);
+    painter.end();
+
+    m_backgroundCache = std::move(cache);
+}
+
+void SplashWindow::paintEvent(QPaintEvent *event) {
+    Q_UNUSED(event)
+
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+
+    if (m_backgroundCache.isNull() || m_backgroundCache.size() != size()) {
+        rebuildBackgroundCache();
+    }
+    painter.drawPixmap(0, 0, m_backgroundCache);
+    const bool dark = m_themeMode == QStringLiteral("dark");
 
     QFont eyebrow(QStringLiteral("Arial"), 8, QFont::DemiBold);
     eyebrow.setLetterSpacing(QFont::AbsoluteSpacing, 2.0);

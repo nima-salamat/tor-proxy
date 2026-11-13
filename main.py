@@ -151,6 +151,7 @@ def main() -> int:
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
     app = QApplication(sys.argv)
+    config_started = time.perf_counter()
     try:
         CONFIG.load()
     except Exception as exc:
@@ -162,11 +163,13 @@ def main() -> int:
     # Resolve System before the first stylesheet is installed, so first-run
     # startup already matches the desktop appearance without a light/dark flash.
     theme_preference = CONFIG.get("theme_preference", "system")
+    theme_started = time.perf_counter()
     startup_mode = (
         resolve_system_theme(app)
         if theme_preference == "system"
         else theme_preference
     )
+    theme_resolved = time.perf_counter()
     if CONFIG.get("mode") != startup_mode:
         CONFIG["mode"] = startup_mode
 
@@ -174,6 +177,14 @@ def main() -> int:
     LOGGER.info(
         "Startup phase: Python, Qt and application modules imported in %.1f ms.",
         (imports_finished - startup_started) * 1000.0,
+    )
+    LOGGER.info(
+        "Startup phase: configuration load and validation %.1f ms.",
+        (time.perf_counter() - config_started) * 1000.0,
+    )
+    LOGGER.info(
+        "Startup phase: theme resolution %.1f ms.",
+        (theme_resolved - theme_started) * 1000.0,
     )
     notify_launcher("starting", "Preparing TorProxy settings…")
     app.setApplicationName("TorProxy")
@@ -190,10 +201,15 @@ def main() -> int:
     lock_path = directories.state / "application.lock"
     try:
         with portalocker.Lock(str(lock_path), mode="a", timeout=0):
+            stylesheet_started = time.perf_counter()
             if CONFIG["mode"] == "light":
                 app.setStyleSheet(qdarkstyle.load_stylesheet(palette=LightPalette()))
             else:
                 app.setStyleSheet(qdarkstyle.load_stylesheet(palette=DarkPalette()))
+            LOGGER.info(
+                "Startup phase: stylesheet generation and install %.1f ms.",
+                (time.perf_counter() - stylesheet_started) * 1000.0,
+            )
             app.setWindowIcon(QIcon(resource_path("assets/icon.png")))
             notify_launcher("starting", "Building the TorProxy window…")
             window_started = time.perf_counter()

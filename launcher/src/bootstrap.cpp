@@ -371,7 +371,6 @@ bool preparePaths(State &s) {
 void startApp(State &s) {
     if (s.ready) return;
     stopChild(s); DeleteFileW(s.statusPath.c_str());
-    s.darkTheme = resolveConfiguredDarkTheme();
     s.failed = false; s.error.clear(); s.lastPayload.clear();
     s.status = L"Starting TorProxy…"; s.lastProgress = GetTickCount64();
     InvalidateRect(s.window, nullptr, FALSE);
@@ -829,12 +828,13 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     switch (msg) {
     case WM_CREATE:
-        SetTimer(hwnd, kTimer, 32, nullptr);
+        SetTimer(hwnd, kTimer, 50, nullptr);
         return 0;
     case WM_TIMER:
-        s->angle = (s->angle + 11) % 360;
-        s->progress = (s->progress + 5) % 500;
-        if (++s->pollCount >= 4) { s->pollCount = 0; poll(*s); }
+        // Keep the splash smooth without competing with Python startup for CPU.
+        s->angle = (s->angle + 17) % 360;
+        s->progress = (s->progress + 8) % 500;
+        if (++s->pollCount >= 2) { s->pollCount = 0; poll(*s); }
         InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
     case WM_DPICHANGED: {
@@ -986,7 +986,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     }
 
     State state;
-    state.darkTheme = resolveConfiguredDarkTheme();
+    // The native system palette is enough for the first frame. Reading and
+    // parsing the user config is deferred until after CreateProcessW succeeds.
+    state.darkTheme = windowsUsesDarkTheme();
     const auto path = executablePath();
     if (path.empty()) {
         Gdiplus::GdiplusShutdown(gdiplusToken);
@@ -1011,12 +1013,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         }
         LocalFree(argv);
     }
-    if (!loadSplashLogo(state)) {
-        Gdiplus::GdiplusShutdown(gdiplusToken);
-        MessageBoxW(nullptr,
-                    L"Could not load the high-resolution TorProxy logo (assets\\icon.png).",
-                    L"TorProxy", MB_OK | MB_ICONERROR);
-        return 6;
+    if (selfTest) {
+        state.darkTheme = resolveConfiguredDarkTheme();
+        if (!loadSplashLogo(state)) {
+            Gdiplus::GdiplusShutdown(gdiplusToken);
+            MessageBoxW(nullptr,
+                        L"Could not load the high-resolution TorProxy logo (assets\\icon.png).",
+                        L"TorProxy", MB_OK | MB_ICONERROR);
+            return 6;
+        }
     }
 
     if (!createWindow(state, instance)) {
@@ -1054,7 +1059,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
                 bufferedPaintReady && themeMatches) ? 0 : 4;
     }
 
+    // UpdateWindow() has already shown a complete lightweight splash frame.
+    // Start Python before optional image decoding and config parsing.
     startApp(state);
+    state.darkTheme = resolveConfiguredDarkTheme();
+    loadSplashLogo(state); // A decorative asset must not block the app from running.
+    InvalidateRect(state.window, nullptr, FALSE);
+
     MSG msg{};
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
         TranslateMessage(&msg);
@@ -1067,10 +1078,111 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
 #else
 #include <cerrno>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <fcntl.h>
 #include <limits.h>
+#include <signal.h>
 #include <string>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <vector>
 #include <unistd.h>
+
+namespace {
+bool hasArgument(int argc, char *argv[], const char *wanted) {
+    for (int index = 1; index < argc; ++index) {
+        if (std::strcmp(argv[index], wanted) == 0) return true;
+    }
+    return false;
+}
+
+bool isHelperLaunch(int argc, char *argv[]) {
+    return hasArgument(argc, argv, "--system-tunnel-helper") ||
+           hasArgument(argc, argv, "--killswitch-helper") ||
+           hasArgument(argc, argv, "--self-test") ||
+           hasArgument(argc, argv, "--version");
+}
+
+bool createPrivateStartupChannel(std::string &statusPath, std::string &token) {
+    std::string directory;
+    const char *runtimeDirectory = std::getenv("XDG_RUNTIME_DIR");
+    if (runtimeDirectory && runtimeDirectory[0] == '/' &&
+        access(runtimeDirectory, W_OK | X_OK) == 0) {
+        directory = runtimeDirectory;
+    } else {
+        const char *temporaryDirectory = std::getenv("TMPDIR");
+        directory = temporaryDirectory && temporaryDirectory[0] == '/'
+            ? temporaryDirectory : "/tmp";
+    }
+
+    const std::string pattern = directory + "/torproxy-startup-XXXXXX";
+    std::vector<char> writablePattern(pattern.begin(), pattern.end());
+    writablePattern.push_back('\0');
+    const int statusFile = mkstemp(writablePattern.data());
+    if (statusFile < 0) return false;
+    statusPath = writablePattern.data();
+    const bool permissionsOk = fchmod(statusFile, S_IRUSR | S_IWUSR) == 0;
+    close(statusFile);
+    if (!permissionsOk) {
+        unlink(statusPath.c_str());
+        statusPath.clear();
+        return false;
+    }
+
+    unsigned char randomBytes[32]{};
+    const int randomFile = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+    if (randomFile < 0) {
+        unlink(statusPath.c_str());
+        statusPath.clear();
+        return false;
+    }
+    size_t received = 0;
+    while (received < sizeof(randomBytes)) {
+        const ssize_t count = read(
+            randomFile, randomBytes + received, sizeof(randomBytes) - received
+        );
+        if (count < 0 && errno == EINTR) continue;
+        if (count <= 0) break;
+        received += static_cast<size_t>(count);
+    }
+    close(randomFile);
+    if (received != sizeof(randomBytes)) {
+        unlink(statusPath.c_str());
+        statusPath.clear();
+        return false;
+    }
+
+    static constexpr char digits[] = "0123456789abcdef";
+    token.reserve(sizeof(randomBytes) * 2);
+    for (unsigned char value : randomBytes) {
+        token.push_back(digits[value >> 4]);
+        token.push_back(digits[value & 0x0F]);
+    }
+    return true;
+}
+
+std::string startupLogPath() {
+    const char *stateHome = std::getenv("XDG_STATE_HOME");
+    if (stateHome && stateHome[0] == '/') {
+        return std::string(stateHome) + "/torproxy/logs/launcher-startup.log";
+    }
+    const char *home = std::getenv("HOME");
+    if (home && home[0] == '/') {
+        return std::string(home) + "/.local/state/torproxy/logs/launcher-startup.log";
+    }
+    return "/tmp/torproxy-launcher-startup.log";
+}
+
+void clearStartupEnvironment() {
+    unsetenv("TORPROXY_LAUNCHER_STATUS_FILE");
+    unsetenv("TORPROXY_LAUNCHER_TOKEN");
+    unsetenv("TORPROXY_LAUNCHER_LOG");
+    unsetenv("TORPROXY_LAUNCHER_PID");
+}
+} // namespace
+
 int main(int argc, char *argv[]) {
     char executable[PATH_MAX + 1]{};
     const ssize_t length = readlink("/proc/self/exe", executable, PATH_MAX);
@@ -1080,12 +1192,72 @@ int main(int argc, char *argv[]) {
     const std::size_t separator = root.find_last_of('/');
     root = separator == std::string::npos ? "." : root.substr(0, separator);
     const std::string gui = root + "/launcher-runtime/bin/TorProxyLauncherUI";
-    std::vector<char *> args; args.reserve(static_cast<size_t>(argc) + 1);
-    args.push_back(const_cast<char *>(gui.c_str()));
-    for (int i = 1; i < argc; ++i) args.push_back(argv[i]);
-    args.push_back(nullptr);
-    execv(gui.c_str(), args.data());
+    const std::string application = root + "/TorProxy";
+
+    // This process becomes the Qt splash process after execv(). Its PID
+    // therefore remains the parent of TorProxy, enabling safe supervision.
+    pid_t applicationPid = -1;
+    std::string statusPath;
+    std::string token;
+    if (!isHelperLaunch(argc, argv) && access(application.c_str(), X_OK) == 0 &&
+        createPrivateStartupChannel(statusPath, token)) {
+        const std::string logPath = startupLogPath();
+        const bool environmentReady =
+            setenv("TORPROXY_LAUNCHER_STATUS_FILE", statusPath.c_str(), 1) == 0 &&
+            setenv("TORPROXY_LAUNCHER_TOKEN", token.c_str(), 1) == 0 &&
+            setenv("TORPROXY_LAUNCHER_LOG", logPath.c_str(), 1) == 0;
+        unsetenv("TORPROXY_LAUNCHER_SERVER");
+
+        if (environmentReady) {
+            applicationPid = fork();
+            if (applicationPid == 0) {
+                std::vector<char *> applicationArgs;
+                applicationArgs.reserve(static_cast<size_t>(argc) + 1);
+                applicationArgs.push_back(const_cast<char *>(application.c_str()));
+                for (int index = 1; index < argc; ++index) {
+                    applicationArgs.push_back(argv[index]);
+                }
+                applicationArgs.push_back(nullptr);
+                execv(application.c_str(), applicationArgs.data());
+                std::perror("TorProxyLauncher: cannot start the desktop process");
+                _exit(127);
+            }
+            if (applicationPid > 0) {
+                const std::string pidText = std::to_string(applicationPid);
+                if (setenv("TORPROXY_LAUNCHER_PID", pidText.c_str(), 1) != 0) {
+                    kill(applicationPid, SIGTERM);
+                    while (waitpid(applicationPid, nullptr, 0) < 0 && errno == EINTR) {}
+                    applicationPid = -1;
+                    clearStartupEnvironment();
+                }
+            } else {
+                std::perror("TorProxyLauncher: cannot create the desktop process");
+                clearStartupEnvironment();
+            }
+        } else {
+            clearStartupEnvironment();
+        }
+        if (applicationPid < 0) {
+            unlink(statusPath.c_str());
+            statusPath.clear();
+            token.clear();
+        }
+    }
+
+    std::vector<char *> launcherArgs;
+    launcherArgs.reserve(static_cast<size_t>(argc) + 1);
+    launcherArgs.push_back(const_cast<char *>(gui.c_str()));
+    for (int index = 1; index < argc; ++index) launcherArgs.push_back(argv[index]);
+    launcherArgs.push_back(nullptr);
+    execv(gui.c_str(), launcherArgs.data());
+
+    const int launchError = errno;
     std::perror("TorProxyLauncher: cannot start native splash runtime");
-    return errno == 0 ? 127 : errno;
+    if (applicationPid > 0) {
+        kill(applicationPid, SIGTERM);
+        while (waitpid(applicationPid, nullptr, 0) < 0 && errno == EINTR) {}
+    }
+    if (!statusPath.empty()) unlink(statusPath.c_str());
+    return launchError == 0 ? 127 : launchError;
 }
 #endif

@@ -41,8 +41,10 @@ protected:
 
 private:
     void updateActionGeometry();
+    void rebuildBackgroundCache();
 
     QPixmap m_logo;
+    QPixmap m_backgroundCache;
     QTimer *m_animationTimer = nullptr;
     QToolButton *m_closeButton = nullptr;
     QPushButton *m_retryButton = nullptr;
