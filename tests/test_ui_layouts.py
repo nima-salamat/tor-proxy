@@ -3176,7 +3176,9 @@ def test_developer_tor_separates_runtime_logs_from_service_activity_and_exposes_
     assert "self.open_service_activity(data)" in page
     assert "def open_service_activity(self, service: dict)" in page
     assert "def traffic_snapshot(self, service_id: str | None = None)" in manager
+    assert "def traffic_snapshots(self, service_ids: list[str])" in manager
     assert "def traffic_events(self, service_id: str, limit: int = 250)" in manager
+    assert "batch_snapshot = getattr(manager, \"traffic_snapshots\", None)" in page
     assert '("incoming_bytes", "TOTAL IN")' in page
     assert '("outgoing_bytes", "TOTAL OUT")' in page
     assert "self._service_traffic_widgets" in page
