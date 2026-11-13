@@ -1,6 +1,7 @@
 """Home dashboard for the independent Developer Tor Onion Hosting runtime."""
 from __future__ import annotations
 
+import json
 import logging
 
 import qtawesome as qta
@@ -702,6 +703,12 @@ class OnionHostingPage(QWidget):
         self._last_snapshot = None
         self._last_services = None
         self._last_visible_service_ids: tuple[str, ...] = ()
+        self._last_rendered_services: list[dict] | None = None
+        self._last_traffic_snapshots: dict = {}
+        self._dashboard_initialized = False
+        self._dashboard_refresh_in_progress = False
+        self._dashboard_refresh_pending = False
+        self._dashboard_worker = None
         self._thread_pool = QThreadPool(self)
         self._thread_pool.setMaxThreadCount(2)
         self.runtime_progress.connect(self._on_runtime_progress)
@@ -854,7 +861,7 @@ class OnionHostingPage(QWidget):
         self.service_search.setPlaceholderText("Filter services…")
         self.service_search.setClearButtonEnabled(True)
         self.service_search.setFixedWidth(190)
-        self.service_search.textChanged.connect(lambda _text: self.refresh_dashboard())
+        self.service_search.textChanged.connect(lambda _text: self._refresh_cached_service_cards())
         service_header.addWidget(self.service_search)
 
         self.service_filter = QComboBox(self)
@@ -864,7 +871,7 @@ class OnionHostingPage(QWidget):
         self.service_filter.addItem("Stopped", "stopped")
         self.service_filter.addItem("Errors", "error")
         self.service_filter.setFixedWidth(112)
-        self.service_filter.currentIndexChanged.connect(lambda _index: self.refresh_dashboard())
+        self.service_filter.currentIndexChanged.connect(lambda _index: self._refresh_cached_service_cards())
         service_header.addWidget(self.service_filter)
 
         self.add_service_button = QPushButton("Create Onion Service", self)
@@ -909,10 +916,23 @@ class OnionHostingPage(QWidget):
 
         self._apply_theme(CONFIG["mode"])
         self._timer = QTimer(self)
-        self._timer.setInterval(1200)
+        self._timer.setInterval(2500)
         self._timer.timeout.connect(self.refresh_dashboard)
+        for button in (
+            self.start_runtime_button, self.stop_runtime_button,
+            self.restart_runtime_button, self.runtime_logs_button,
+            self.add_service_button,
+        ):
+            button.setEnabled(False)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
         self._timer.start()
         self.refresh_dashboard()
+
+    def hideEvent(self, event) -> None:
+        self._timer.stop()
+        super().hideEvent(event)
 
     def apply_theme(self, mode):
         self._apply_theme(mode)
@@ -1311,37 +1331,68 @@ class OnionHostingPage(QWidget):
             result.append(service)
         return result
 
-    def _refresh_traffic_metrics(self, manager, services: list[dict]) -> None:
-        try:
-            totals = manager.traffic_snapshot()
-            for key, label in self._global_traffic_labels.items():
-                value = totals.get(key, 0)
-                label.setText(
-                    _format_bytes(value)
-                    if key in {"incoming_bytes", "outgoing_bytes"}
-                    else f"{int(value):,}"
-                )
-            for service_id, labels in self._service_traffic_widgets.items():
-                snapshot = manager.traffic_snapshot(service_id)
-                labels["incoming_bytes"].setText(_format_bytes(snapshot["incoming_bytes"]))
-                labels["outgoing_bytes"].setText(_format_bytes(snapshot["outgoing_bytes"]))
-                labels["http_requests"].setText(f"{int(snapshot['http_requests']):,}")
-                labels["errors"].setText(f"{int(snapshot['errors']):,}")
-                labels["active_connections"].setText(f"{int(snapshot['active_connections']):,}")
-        except Exception:
-            logger.exception("Could not refresh Developer Tor traffic metrics.")
-            for label in self._global_traffic_labels.values():
-                if not label.text().strip():
-                    label.setText("—")
+    def _refresh_traffic_metrics(self, snapshots: dict) -> None:
+        totals = snapshots.get("global") or {}
+        for key, label in self._global_traffic_labels.items():
+            value = totals.get(key, 0)
+            label.setText(
+                _format_bytes(value)
+                if key in {"incoming_bytes", "outgoing_bytes"}
+                else f"{int(value):,}"
+            )
+        per_service = snapshots.get("services") or {}
+        for service_id, labels in self._service_traffic_widgets.items():
+            snapshot = per_service.get(service_id) or {}
+            labels["incoming_bytes"].setText(_format_bytes(snapshot.get("incoming_bytes", 0)))
+            labels["outgoing_bytes"].setText(_format_bytes(snapshot.get("outgoing_bytes", 0)))
+            labels["http_requests"].setText(f"{int(snapshot.get('http_requests', 0)):,}")
+            labels["errors"].setText(f"{int(snapshot.get('errors', 0)):,}")
+            labels["active_connections"].setText(f"{int(snapshot.get('active_connections', 0)):,}")
+
+    def _collect_dashboard_snapshot(self) -> str:
+        """Collect runtime, profile inventory and SQLite counters off the GUI thread."""
+        manager = self._manager()
+        runtime = manager.runtime_snapshot()
+        services = manager.services_snapshot()
+        traffic = {
+            "global": manager.traffic_snapshot(),
+            "services": {
+                str(service["id"]): manager.traffic_snapshot(str(service["id"]))
+                for service in services
+            },
+        }
+        return json.dumps(
+            {"runtime": runtime, "services": services, "traffic": traffic},
+            separators=(",", ":"), default=str,
+        )
 
     def refresh_dashboard(self):
-        try:
-            manager = self._manager()
-            runtime = manager.runtime_snapshot()
-            services = manager.services_snapshot()
-        except Exception as exc:
-            self.runtime_message.setText(str(exc))
+        if not self.isVisible():
             return
+        if self._dashboard_refresh_in_progress:
+            self._dashboard_refresh_pending = True
+            return
+        self._dashboard_refresh_in_progress = True
+        worker = Worker(self._collect_dashboard_snapshot)
+        worker.signals.finished.connect(self._on_dashboard_snapshot)
+        worker.signals.error.connect(self._on_dashboard_snapshot_failed)
+        self._dashboard_worker = worker
+        self._thread_pool.start(worker)
+
+    def _on_dashboard_snapshot(self, result: str) -> None:
+        self._dashboard_refresh_in_progress = False
+        self._dashboard_worker = None
+        try:
+            payload = json.loads(result)
+            runtime = payload["runtime"]
+            services = payload.get("services") or []
+            traffic = payload.get("traffic") or {}
+        except (TypeError, ValueError, KeyError) as exc:
+            self._on_dashboard_snapshot_failed(f"Invalid dashboard snapshot: {exc}")
+            return
+
+        self._dashboard_initialized = True
+        self._last_traffic_snapshots = traffic
         if runtime != self._last_snapshot:
             self._last_snapshot = dict(runtime)
             state = str(runtime["state"]).lower()
@@ -1357,24 +1408,45 @@ class OnionHostingPage(QWidget):
             memory = int(runtime.get("memory_bytes") or 0)
             memory_text = f"{memory / (1024 * 1024):.1f} MiB" if memory else "—"
             uptime = int(runtime.get("uptime_seconds") or 0)
-            self.runtime_metrics.setText(f"{version}  ·  {memory_text}  ·  {uptime // 3600:02d}:{(uptime % 3600) // 60:02d}:{uptime % 60:02d}")
+            self.runtime_metrics.setText(
+                f"{version}  ·  {memory_text}  ·  {uptime // 3600:02d}:{(uptime // 60) % 60:02d}:{uptime % 60:02d}"
+            )
 
-        total_count = len(services)
+        self._last_services = [dict(item) for item in services]
         self.services_count_label.setText(
-            f"{total_count} service" + ("" if total_count == 1 else "s")
+            f"{len(services)} service" + ("" if len(services) == 1 else "s")
         )
-        visible = self._filtered_services(services)
-        visible_ids = tuple(str(item["id"]) for item in visible)
-        if services != self._last_services or visible_ids != self._last_visible_service_ids:
-            self._last_services = [dict(item) for item in services]
-            self._last_visible_service_ids = visible_ids
-            self._rebuild_service_cards(visible, total_count=total_count)
-
-        self._refresh_traffic_metrics(manager, services)
+        self._refresh_cached_service_cards()
         state = str(runtime["state"]).lower()
         self.start_runtime_button.setEnabled(state in {"stopped", "failed"} and "runtime" not in self._workers)
-        self.stop_runtime_button.setEnabled(state not in {"stopped"} and "runtime" not in self._workers)
+        self.stop_runtime_button.setEnabled(state != "stopped" and "runtime" not in self._workers)
         self.restart_runtime_button.setEnabled(state != "stopped" and "runtime" not in self._workers)
+        self.runtime_logs_button.setEnabled(True)
+        self.add_service_button.setEnabled(True)
+
+        if self._dashboard_refresh_pending:
+            self._dashboard_refresh_pending = False
+            QTimer.singleShot(0, self.refresh_dashboard)
+
+    def _on_dashboard_snapshot_failed(self, error: str) -> None:
+        self._dashboard_refresh_in_progress = False
+        self._dashboard_worker = None
+        self.runtime_message.setText(f"Dashboard refresh failed: {error}")
+        logger.warning("Developer Tor dashboard refresh failed: %s", error)
+        if self._dashboard_refresh_pending and self.isVisible():
+            self._dashboard_refresh_pending = False
+            QTimer.singleShot(0, self.refresh_dashboard)
+
+    def _refresh_cached_service_cards(self) -> None:
+        if self._last_services is None:
+            return
+        visible = self._filtered_services(self._last_services)
+        visible_ids = tuple(str(item["id"]) for item in visible)
+        if visible != self._last_rendered_services or visible_ids != self._last_visible_service_ids:
+            self._last_rendered_services = [dict(item) for item in visible]
+            self._last_visible_service_ids = visible_ids
+            self._rebuild_service_cards(visible, total_count=len(self._last_services))
+            self._refresh_traffic_metrics(self._last_traffic_snapshots)
 
     def _rebuild_service_cards(self, services: list[dict], *, total_count: int = 0):
         # The empty-state label is permanent. Only remove cards created by the
