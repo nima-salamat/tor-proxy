@@ -641,7 +641,9 @@ class StatisticsWindow(QWidget):
         """Render app-lifetime samples; explicit arguments preserve deterministic tests."""
         if now is None and total_bytes is None and direction_totals is None and self._sync_session_tracker():
             self._refresh_metrics(total_bytes=self._read_total_bytes())
-            self.rate_chart.set_samples(list(self._samples))
+            samples = list(self._samples)
+            self.rate_chart.set_samples(samples)
+            self.volume_chart.set_samples(samples)
             return
 
         timestamp = time.monotonic() if now is None else float(now)
