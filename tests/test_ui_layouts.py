@@ -3978,3 +3978,34 @@ def test_background_page_work_is_started_only_after_navigation():
     assert "self._refresh_traffic_metrics(self._last_traffic_snapshots)" in card_refresh
     assert "Worker(" in stats and "self._load_history_snapshot" in stats
     assert "self._sync_session_tracker()" in stats
+
+
+
+def test_startup_defers_global_hotkeys_and_browser_dialog_import():
+    repository = Path(__file__).resolve().parents[1]
+    ui_source = (repository / "ui.py").read_text(encoding="utf-8")
+    proxy_source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+    main_source = (repository / "main.py").read_text(encoding="utf-8")
+
+    assert "self.hotkey_manager.start()" not in ui_source
+    assert "def start_deferred_startup" in ui_source
+    assert "QThreadPool.globalInstance().start(worker)" in ui_source
+    assert "win.start_deferred_startup()" in main_source
+    assert "from ui_.window.open_browser_dialog import OpenBrowserDialog" not in proxy_source
+    browser_method = proxy_source[
+        proxy_source.index("    def open_browser_dialog(self):"):
+        proxy_source.index("    def whatismyip_clicked(self):")
+    ]
+    assert "from ui_.window.open_browser_dialog import OpenBrowserDialog" in browser_method
+
+
+def test_home_tunnel_summary_uses_background_status_snapshot():
+    repository = Path(__file__).resolve().parents[1]
+    proxy_source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+    start = proxy_source.index("    def _update_tunnel_hint(self):")
+    end = proxy_source.index("    def toggle_system_tunnel(self):", start)
+    summary = proxy_source[start:end]
+
+    assert "manager.status()" not in summary
+    assert "_system_tunnel_home_snapshot" in summary
+    assert "_refresh_system_tunnel_status_async()" in summary
