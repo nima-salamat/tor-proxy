@@ -2755,7 +2755,7 @@ def test_main_window_advertises_native_windows_snap_and_maximize_support():
     assert "_WM_CAPTURECHANGED = 0x0215" in source
     assert "SetCapture" in source and "ReleaseCapture" in source
     assert "DefWindowProc's own caption-button click loop." in source
-    assert "Do not enter DefWindowProc's classic caption-button loop." in source
+    assert "Never run DefWindowProc's own caption-button click loop." in source
     assert "_WM_MOVING = 0x0216" in source
     assert "_WM_SIZING = 0x0214" in source
     assert "_WM_ENTERSIZEMOVE = 0x0231" in source
