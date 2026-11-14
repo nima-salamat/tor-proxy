@@ -620,26 +620,22 @@ class ProxyWindow(QWidget):
         return min(360, proportional_width)
 
     def _logs_home_available_width(self) -> int:
-        """Return the projected Home width with the drawer docked.
+        """Return Home's actual width in the current drawer mode.
 
-        Use this same projected width in both modes. In overlay mode the real
-        Home is wider, but the decision must account for the space the drawer
-        will occupy after docking so both transitions share one exact boundary.
+        When docked, the drawer consumes part of Home's layout width. When
+        floating, it is detached from main_layout, so the Home area underneath
+        the overlay remains part of Home and must be counted.
         """
         window_width = max(0, int(self.width()))
         if not self.logs_open:
             return window_width
-
         if self._logs_overlay_mode:
-            drawer_width = (
-                self._logs_overlay_width
-                or self._logs_last_docked_width
-                or self._logs_drawer_width()
-            )
-        else:
-            # Use the intended drawer width, not a transient animation frame.
-            drawer_width = self._logs_drawer_width()
-        return max(0, window_width - int(drawer_width))
+            home = getattr(self, "home_content", None)
+            if home is not None:
+                return max(0, int(home.width()))
+            return window_width
+
+        return max(0, window_width - int(self._logs_drawer_width()))
 
     def _stop_logs_animation(self) -> None:
         """Cancel the previous transition without leaving a stale animation alive."""
@@ -699,14 +695,24 @@ class ProxyWindow(QWidget):
         animation.start()
 
     def _sync_logs_overlay_mode(self) -> bool:
-        """Move the open drawer between docked and overlay modes."""
+        """Move the open drawer between docked and overlay modes with hysteresis."""
         if not self.logs_open:
             return False
 
-        # Both directions use the same projected Home width and the same
-        # threshold. This avoids different switch points when floating/docking.
+        # Home's real width depends on the mode: docked mode loses the drawer
+        # width, while overlay mode includes the area underneath the floating
+        # drawer. Only dock again when that full Home width can fit the drawer
+        # and still leave the same 960px minimum Home area.
         available_home_width = self._logs_home_available_width()
-        target_overlay_mode = available_home_width < 960
+        if self._logs_overlay_mode:
+            drawer_width = (
+                self._logs_overlay_width
+                or self._logs_last_docked_width
+                or self._logs_drawer_width()
+            )
+            target_overlay_mode = available_home_width < (960 + int(drawer_width))
+        else:
+            target_overlay_mode = available_home_width < 960
         if target_overlay_mode == self._logs_overlay_mode:
             return False
 
