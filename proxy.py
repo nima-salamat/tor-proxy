@@ -762,13 +762,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
             if route == "blocked":
                 self.send_error(403, "Destination blocked by host policy")
                 return
+            connect_options = {"server": self.server}
+            if local_target is not None:
+                connect_options["local_target"] = local_target
             remote = _connect_upstream(
-                host,
-                port,
-                route,
-                self.server.tor_socks_port,
-                server=self.server,
-                local_target=local_target,
+                host, port, route, self.server.tor_socks_port, **connect_options
             )
             self.connection.settimeout(RELAY_IDLE_TIMEOUT_SECONDS)
             remote.settimeout(RELAY_IDLE_TIMEOUT_SECONDS)
@@ -866,13 +864,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 self.send_error(413, "Request body exceeds the proxy limit")
                 return
 
+            connect_options = {"server": self.server}
+            if local_target is not None:
+                connect_options["local_target"] = local_target
             remote = _connect_upstream(
-                host,
-                port,
-                route,
-                self.server.tor_socks_port,
-                server=self.server,
-                local_target=local_target,
+                host, port, route, self.server.tor_socks_port, **connect_options
             )
             remote.settimeout(RELAY_IDLE_TIMEOUT_SECONDS)
             request_path = parsed.path or "/"
