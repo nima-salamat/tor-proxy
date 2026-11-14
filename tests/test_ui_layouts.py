@@ -387,7 +387,9 @@ def test_home_uses_circular_animation_proxy_policies_and_left_log_drawer():
     assert "drawEllipse(center" in pulse_source
     assert "toggle_state" not in pulse_source
     assert "QWidget#logsDrawer" in log_source
-    assert 'QPropertyAnimation(self.logs_widget, b"maximumWidth"' in home_source
+    assert 'QPropertyAnimation(self.logs_widget, property_name, self)' in home_source
+    assert 'self._start_logs_animation(b"maximumWidth", target_width)' in home_source
+    assert 'self._start_logs_animation(\n                b"geometry",' in home_source
     assert '"system_proxy_mode": "unchanged"' in config_source
     assert 'if action not in {"set", "clear", "disable"}' in proxy_manager_source
     assert "def disable_windows_proxy(self)" in proxy_manager_source
