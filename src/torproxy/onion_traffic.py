@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import logging
 import os
+import queue
 from pathlib import Path
 import re
 import select
@@ -57,9 +58,22 @@ class OnionTrafficStore:
             except OSError:
                 pass
         self._lock = threading.RLock()
+        self._active_lock = threading.RLock()
+        self._active_connections: dict[str, int] = {}
+        self._deleted_services: set[str] = set()
+        self._write_queue: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=2048)
+        self._dropped_write_events = 0
+        self._last_drop_log = 0.0
+        self._last_write_error_log = 0.0
         # Shared by every service and port mapping in the Developer Tor runtime.
         self.connection_slots = threading.BoundedSemaphore(_MAX_CONNECTIONS_GLOBAL)
         self._initialize()
+        self._writer_thread = threading.Thread(
+            target=self._write_loop,
+            name="onion-traffic-writer",
+            daemon=True,
+        )
+        self._writer_thread.start()
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(str(self.path), timeout=5.0)
@@ -127,15 +141,128 @@ class OnionTrafficStore:
                 pass
 
     def begin_connection(self, service_id: str) -> None:
-        with self._lock, self._database() as db:
-            db.execute(
-                "INSERT OR IGNORE INTO service_totals(service_id) VALUES (?)",
-                (service_id,),
-            )
-            db.execute(
-                "UPDATE service_totals SET active_connections=active_connections+1 WHERE service_id=?",
-                (service_id,),
-            )
+        """Track active sockets in memory without putting SQLite on the relay path."""
+        key = str(service_id)
+        with self._active_lock:
+            self._active_connections[key] = self._active_connections.get(key, 0) + 1
+
+    def _finish_active_connection(self, service_id: str) -> None:
+        key = str(service_id)
+        with self._active_lock:
+            active = self._active_connections.get(key, 0)
+            if active <= 1:
+                self._active_connections.pop(key, None)
+            else:
+                self._active_connections[key] = active - 1
+
+    def _persist_connection(
+        self,
+        service_id: str,
+        *,
+        occurred_at: str | None = None,
+        onion_port: int,
+        local_port: int,
+        protocol: str,
+        method: str = "",
+        path: str = "",
+        status_code: int | None = None,
+        incoming_bytes: int = 0,
+        outgoing_bytes: int = 0,
+        duration_ms: int = 0,
+        error: str = "",
+    ) -> None:
+        occurred_at = occurred_at or _timestamp()
+        key = str(service_id)
+        incoming_bytes = max(0, int(incoming_bytes))
+        outgoing_bytes = max(0, int(outgoing_bytes))
+        with self._lock:
+            # A queued event must not recreate a service that was just deleted.
+            if key in self._deleted_services:
+                return
+            with self._database() as db:
+                db.execute(
+                    "INSERT OR IGNORE INTO service_totals(service_id) VALUES (?)",
+                    (key,),
+                )
+                db.execute(
+                    """
+                    UPDATE service_totals SET
+                        incoming_bytes=incoming_bytes+?,
+                        outgoing_bytes=outgoing_bytes+?,
+                        connections=connections+1,
+                        http_requests=http_requests+?,
+                        errors=errors+?,
+                        active_connections=CASE
+                            WHEN active_connections>0 THEN active_connections-1 ELSE 0 END,
+                        last_activity=?
+                    WHERE service_id=?
+                    """,
+                    (
+                        incoming_bytes,
+                        outgoing_bytes,
+                        1 if method else 0,
+                        1 if error else 0,
+                        occurred_at,
+                        key,
+                    ),
+                )
+                db.execute(
+                    """
+                    INSERT INTO service_events (
+                        service_id, occurred_at, onion_port, local_port, protocol,
+                        method, path, status_code, incoming_bytes, outgoing_bytes,
+                        duration_ms, error
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        key,
+                        occurred_at,
+                        int(onion_port),
+                        int(local_port),
+                        str(protocol or "TCP")[:12],
+                        str(method or "")[:12],
+                        str(path or "")[:256],
+                        int(status_code) if status_code is not None else None,
+                        incoming_bytes,
+                        outgoing_bytes,
+                        max(0, int(duration_ms)),
+                        str(error or "")[:180],
+                    ),
+                )
+                db.execute(
+                    """
+                    DELETE FROM service_events
+                    WHERE service_id=? AND id NOT IN (
+                        SELECT id FROM service_events
+                        WHERE service_id=? ORDER BY id DESC LIMIT ?
+                    )
+                    """,
+                    (key, key, _MAX_EVENT_ROWS_PER_SERVICE),
+                )
+
+    def _write_loop(self) -> None:
+        """Persist bounded telemetry off the socket-forwarding threads."""
+        while True:
+            try:
+                record = self._write_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            try:
+                self._persist_connection(**record)
+            except Exception:
+                now = time.monotonic()
+                with self._active_lock:
+                    should_log = now - self._last_write_error_log >= 30.0
+                    if should_log:
+                        self._last_write_error_log = now
+                if should_log:
+                    LOGGER.warning(
+                        "Could not persist Onion Service traffic telemetry; "
+                        "the network relay remains independent of this store.",
+                        exc_info=True,
+                    )
+            finally:
+                self._write_queue.task_done()
 
     def finish_connection(
         self,
@@ -152,69 +279,74 @@ class OnionTrafficStore:
         duration_ms: int = 0,
         error: str = "",
     ) -> None:
-        occurred_at = _timestamp()
-        incoming_bytes = max(0, int(incoming_bytes))
-        outgoing_bytes = max(0, int(outgoing_bytes))
-        with self._lock, self._database() as db:
-            db.execute(
-                "INSERT OR IGNORE INTO service_totals(service_id) VALUES (?)",
-                (service_id,),
-            )
-            db.execute(
-                """
-                UPDATE service_totals SET
-                    incoming_bytes=incoming_bytes+?,
-                    outgoing_bytes=outgoing_bytes+?,
-                    connections=connections+1,
-                    http_requests=http_requests+?,
-                    errors=errors+?,
-                    active_connections=CASE
-                        WHEN active_connections>0 THEN active_connections-1 ELSE 0 END,
-                    last_activity=?
-                WHERE service_id=?
-                """,
-                (
-                    incoming_bytes,
-                    outgoing_bytes,
-                    1 if method else 0,
-                    1 if error else 0,
-                    occurred_at,
-                    service_id,
-                ),
-            )
-            db.execute(
-                """
-                INSERT INTO service_events (
-                    service_id, occurred_at, onion_port, local_port, protocol,
-                    method, path, status_code, incoming_bytes, outgoing_bytes,
-                    duration_ms, error
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    service_id,
-                    occurred_at,
-                    int(onion_port),
-                    int(local_port),
-                    str(protocol or "TCP")[:12],
-                    str(method or "")[:12],
-                    str(path or "")[:256],
-                    int(status_code) if status_code is not None else None,
-                    incoming_bytes,
-                    outgoing_bytes,
-                    max(0, int(duration_ms)),
-                    str(error or "")[:180],
-                ),
-            )
-            db.execute(
-                """
-                DELETE FROM service_events
-                WHERE service_id=? AND id NOT IN (
-                    SELECT id FROM service_events
-                    WHERE service_id=? ORDER BY id DESC LIMIT ?
+        """Synchronously persist a record for explicit maintenance/test callers."""
+        self._finish_active_connection(service_id)
+        self._persist_connection(
+            service_id,
+            onion_port=onion_port,
+            local_port=local_port,
+            protocol=protocol,
+            method=method,
+            path=path,
+            status_code=status_code,
+            incoming_bytes=incoming_bytes,
+            outgoing_bytes=outgoing_bytes,
+            duration_ms=duration_ms,
+            error=error,
+        )
+
+    def record_connection_async(
+        self,
+        service_id: str,
+        *,
+        onion_port: int,
+        local_port: int,
+        protocol: str,
+        method: str = "",
+        path: str = "",
+        status_code: int | None = None,
+        incoming_bytes: int = 0,
+        outgoing_bytes: int = 0,
+        duration_ms: int = 0,
+        error: str = "",
+    ) -> bool:
+        """Queue one completed relay record without waiting for SQLite.
+
+        The queue is deliberately bounded. Under sustained storage pressure,
+        telemetry can be dropped, but visitor traffic is never delayed or denied
+        because the local history database is busy or unavailable.
+        """
+        self._finish_active_connection(service_id)
+        record = {
+            "service_id": str(service_id),
+            "occurred_at": _timestamp(),
+            "onion_port": onion_port,
+            "local_port": local_port,
+            "protocol": protocol,
+            "method": method,
+            "path": path,
+            "status_code": status_code,
+            "incoming_bytes": incoming_bytes,
+            "outgoing_bytes": outgoing_bytes,
+            "duration_ms": duration_ms,
+            "error": error,
+        }
+        try:
+            self._write_queue.put_nowait(record)
+            return True
+        except queue.Full:
+            now = time.monotonic()
+            with self._active_lock:
+                self._dropped_write_events += 1
+                should_log = now - self._last_drop_log >= 60.0
+                if should_log:
+                    self._last_drop_log = now
+            if should_log:
+                LOGGER.warning(
+                    "Onion Service traffic history queue is full; "
+                    "dropping telemetry records while continuing to relay traffic."
                 )
-                """,
-                (service_id, service_id, _MAX_EVENT_ROWS_PER_SERVICE),
-            )
+            return False
 
     def snapshot(self, service_id: str | None = None) -> dict[str, Any]:
         with self._lock, self._database() as db:
@@ -227,7 +359,7 @@ class OnionTrafficStore:
                         COALESCE(SUM(connections), 0) AS connections,
                         COALESCE(SUM(http_requests), 0) AS http_requests,
                         COALESCE(SUM(errors), 0) AS errors,
-                        COALESCE(SUM(active_connections), 0) AS active_connections,
+                        0 AS active_connections,
                         COALESCE(MAX(last_activity), '') AS last_activity
                     FROM service_totals
                     """
@@ -236,18 +368,26 @@ class OnionTrafficStore:
                 row = db.execute(
                     """
                     SELECT incoming_bytes, outgoing_bytes, connections,
-                           http_requests, errors, active_connections, last_activity
+                           http_requests, errors, 0 AS active_connections, last_activity
                     FROM service_totals WHERE service_id=?
                     """,
                     (service_id,),
                 ).fetchone()
+        with self._active_lock:
+            active_connections = (
+                sum(self._active_connections.values())
+                if service_id is None
+                else self._active_connections.get(str(service_id), 0)
+            )
         if row is None:
             return {
                 "incoming_bytes": 0, "outgoing_bytes": 0, "connections": 0,
-                "http_requests": 0, "errors": 0, "active_connections": 0,
-                "last_activity": "",
+                "http_requests": 0, "errors": 0,
+                "active_connections": active_connections, "last_activity": "",
             }
-        return {key: row[key] for key in row.keys()}
+        result = {key: row[key] for key in row.keys()}
+        result["active_connections"] = active_connections
+        return result
 
     def snapshot_many(self, service_ids: list[str]) -> dict[str, Any]:
         """Read global and per-service counters with one SQLite connection."""
@@ -283,22 +423,33 @@ class OnionTrafficStore:
                 rows = db.execute(
                     f"""
                     SELECT service_id, incoming_bytes, outgoing_bytes, connections,
-                           http_requests, errors, active_connections, last_activity
+                           http_requests, errors, last_activity
                     FROM service_totals
                     WHERE service_id IN ({placeholders})
                     """,
                     identifiers,
                 ).fetchall()
 
+        with self._active_lock:
+            active_counts = {
+                service_id: self._active_connections.get(service_id, 0)
+                for service_id in identifiers
+            }
+            total_active = sum(self._active_connections.values())
         services = {service_id: dict(empty_snapshot) for service_id in identifiers}
         for row in rows:
-            services[str(row["service_id"])] = {
-                key: row[key] for key in empty_snapshot
+            service_id = str(row["service_id"])
+            services[service_id] = {
+                key: row[key] for key in empty_snapshot if key != "active_connections"
             }
-        return {
-            "global": {key: total_row[key] for key in empty_snapshot},
-            "services": services,
+            services[service_id]["active_connections"] = active_counts.get(service_id, 0)
+        global_snapshot = {
+            key: total_row[key] for key in empty_snapshot if key != "active_connections"
         }
+        global_snapshot["active_connections"] = total_active
+        for service_id, active in active_counts.items():
+            services[service_id]["active_connections"] = active
+        return {"global": global_snapshot, "services": services}
 
     def events(self, service_id: str, limit: int = 250) -> list[dict[str, Any]]:
         bounded_limit = max(1, min(int(limit), 1000))
@@ -316,10 +467,15 @@ class OnionTrafficStore:
         return [dict(row) for row in rows]
 
     def delete_service(self, service_id: str) -> None:
-        """Remove the traffic history when its owning service is permanently deleted."""
-        with self._lock, self._database() as db:
-            db.execute("DELETE FROM service_events WHERE service_id=?", (service_id,))
-            db.execute("DELETE FROM service_totals WHERE service_id=?", (service_id,))
+        """Remove history and discard any queued records for a deleted service."""
+        key = str(service_id)
+        with self._lock:
+            self._deleted_services.add(key)
+            with self._active_lock:
+                self._active_connections.pop(key, None)
+            with self._database() as db:
+                db.execute("DELETE FROM service_events WHERE service_id=?", (key,))
+                db.execute("DELETE FROM service_totals WHERE service_id=?", (key,))
 
 
 class _HttpLineProbe:
@@ -485,7 +641,7 @@ class _TcpPortRelay:
                         pass
             if connection_started:
                 try:
-                    self.store.finish_connection(
+                    self.store.record_connection_async(
                         self.service_id,
                         onion_port=int(self.mapping["onion_port"]),
                         local_port=int(self.mapping["local_port"]),
