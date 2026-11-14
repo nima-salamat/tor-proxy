@@ -3592,7 +3592,10 @@ def test_home_event_log_uses_an_overlay_on_narrow_windows_and_docks_on_wide_wind
     assert 'QPropertyAnimation(self.logs_widget, property_name, self)' in source
     assert 'self._start_logs_animation(\n                b"geometry",' in source
     assert 'self._start_logs_animation(b"maximumWidth", target_width)' in source
-    assert "animation.setEndValue(" in source
+    assert "animation.setEndValue(target_width)" in source
+    assert "self.logs_widget.setGeometry(target_geometry)" in source
+    assert 'self._stop_logs_animation()\n                self.logs_widget.setGeometry(' in source
+    assert "self._logs_drawer_width()" in source
     assert "self.logs_widget.raise_()" in source
     assert "self._sync_logs_overlay_mode()" in source
     assert "def show_logs(self):" in source
@@ -3603,8 +3606,9 @@ def test_home_event_log_uses_an_overlay_on_narrow_windows_and_docks_on_wide_wind
     assert 'self.setProperty("overlay", "false")' in log_source
     assert 'QWidget#logsDrawer[overlay="true"]' in log_source
     assert 'overlay_surface = "#263342" if dark else "#f5f8fc"' in log_source
-    assert "border-top-right-radius: 14px" in log_source
-    assert "border-bottom-right-radius: 14px" in log_source
+    assert "border-top-right-radius: 18px" in log_source
+    assert "border-bottom-right-radius: 18px" in log_source
+    assert "border-right: 2px solid {accent};" in log_source
     assert "border: 1px solid {overlay_border}; border-left: none;" in log_source
 
     # The drawer leaves main_layout in overlay mode, so Home keeps the full width.
