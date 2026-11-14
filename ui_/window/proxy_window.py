@@ -415,6 +415,7 @@ class ProxyWindow(QWidget):
         self._home_proxy_row = proxy_row
         proxy_title = QLabel("SYSTEM PROXY")
         proxy_title.setObjectName("systemProxyTitle")
+        self._home_proxy_title = proxy_title
         proxy_row.addWidget(proxy_title)
         self.system_proxy_mode = QComboBox(proxy_controls)
         self.system_proxy_mode.setObjectName("systemProxyMode")
@@ -771,7 +772,11 @@ class ProxyWindow(QWidget):
         # expand vertically, and the combo box fills the proxy row's available
         # height instead of remaining a short, fixed-height control.
         self._home_proxy_controls.setMinimumHeight(0)
+        self._home_proxy_controls.setMaximumHeight(16777215)
         self.system_tunnel_hint.setMinimumHeight(0)
+        self.system_tunnel_hint.setMaximumHeight(16777215)
+        self.system_proxy_mode.setMinimumHeight(32)
+        self.system_proxy_mode.setMaximumHeight(16777215)
         self._home_proxy_controls_layout.activate()
         self._home_tunnel_hint_layout.activate()
         shared_service_control_height = max(
@@ -783,7 +788,15 @@ class ProxyWindow(QWidget):
         # floating inside a taller transparent container.
         self._home_proxy_controls.setFixedHeight(shared_service_control_height)
         self.system_tunnel_hint.setFixedHeight(shared_service_control_height)
-        self.system_proxy_mode.setFixedHeight(shared_service_control_height)
+        proxy_combo_height = shared_service_control_height
+        if self._home_proxy_row.direction() == vertical:
+            proxy_combo_height = max(
+                32,
+                shared_service_control_height
+                - self._home_proxy_title.sizeHint().height()
+                - self._home_proxy_row.spacing(),
+            )
+        self.system_proxy_mode.setFixedHeight(proxy_combo_height)
 
         # The exit-IP card uses the exact same height as both listener cards.
         # Account for content-driven height in very narrow layouts where the
