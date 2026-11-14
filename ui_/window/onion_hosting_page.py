@@ -35,6 +35,7 @@ from torproxy.onion_hosting import OnionHostingError, validate_loopback_target
 from ui_.worker.worker import Worker
 from ui_.window.dialogs import QMessageBox, StandardButton, _FramelessDialog
 from ui_.window.tor_log_dialog import TorLogDialog
+from ui_.window.qr_display import QrCodeButton
 
 logger = logging.getLogger(__name__)
 
@@ -1014,6 +1015,17 @@ class OnionHostingPage(QWidget):
             QPushButton#onionActionButton:disabled, QPushButton#onionActionPrimary:disabled {{
                 color: {muted}; background: {field}; border-color: {border};
             }}
+            QPushButton#onionQrButton {{
+                min-width: 36px; max-width: 36px; min-height: 36px; max-height: 36px;
+                padding: 0; border: 1px solid {border}; border-radius: 9px;
+                background: {field}; color: {accent};
+            }}
+            QPushButton#onionQrButton:hover {{
+                border-color: {accent}; background: {hover};
+            }}
+            QPushButton#onionQrButton:disabled {{
+                color: {muted}; background: {field}; border-color: {border};
+            }}
             QScrollArea#onionServicesScroll {{ background: transparent; border: none; }}
             QLabel#onionServiceName {{ color: {text}; font-size: 12px; font-weight: 800; }}
             QLabel#onionServiceDetail {{ color: {muted}; font-size: 9px; }}
@@ -1497,11 +1509,37 @@ class OnionHostingPage(QWidget):
         layout.addLayout(header)
 
         address = str(service.get("address") or "Address will be assigned when the service starts")
+        address_row = QHBoxLayout()
+        address_row.setContentsMargins(0, 0, 0, 0)
+        address_row.setSpacing(8)
         address_label = QLabel(address, card)
         address_label.setObjectName("onionServiceAddress")
         address_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         address_label.setWordWrap(True)
-        layout.addWidget(address_label)
+        address_row.addWidget(address_label, 1)
+
+        private_service = service.get("access_mode") == "private"
+        qr_description = (
+            "Scan with Tor Browser to open this Onion Service. "
+            "This is a private service, so visitors also need its client authorization key."
+            if private_service else
+            "Scan with Tor Browser to open this Onion Service address."
+        )
+        qr_button = QrCodeButton(
+            f"http://{address}" if service.get("address") else "",
+            parent=card,
+            button_text="",
+            title=f"Share · {service.get('display_name', 'Onion Service')}",
+            description=qr_description,
+            display_value=address if service.get("address") else None,
+            center_icon="fa6s.shield-halved",
+        )
+        qr_button.setObjectName("onionQrButton")
+        qr_button.setFixedSize(36, 36)
+        qr_button.setToolTip("Show Onion address as a QR code")
+        qr_button.setEnabled(bool(service.get("address")))
+        address_row.addWidget(qr_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addLayout(address_row)
 
         lifetime = "Persistent" if service.get("persistent") else "Temporary"
         access = "Private access" if service.get("access_mode") == "private" else "Public access"
