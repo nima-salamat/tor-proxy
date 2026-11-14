@@ -481,9 +481,22 @@ class OnionHostingManager:
             except Exception:
                 memory = 0
         version = ""
-        if state == "ready" and getattr(manager, "_controller", None) is not None:
+        if state == "ready":
             try:
-                version = str(manager._controller.get_info("version", ""))
+                # Dashboard snapshots run in a background worker while service
+                # actions may issue ADD_ONION/DEL_ONION on the same ControlPort.
+                # Serialize this read with TorManager.send_control_command so
+                # concurrent Stem requests cannot consume each other's replies.
+                control_lock = getattr(manager, "_lock", None)
+                if control_lock is None:
+                    controller = getattr(manager, "_controller", None)
+                    if controller is not None:
+                        version = str(controller.get_info("version", ""))
+                else:
+                    with control_lock:
+                        controller = getattr(manager, "_controller", None)
+                        if controller is not None:
+                            version = str(controller.get_info("version", ""))
             except Exception:
                 version = ""
         return {
