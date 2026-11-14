@@ -4262,6 +4262,10 @@ def test_developer_tor_copy_url_is_icon_only_next_to_qr_and_title_is_not_clipped
         assert qt_app.clipboard().text() == "http://abcdefghijklmnop.onion"
         assert page.status_label.text() == "Onion URL copied."
 
+        # Simulate a runtime text-scale increase: the title must reserve
+        # enough width for the full glyph bounds, including the final "r".
+        page.page_title.setStyleSheet("font-size: 26px; font-weight: 800;")
+        qt_app.processEvents()
         title_bounds = page.page_title.fontMetrics().boundingRect(
             page.page_title.text()
         )
