@@ -1703,7 +1703,10 @@ def test_home_proxy_controls_hide_explanatory_copy_and_use_consistent_surfaces()
     assert "QWidget#systemProxyControls {{\n                background: transparent; border: none;" in source
     assert "QFrame#systemProxyControls" not in source
     assert "QFrame#systemTunnelHint" in source
-    assert "border-radius: 12px" in source
+    assert 'QComboBox#systemProxyMode {{\n                min-height: 32px; padding: 0 8px; border: 1px solid {border};\n                border-radius: 9px;' in source
+    assert 'QFrame#systemTunnelHint {{\n                background: {surface}; border: 1px solid {border}; border-radius: 9px;' in source
+    assert 'self.system_proxy_mode.setFixedHeight(proxy_combo_height)' in source
+    assert 'self.system_tunnel_hint.setFixedHeight(shared_service_control_height)' in source
 
 
 def test_home_tunnel_controls_start_and_stop_installed_engine_without_showing_manage():
@@ -3593,6 +3596,16 @@ def test_home_event_log_uses_an_overlay_on_narrow_windows_and_docks_on_wide_wind
     assert "self.logs_widget.raise_()" in source
     assert "self._sync_logs_overlay_mode()" in source
     assert "def show_logs(self):" in source
+
+    assert "self.logs_widget.set_overlay_mode(True)" in source
+    assert "self.logs_widget.set_overlay_mode(False)" in source
+    log_source = (repository / "ui_/window/log_window.py").read_text(encoding="utf-8")
+    assert 'self.setProperty("overlay", "false")' in log_source
+    assert 'QWidget#logsDrawer[overlay="true"]' in log_source
+    assert 'overlay_surface = "#263342" if dark else "#f5f8fc"' in log_source
+    assert "border-top-right-radius: 14px" in log_source
+    assert "border-bottom-right-radius: 14px" in log_source
+    assert "border: 1px solid {overlay_border}; border-left: none;" in log_source
 
     # The drawer leaves main_layout in overlay mode, so Home keeps the full width.
     overlay_switch = source.index("self.main_layout.removeWidget(self.logs_widget)")
