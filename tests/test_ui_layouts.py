@@ -1692,7 +1692,10 @@ def test_home_proxy_controls_hide_explanatory_copy_and_use_consistent_surfaces()
     assert 'shared_service_control_height = max(' in source
     assert 'self._home_proxy_controls.setFixedHeight(shared_service_control_height)' in source
     assert 'self.system_tunnel_hint.setFixedHeight(shared_service_control_height)' in source
-    assert 'self.system_proxy_mode.setFixedHeight(shared_service_control_height)' in source
+    assert 'self.system_proxy_mode.setFixedHeight(proxy_combo_height)' in source
+    assert 'proxy_combo_height = shared_service_control_height' in source
+    assert 'self.system_proxy_mode.setMaximumHeight(16777215)' in source
+    assert 'self._home_proxy_title.sizeHint().height()' in source
     assert 'proxy_controls.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)' in source
     assert 'proxy_controls.setAutoFillBackground(False)' in source
     assert "QWidget#systemProxyControls {{\n                background: transparent; border: none;" in source
@@ -3146,8 +3149,13 @@ def test_home_endpoint_cards_have_clear_copy_targets_and_consistent_exit_ip_summ
     assert 'endpoint_row.addWidget(self.exit_ip_card, 1)' in source
     assert 'QLabel("ADDRESS", card)' in source
     assert 'QLabel("PORT", card)' in source
-    assert 'copy_button.setText("Copy")' in source
-    assert 'copy_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)' in source
+    assert 'copy_button = QPushButton("Copy", card)' in source
+    assert 'copy_button.setObjectName("homeEndpointCopy")' in source
+    assert 'QPushButton#homeEndpointCopy' in source
+    assert 'text-align: center;' in source[
+        source.index("QPushButton#homeEndpointCopy {{"):
+        source.index("QPushButton#homeEndpointCopy:hover")
+    ]
     assert 'copy_button.setFixedSize(84, 32)' in source
     assert 'self._show_home_endpoint_copy_feedback(key)' in source
     assert '"copy_timer": copy_feedback_timer' in source
@@ -3457,7 +3465,7 @@ def test_home_page_uses_adaptive_compact_layout_without_scrollbars():
     assert "self._home_metrics_layout.setDirection(" in source
     assert "self._home_metric_separator.setFrameShape(QFrame.Shape.HLine)" in source
     assert 'QPushButton#secondaryAction[compact="true"]' in source
-    assert 'QToolButton#homeEndpointCopy[compact="true"]' in source
+    assert 'QPushButton#homeEndpointCopy[compact="true"]' in source
     assert "self.system_tunnel_hint_label.setWordWrap(compact)" in source
     assert "card.setMinimumWidth(210)" not in source
     assert "self.exit_ip_card.setMinimumWidth(180)" not in source
