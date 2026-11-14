@@ -25,6 +25,7 @@ dependencies = [
   "portalocker>=2.8,<4",
   "beautifulsoup4>=4.12,<5",
   "requests>=2.31,<3",
+  "qrcode>=7.4,<9",
 ]
 
 [project.optional-dependencies]
