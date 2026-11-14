@@ -604,7 +604,7 @@ class ProxyWindow(QWidget):
     def _logs_drawer_width(self) -> int:
         """Size the drawer proportionally while preserving a useful Home area."""
         window_width = max(0, int(self.width()))
-        proportional_width = max(160, int(window_width * 0.30))
+        proportional_width = max(160, int(window_width * 0.28))
         return min(360, proportional_width, max(0, window_width - 96))
 
     def _stop_logs_animation(self) -> None:
