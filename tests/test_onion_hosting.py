@@ -279,6 +279,39 @@ def test_unavailable_local_target_fails_before_contacting_tor(hosting, monkeypat
     assert not any(command.startswith("ADD_ONION") for command in tor.commands)
 
 
+
+def test_runtime_snapshot_serializes_control_port_reads_with_service_commands(hosting):
+    manager, _config, tor = hosting
+
+    class TrackingLock:
+        def __init__(self):
+            self.held = False
+
+        def __enter__(self):
+            assert not self.held
+            self.held = True
+            return self
+
+        def __exit__(self, *_exc):
+            self.held = False
+
+    control_lock = TrackingLock()
+    tor._lock = control_lock
+    tor._controller = SimpleNamespace(
+        get_info=lambda key, default=None: (
+            "0.4.8" if control_lock.held and key == "version" else
+            pytest.fail("Dashboard read Tor ControlPort without the shared lock.")
+        )
+    )
+    tor.process = SimpleNamespace(pid=None, poll=lambda: None)
+
+    snapshot = manager.runtime_snapshot()
+
+    assert snapshot["state"] == "ready"
+    assert snapshot["version"] == "0.4.8"
+    assert control_lock.held is False
+
+
 def test_unexpected_runtime_exit_reconciles_active_services(hosting):
     manager, _config, tor = hosting
     profile_id = manager.create_service(
