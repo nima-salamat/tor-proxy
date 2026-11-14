@@ -950,6 +950,7 @@ class OnionHostingPage(QWidget):
         field = "#182230" if dark else "#f5f8fc"
         accent = "#4b9fe7" if dark else "#2878c8"
         hover = "rgba(75, 159, 231, 0.15)" if dark else "rgba(40, 120, 200, 0.09)"
+        self._theme_accent = accent
         self.settings_button.setIcon(qta.icon("fa6s.sliders", color=text))
         self.setStyleSheet(f"""
             QWidget {{ color: {text}; background: transparent; }}
@@ -1015,15 +1016,15 @@ class OnionHostingPage(QWidget):
             QPushButton#onionActionButton:disabled, QPushButton#onionActionPrimary:disabled {{
                 color: {muted}; background: {field}; border-color: {border};
             }}
-            QPushButton#onionQrButton {{
+            QPushButton#onionQrButton, QPushButton#onionCopyUrlButton {{
                 min-width: 36px; max-width: 36px; min-height: 36px; max-height: 36px;
                 padding: 0; border: 1px solid {border}; border-radius: 9px;
                 background: {field}; color: {accent};
             }}
-            QPushButton#onionQrButton:hover {{
+            QPushButton#onionQrButton:hover, QPushButton#onionCopyUrlButton:hover {{
                 border-color: {accent}; background: {hover};
             }}
-            QPushButton#onionQrButton:disabled {{
+            QPushButton#onionQrButton:disabled, QPushButton#onionCopyUrlButton:disabled {{
                 color: {muted}; background: {field}; border-color: {border};
             }}
             QScrollArea#onionServicesScroll {{ background: transparent; border: none; }}
@@ -1061,6 +1062,13 @@ class OnionHostingPage(QWidget):
                 border-color: {accent};
             }}
         """)
+        # QLabel's hint can be a few pixels narrower than the painted glyph
+        # bounds, which clips the final "r" in "Tor" at larger text scales.
+        self.page_title.ensurePolished()
+        title_width = self.page_title.fontMetrics().boundingRect(
+            self.page_title.text()
+        ).width()
+        self.page_title.setMinimumWidth(title_width + 10)
 
     def _run(self, key: str, callback, *args, finished=None):
         if key in self._workers:
@@ -1518,6 +1526,18 @@ class OnionHostingPage(QWidget):
         address_label.setWordWrap(True)
         address_row.addWidget(address_label, 1)
 
+        copy_url = QPushButton(card)
+        copy_url.setObjectName("onionCopyUrlButton")
+        copy_url.setIcon(qta.icon("fa6s.copy", color=getattr(self, "_theme_accent", "#2878c8")))
+        copy_url.setFixedSize(36, 36)
+        copy_url.setToolTip("Copy Onion address")
+        copy_url.setAccessibleName("Copy Onion address")
+        copy_url.setEnabled(bool(service.get("address")))
+        copy_url.clicked.connect(
+            lambda _checked=False, value=service.get("address", ""): self.copy_address(value)
+        )
+        address_row.addWidget(copy_url, 0, Qt.AlignmentFlag.AlignVCenter)
+
         private_service = service.get("access_mode") == "private"
         qr_description = (
             "Scan with Tor Browser to open this Onion Service. "
@@ -1608,13 +1628,6 @@ class OnionHostingPage(QWidget):
             start.clicked.connect(lambda _checked=False, key=service["id"]: self.start_service(key))
         start.setObjectName("onionActionButton")
         actions.addWidget(start)
-
-        copy = QPushButton("Copy address", card)
-        copy.setObjectName("onionActionButton")
-        copy.setIcon(qta.icon("fa6s.copy"))
-        copy.setEnabled(bool(service.get("address")))
-        copy.clicked.connect(lambda _checked=False, value=service.get("address", ""): self.copy_address(value))
-        actions.addWidget(copy)
 
         if service.get("access_mode") == "private":
             auth = QPushButton("Copy client key", card)
