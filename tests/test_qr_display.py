@@ -27,6 +27,9 @@ def test_qr_dot_widget_builds_a_matrix_with_a_four_module_quiet_zone(qt_app):
     widget = QrCodeDotWidget(
         "http://abcdefghijklmnopqrstuvwxyz1234567890abcdefghijklmnopqrstuvwxyz.onion"
     )
+    widget.resize(320, 320)
+    widget.show()
+    qt_app.processEvents()
     matrix = widget._matrix
 
     assert len(matrix) > 21
