@@ -807,8 +807,11 @@ def test_primary_pool_allocates_a_dual_protocol_dns_port_only_when_requested(mon
     assert all(manager.settings.dns_port is not None for manager in managers)
     assert len({manager.settings.dns_port for manager in managers}) == 3
     assert runner.socks_port not in listener_ports
-    assert runner.control_port not in listener_ports
+    assert runner.control_port in listener_ports
     assert runner.dns_port in listener_ports
+    assert len({manager.settings.socks_port for manager in managers}) == 3
+    assert len({manager.settings.control_port for manager in managers}) == 3
+    assert len({manager.settings.dns_port for manager in managers}) == 3
 
 
 
