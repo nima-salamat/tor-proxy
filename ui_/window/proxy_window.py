@@ -689,10 +689,13 @@ class ProxyWindow(QWidget):
             self.logs_widget.raise_()
             self.main_layout.invalidate()
             self.main_layout.activate()
-            self._start_logs_animation(
-                b"geometry",
-                QRect(0, 0, target_width, max(0, int(self.height()))),
+            target_geometry = QRect(
+                0, 0, target_width, max(0, int(self.height()))
             )
+            if self.logs_open and current_width > 0:
+                self.logs_widget.setGeometry(target_geometry)
+            else:
+                self._start_logs_animation(b"geometry", target_geometry)
         else:
             # Pin the current width before re-inserting so the panel does not jump
             # to its size hint for a frame while the docked transition begins.
@@ -946,12 +949,15 @@ class ProxyWindow(QWidget):
             # Keep an in-flight transition smooth while updating its destination
             # to the latest window size; do not stop/recreate it on every resize.
             if self._logs_overlay_mode and self._logs_animation_property == b"geometry":
-                animation.setEndValue(
+                self._stop_logs_animation()
+                self.logs_widget.setGeometry(
                     QRect(0, 0, target_width, max(0, int(self.height())))
                 )
-            elif not self._logs_overlay_mode and self._logs_animation_property == b"maximumWidth":
+                self.logs_widget.raise_()
+                return
+            if not self._logs_overlay_mode and self._logs_animation_property == b"maximumWidth":
                 animation.setEndValue(target_width)
-            return
+                return
 
         if not self.logs_open:
             return
