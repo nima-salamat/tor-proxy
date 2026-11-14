@@ -1,8 +1,23 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
+import pytest
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
 from PySide6.QtWidgets import QApplication, QWidget
+
+
+@pytest.fixture(scope="module")
+def qt_app():
+    pytest.importorskip("PySide6")
+    try:
+        from PySide6.QtWidgets import QApplication
+    except (ImportError, OSError) as exc:
+        pytest.skip(f"Qt native libraries are unavailable in this environment: {exc}")
+    return QApplication.instance() or QApplication([])
 
 
 def test_qr_dot_widget_builds_a_matrix_with_a_four_module_quiet_zone(qt_app):
