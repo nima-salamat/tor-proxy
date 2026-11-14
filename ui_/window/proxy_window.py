@@ -589,7 +589,7 @@ class ProxyWindow(QWidget):
         self.timer = QTimer(self)
         self.timer.setInterval(int(CONFIG["newnym_interval"] or 0))
 
-        self.timer_data_usage = QTimer()
+        self.timer_data_usage = QTimer(self)
         self.timer_data_usage.setInterval(1000)
         self.timer_data_usage.timeout.connect(self.change_data_usage)
         self._update_home_responsive_layout()
