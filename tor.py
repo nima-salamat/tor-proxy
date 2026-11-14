@@ -423,25 +423,62 @@ class TorRunner(QObject):
 
     @staticmethod
     def _allocate_local_port(reserved: set[int], *, udp: bool = False) -> int:
-        """Choose an unused loopback port, checking UDP too for Tor DNSPort."""
+        """Choose a free loopback port; DNSPort must be available over TCP and UDP."""
+        udp_conflicts = 0
+        tcp_conflicts = 0
+        reserved_collisions = 0
+        last_error = None
+
         for _attempt in range(64):
+            failure_stage = "udp" if udp else "tcp"
             try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-                    probe.bind(("127.0.0.1", 0))
-                    port = int(probe.getsockname()[1])
-                    if port in reserved:
-                        continue
-                    if udp:
-                        # Tor DNSPort may need this same numeric port for both
-                        # TCP and UDP. Check both while the TCP probe is held.
-                        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp_probe:
-                            udp_probe.bind(("127.0.0.1", port))
-                    reserved.add(port)
-                    return port
-            except OSError:
-                # A port occupied by either protocol is not a usable DNSPort.
-                continue
-        raise TorManagerError("Could not allocate distinct local listener ports for the primary Tor instances.")
+                if udp:
+                    # Ask the OS for a UDP ephemeral port first. TCP and UDP
+                    # ephemeral ranges/exclusions can differ on Windows, so a
+                    # TCP-selected port is not guaranteed to be bindable as UDP.
+                    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp_probe:
+                        udp_probe.bind(("127.0.0.1", 0))
+                        port = int(udp_probe.getsockname()[1])
+                        if port in reserved:
+                            reserved_collisions += 1
+                            continue
+
+                        # Tor DNSPort may listen on both protocols at the same
+                        # numeric port. Keep UDP bound while validating TCP.
+                        failure_stage = "tcp"
+                        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp_probe:
+                            tcp_probe.bind(("127.0.0.1", port))
+                        reserved.add(port)
+                        return port
+
+                else:
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp_probe:
+                        tcp_probe.bind(("127.0.0.1", 0))
+                        port = int(tcp_probe.getsockname()[1])
+                        if port in reserved:
+                            reserved_collisions += 1
+                            continue
+                        reserved.add(port)
+                        return port
+
+            except OSError as exc:
+                last_error = exc
+                if failure_stage == "udp":
+                    udp_conflicts += 1
+                else:
+                    tcp_conflicts += 1
+
+        detail = (
+            f"UDP bind failures: {udp_conflicts}, TCP bind failures: {tcp_conflicts}, "
+            f"already-reserved collisions: {reserved_collisions}"
+        )
+        if last_error is not None:
+            detail += f"; last OS error: {type(last_error).__name__}: {last_error}"
+        raise TorManagerError(
+            "Could not allocate a distinct loopback listener port"
+            + (" usable by both UDP and TCP" if udp else "")
+            + f" after 64 attempts ({detail})."
+        )
 
     def _make_manager(self, worker_index: int = 0) -> TorManager:
         if not self.path_set or not self.tor_path:
