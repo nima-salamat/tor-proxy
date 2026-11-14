@@ -3574,6 +3574,30 @@ def test_pulse_button_can_shrink_without_losing_its_animation_geometry(qt_app):
 
 
 
+def test_home_event_log_uses_an_overlay_on_narrow_windows_and_docks_on_wide_windows():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+
+    assert "self._logs_overlay_mode = False" in source
+    assert "def _sync_logs_overlay_mode(self) -> bool:" in source
+    assert "window_width < 1040 if self._logs_overlay_mode" in source
+    assert "else window_width < 960" in source
+    assert "self.main_layout.removeWidget(self.logs_widget)" in source
+    assert "self.main_layout.insertWidget(0, self.logs_widget, 0)" in source
+    assert 'QPropertyAnimation(self.logs_widget, property_name, self)' in source
+    assert 'self._start_logs_animation(\n                b"geometry",' in source
+    assert 'self._start_logs_animation(b"maximumWidth", target_width)' in source
+    assert "animation.setEndValue(" in source
+    assert "self.logs_widget.raise_()" in source
+    assert "self._sync_logs_overlay_mode()" in source
+    assert "def show_logs(self):" in source
+
+    # The drawer leaves main_layout in overlay mode, so Home keeps the full width.
+    overlay_switch = source.index("self.main_layout.removeWidget(self.logs_widget)")
+    dock_switch = source.index("self.main_layout.insertWidget(0, self.logs_widget, 0)")
+    assert overlay_switch < dock_switch
+
+
 def test_home_keeps_status_at_top_with_a_minimum_gap_and_polishes_bottom_actions():
     repository = Path(__file__).resolve().parents[1]
     source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
