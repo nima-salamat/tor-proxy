@@ -25,6 +25,7 @@ from PySide6.QtCore import (
     QThreadPool,
     QTimer,
     QSize,
+    QRect,
     QRectF,
     Qt,
 )
@@ -264,7 +265,9 @@ class ProxyWindow(QWidget):
 
         self.logs_widget = LogWindow(self)
         self.logs_open = False
+        self._logs_overlay_mode = False
         self._logs_animation = None
+        self._logs_animation_property = None
         self._system_proxy_action_busy = False
         self._system_proxy_is_cleared = False
         self._system_proxy_clear_failed = False
@@ -599,8 +602,108 @@ class ProxyWindow(QWidget):
         QTimer.singleShot(0, self._update_home_responsive_layout)
 
     def _logs_drawer_width(self) -> int:
-        """Keep the event-log drawer proportional so it cannot consume a small Home window."""
-        return min(360, max(160, int(max(0, self.width()) * 0.28)))
+        """Size the drawer proportionally while preserving a useful Home area."""
+        window_width = max(0, int(self.width()))
+        proportional_width = max(160, int(window_width * 0.30))
+        return min(360, proportional_width, max(0, window_width - 96))
+
+    def _stop_logs_animation(self) -> None:
+        """Cancel the previous transition without leaving a stale animation alive."""
+        animation = self._logs_animation
+        self._logs_animation = None
+        self._logs_animation_property = None
+        if animation is not None:
+            animation.stop()
+            animation.deleteLater()
+
+    def _finish_logs_animation(self, animation, property_name, target_value) -> None:
+        if self._logs_animation is not animation:
+            return
+        self._logs_animation = None
+        self._logs_animation_property = None
+        if property_name == b"geometry":
+            self.logs_widget.setGeometry(target_value)
+        else:
+            self.logs_widget.setMaximumWidth(int(target_value))
+        animation.deleteLater()
+        self._update_home_responsive_layout()
+
+    def _start_logs_animation(self, property_name: bytes, target_value) -> None:
+        """Run one interruptible Qt property animation for the current drawer mode."""
+        self._stop_logs_animation()
+        start_value = (
+            self.logs_widget.geometry()
+            if property_name == b"geometry"
+            else self.logs_widget.maximumWidth()
+        )
+        if start_value == target_value:
+            if property_name == b"geometry":
+                self.logs_widget.setGeometry(target_value)
+            else:
+                self.logs_widget.setMaximumWidth(int(target_value))
+            self._update_home_responsive_layout()
+            return
+
+        animation = QPropertyAnimation(self.logs_widget, property_name, self)
+        animation.setDuration(220)
+        animation.setEasingCurve(
+            QEasingCurve.Type.OutCubic if self.logs_open
+            else QEasingCurve.Type.InOutCubic
+        )
+        animation.setStartValue(start_value)
+        animation.setEndValue(target_value)
+        if property_name == b"maximumWidth":
+            animation.valueChanged.connect(
+                lambda _value: self._update_home_responsive_layout()
+            )
+        animation.finished.connect(
+            lambda current=animation, prop=property_name, target=target_value:
+            self._finish_logs_animation(current, prop, target)
+        )
+        self._logs_animation = animation
+        self._logs_animation_property = property_name
+        animation.start()
+
+    def _sync_logs_overlay_mode(self) -> bool:
+        """Move the open drawer between docked and overlay modes with hysteresis."""
+        window_width = max(0, int(self.width()))
+        # Separate enter/exit thresholds prevent layout flapping near the breakpoint.
+        target_overlay_mode = (
+            window_width < 1040 if self._logs_overlay_mode
+            else window_width < 960
+        )
+        if target_overlay_mode == self._logs_overlay_mode:
+            return False
+
+        self._stop_logs_animation()
+        current_width = max(0, int(self.logs_widget.width()))
+        target_width = self._logs_drawer_width() if self.logs_open else 0
+        current_geometry = QRect(0, 0, current_width, max(0, int(self.height())))
+
+        if target_overlay_mode:
+            self.main_layout.removeWidget(self.logs_widget)
+            self._logs_overlay_mode = True
+            self.logs_widget.setMaximumWidth(16777215)
+            self.logs_widget.setGeometry(current_geometry)
+            self.logs_widget.raise_()
+            self.main_layout.invalidate()
+            self.main_layout.activate()
+            self._start_logs_animation(
+                b"geometry",
+                QRect(0, 0, target_width, max(0, int(self.height()))),
+            )
+        else:
+            # Pin the current width before re-inserting so the panel does not jump
+            # to its size hint for a frame while the docked transition begins.
+            self.logs_widget.setGeometry(current_geometry)
+            self.logs_widget.setMaximumWidth(current_width)
+            self.main_layout.insertWidget(0, self.logs_widget, 0)
+            self._logs_overlay_mode = False
+            self.main_layout.invalidate()
+            self.main_layout.activate()
+            self._start_logs_animation(b"maximumWidth", target_width)
+
+        return True
 
     def _update_home_responsive_layout(self) -> None:
         """Fit all Home controls into the visible page without a scroll bar."""
@@ -820,18 +923,38 @@ class ProxyWindow(QWidget):
         self.home_layout.activate()
 
     def _apply_home_resize_update(self) -> None:
-        """Apply the latest window geometry once per frame during live resizing."""
-        self._update_home_responsive_layout()
+        """Retarget the drawer and reflow Home without animating every resize tick."""
         if getattr(self, "logs_open", False):
-            animation = getattr(self, "_logs_animation", None)
-            if (
-                animation is not None
-                and animation.state() == QAbstractAnimation.State.Running
-            ):
-                animation.stop()
-            target_width = self._logs_drawer_width()
-            if self.logs_widget.maximumWidth() != target_width:
-                self.logs_widget.setMaximumWidth(target_width)
+            self._sync_logs_overlay_mode()
+        self._update_home_responsive_layout()
+        if not getattr(self, "logs_open", False):
+            return
+
+        target_width = self._logs_drawer_width()
+        animation = self._logs_animation
+        if (
+            animation is not None
+            and animation.state() == QAbstractAnimation.State.Running
+        ):
+            # Keep an in-flight transition smooth while updating its destination
+            # to the latest window size; do not stop/recreate it on every resize.
+            if self._logs_overlay_mode and self._logs_animation_property == b"geometry":
+                animation.setEndValue(
+                    QRect(0, 0, target_width, max(0, int(self.height())))
+                )
+            elif not self._logs_overlay_mode and self._logs_animation_property == b"maximumWidth":
+                animation.setEndValue(target_width)
+            return
+
+        if self._logs_overlay_mode:
+            target_geometry = QRect(
+                0, 0, target_width, max(0, int(self.height()))
+            )
+            if self.logs_widget.geometry() != target_geometry:
+                self.logs_widget.setGeometry(target_geometry)
+                self.logs_widget.raise_()
+        elif self.logs_widget.maximumWidth() != target_width:
+            self.logs_widget.setMaximumWidth(target_width)
 
     def set_live_resize_active(self, active: bool) -> None:
         """Suspend Connect's decorative animations while Windows is in its size/move loop."""
@@ -1466,20 +1589,22 @@ class ProxyWindow(QWidget):
         opening = not self.logs_open
         self.logs_open = opening
         self.btn_log.setChecked(opening)
-        if self._logs_animation is not None:
-            self._logs_animation.stop()
+
+        # Opening at a narrow width starts as an overlay. Crossing the width
+        # breakpoint while open is handled by resizeEvent using the same path.
+        if self._sync_logs_overlay_mode():
+            return
+
         target_width = self._logs_drawer_width() if opening else 0
-        animation = QPropertyAnimation(self.logs_widget, b"maximumWidth", self)
-        animation.setDuration(240)
-        animation.setEasingCurve(
-            QEasingCurve.Type.OutCubic if opening else QEasingCurve.Type.InCubic
-        )
-        animation.setStartValue(self.logs_widget.maximumWidth())
-        animation.setEndValue(target_width)
-        animation.finished.connect(lambda: self.logs_widget.setMaximumWidth(target_width))
-        animation.finished.connect(self._update_home_responsive_layout)
-        self._logs_animation = animation
-        animation.start()
+        if self._logs_overlay_mode:
+            if opening:
+                self.logs_widget.raise_()
+            self._start_logs_animation(
+                b"geometry",
+                QRect(0, 0, target_width, max(0, int(self.height()))),
+            )
+        else:
+            self._start_logs_animation(b"maximumWidth", target_width)
 
     def _apply_home_theme(self):
         dark = CONFIG["mode"] == "dark"
