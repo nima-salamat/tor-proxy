@@ -619,6 +619,28 @@ class ProxyWindow(QWidget):
         # preferred width in docked and floating modes.
         return min(360, proportional_width)
 
+    def _logs_home_available_width(self) -> int:
+        """Return the Home width that would remain with the drawer docked.
+
+        Use the same projected content width in both modes. A floating drawer
+        must not make the full window width look artificially large enough to
+        dock again, or the mode can immediately reverse after switching.
+        """
+        window_width = max(0, int(self.width()))
+        if not self.logs_open:
+            return window_width
+        if self._logs_overlay_mode:
+            drawer_width = (
+                self._logs_overlay_width
+                or self._logs_last_docked_width
+                or self._logs_drawer_width()
+            )
+        else:
+            # While docked, use the width it is intended to occupy after the
+            # current resize, rather than the previous animation frame width.
+            drawer_width = self._logs_drawer_width()
+        return max(0, window_width - int(drawer_width))
+
     def _stop_logs_animation(self) -> None:
         """Cancel the previous transition without leaving a stale animation alive."""
         animation = self._logs_animation
@@ -678,11 +700,19 @@ class ProxyWindow(QWidget):
 
     def _sync_logs_overlay_mode(self) -> bool:
         """Move the open drawer between docked and overlay modes with hysteresis."""
-        window_width = max(0, int(self.width()))
-        # Separate enter/exit thresholds prevent layout flapping near the breakpoint.
+        if not self.logs_open:
+            return False
+
+        # Compare the Home content width after accounting for the drawer in
+        # either mode. Never compare the full floating-window width with the
+        # reduced docked Home width; doing that makes the mode decision reverse
+        # as soon as the drawer is detached from main_layout.
+        available_home_width = self._logs_home_available_width()
+        # Separate enter/exit thresholds provide hysteresis without allowing
+        # the drawer itself to inflate the width used for the decision.
         target_overlay_mode = (
-            window_width < 1040 if self._logs_overlay_mode
-            else window_width < 960
+            available_home_width < 1040 if self._logs_overlay_mode
+            else available_home_width < 960
         )
         if target_overlay_mode == self._logs_overlay_mode:
             return False
