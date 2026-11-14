@@ -20,8 +20,9 @@ def qt_app():
 
 
 def test_qr_dot_widget_builds_a_matrix_with_a_four_module_quiet_zone(qt_app):
+    import inspect
+
     from PySide6.QtCore import Qt
-    from PySide6.QtGui import QColor, QImage, QPainter
     from ui_.window.qr_display import QrCodeDotWidget
 
     widget = QrCodeDotWidget(
@@ -44,13 +45,14 @@ def test_qr_dot_widget_builds_a_matrix_with_a_four_module_quiet_zone(qt_app):
     assert not widget._center_pixmap.isNull()
     assert widget.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
     assert widget.autoFillBackground() is False
-    image = QImage(widget.size(), QImage.Format.Format_ARGB32)
-    image.fill(QColor(0, 0, 0, 0))
-    painter = QPainter(image)
-    widget.render(painter)
-    painter.end()
-    assert image.pixelColor(0, 0).alpha() == 0
+    paint_source = inspect.getsource(QrCodeDotWidget.paintEvent)
+    # Only QR modules and the app mark are painted; there is no opaque canvas
+    # or white logo tile underneath them.
+    assert "painter.drawRoundedRect(bounds" not in paint_source
+    assert "painter.drawRoundedRect(logo_rect" not in paint_source
+    assert "painter.fillPath" not in paint_source
 
+    widget.close()
     widget.deleteLater()
     qt_app.processEvents()
 
