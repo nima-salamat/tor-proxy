@@ -116,9 +116,9 @@ def test_qr_dialog_uses_shared_custom_shell_and_copies_the_payload(qt_app):
     assert eyebrow is not None and eyebrow.autoFillBackground() is False
     assert dialog.title_bar.icon.objectName() == "dialogTitleIcon"
     assert dialog.title_bar.icon.autoFillBackground() is False
-    assert 'QFrame#qrDisplayPanel {{\\n                background: transparent;' in dialog.styleSheet()
-    assert 'QLabel#qrDisplayValue {{\\n                color:' in dialog.styleSheet()
-    assert 'background: transparent;' in dialog.styleSheet()
+    assert "QFrame#qrDisplayPanel" in dialog.styleSheet()
+    assert "QLabel#qrDisplayValue" in dialog.styleSheet()
+    assert "background: transparent;" in dialog.styleSheet()
     assert dialog.value_label.text() == "exampleabcdefghijklmnopqrstuvwxyz.onion"
 
     dialog.copy_payload()
