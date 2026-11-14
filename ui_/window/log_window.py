@@ -102,6 +102,7 @@ class LogWindow(QWidget):
         editor = "#171c23" if dark else "#ffffff"
         overlay_surface = "#263342" if dark else "#f5f8fc"
         overlay_border = "#607b99" if dark else "#b8c9dc"
+        accent = "#47a3f2" if dark else "#1876bf"
         self.setStyleSheet(f"""
             QWidget#logsDrawer {{
                 background: {surface}; border-right: 1px solid {border};
