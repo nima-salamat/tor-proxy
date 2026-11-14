@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import socket
+import sqlite3
 import threading
 import time
 
@@ -165,3 +166,106 @@ def test_batched_traffic_snapshot_returns_global_and_selected_service_totals(tmp
     assert snapshot["services"]["service-a"]["incoming_bytes"] == 120
     assert snapshot["services"]["service-b"]["outgoing_bytes"] == 80
     assert snapshot["services"]["missing"]["connections"] == 0
+
+
+
+def _request_through_test_relay(store, *, service_id: str) -> bytes:
+    """Send one HTTP request through a relay and return the application response."""
+    application = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    application.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    application.bind(("127.0.0.1", 0))
+    application.listen(1)
+    application.settimeout(3.0)
+    application_port = int(application.getsockname()[1])
+    request = b"GET /health HTTP/1.1\\r\\nHost: local\\r\\nConnection: close\\r\\n\\r\\n"
+    response = b"HTTP/1.1 200 OK\\r\\nContent-Length: 2\\r\\nConnection: close\\r\\n\\r\\nOK"
+    failures = []
+
+    def serve_application():
+        try:
+            client, _peer = application.accept()
+            with client:
+                received = bytearray()
+                while True:
+                    chunk = client.recv(4096)
+                    if not chunk:
+                        break
+                    received.extend(chunk)
+                if bytes(received) != request:
+                    raise AssertionError("The local application received an altered request.")
+                client.sendall(response)
+        except Exception as exc:
+            failures.append(exc)
+        finally:
+            application.close()
+
+    application_thread = threading.Thread(target=serve_application, daemon=True)
+    application_thread.start()
+    relay = OnionServiceRelay(
+        service_id,
+        [{"onion_port": 80, "local_host": "127.0.0.1", "local_port": application_port}],
+        store,
+    )
+    try:
+        mapping = relay.start()[0]
+        with socket.create_connection(("127.0.0.1", mapping["local_port"]), timeout=1.5) as visitor:
+            visitor.settimeout(1.5)
+            visitor.sendall(request)
+            visitor.shutdown(socket.SHUT_WR)
+            received_response = bytearray()
+            while True:
+                chunk = visitor.recv(4096)
+                if not chunk:
+                    break
+                received_response.extend(chunk)
+        application_thread.join(timeout=2.0)
+        assert not application_thread.is_alive()
+        assert not failures
+        return bytes(received_response)
+    finally:
+        relay.close()
+        application.close()
+        if application_thread.is_alive():
+            application_thread.join(timeout=1.0)
+
+
+def test_relay_forwards_while_traffic_database_has_a_write_lock(tmp_path):
+    store = OnionTrafficStore(tmp_path)
+    blocker = sqlite3.connect(str(store.path), timeout=1.0)
+    blocker.execute("BEGIN IMMEDIATE")
+    try:
+        started = time.monotonic()
+        received = _request_through_test_relay(store, service_id="locked-db")
+        elapsed = time.monotonic() - started
+    finally:
+        blocker.rollback()
+        blocker.close()
+
+    assert received.startswith(b"HTTP/1.1 200 OK")
+    assert elapsed < 1.5
+
+    deadline = time.monotonic() + 3.0
+    events = []
+    while time.monotonic() < deadline:
+        events = store.events("locked-db")
+        if events:
+            break
+        time.sleep(0.02)
+    assert len(events) == 1
+
+
+def test_relay_keeps_forwarding_when_telemetry_writer_fails(tmp_path, monkeypatch):
+    store = OnionTrafficStore(tmp_path)
+
+    def fail_persist(*_args, **_kwargs):
+        raise sqlite3.OperationalError("simulated telemetry write failure")
+
+    monkeypatch.setattr(store, "_persist_connection", fail_persist)
+    received = _request_through_test_relay(store, service_id="failed-db")
+    assert received.startswith(b"HTTP/1.1 200 OK")
+
+    deadline = time.monotonic() + 2.0
+    while store._write_queue.unfinished_tasks and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert store._write_queue.unfinished_tasks == 0
+    assert store._writer_thread.is_alive()
