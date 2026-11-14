@@ -53,6 +53,7 @@ class SocksFailoverGateway:
         connect_timeout: float = 8.0,
         handshake_timeout: float = 12.0,
         backend_connect_timeout: float = 125.0,
+        onion_connect_timeout: float = 45.0,
         idle_timeout: float = 120.0,
         max_sessions: int = 256,
         host_router: Callable[[str], str] | None = None,
@@ -81,9 +82,12 @@ class SocksFailoverGateway:
         self._selection_mode = self._validate_selection_mode(selection_mode)
         self._connect_timeout = max(0.5, float(connect_timeout))
         self._handshake_timeout = max(1.0, float(handshake_timeout))
-        # Tor's default SocksTimeout is 120 seconds. Keep a small margin so
-        # Tor can finish circuit/stream attachment before the gateway gives up.
+        # Ordinary Tor CONNECTs retain the longer budget needed for delayed
+        # circuit attachment (for example, long-lived messaging connections).
         self._backend_connect_timeout = max(1.0, float(backend_connect_timeout))
+        # Failed Onion Service lookups should not hold the browser for the full
+        # ordinary-destination budget before returning an upstream failure.
+        self._onion_connect_timeout = max(0.1, float(onion_connect_timeout))
         self._idle_timeout = max(5.0, float(idle_timeout))
         if type(max_sessions) is not int or not 1 <= max_sessions <= 4096:
             raise ValueError("The SOCKS gateway session limit must be between 1 and 4096.")
@@ -678,7 +682,9 @@ class SocksFailoverGateway:
 
             last_reply: bytes | None = None
             attempted_backends = 0
-            connect_deadline = time.monotonic() + self._backend_connect_timeout
+            onion_destination = destination_host.rstrip(".").casefold().endswith(".onion")
+            connect_budget = self._onion_connect_timeout if onion_destination else self._backend_connect_timeout
+            connect_deadline = time.monotonic() + connect_budget
 
             for endpoint in self._ordered_backends():
                 if self._stop.is_set():
@@ -753,7 +759,7 @@ class SocksFailoverGateway:
                         LOGGER.warning(
                             "The shared Tor SOCKS CONNECT wait budget expired after %.1f seconds "
                             "while waiting for destination=%s:%s; no further backend will be tried.",
-                            self._backend_connect_timeout,
+                            connect_budget,
                             destination_host,
                             destination_port,
                         )
