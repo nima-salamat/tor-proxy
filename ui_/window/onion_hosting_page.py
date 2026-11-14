@@ -5,7 +5,7 @@ import json
 import logging
 
 import qtawesome as qta
-from PySide6.QtCore import Qt, QThreadPool, QTimer, Signal, QUrl, QObject, Slot
+from PySide6.QtCore import QEvent, Qt, QThreadPool, QTimer, Signal, QUrl, QObject, Slot
 from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
@@ -736,6 +736,7 @@ class OnionHostingPage(QWidget):
         hero_copy.setSpacing(1)
         self.page_title = QLabel("Developer Tor", hero)
         self.page_title.setObjectName("onionPageTitle")
+        self.page_title.installEventFilter(self)
         self.description = QLabel(
             "Publish local applications as v3 Onion Services · Separate from Main and Custom Tor.",
             hero,
@@ -1062,8 +1063,17 @@ class OnionHostingPage(QWidget):
                 border-color: {accent};
             }}
         """)
-        # QLabel's hint can be a few pixels narrower than the painted glyph
-        # bounds, which clips the final "r" in "Tor" at larger text scales.
+        self._update_page_title_minimum_width()
+
+    def eventFilter(self, watched, event):
+        if watched is self.page_title and event.type() == QEvent.Type.FontChange:
+            self._update_page_title_minimum_width()
+        return super().eventFilter(watched, event)
+
+    def _update_page_title_minimum_width(self):
+        # QLabel's size hint can be a few pixels narrower than the painted
+        # glyph bounds. Reserve a small right-side safety margin, recalculating
+        # whenever the title font changes (including runtime scaling changes).
         self.page_title.ensurePolished()
         title_width = self.page_title.fontMetrics().boundingRect(
             self.page_title.text()
