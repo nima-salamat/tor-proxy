@@ -1,4 +1,5 @@
 """Theme-aware embedded event-log drawer for Home."""
+from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -11,7 +12,15 @@ from PySide6.QtWidgets import (
 import re
 
 import qtawesome as qta
-from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor, QTextFormat
+from PySide6.QtGui import (
+    QColor,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QTextCharFormat,
+    QTextCursor,
+    QTextFormat,
+)
 
 
 class LogWindow(QWidget):
@@ -22,6 +31,10 @@ class LogWindow(QWidget):
         self.parent_ = parent
         self.setObjectName("logsDrawer")
         self.setProperty("overlay", "false")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._overlay_surface_color = "#263342"
+        self._overlay_border_color = "#607b99"
+        self._overlay_accent_color = "#47a3f2"
         self.setMinimumWidth(0)
         self.setMinimumHeight(0)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
@@ -80,6 +93,40 @@ class LogWindow(QWidget):
         self.text_edit.setPlaceholderText("Events will appear here when TorProxy is active.")
         layout.addWidget(self.text_edit, 1)
 
+    def paintEvent(self, event) -> None:
+        if self.property("overlay") != "true":
+            super().paintEvent(event)
+            return
+
+        # Paint the floating drawer as a genuinely opaque surface. Relying on
+        # the stylesheet alone allowed some platform styles to leave the
+        # QWidget background transparent, exposing Home controls underneath.
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        radius = min(18.0, rect.height() / 8.0)
+        right = rect.right()
+        path = QPainterPath()
+        path.moveTo(rect.left(), rect.top())
+        path.lineTo(right - radius, rect.top())
+        path.quadTo(right, rect.top(), right, rect.top() + radius)
+        path.lineTo(right, rect.bottom() - radius)
+        path.quadTo(right, rect.bottom(), right - radius, rect.bottom())
+        path.lineTo(rect.left(), rect.bottom())
+        path.closeSubpath()
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.fillPath(path, QColor(self._overlay_surface_color))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(QColor(self._overlay_border_color), 1.0))
+        painter.drawPath(path)
+        painter.setPen(QPen(QColor(self._overlay_accent_color), 2.0))
+        painter.drawLine(
+            QPointF(right - 1.0, rect.top() + radius),
+            QPointF(right - 1.0, rect.bottom() - radius),
+        )
+        painter.end()
+
     def _clear_logs(self):
         self.text_edit.clear()
 
@@ -104,16 +151,18 @@ class LogWindow(QWidget):
         overlay_surface = "#263342" if dark else "#f5f8fc"
         overlay_border = "#607b99" if dark else "#b8c9dc"
         accent = "#47a3f2" if dark else "#1876bf"
+        self._overlay_surface_color = overlay_surface
+        self._overlay_border_color = overlay_border
+        self._overlay_accent_color = accent
         self.setStyleSheet(f"""
             QWidget#logsDrawer {{
                 background: {surface}; border-right: 1px solid {border};
                 border-radius: 0;
             }}
             QWidget#logsDrawer[overlay="true"] {{
-                background: {overlay_surface};
-                border: 1px solid {overlay_border}; border-left: none;
-                border-right: 2px solid {accent};
-                border-top-right-radius: 18px; border-bottom-right-radius: 18px;
+                background: transparent;
+                border: none;
+                border-radius: 0;
             }}
             QLabel#logTitle {{ background: transparent; color: {text}; font-size: 11px; font-weight: 800; letter-spacing: 1px; }}
             QLabel#logSubtitle {{ background: transparent; color: {muted}; font-size: 10px; }}
