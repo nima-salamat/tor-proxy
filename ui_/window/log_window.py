@@ -38,11 +38,12 @@ class LogWindow(QWidget):
         header.addWidget(title)
         header.addStretch(1)
 
-        self.btn_open_tor_log = QPushButton(qta.icon("fa6s.file-lines"), "")
+        self.btn_open_tor_log = QPushButton(qta.icon("fa6s.file-lines"), "Tor log")
         self.btn_open_tor_log.setObjectName("logIconButton")
         self.btn_open_tor_log.setToolTip("Open the live Tor log file")
         self.btn_open_tor_log.setAccessibleName("Open live Tor log file")
-        self.btn_open_tor_log.setFixedSize(30, 30)
+        self.btn_open_tor_log.setMinimumHeight(30)
+        self.btn_open_tor_log.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         if self.parent_ is not None and hasattr(self.parent_, "open_tor_log_dialog"):
             self.btn_open_tor_log.clicked.connect(self.parent_.open_tor_log_dialog)
         else:
