@@ -94,6 +94,9 @@ class DialogTitleBar(QWidget):
         layout.setSpacing(10)
 
         self.icon = QLabel(self)
+        self.icon.setObjectName("dialogTitleIcon")
+        self.icon.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.icon.setAutoFillBackground(False)
         self.icon.setFixedSize(22, 22)
         self.icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.icon.setPixmap(qta.icon(icon_name, color=accent).pixmap(20, 20))
@@ -224,6 +227,7 @@ class _FramelessDialog(QDialog):
                 border-top-left-radius: 14px;
                 border-top-right-radius: 14px;
             }}
+            QLabel#dialogTitleIcon {{ background: transparent; border: none; }}
             QLabel#dialogTitle {{
                 color: {self._colors["text"]};
                 font-size: 10.5pt;
