@@ -3192,7 +3192,8 @@ def test_developer_tor_separates_runtime_logs_from_service_activity_and_exposes_
     assert "def rotate_service_identity(self, profile_id: str)" in manager
     assert "self._traffic_relays[profile_id] = relay" in manager
     assert "OnionServiceRelay(profile_id, mappings, self._traffic_store)" in manager
-    assert "self.store.finish_connection(" in traffic
+    assert "self.store.record_connection_async(" in traffic
+    assert "def _write_loop(" in traffic
     assert "self._request_buffer.find(b\"\\r\\n\")" in traffic
     assert "def _safe_request_path(raw_target: bytes) -> str" in traffic
     assert "self.path = _safe_request_path(" in traffic
