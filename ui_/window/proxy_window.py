@@ -402,9 +402,8 @@ class ProxyWindow(QWidget):
         proxy_controls.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
         proxy_controls.setAutoFillBackground(False)
         proxy_controls.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
-        proxy_controls.setMaximumHeight(92)
         proxy_controls_layout = QVBoxLayout(proxy_controls)
         proxy_controls_layout.setContentsMargins(0, 4, 0, 4)
         proxy_controls_layout.setSpacing(3)
@@ -419,6 +418,9 @@ class ProxyWindow(QWidget):
         proxy_row.addWidget(proxy_title)
         self.system_proxy_mode = QComboBox(proxy_controls)
         self.system_proxy_mode.setObjectName("systemProxyMode")
+        self.system_proxy_mode.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
         self.system_proxy_mode.addItem("Set system proxy", "set")
         self.system_proxy_mode.addItem("Do not change system proxy", "unchanged")
         self.system_proxy_mode.addItem("Clear system proxy", "clear")
@@ -438,7 +440,7 @@ class ProxyWindow(QWidget):
         self.system_tunnel_hint = QFrame(self.home_content)
         self.system_tunnel_hint.setObjectName("systemTunnelHint")
         self.system_tunnel_hint.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
         tunnel_hint_layout = QHBoxLayout(self.system_tunnel_hint)
         self._home_tunnel_hint_layout = tunnel_hint_layout
@@ -512,15 +514,13 @@ class ProxyWindow(QWidget):
 
         self.tor_ip_label = QLabel("Not checked yet", self.exit_ip_card)
         self.tor_ip_label.setObjectName("exitIpLabel")
-        self.tor_ip_label.setAlignment(
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-        )
+        self.tor_ip_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.tor_ip_label.setWordWrap(True)
         self.tor_ip_label.setMinimumWidth(0)
         self.exit_ip_card.setToolTip(
             "Exit address observed through Tor using the local HTTP proxy."
         )
-        exit_ip_layout.addWidget(self.tor_ip_label)
+        exit_ip_layout.addWidget(self.tor_ip_label, 1)
         endpoint_row.addWidget(self.exit_ip_card, 1)
         self.home_layout.addLayout(endpoint_row)
 
@@ -534,23 +534,17 @@ class ProxyWindow(QWidget):
         self.btn_change_identity.setToolTip("Request a new Tor circuit identity.")
         self.btn_change_identity.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_change_identity.clicked.connect(self.change_identity_)
-        utility_row.addWidget(self.btn_change_identity, 1)
-
         self.btn_log = QPushButton(qta.icon("fa6s.list-ul"), "Event Log")
         self.btn_log.setObjectName("secondaryAction")
         self.btn_log.setCheckable(True)
         self.btn_log.setToolTip("Show or hide the live Tor and proxy event log.")
         self.btn_log.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_log.clicked.connect(self.show_logs)
-        utility_row.addWidget(self.btn_log, 1)
-
         self.btn_whatismyip = QPushButton(qta.icon("fa6s.globe"), "Check Exit IP")
         self.btn_whatismyip.setObjectName("secondaryAction")
         self.btn_whatismyip.setToolTip("Check the public IP observed through the Tor HTTP proxy.")
         self.btn_whatismyip.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_whatismyip.clicked.connect(self.whatismyip_clicked)
-        utility_row.addWidget(self.btn_whatismyip, 1)
-
         self.btn_open_browser = QPushButton(
             qta.icon("fa6s.arrow-up-right-from-square"), "Open Browser", self.home_content
         )
@@ -562,13 +556,17 @@ class ProxyWindow(QWidget):
         self.btn_open_browser.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_open_browser.setEnabled(False)
         self.btn_open_browser.clicked.connect(self.open_browser_dialog)
+        # Keep the Home actions in the requested visual order.
+        utility_row.addWidget(self.btn_log, 1)
         utility_row.addWidget(self.btn_open_browser, 1)
+        utility_row.addWidget(self.btn_change_identity, 1)
+        utility_row.addWidget(self.btn_whatismyip, 1)
 
         self._home_utility_buttons = (
-            self.btn_change_identity,
             self.btn_log,
-            self.btn_whatismyip,
             self.btn_open_browser,
+            self.btn_change_identity,
+            self.btn_whatismyip,
         )
         for button in self._home_utility_buttons:
             button.setIconSize(QSize(16, 16))
@@ -675,15 +673,13 @@ class ProxyWindow(QWidget):
             8 if compact else 10, 4 if compact else 5,
             8 if compact else 10, 4 if compact else 5
         )
+        endpoint_card_base_height = (
+            66 if very_compact else 78 if compact else 92
+        )
         for card_layout in self._home_endpoint_card_layouts.values():
             card = card_layout.parentWidget()
             if card is not None:
-                card.setMinimumHeight(
-                    66 if very_compact else 78 if compact else 92
-                )
-        self.exit_ip_card.setMinimumHeight(
-            58 if very_compact else 68 if compact else 82
-        )
+                card.setMinimumHeight(endpoint_card_base_height)
         for button in self._home_utility_buttons:
             button.setMinimumHeight(36 if compact else 42)
             button.setMaximumHeight(42 if compact else 48)
@@ -741,12 +737,7 @@ class ProxyWindow(QWidget):
             )
 
         self.system_tunnel_hint_label.setWordWrap(compact)
-        for button in (
-            self.btn_change_identity,
-            self.btn_log,
-            self.btn_whatismyip,
-            self.btn_open_browser,
-        ):
+        for button in self._home_utility_buttons:
             button.setProperty("compact", "true" if compact else "false")
             button.setSizePolicy(
                 QSizePolicy.Policy.Expanding if stacked_actions else QSizePolicy.Policy.Preferred,
@@ -772,6 +763,36 @@ class ProxyWindow(QWidget):
             copy_button.setFixedSize(72 if compact else 84, 29 if compact else 32)
             copy_button.style().unpolish(copy_button)
             copy_button.style().polish(copy_button)
+
+        # Match the System Proxy side to the sing-box panel. Both containers
+        # expand vertically, and the combo box fills the proxy row's available
+        # height instead of remaining a short, fixed-height control.
+        self._home_proxy_controls_layout.activate()
+        self._home_tunnel_hint_layout.activate()
+        shared_service_control_height = max(
+            self._home_proxy_controls.sizeHint().height(),
+            self.system_tunnel_hint.sizeHint().height(),
+        )
+        self._home_proxy_controls.setMinimumHeight(shared_service_control_height)
+        self.system_tunnel_hint.setMinimumHeight(shared_service_control_height)
+
+        # The exit-IP card uses the exact same height as both listener cards.
+        # Account for content-driven height in very narrow layouts where the
+        # address/port columns reflow vertically.
+        endpoint_cards = [
+            card_layout.parentWidget()
+            for card_layout in self._home_endpoint_card_layouts.values()
+            if card_layout.parentWidget() is not None
+        ]
+        for card_layout in self._home_endpoint_card_layouts.values():
+            card_layout.activate()
+        endpoint_card_height = max(
+            endpoint_card_base_height,
+            *(card.sizeHint().height() for card in endpoint_cards),
+        )
+        for card in endpoint_cards:
+            card.setFixedHeight(endpoint_card_height)
+        self.exit_ip_card.setFixedHeight(endpoint_card_height)
 
         self.home_content.updateGeometry()
         self.home_layout.activate()
