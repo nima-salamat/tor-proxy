@@ -42,5 +42,7 @@ jobs:
         run: python -m compileall -q main.py ui.py config.py proxy.py tor.py set_proxy.py updater.py utils.py whatismyip.py ui_ src/torproxy tests scripts
       - name: Lint core and tests
         run: ruff check src/torproxy tests --select E,F,UP --ignore E501
+      - name: Test QR display widgets
+        run: pytest tests/test_qr_display.py -vv
       - name: Test core behavior and coverage
         run: pytest --cov=torproxy.host_rules --cov=torproxy.ip_check --cov-report=term-missing --cov-fail-under=75
