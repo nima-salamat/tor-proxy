@@ -3589,7 +3589,7 @@ def test_home_event_log_uses_an_overlay_on_narrow_windows_and_docks_on_wide_wind
     assert "self._logs_overlay_mode = False" in source
     assert "def _sync_logs_overlay_mode(self) -> bool:" in source
     assert "def _logs_home_available_width(self) -> int:" in source
-    assert "window_width - int(drawer_width)" in source
+    assert "window_width - int(self._logs_drawer_width())" in source
     assert "available_home_width < (960 + int(drawer_width))" in source
     assert "available_home_width < 960" in source
     assert "return max(0, int(home.width()))" in source
