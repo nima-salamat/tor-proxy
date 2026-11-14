@@ -1562,7 +1562,6 @@ class OnionHostingPage(QWidget):
             title=f"Share · {service.get('display_name', 'Onion Service')}",
             description=qr_description,
             display_value=address if service.get("address") else None,
-            center_icon="fa6s.shield-halved",
         )
         qr_button.setObjectName("onionQrButton")
         qr_button.setFixedSize(36, 36)
