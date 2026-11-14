@@ -398,6 +398,9 @@ class ProxyWindow(QWidget):
 
         proxy_controls = QWidget(self.home_content)
         proxy_controls.setObjectName("systemProxyControls")
+        # This is a layout-only container; let the Home canvas show through it.
+        proxy_controls.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        proxy_controls.setAutoFillBackground(False)
         proxy_controls.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
@@ -1485,6 +1488,9 @@ class ProxyWindow(QWidget):
             QLabel#trafficUsage, QLabel#proxyStatusLabel {{
                 color: {muted}; background: transparent; border: none;
                 font-size: 10px; font-weight: 500; padding: 0 2px;
+            }}
+            QWidget#systemProxyControls {{
+                background: transparent; border: none;
             }}
             QWidget#homeEndpointPanel, QWidget#homeMetricsLeft,
             QWidget#homeMetricsRight {{
