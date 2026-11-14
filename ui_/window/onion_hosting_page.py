@@ -28,14 +28,14 @@ from PySide6.QtWidgets import (
 )
 
 from config import CONFIG
-from torproxy.paths import user_directories
-from ui_.window.numeric_controls import NoWheelSpinBox
 from torproxy.bridges import normalize_sni_hostname, parse_bridge_text
 from torproxy.onion_hosting import OnionHostingError, validate_loopback_target
+from torproxy.paths import user_directories
 from ui_.worker.worker import Worker
 from ui_.window.dialogs import QMessageBox, StandardButton, _FramelessDialog
-from ui_.window.tor_log_dialog import TorLogDialog
+from ui_.window.numeric_controls import NoWheelSpinBox
 from ui_.window.qr_display import QrCodeButton
+from ui_.window.tor_log_dialog import TorLogDialog
 
 logger = logging.getLogger(__name__)
 
