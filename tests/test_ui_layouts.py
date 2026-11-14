@@ -4202,3 +4202,72 @@ def test_open_browser_home_button_stays_checked_while_dialog_is_open(qt_app, mon
     ProxyWindow.open_browser_dialog(fake)
 
     assert button.isChecked() is False
+
+def test_developer_tor_copy_url_is_icon_only_next_to_qr_and_title_is_not_clipped(qt_app):
+    from PySide6.QtWidgets import QPushButton
+    from ui_.window.onion_hosting_page import OnionHostingPage
+
+    class FakeOnionManager:
+        pass
+
+    manager = FakeOnionManager()
+
+    class FakeProxy:
+        def _ensure_onion_hosting_manager(self):
+            return manager
+
+    page = OnionHostingPage(FakeProxy())
+    page._timer.stop()
+    card = None
+    try:
+        page._apply_theme("dark")
+        service = {
+            "id": "copy-url-test",
+            "display_name": "Copy URL test",
+            "local_host": "127.0.0.1",
+            "local_port": 8000,
+            "onion_port": 80,
+            "persistent": True,
+            "access_mode": "public",
+            "running": False,
+            "error": None,
+            "address": "abcdefghijklmnop.onion",
+        }
+        card = page._service_card(service)
+
+        copy_button = card.findChild(QPushButton, "onionCopyUrlButton")
+        qr_button = card.findChild(QPushButton, "onionQrButton")
+        assert copy_button is not None
+        assert qr_button is not None
+        assert copy_button.text() == ""
+        assert copy_button.accessibleName() == "Copy Onion address"
+        assert copy_button.toolTip() == "Copy Onion address"
+        assert copy_button.isEnabled()
+
+        address_row = card.layout().itemAt(1).layout()
+        row_widgets = [
+            address_row.itemAt(index).widget()
+            for index in range(address_row.count())
+            if address_row.itemAt(index).widget() is not None
+        ]
+        assert row_widgets[-2:] == [copy_button, qr_button]
+
+        actions = card.layout().itemAt(card.layout().count() - 1).layout()
+        assert all(
+            actions.itemAt(index).widget() is not copy_button
+            for index in range(actions.count())
+        )
+
+        copy_button.click()
+        assert qt_app.clipboard().text() == "http://abcdefghijklmnop.onion"
+        assert page.status_label.text() == "Onion URL copied."
+
+        title_bounds = page.page_title.fontMetrics().boundingRect(
+            page.page_title.text()
+        )
+        assert page.page_title.minimumWidth() >= title_bounds.width() + 10
+    finally:
+        if card is not None:
+            card.deleteLater()
+        page.deleteLater()
+        qt_app.processEvents()
