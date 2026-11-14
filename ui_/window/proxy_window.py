@@ -679,7 +679,10 @@ class ProxyWindow(QWidget):
         for card_layout in self._home_endpoint_card_layouts.values():
             card = card_layout.parentWidget()
             if card is not None:
+                # Release the previous responsive fixed height before
+                # measuring the newly arranged card contents.
                 card.setMinimumHeight(endpoint_card_base_height)
+                card.setMaximumHeight(16777215)
         for button in self._home_utility_buttons:
             button.setMinimumHeight(36 if compact else 42)
             button.setMaximumHeight(42 if compact else 48)
@@ -767,6 +770,8 @@ class ProxyWindow(QWidget):
         # Match the System Proxy side to the sing-box panel. Both containers
         # expand vertically, and the combo box fills the proxy row's available
         # height instead of remaining a short, fixed-height control.
+        self._home_proxy_controls.setMinimumHeight(0)
+        self.system_tunnel_hint.setMinimumHeight(0)
         self._home_proxy_controls_layout.activate()
         self._home_tunnel_hint_layout.activate()
         shared_service_control_height = max(
