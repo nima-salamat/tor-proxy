@@ -140,6 +140,60 @@ def test_authority_parser_rejects_malformed_authorities(authority):
         proxy_module._parse_authority(authority, 443)
 
 
+def test_local_public_onion_shortcut_is_limited_to_loopback_clients(monkeypatch):
+    onion_host = "a" * 56 + ".onion"
+    expected = ("127.0.0.1", 43123)
+    calls = []
+
+    monkeypatch.setattr(proxy_module, "_blocked_rules", HostRules())
+    monkeypatch.setattr(proxy_module, "_excluded_rules", HostRules.from_values(["*.onion"]))
+    monkeypatch.setattr(
+        proxy_module,
+        "_local_onion_target_resolver",
+        lambda host, port: (calls.append((host, port)), expected)[1],
+    )
+
+    route, target = proxy_module._route_for_client(onion_host, 80, ("127.0.0.1", 1234))
+    assert route == "local-onion"
+    assert target == expected
+    assert calls == [(onion_host, 80)]
+
+    route, target = proxy_module._route_for_client(onion_host, 80, ("192.0.2.8", 1234))
+    assert route == "tor"
+    assert target is None
+    assert len(calls) == 1
+
+
+def test_local_onion_route_connects_to_loopback_relay_without_using_tor(monkeypatch):
+    target = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _EchoHandler)
+    target.daemon_threads = True
+    target_thread = threading.Thread(target=target.serve_forever, daemon=True)
+    target_thread.start()
+    monkeypatch.setattr(
+        proxy_module.socks,
+        "socksocket",
+        lambda: pytest.fail("The local Onion Service route must not open a Tor SOCKS socket."),
+    )
+    remote = None
+    try:
+        remote = proxy_module._connect_upstream(
+            "a" * 56 + ".onion",
+            80,
+            "local-onion",
+            9050,
+            local_target=("127.0.0.1", target.server_address[1]),
+        )
+        remote.settimeout(2)
+        remote.sendall(b"django")
+        assert _receive_exact(remote, 6) == b"django"
+    finally:
+        if remote is not None:
+            remote.close()
+        target.shutdown()
+        target.server_close()
+        target_thread.join(timeout=2)
+
+
 def test_onion_destinations_cannot_be_sent_direct_by_exclude_rules(monkeypatch):
     onion_host = "a" * 56 + ".onion"
     monkeypatch.setattr(proxy_module, "_blocked_rules", HostRules())

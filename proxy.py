@@ -46,6 +46,8 @@ RELAY_SHUTDOWN_POLL_SECONDS = 0.25
 _rule_lock = threading.RLock()
 _blocked_rules = HostRules()
 _excluded_rules = HostRules()
+_local_onion_resolver_lock = threading.RLock()
+_local_onion_target_resolver = None
 queue_bytes: queue.Queue[tuple[float, int, str | None]] = queue.Queue(maxsize=65536)
 _traffic_direction_lock = threading.Lock()
 _traffic_direction_totals = {"upload": 0, "download": 0}
@@ -441,6 +443,60 @@ def route_host(host: str) -> str:
     return _route_for_host(host)
 
 
+def set_local_onion_target_resolver(resolver) -> None:
+    """Install the resolver for this process's own active public Onion Services."""
+    if resolver is not None and not callable(resolver):
+        raise TypeError("The local Onion Service resolver must be callable or None.")
+    global _local_onion_target_resolver
+    with _local_onion_resolver_lock:
+        _local_onion_target_resolver = resolver
+
+
+def _resolve_local_onion_target(host: str, port: int) -> tuple[str, int] | None:
+    with _local_onion_resolver_lock:
+        resolver = _local_onion_target_resolver
+    if resolver is None:
+        return None
+    try:
+        target = resolver(host, port)
+    except Exception:
+        logger.exception("The local public Onion Service resolver failed.")
+        return None
+    if target is None:
+        return None
+    try:
+        target_host, target_port = target
+        address = ipaddress.ip_address(str(target_host))
+        if not address.is_loopback or type(target_port) is not int or not 1 <= target_port <= 65535:
+            raise ValueError("The local Onion Service resolver returned a non-loopback endpoint.")
+        return str(address), target_port
+    except (TypeError, ValueError):
+        logger.error("The local public Onion Service resolver returned an invalid endpoint.")
+        return None
+
+
+def _route_for_client(
+    host: str,
+    port: int,
+    client_address: tuple,
+) -> tuple[str, tuple[str, int] | None]:
+    """Use the local relay only for loopback clients and active public Onion Services."""
+    route = _route_for_host(host)
+    if route != "tor" or not str(host).rstrip(".").casefold().endswith(".onion"):
+        return route, None
+    try:
+        peer = ipaddress.ip_address(str(client_address[0]).split("%", 1)[0])
+    except (IndexError, TypeError, ValueError):
+        return route, None
+    if not peer.is_loopback:
+        return route, None
+    target = _resolve_local_onion_target(host, port)
+    if target is None:
+        return route, None
+    logger.debug("Using the local relay for this process's active public Onion Service.")
+    return "local-onion", target
+
+
 def is_host_blocked(host: str) -> bool:
     """Return whether a normalized destination matches the shared block policy."""
     normalized = normalize_hostname(host)
@@ -570,6 +626,8 @@ def _log_upstream_failure(
     """Log the failed outbound hop without exposing request paths or query strings."""
     if route == "tor":
         upstream = f"Main Tor SOCKS gateway 127.0.0.1:{tor_socks_port}"
+    elif route == "local-onion":
+        upstream = "local public Onion Service relay (loopback)"
     elif route == "direct":
         upstream = "direct network socket (host exclusion)"
     else:
@@ -594,7 +652,34 @@ def _connect_upstream(
     tor_socks_port: int,
     *,
     server=None,
+    local_target: tuple[str, int] | None = None,
 ) -> socket.socket:
+    if route == "local-onion":
+        if local_target is None:
+            raise OSError("No active local public Onion Service relay matches this destination.")
+        try:
+            target_host, target_port = local_target
+            target_address = ipaddress.ip_address(str(target_host))
+            if not target_address.is_loopback or type(target_port) is not int or not 1 <= target_port <= 65535:
+                raise ValueError("The local Onion Service target is not a valid loopback endpoint.")
+        except (TypeError, ValueError) as exc:
+            raise OSError("The local Onion Service resolver returned an invalid endpoint.") from exc
+        family = socket.AF_INET6 if target_address.version == 6 else socket.AF_INET
+        remote = socket.socket(family, socket.SOCK_STREAM)
+        remote.settimeout(SOCKET_TIMEOUT_SECONDS)
+        try:
+            _register_upstream(server, remote)
+            address = (str(target_address), target_port)
+            _connect_with_shutdown(remote, address, server)
+            return remote
+        except Exception:
+            _unregister_upstream(server, remote)
+            try:
+                remote.close()
+            except OSError:
+                pass
+            raise
+
     if route == "direct":
         # Explicit bypass; track the socket before connect so shutdown can cancel it.
         last_error = None
@@ -673,12 +758,17 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self.close_connection = True
         try:
             host, port = _parse_authority(self.path)
-            route = _route_for_host(host)
+            route, local_target = _route_for_client(host, port, self.client_address)
             if route == "blocked":
                 self.send_error(403, "Destination blocked by host policy")
                 return
             remote = _connect_upstream(
-                host, port, route, self.server.tor_socks_port, server=self.server
+                host,
+                port,
+                route,
+                self.server.tor_socks_port,
+                server=self.server,
+                local_target=local_target,
             )
             self.connection.settimeout(RELAY_IDLE_TIMEOUT_SECONDS)
             remote.settimeout(RELAY_IDLE_TIMEOUT_SECONDS)
@@ -756,7 +846,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 self.send_error(400, "Invalid destination port")
                 return
             host = normalize_hostname(parsed.hostname)
-            route = _route_for_host(host)
+            route, local_target = _route_for_client(host, port, self.client_address)
             if route == "blocked":
                 self.send_error(403, "Destination blocked by host policy")
                 return
@@ -777,7 +867,12 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 return
 
             remote = _connect_upstream(
-                host, port, route, self.server.tor_socks_port, server=self.server
+                host,
+                port,
+                route,
+                self.server.tor_socks_port,
+                server=self.server,
+                local_target=local_target,
             )
             remote.settimeout(RELAY_IDLE_TIMEOUT_SECONDS)
             request_path = parsed.path or "/"

@@ -261,6 +261,45 @@ def test_persistent_to_temporary_transition_keeps_private_client_key(hosting):
     assert manager._key_path(profile_id).exists() is False
 
 
+def test_public_active_onion_service_resolves_to_its_local_port_relay(hosting):
+    manager, _config, _tor = hosting
+    profile_id = manager.create_service(
+        display_name="Local Django API",
+        local_host="127.0.0.1",
+        local_port=8000,
+        onion_port=80,
+        persistent=True,
+        access_mode="public",
+    )
+
+    address = manager.start_service(profile_id)
+    target = manager.resolve_local_public_target(address, 80)
+
+    assert target is not None
+    assert target[0] == "127.0.0.1"
+    assert target[1] != 8000
+    assert manager.resolve_local_public_target(address, 443) is None
+
+    manager.stop_service(profile_id)
+    assert manager.resolve_local_public_target(address, 80) is None
+
+
+def test_private_active_onion_service_never_resolves_to_local_relay(hosting):
+    manager, _config, _tor = hosting
+    profile_id = manager.create_service(
+        display_name="Private API",
+        local_host="127.0.0.1",
+        local_port=8000,
+        onion_port=80,
+        persistent=False,
+        access_mode="private",
+    )
+
+    address = manager.start_service(profile_id)
+
+    assert manager.resolve_local_public_target(address, 80) is None
+
+
 def test_unavailable_local_target_fails_before_contacting_tor(hosting, monkeypatch):
     manager, _config, tor = hosting
     profile_id = manager.create_service(

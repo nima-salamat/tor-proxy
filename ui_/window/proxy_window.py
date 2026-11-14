@@ -1307,6 +1307,14 @@ class ProxyWindow(QWidget):
         if manager is None:
             manager = OnionHostingManager(self._build_developer_tor_settings)
             self.onion_hosting_manager = manager
+        try:
+            from proxy import set_local_onion_target_resolver
+
+            set_local_onion_target_resolver(manager.resolve_local_public_target)
+        except Exception:
+            # Onion Hosting must remain usable even if the optional local shortcut
+            # cannot be registered; requests then retain the normal Tor route.
+            logger.exception("Could not register the local public Onion Service resolver.")
         return manager
 
     def open_browser_dialog(self):

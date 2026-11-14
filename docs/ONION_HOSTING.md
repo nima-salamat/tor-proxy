@@ -113,3 +113,10 @@ The counters measure bytes at the local relay boundary. They do not include Tor 
 An Onion address does not guarantee that a hosted application is anonymous. The application can expose identifying information through content, headers, analytics, uploaded files, error pages, server logs or external resources. TorProxy forwards to a local process; it does not audit or sandbox that application.
 
 The local destination must be trusted. Do not bind a development server to a public interface for convenience; TorProxy deliberately accepts loopback-only destinations. Running a second Tor process uses additional memory and network resources, and it performs its own bootstrap.
+
+
+## Requests from this computer to your own public Onion Service
+
+When the local HTTP proxy receives a request from a loopback client for an Onion address currently hosted by this same TorProxy instance, it resolves the active public service and the requested Onion port to that service's local relay listener. The HTTP request or CONNECT tunnel is then forwarded over loopback to the relay, which forwards it to the configured Django/application port. This avoids sending a self-request out through Main Tor and back into Developer Tor.
+
+This optimization is deliberately limited to loopback clients and active **public** services. Remote/LAN clients and private services continue through the normal Tor route; private V3 client authorization is never bypassed. Unknown or inactive Onion addresses also retain the normal Tor route. The local relay still performs the same port mapping and traffic accounting as a normal Onion Service visit.

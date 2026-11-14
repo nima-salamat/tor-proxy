@@ -982,6 +982,62 @@ class OnionHostingManager:
                     "Start every mapped local service before publishing the Onion Service."
                 ) from exc
 
+    def resolve_local_public_target(self, hostname: str, onion_port: int) -> tuple[str, int] | None:
+        """Resolve this process's active public Onion address to its loopback relay.
+
+        Private services intentionally never use this shortcut: their V3 client
+        authorization must still be enforced by Tor.
+        """
+        normalized = str(hostname or "").strip().rstrip(".").casefold()
+        if not normalized.endswith(".onion"):
+            return None
+        onion_id = normalized[:-6]
+        if not _SERVICE_ID_RE.fullmatch(onion_id):
+            return None
+        if type(onion_port) is not int or not 1 <= onion_port <= 65535:
+            return None
+
+        with self._lock:
+            manager = self._manager
+            if (
+                self._shutdown_requested
+                or manager is None
+                or getattr(getattr(manager, "state", None), "value", "") != "ready"
+            ):
+                return None
+            process = getattr(manager, "process", None)
+            if process is not None:
+                try:
+                    if process.poll() is not None:
+                        return None
+                except Exception:
+                    return None
+
+            for profile_id, active_id in tuple(self._active_services.items()):
+                if str(active_id).casefold() != onion_id:
+                    continue
+                try:
+                    service = self._find_service(profile_id)
+                except OnionHostingError:
+                    continue
+                if str(service.get("access_mode", "public")).casefold() != "public":
+                    continue
+                relay = self._traffic_relays.get(profile_id)
+                if relay is None:
+                    continue
+                target = relay.local_target(onion_port)
+                if target is None:
+                    continue
+                host, port = target
+                try:
+                    address = ipaddress.ip_address(str(host))
+                except ValueError:
+                    continue
+                if not address.is_loopback or type(port) is not int or not 1 <= port <= 65535:
+                    continue
+                return str(address), port
+        return None
+
     def start_service(self, profile_id: str) -> str:
         with self._lock:
             if self._shutdown_requested:

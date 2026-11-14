@@ -770,6 +770,27 @@ class OnionServiceRelay:
             self.close()
             raise
 
+    def local_target(self, onion_port: int) -> tuple[str, int] | None:
+        """Return the loopback relay endpoint for one currently active Onion port."""
+        if self._closed:
+            return None
+        try:
+            requested_port = int(onion_port)
+        except (TypeError, ValueError):
+            return None
+        if not 1 <= requested_port <= 65535:
+            return None
+        for relay in tuple(self._listeners):
+            try:
+                if int(relay.mapping.get("onion_port", 0)) != requested_port:
+                    continue
+                if relay._stop.is_set() or not relay._accept_thread.is_alive():
+                    return None
+                return "127.0.0.1", int(relay.port)
+            except (AttributeError, TypeError, ValueError):
+                continue
+        return None
+
     def close(self) -> None:
         if self._closed:
             return
