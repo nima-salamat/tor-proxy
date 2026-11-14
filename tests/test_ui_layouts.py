@@ -3394,17 +3394,20 @@ def test_home_resize_work_is_coalesced_and_connect_geometry_is_host_owned():
     button_source = (repository / "ui_/btn/pulse_button.py").read_text(encoding="utf-8")
 
     initialization = home_source[
-        home_source.index("self._home_responsive_mode = None"):
-        home_source.index("self.connection_status_frame")
+        home_source.index("self.timer_data_usage = QTimer(self)"):
+        home_source.index("self._update_home_responsive_layout()", home_source.index("self.timer_data_usage = QTimer(self)"))
     ]
-    assert "self._home_resize_timer" not in initialization
+    assert "self._home_resize_timer = QTimer(self)" in initialization
+    assert "self._home_resize_timer.setSingleShot(True)" in initialization
+    assert "self._home_resize_timer.setInterval(75)" in initialization
+    assert "self._home_resize_timer.timeout.connect(self._apply_home_resize_update)" in initialization
 
     resize_event = home_source[
         home_source.index("def resizeEvent(self, event) -> None:"):
         home_source.index("def _build_home_endpoint_card", home_source.index("def resizeEvent(self, event) -> None:"))
     ]
-    assert "self._apply_home_resize_update()" in resize_event
-    assert "_home_resize_timer" not in resize_event
+    assert "resize_timer.start()" in resize_event
+    assert "self._apply_home_resize_update()" not in resize_event
 
     assert "self._home_connect_host = PulseButtonHost(self.connect_btn, self.home_content)" in home_source
     assert "self.home_layout.addWidget(self._home_connect_host, 1)" in home_source
@@ -3594,7 +3597,14 @@ def test_home_event_log_uses_an_overlay_on_narrow_windows_and_docks_on_wide_wind
     assert 'self._start_logs_animation(b"maximumWidth", target_width)' in source
     assert "animation.setEndValue(target_width)" in source
     assert "self.logs_widget.setGeometry(target_geometry)" in source
-    assert 'self._stop_logs_animation()\n                self.logs_widget.setGeometry(' in source
+    assert "self._logs_overlay_width: int | None = None" in source
+    assert "self._logs_last_docked_width: int | None = None" in source
+    assert "preserved_width = self._logs_last_docked_width or max(current_width, target_width)" in source
+    assert "return min(360, proportional_width)" in source
+    assert "animation.valueChanged.connect(" not in source[
+        source.index("def _start_logs_animation"):source.index("def _sync_logs_overlay_mode")
+    ]
+    assert "Retarget only the height; keep the frozen overlay width." in source
     assert "self._logs_drawer_width()" in source
     assert "self.logs_widget.raise_()" in source
     assert "self._sync_logs_overlay_mode()" in source
