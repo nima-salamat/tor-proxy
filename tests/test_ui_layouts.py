@@ -3600,6 +3600,9 @@ def test_home_event_log_uses_an_overlay_on_narrow_windows_and_docks_on_wide_wind
     assert "self._logs_overlay_width: int | None = None" in source
     assert "self._logs_last_docked_width: int | None = None" in source
     assert "preserved_width = self._logs_last_docked_width or max(current_width, target_width)" in source
+    assert "target_width = (" in source
+    assert "self._logs_overlay_width" in source
+    assert "Re-docking must keep the exact width used by the floating" in source
     assert "return min(360, proportional_width)" in source
     assert "animation.valueChanged.connect(" not in source[
         source.index("def _start_logs_animation"):source.index("def _sync_logs_overlay_mode")
@@ -3626,6 +3629,35 @@ def test_home_event_log_uses_an_overlay_on_narrow_windows_and_docks_on_wide_wind
     overlay_switch = source.index("self.main_layout.removeWidget(self.logs_widget)")
     dock_switch = source.index("self.main_layout.insertWidget(0, self.logs_widget, 0)")
     assert overlay_switch < dock_switch
+
+
+def test_floating_event_log_paints_an_opaque_surface_and_labels_tor_log(qt_app):
+    from PySide6.QtGui import QColor, QImage, QPainter
+    from ui_.window.log_window import LogWindow
+
+    log = LogWindow()
+    try:
+        log.apply_theme("dark")
+        log.set_overlay_mode(True)
+        log.resize(260, 360)
+        log.show()
+        qt_app.processEvents()
+
+        image = QImage(log.size(), QImage.Format.Format_ARGB32)
+        image.fill(QColor("#ff00ff"))
+        painter = QPainter(image)
+        log.render(painter)
+        painter.end()
+
+        # This point sits in the drawer's left interior margin, outside child
+        # controls. It must be the opaque overlay color, not Home's magenta.
+        assert image.pixelColor(5, 120).name() == "#263342"
+        assert log.btn_open_tor_log.text() == "Tor log"
+        assert log.testAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+    finally:
+        log.close()
+        log.deleteLater()
+        qt_app.processEvents()
 
 
 def test_home_keeps_status_at_top_with_a_minimum_gap_and_polishes_bottom_actions():
