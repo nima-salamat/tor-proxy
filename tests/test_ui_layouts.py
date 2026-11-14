@@ -1685,7 +1685,8 @@ def test_home_proxy_controls_hide_explanatory_copy_and_use_consistent_surfaces()
     assert "self.proxy_status_label.setVisible(False)" in source
     assert "proxy_controls_layout.addWidget(self.proxy_status_label)" not in source
     assert "QComboBox#systemProxyMode" in source
-    assert "QFrame#systemProxyControls" in source
+    assert 'proxy_controls = QWidget(self.home_content)' in source
+    assert "QFrame#systemProxyControls" not in source
     assert "QFrame#systemTunnelHint" in source
     assert "border-radius: 12px" in source
 
@@ -2214,6 +2215,7 @@ def test_disabled_home_action_text_uses_the_theme_muted_foreground():
     source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
 
     assert 'self.btn_open_browser.setObjectName("secondaryAction")' in source
+    assert 'self.btn_open_browser.setCheckable(True)' in source
     assert 'self.btn_open_browser.setEnabled(False)' in source
     assert "QPushButton#secondaryAction:disabled {{" in source
     assert "background: {field}; color: {muted}; border-color: {border};" in source
@@ -3142,10 +3144,12 @@ def test_home_endpoint_cards_have_clear_copy_targets_and_consistent_exit_ip_summ
     assert 'controls["host"].clicked' not in source  # QToolButton.clicked is connected when the card is built.
     assert '_copy_home_endpoint_part(endpoint, "host")' in source
     assert '_copy_home_endpoint_part(endpoint, "port")' in source
+    assert 'self._show_home_endpoint_copy_feedback(key, copied_item=copied_item)' not in source
+    assert 'copied_item = "address" if part == "host" else "port"' in source
     assert '_copy_home_endpoint_full(endpoint)' in source
     assert 'QApplication.clipboard().setText(f"{host}:{port}")' in source
     assert 'QFrame#homeEndpointCard, QFrame#homeExitIpCard' in source
-    assert 'QFrame#systemProxyControls' in source
+    assert 'QFrame#systemProxyControls' not in source
     assert 'QFrame#homeMetricsPanel' in source
     assert 'self._home_connect_host = PulseButtonHost(self.connect_btn, self.home_content)' in source
     assert 'self.home_layout.addWidget(self._home_connect_host, 1)' in source
@@ -4049,3 +4053,61 @@ def test_home_tunnel_summary_uses_background_status_snapshot():
     assert "manager.status()" not in summary
     assert "_system_tunnel_home_snapshot" in summary
     assert "_refresh_system_tunnel_status_async()" in summary
+
+
+
+def test_home_address_and_port_copy_updates_the_copy_button_feedback(qt_app):
+    from ui_.window.proxy_window import ProxyWindow
+
+    class _Feedback:
+        _home_endpoint_values = {
+            "http": {"host": "127.0.0.1", "port": "8118"}
+        }
+
+        def __init__(self):
+            self.feedback = []
+
+        def _show_home_endpoint_copy_feedback(self, key, *, copied_item="endpoint"):
+            self.feedback.append((key, copied_item))
+
+    fake = _Feedback()
+    clipboard = qt_app.clipboard()
+
+    ProxyWindow._copy_home_endpoint_part(fake, "http", "host")
+    assert clipboard.text() == "127.0.0.1"
+    assert fake.feedback == [("http", "address")]
+
+    ProxyWindow._copy_home_endpoint_part(fake, "http", "port")
+    assert clipboard.text() == "8118"
+    assert fake.feedback[-1] == ("http", "port")
+
+
+def test_open_browser_home_button_stays_checked_while_dialog_is_open(qt_app, monkeypatch):
+    from types import SimpleNamespace
+    from PySide6.QtWidgets import QPushButton
+    from ui_.window import open_browser_dialog as browser_dialog_module
+    from ui_.window.proxy_window import ProxyWindow
+
+    button = QPushButton("Open Browser")
+    button.setCheckable(True)
+    fake = SimpleNamespace(
+        running=True,
+        connected=True,
+        proxy=SimpleNamespace(is_running=True, port=45555),
+        btn_open_browser=button,
+    )
+
+    class _Dialog:
+        def __init__(self, parent, *, proxy_port):
+            assert parent is fake
+            assert proxy_port == 45555
+
+        def exec(self):
+            assert button.isChecked() is True
+            return 0
+
+    monkeypatch.setattr(browser_dialog_module, "OpenBrowserDialog", _Dialog)
+
+    ProxyWindow.open_browser_dialog(fake)
+
+    assert button.isChecked() is False

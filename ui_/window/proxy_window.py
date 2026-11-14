@@ -396,14 +396,14 @@ class ProxyWindow(QWidget):
         self.home_layout.addWidget(metrics_panel)
         self.data.valueChanged.connect(self.dataValueChanged)
 
-        proxy_controls = QFrame(self.home_content)
+        proxy_controls = QWidget(self.home_content)
         proxy_controls.setObjectName("systemProxyControls")
         proxy_controls.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
         proxy_controls.setMaximumHeight(92)
         proxy_controls_layout = QVBoxLayout(proxy_controls)
-        proxy_controls_layout.setContentsMargins(12, 7, 12, 7)
+        proxy_controls_layout.setContentsMargins(0, 4, 0, 4)
         proxy_controls_layout.setSpacing(3)
         self._home_proxy_controls_layout = proxy_controls_layout
 
@@ -552,6 +552,7 @@ class ProxyWindow(QWidget):
             qta.icon("fa6s.arrow-up-right-from-square"), "Open Browser", self.home_content
         )
         self.btn_open_browser.setObjectName("secondaryAction")
+        self.btn_open_browser.setCheckable(True)
         self.btn_open_browser.setToolTip(
             "Connect to Tor and wait for the verified bootstrap to finish before opening a browser."
         )
@@ -666,10 +667,7 @@ class ProxyWindow(QWidget):
             40 if very_compact or compact else
             44
         )
-        self._home_proxy_controls_layout.setContentsMargins(
-            8 if compact else 12, 5 if compact else 7,
-            8 if compact else 12, 5 if compact else 7
-        )
+        self._home_proxy_controls_layout.setContentsMargins(0, 4, 0, 4)
         self._home_tunnel_hint_layout.setContentsMargins(
             8 if compact else 10, 4 if compact else 5,
             8 if compact else 10, 4 if compact else 5
@@ -997,6 +995,8 @@ class ProxyWindow(QWidget):
         value = str(self._home_endpoint_values.get(key, {}).get(part, "") or "")
         if value:
             QApplication.clipboard().setText(value)
+            copied_item = "address" if part == "host" else "port"
+            self._show_home_endpoint_copy_feedback(key, copied_item=copied_item)
 
     def _copy_home_endpoint_full(self, key: str) -> None:
         values = self._home_endpoint_values.get(key, {})
@@ -1006,7 +1006,9 @@ class ProxyWindow(QWidget):
             QApplication.clipboard().setText(f"{host}:{port}")
             self._show_home_endpoint_copy_feedback(key)
 
-    def _show_home_endpoint_copy_feedback(self, key: str) -> None:
+    def _show_home_endpoint_copy_feedback(
+        self, key: str, *, copied_item: str = "endpoint"
+    ) -> None:
         controls = self._home_endpoint_controls.get(key, {})
         button = controls.get("copy")
         if button is None:
@@ -1015,7 +1017,7 @@ class ProxyWindow(QWidget):
         success = "#45c98b" if dark else "#16834f"
         button.setText("Copied")
         button.setIcon(qta.icon("fa6s.check", color=success))
-        button.setToolTip("Endpoint copied to the clipboard")
+        button.setToolTip(f"{copied_item.capitalize()} copied to the clipboard")
         timer = controls.get("copy_timer")
         if timer is not None:
             timer.start(1100)
@@ -1318,13 +1320,15 @@ class ProxyWindow(QWidget):
         return manager
 
     def open_browser_dialog(self):
-        """Open the browser chooser only after Tor and the local HTTP listener are ready."""
+        """Keep the Home action highlighted for exactly as long as its dialog is open."""
+        button = self.btn_open_browser
         if (
             not self.running
             or not self.connected
             or not bool(CONFIG["http_proxy_enabled"])
             or not bool(getattr(self.proxy, "is_running", False))
         ):
+            button.setChecked(False)
             self.logs_widget.update_log(
                 "Open Browser is unavailable until Tor bootstrap and the local HTTP proxy are ready."
             )
@@ -1333,10 +1337,13 @@ class ProxyWindow(QWidget):
             from ui_.window.open_browser_dialog import OpenBrowserDialog
 
             dialog = OpenBrowserDialog(self, proxy_port=int(self.proxy.port))
+            button.setChecked(True)
             dialog.exec()
         except Exception as exc:
             logger.exception("Could not open the browser chooser.")
             QMessageBox.warning(self, "Open Browser", str(exc))
+        finally:
+            button.setChecked(False)
 
     def whatismyip_clicked(self):
         if self._exit_ip_check_busy:
@@ -1580,9 +1587,6 @@ class ProxyWindow(QWidget):
             }}
             QPushButton#secondaryAction:disabled {{
                 background: {field}; color: {muted}; border-color: {border};
-            }}
-            QFrame#systemProxyControls {{
-                background: {surface}; border: 1px solid {border}; border-radius: 12px;
             }}
             QFrame#systemTunnelHint {{
                 background: {surface}; border: 1px solid {border}; border-radius: 12px;
