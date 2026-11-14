@@ -3632,6 +3632,7 @@ def test_home_event_log_uses_an_overlay_on_narrow_windows_and_docks_on_wide_wind
 
 
 def test_floating_event_log_paints_an_opaque_surface_and_labels_tor_log(qt_app):
+    from PySide6.QtCore import Qt
     from PySide6.QtGui import QColor, QImage, QPainter
     from ui_.window.log_window import LogWindow
 
