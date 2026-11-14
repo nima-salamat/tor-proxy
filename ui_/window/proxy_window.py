@@ -700,9 +700,17 @@ class ProxyWindow(QWidget):
         elif target_overlay_mode:
             self._logs_overlay_width = None
         else:
-            self._logs_overlay_width = None
             if self.logs_open:
+                # Re-docking must keep the exact width used by the floating
+                # drawer. Otherwise crossing the breakpoint makes the panel
+                # visibly grow or shrink even though it is the same drawer.
+                target_width = (
+                    self._logs_overlay_width
+                    or self._logs_last_docked_width
+                    or target_width
+                )
                 self._logs_last_docked_width = target_width
+            self._logs_overlay_width = None
         current_geometry = QRect(0, 0, current_width, max(0, int(self.height())))
 
         if target_overlay_mode:
