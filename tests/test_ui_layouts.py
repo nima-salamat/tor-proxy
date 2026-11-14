@@ -3621,10 +3621,12 @@ def test_home_event_log_uses_an_overlay_on_narrow_windows_and_docks_on_wide_wind
     assert 'self.setProperty("overlay", "false")' in log_source
     assert 'QWidget#logsDrawer[overlay="true"]' in log_source
     assert 'overlay_surface = "#263342" if dark else "#f5f8fc"' in log_source
-    assert "border-top-right-radius: 18px" in log_source
-    assert "border-bottom-right-radius: 18px" in log_source
-    assert "border-right: 2px solid {accent};" in log_source
-    assert "border: 1px solid {overlay_border}; border-left: none;" in log_source
+    assert "path.quadTo(right, rect.top(), right, rect.top() + radius)" in log_source
+    assert "path.quadTo(right, rect.bottom(), right - radius, rect.bottom())" in log_source
+    assert "painter.fillPath(path, QColor(self._overlay_surface_color))" in log_source
+    assert "painter.drawLine(" in log_source
+    assert "self._overlay_border_color = overlay_border" in log_source
+    assert "self._overlay_accent_color = accent" in log_source
     assert 'QPushButton(qta.icon("fa6s.file-lines"), "Tor log")' in log_source
 
     # The drawer leaves main_layout in overlay mode, so Home keeps the full width.
@@ -3662,7 +3664,7 @@ def test_event_log_mode_threshold_uses_home_width_excluding_drawer(qt_app):
 
 def test_floating_event_log_paints_an_opaque_surface_and_labels_tor_log(qt_app):
     from PySide6.QtCore import Qt
-    from PySide6.QtGui import QColor, QImage, QPainter
+    from PySide6.QtGui import QColor, QImage
     from ui_.window.log_window import LogWindow
 
     log = LogWindow()
@@ -3675,9 +3677,7 @@ def test_floating_event_log_paints_an_opaque_surface_and_labels_tor_log(qt_app):
 
         image = QImage(log.size(), QImage.Format.Format_ARGB32)
         image.fill(QColor("#ff00ff"))
-        painter = QPainter(image)
-        log.render(painter)
-        painter.end()
+        log.render(image)
 
         # This point sits in the drawer's left interior margin, outside child
         # controls. It must be the opaque overlay color, not Home's magenta.
