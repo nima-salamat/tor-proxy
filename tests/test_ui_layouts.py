@@ -1690,8 +1690,9 @@ def test_home_proxy_controls_hide_explanatory_copy_and_use_consistent_surfaces()
     assert 'self.system_proxy_mode.setSizePolicy(' in source
     assert 'self.system_tunnel_hint.setSizePolicy(' in source
     assert 'shared_service_control_height = max(' in source
-    assert 'self._home_proxy_controls.setMinimumHeight(shared_service_control_height)' in source
-    assert 'self.system_tunnel_hint.setMinimumHeight(shared_service_control_height)' in source
+    assert 'self._home_proxy_controls.setFixedHeight(shared_service_control_height)' in source
+    assert 'self.system_tunnel_hint.setFixedHeight(shared_service_control_height)' in source
+    assert 'self.system_proxy_mode.setFixedHeight(shared_service_control_height)' in source
     assert 'proxy_controls.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)' in source
     assert 'proxy_controls.setAutoFillBackground(False)' in source
     assert "QWidget#systemProxyControls {{\n                background: transparent; border: none;" in source
@@ -3182,6 +3183,20 @@ def test_home_endpoint_cards_have_clear_copy_targets_and_consistent_exit_ip_summ
     assert 'tor_socks_bind_all_interfaces' in source
     assert 'LAN IP unavailable' in source
 
+
+
+def test_home_endpoint_copy_button_centers_icon_and_text():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+
+    assert 'copy_button = QPushButton("Copy", card)' in source
+    assert 'copy_button.setObjectName("homeEndpointCopy")' in source
+    assert "QPushButton#homeEndpointCopy" in source
+    assert "text-align: center;" in source[
+        source.index("QPushButton#homeEndpointCopy {{"):
+        source.index("QPushButton#homeEndpointCopy:hover")
+    ]
+    assert "setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)" not in source
 
 
 def test_home_exit_ip_card_matches_listener_cards_and_centers_its_value():
