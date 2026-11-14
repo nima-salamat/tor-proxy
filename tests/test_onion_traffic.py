@@ -177,8 +177,8 @@ def _request_through_test_relay(store, *, service_id: str) -> bytes:
     application.listen(1)
     application.settimeout(3.0)
     application_port = int(application.getsockname()[1])
-    request = b"GET /health HTTP/1.1\\r\\nHost: local\\r\\nConnection: close\\r\\n\\r\\n"
-    response = b"HTTP/1.1 200 OK\\r\\nContent-Length: 2\\r\\nConnection: close\\r\\n\\r\\nOK"
+    request = b"GET /health HTTP/1.1\r\nHost: local\r\nConnection: close\r\n\r\n"
+    response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK"
     failures = []
 
     def serve_application():
