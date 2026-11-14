@@ -3590,9 +3590,9 @@ def test_home_event_log_uses_an_overlay_on_narrow_windows_and_docks_on_wide_wind
     assert "def _sync_logs_overlay_mode(self) -> bool:" in source
     assert "def _logs_home_available_width(self) -> int:" in source
     assert "window_width - int(self._logs_drawer_width())" in source
+    assert "available_home_width < (960 + int(drawer_width))" in source
     assert "target_overlay_mode = available_home_width < 960" in source
-    assert "available_home_width < (960 + int(drawer_width))" not in source
-    assert "return max(0, int(home.width()))" not in source
+    assert "return max(0, int(home.width()))" in source
     assert "self.main_layout.removeWidget(self.logs_widget)" in source
     assert "self.main_layout.insertWidget(0, self.logs_widget, 0)" in source
     assert 'QPropertyAnimation(self.logs_widget, property_name, self)' in source
@@ -3636,33 +3636,41 @@ def test_home_event_log_uses_an_overlay_on_narrow_windows_and_docks_on_wide_wind
     assert overlay_switch < dock_switch
 
 
-def test_event_log_mode_threshold_uses_same_projected_home_width_in_both_modes(qt_app):
+def test_event_log_mode_threshold_uses_actual_home_width_in_each_mode(qt_app):
     from types import SimpleNamespace
     from ui_.window.proxy_window import ProxyWindow
 
+    home_width = {"value": 1319}
+    home = SimpleNamespace(width=lambda: home_width["value"])
+    window_width = {"value": 1319}
     window = SimpleNamespace(
-        width=lambda: 1350,
+        width=lambda: window_width["value"],
         logs_open=True,
         _logs_overlay_mode=False,
         _logs_overlay_width=None,
         _logs_last_docked_width=360,
         _logs_drawer_width=lambda: 360,
+        home_content=home,
     )
 
-    # Projected Home width is window width minus the drawer in docked mode.
-    docked_projected_width = ProxyWindow._logs_home_available_width(window)
-    assert docked_projected_width == 990
-
-    # The floating drawer is detached from the layout, but mode selection
-    # still measures the exact same projected Home width after re-docking.
-    window._logs_overlay_mode = True
-    window._logs_overlay_width = 360
-    assert ProxyWindow._logs_home_available_width(window) == docked_projected_width
-
-    # Both transitions use the identical 960px projected-Home boundary.
-    window.width = lambda: 1319
+    # Docked mode: the drawer takes 360px from the Home layout.
     assert ProxyWindow._logs_home_available_width(window) == 959
-    window.width = lambda: 1320
+
+    # Floating mode: count the full Home area, including the region underneath
+    # the overlay; do not subtract the floating drawer from Home's width.
+    window._logs_overlay_mode = True
+    assert ProxyWindow._logs_home_available_width(window) == 1319
+
+    # With a 360px drawer, floating mode re-docks at 1320px: this leaves
+    # exactly 960px for Home after the drawer is attached again.
+    assert 1319 < 960 + 360
+    home_width["value"] = 1320
+    window_width["value"] = 1320
+    assert ProxyWindow._logs_home_available_width(window) == 1320
+    assert not (ProxyWindow._logs_home_available_width(window) < 960 + 360)
+
+    # Once docked at that same window size, Home is exactly 960px wide.
+    window._logs_overlay_mode = False
     assert ProxyWindow._logs_home_available_width(window) == 960
 
     window.logs_open = False
