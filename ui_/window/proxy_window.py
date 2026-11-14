@@ -405,7 +405,7 @@ class ProxyWindow(QWidget):
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
         proxy_controls_layout = QVBoxLayout(proxy_controls)
-        proxy_controls_layout.setContentsMargins(0, 4, 0, 4)
+        proxy_controls_layout.setContentsMargins(0, 0, 0, 0)
         proxy_controls_layout.setSpacing(3)
         self._home_proxy_controls_layout = proxy_controls_layout
 
@@ -668,7 +668,7 @@ class ProxyWindow(QWidget):
             40 if very_compact or compact else
             44
         )
-        self._home_proxy_controls_layout.setContentsMargins(0, 4, 0, 4)
+        self._home_proxy_controls_layout.setContentsMargins(0, 0, 0, 0)
         self._home_tunnel_hint_layout.setContentsMargins(
             8 if compact else 10, 4 if compact else 5,
             8 if compact else 10, 4 if compact else 5
@@ -778,8 +778,12 @@ class ProxyWindow(QWidget):
             self._home_proxy_controls.sizeHint().height(),
             self.system_tunnel_hint.sizeHint().height(),
         )
-        self._home_proxy_controls.setMinimumHeight(shared_service_control_height)
-        self.system_tunnel_hint.setMinimumHeight(shared_service_control_height)
+        # The dropdown itself spans the same vertical dimension as the
+        # neighboring sing-box panel, rather than leaving a short selector
+        # floating inside a taller transparent container.
+        self._home_proxy_controls.setFixedHeight(shared_service_control_height)
+        self.system_tunnel_hint.setFixedHeight(shared_service_control_height)
+        self.system_proxy_mode.setFixedHeight(shared_service_control_height)
 
         # The exit-IP card uses the exact same height as both listener cards.
         # Account for content-driven height in very narrow layouts where the
@@ -892,12 +896,10 @@ class ProxyWindow(QWidget):
         )
         port_column.addWidget(port_button)
 
-        copy_button = QToolButton(card)
+        copy_button = QPushButton("Copy", card)
         copy_button.setObjectName("homeEndpointCopy")
-        copy_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         copy_button.setCursor(Qt.CursorShape.PointingHandCursor)
         copy_button.setFixedSize(84, 32)
-        copy_button.setText("Copy")
         copy_button.setToolTip("Copy the complete host:port endpoint")
         copy_button.setIcon(qta.icon("fa6s.copy", color="#aab4c1"))
         copy_button.clicked.connect(
@@ -1543,19 +1545,20 @@ class ProxyWindow(QWidget):
             }}
             QToolButton#homeEndpointPart:hover {{ color: {accent}; }}
             QToolButton#homeEndpointPart:disabled {{ color: {muted}; }}
-            QToolButton#homeEndpointCopy {{
+            QPushButton#homeEndpointCopy {{
                 min-width: 84px; min-height: 32px; color: {text};
                 background: {hover}; border: 1px solid {border};
                 border-radius: 8px; padding: 0 7px;
-                font-size: 10px; font-weight: 750;
+                font-size: 10px; font-weight: 750; text-align: center;
             }}
-            QToolButton#homeEndpointCopy[compact="true"] {{
-                min-width: 72px; min-height: 29px; padding: 0 4px; font-size: 9px;
+            QPushButton#homeEndpointCopy[compact="true"] {{
+                min-width: 72px; min-height: 29px; padding: 0 4px;
+                font-size: 9px; text-align: center;
             }}
-            QToolButton#homeEndpointCopy:hover {{
+            QPushButton#homeEndpointCopy:hover {{
                 background: rgba(71, 163, 242, 0.12); border-color: {accent};
             }}
-            QToolButton#homeEndpointCopy:disabled {{
+            QPushButton#homeEndpointCopy:disabled {{
                 color: {muted}; background: transparent; border-color: {border};
             }}
             QLabel#exitIpLabel {{
