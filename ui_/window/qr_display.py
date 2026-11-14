@@ -96,7 +96,7 @@ class QrCodeDotWidget(QWidget):
         origin_x = bounds.center().x() - (side * module_size / 2)
         origin_y = bounds.center().y() - (side * module_size / 2)
         center = side // 2
-        logo_half_modules = 2.7
+        logo_half_modules = 1.7
 
         ink = QLinearGradient(
             QPointF(bounds.left(), bounds.top()),
@@ -136,7 +136,7 @@ class QrCodeDotWidget(QWidget):
 
         # The quiet white island protects the logo from nearby modules. High
         # error correction plus this small central area keeps the code scannable.
-        logo_size = module_size * 6.0
+        logo_size = module_size * 4.2
         logo_rect = QRectF(
             bounds.center().x() - logo_size / 2,
             bounds.center().y() - logo_size / 2,
@@ -147,7 +147,7 @@ class QrCodeDotWidget(QWidget):
         painter.setPen(QPen(QColor("#d8e4eb"), max(1.0, module_size * 0.12)))
         painter.drawRoundedRect(logo_rect, module_size * 0.85, module_size * 0.85)
 
-        icon_size = max(18, int(module_size * 3.4))
+        icon_size = max(17, int(module_size * 2.6))
         icon_pixmap = qta.icon(self._center_icon, color="#176b91").pixmap(
             icon_size, icon_size
         )
@@ -320,7 +320,7 @@ class QrCodeButton(QPushButton):
         self._display_value = display_value
         self._center_icon = center_icon
         self.setObjectName("qrCodeButton")
-        self.setIcon(qta.icon("fa6s.qrcode"))
+        self.setIcon(qta.icon("fa6s.qrcode", color="#287db5"))
         self.setIconSize(QSize(16, 16))
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setToolTip("Show this value as a QR code")
