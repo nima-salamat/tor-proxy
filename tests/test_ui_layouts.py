@@ -3144,7 +3144,7 @@ def test_home_endpoint_cards_have_clear_copy_targets_and_consistent_exit_ip_summ
     assert 'controls["host"].clicked' not in source  # QToolButton.clicked is connected when the card is built.
     assert '_copy_home_endpoint_part(endpoint, "host")' in source
     assert '_copy_home_endpoint_part(endpoint, "port")' in source
-    assert 'self._show_home_endpoint_copy_feedback(key, copied_item=copied_item)' not in source
+    assert 'self._show_home_endpoint_copy_feedback(key, copied_item=copied_item)' in source
     assert 'copied_item = "address" if part == "host" else "port"' in source
     assert '_copy_home_endpoint_full(endpoint)' in source
     assert 'QApplication.clipboard().setText(f"{host}:{port}")' in source
