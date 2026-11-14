@@ -1686,6 +1686,9 @@ def test_home_proxy_controls_hide_explanatory_copy_and_use_consistent_surfaces()
     assert "proxy_controls_layout.addWidget(self.proxy_status_label)" not in source
     assert "QComboBox#systemProxyMode" in source
     assert 'proxy_controls = QWidget(self.home_content)' in source
+    assert 'proxy_controls.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)' in source
+    assert 'proxy_controls.setAutoFillBackground(False)' in source
+    assert "QWidget#systemProxyControls {{\n                background: transparent; border: none;" in source
     assert "QFrame#systemProxyControls" not in source
     assert "QFrame#systemTunnelHint" in source
     assert "border-radius: 12px" in source
