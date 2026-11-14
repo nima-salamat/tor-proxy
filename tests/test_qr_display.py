@@ -7,7 +7,6 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QWidget
 
 
 @pytest.fixture(scope="module")
@@ -41,6 +40,7 @@ def test_qr_dot_widget_builds_a_matrix_with_a_four_module_quiet_zone(qt_app):
 
 def test_qr_button_accepts_a_payload_provider_and_uses_the_shared_window(qt_app, monkeypatch):
     import ui_.window.qr_display as qr_display
+    from PySide6.QtWidgets import QWidget
 
     owner = QWidget()
     payloads = []
@@ -83,6 +83,7 @@ def test_qr_button_accepts_a_payload_provider_and_uses_the_shared_window(qt_app,
 
 
 def test_qr_dialog_uses_shared_custom_shell_and_copies_the_payload(qt_app):
+    from PySide6.QtWidgets import QApplication
     from ui_.window.dialogs import _FramelessDialog
     from ui_.window.qr_display import QrCodeDisplayDialog
 
