@@ -12,7 +12,7 @@ import qtawesome as qta
 from qrcode.constants import ERROR_CORRECT_H
 from qrcode.exceptions import DataOverflowError
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer
-from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from ui_.window.dialogs import _FramelessDialog
+from utils import resource_path
 
 
 class QrCodeDotWidget(QWidget):
@@ -33,8 +34,9 @@ class QrCodeDotWidget(QWidget):
         self,
         payload: str,
         *,
-        center_icon: str = "fa6s.shield-halved",
+        center_icon: str | None = None,
         parent: QWidget | None = None,
+        dark: bool = False,
     ):
         super().__init__(parent)
         value = str(payload or "").strip()
@@ -54,7 +56,10 @@ class QrCodeDotWidget(QWidget):
             raise ValueError("This content is too long to fit in a QR code.") from exc
 
         self._matrix = tuple(tuple(bool(cell) for cell in row) for row in qr.get_matrix())
-        self._center_icon = str(center_icon or "fa6s.shield-halved")
+        self._center_icon = str(center_icon or "")
+        self._dark = bool(dark)
+        self._center_icon_path = resource_path("assets/icon.png") if not self._center_icon else None
+        self._center_pixmap = QPixmap(self._center_icon_path) if self._center_icon_path else QPixmap()
         self.setObjectName("qrCodeDotCanvas")
         self.setMinimumSize(260, 260)
         self.setMaximumSize(340, 340)
@@ -87,8 +92,6 @@ class QrCodeDotWidget(QWidget):
 
         bounds = QRectF(self.rect()).adjusted(2, 2, -2, -2)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#ffffff"))
-        painter.drawRoundedRect(bounds, 22, 22)
 
         side = len(self._matrix)
         module_size = min(bounds.width(), bounds.height()) / side
@@ -101,9 +104,14 @@ class QrCodeDotWidget(QWidget):
             QPointF(bounds.left(), bounds.top()),
             QPointF(bounds.right(), bounds.bottom()),
         )
-        ink.setColorAt(0.0, QColor("#102a43"))
-        ink.setColorAt(0.56, QColor("#164c69"))
-        ink.setColorAt(1.0, QColor("#087b83"))
+        if self._dark:
+            ink.setColorAt(0.0, QColor("#f0f7ff"))
+            ink.setColorAt(0.56, QColor("#c8e7f5"))
+            ink.setColorAt(1.0, QColor("#82c9e5"))
+        else:
+            ink.setColorAt(0.0, QColor("#102a43"))
+            ink.setColorAt(0.56, QColor("#164c69"))
+            ink.setColorAt(1.0, QColor("#087b83"))
 
         dots = QPainterPath()
         finder_blocks = QPainterPath()
@@ -133,23 +141,22 @@ class QrCodeDotWidget(QWidget):
         painter.drawPath(dots)
         painter.drawPath(finder_blocks)
 
-        # The quiet white island protects the logo from nearby modules. High
-        # error correction plus this small central area keeps the code scannable.
-        logo_size = module_size * 4.2
-        logo_rect = QRectF(
-            bounds.center().x() - logo_size / 2,
-            bounds.center().y() - logo_size / 2,
-            logo_size,
-            logo_size,
-        )
-        painter.setBrush(QColor("#ffffff"))
-        painter.setPen(QPen(QColor("#d8e4eb"), max(1.0, module_size * 0.12)))
-        painter.drawRoundedRect(logo_rect, module_size * 0.85, module_size * 0.85)
-
+        # Keep the quiet zone transparent. The high-error-correction matrix
+        # reserves this center area for the application mark without an opaque
+        # tile behind it.
         icon_size = max(17, int(module_size * 2.6))
-        icon_pixmap = qta.icon(self._center_icon, color="#176b91").pixmap(
-            icon_size, icon_size
-        )
+        if self._center_icon:
+            icon_pixmap = qta.icon(
+                self._center_icon,
+                color="#176b91" if not self._dark else "#d8f1ff",
+            ).pixmap(icon_size, icon_size)
+        else:
+            icon_pixmap = self._center_pixmap.scaled(
+                icon_size,
+                icon_size,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
         icon_rect = QRectF(
             bounds.center().x() - icon_size / 2,
             bounds.center().y() - icon_size / 2,
@@ -172,7 +179,7 @@ class QrCodeDisplayDialog(_FramelessDialog):
         title: str = "Show QR code",
         description: str = "Scan this code with a compatible QR scanner.",
         display_value: str | None = None,
-        center_icon: str = "fa6s.shield-halved",
+        center_icon: str | None = None,
     ):
         self.payload = str(payload or "").strip()
         if not self.payload:
@@ -190,6 +197,8 @@ class QrCodeDisplayDialog(_FramelessDialog):
 
         eyebrow = QLabel("SCAN TO OPEN", self.body_host)
         eyebrow.setObjectName("qrDisplayEyebrow")
+        eyebrow.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        eyebrow.setAutoFillBackground(False)
         self.body_layout.addWidget(eyebrow)
 
         message = QLabel(str(description or ""), self.body_host)
@@ -199,6 +208,9 @@ class QrCodeDisplayDialog(_FramelessDialog):
 
         preview = QFrame(self.body_host)
         preview.setObjectName("qrDisplayPanel")
+        preview.setFrameShape(QFrame.Shape.NoFrame)
+        preview.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        preview.setAutoFillBackground(False)
         preview_layout = QVBoxLayout(preview)
         preview_layout.setContentsMargins(12, 12, 12, 12)
         preview_layout.setSpacing(0)
@@ -206,6 +218,7 @@ class QrCodeDisplayDialog(_FramelessDialog):
             self.payload,
             center_icon=center_icon,
             parent=preview,
+            dark=self._dark,
         )
         preview_layout.addWidget(self.qr_widget, 0, Qt.AlignmentFlag.AlignCenter)
         self.body_layout.addWidget(preview, 0, Qt.AlignmentFlag.AlignCenter)
@@ -220,6 +233,8 @@ class QrCodeDisplayDialog(_FramelessDialog):
         )
         self.value_label.setWordWrap(True)
         self.value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.value_label.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.value_label.setAutoFillBackground(False)
         self.body_layout.addWidget(self.value_label)
 
         self.setStyleSheet(self.styleSheet() + f"""
@@ -228,15 +243,14 @@ class QrCodeDisplayDialog(_FramelessDialog):
                 font-size: 8pt; font-weight: 850; letter-spacing: 1.3px;
             }}
             QFrame#qrDisplayPanel {{
-                background: {self._colors["panel"]};
-                border: 1px solid {self._colors["border"]};
-                border-radius: 18px;
+                background: transparent;
+                border: none;
             }}
             QLabel#qrDisplayValue {{
                 color: {self._colors["text"]};
-                background: {self._colors["panel"]};
-                border: 1px solid {self._colors["border"]};
-                border-radius: 9px;
+                background: transparent;
+                border: none;
+                border-radius: 0;
                 padding: 8px 12px;
                 font-family: Consolas, monospace;
                 font-size: 8.5pt;
@@ -283,7 +297,7 @@ def show_qr_code(
     title: str = "Show QR code",
     description: str = "Scan this code with a compatible QR scanner.",
     display_value: str | None = None,
-    center_icon: str = "fa6s.shield-halved",
+    center_icon: str | None = None,
 ) -> int:
     """Open the shared QR window from any page or widget."""
     owner = parent.window() if parent is not None else None
@@ -310,7 +324,7 @@ class QrCodeButton(QPushButton):
         title: str = "Show QR code",
         description: str = "Scan this code with a compatible QR scanner.",
         display_value: str | None = None,
-        center_icon: str = "fa6s.shield-halved",
+        center_icon: str | None = None,
     ):
         super().__init__(button_text, parent)
         self._payload = payload
