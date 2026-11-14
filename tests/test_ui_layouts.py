@@ -3938,6 +3938,38 @@ def test_theme_switch_profiles_sync_stages_and_updates_only_visible_local_pages(
 
 
 
+
+def test_listener_port_sync_is_safe_before_ports_page_is_initialized():
+    from types import SimpleNamespace
+    import ui_.window.setting_window as settings
+
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
+    constructor = source[
+        source.index("    def __init__(self, parent=None):"):
+        source.index("    def _create_scroll_page(")
+    ]
+    assert "self._listener_port_inputs: dict[str, QLineEdit] = {}" in constructor
+    assert "self._listener_port_status_labels: dict[str, QLabel] = {}" in constructor
+
+    # The Settings window may exist while its Ports page is still deferred.
+    fake = SimpleNamespace(
+        _listener_port_inputs={},
+        _listener_port_status_labels={},
+    )
+    settings.SettingWindow.sync_listener_ports(
+        fake,
+        {
+            "tor_port": 19050,
+            "proxy_port": 19051,
+            "dns_port": 19052,
+            "control_port": 19053,
+        },
+    )
+    assert fake._listener_port_inputs == {}
+    assert fake._listener_port_status_labels == {}
+
+
 def test_settings_tabs_are_constructed_only_when_first_selected():
     repository = Path(__file__).resolve().parents[1]
     source = (repository / "ui_/window/setting_window.py").read_text(encoding="utf-8")
