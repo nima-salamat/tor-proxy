@@ -3620,6 +3620,7 @@ def test_home_event_log_uses_an_overlay_on_narrow_windows_and_docks_on_wide_wind
     assert "border-bottom-right-radius: 18px" in log_source
     assert "border-right: 2px solid {accent};" in log_source
     assert "border: 1px solid {overlay_border}; border-left: none;" in log_source
+    assert 'QPushButton(qta.icon("fa6s.file-lines"), "Tor log")' in log_source
 
     # The drawer leaves main_layout in overlay mode, so Home keeps the full width.
     overlay_switch = source.index("self.main_layout.removeWidget(self.logs_widget)")
