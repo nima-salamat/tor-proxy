@@ -46,6 +46,9 @@ def _start_echo_socks_backend(*, connect_delay: float = 0.0):
                 connection.sendall(b"\x05\x00\x00\x01\x7f\x00\x00\x01\x00\x01")
                 payload = _recv_exact(connection, 4)
                 connection.sendall(payload)
+        except OSError:
+            # The Onion-specific deadline may close the delayed backend first.
+            pass
         finally:
             listener.close()
 
@@ -71,10 +74,10 @@ def test_gateway_uses_shorter_connect_budget_for_onion_service_hosts():
     try:
         with socket.create_connection(("127.0.0.1", gateway_port), timeout=2) as client:
             client.settimeout(2)
-            client.sendall(b"\\x05\\x01\\x00")
-            assert _recv_exact(client, 2) == b"\\x05\\x00"
+            client.sendall(b"\x05\x01\x00")
+            assert _recv_exact(client, 2) == b"\x05\x00"
             host = b"new-address.onion"
-            request = b"\\x05\\x01\\x00\\x03" + bytes((len(host),)) + host + b"\\x00\\x50"
+            request = b"\x05\x01\x00\x03" + bytes((len(host),)) + host + b"\x00\x50"
             started = time.monotonic()
             client.sendall(request)
             response = _recv_exact(client, 10)
