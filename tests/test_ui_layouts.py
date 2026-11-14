@@ -3590,8 +3590,9 @@ def test_home_event_log_uses_an_overlay_on_narrow_windows_and_docks_on_wide_wind
     assert "def _sync_logs_overlay_mode(self) -> bool:" in source
     assert "def _logs_home_available_width(self) -> int:" in source
     assert "window_width - int(self._logs_drawer_width())" in source
-    assert "available_home_width < (960 + int(drawer_width))" in source
-    assert "target_overlay_mode = available_home_width < 960" in source
+    assert "available_home_width < (820 + int(drawer_width))" in source
+    assert "target_overlay_mode = available_home_width < 820" in source
+    assert "same 820px minimum Home area" not in source
     assert "return max(0, int(home.width()))" in source
     assert "self.main_layout.removeWidget(self.logs_widget)" in source
     assert "self.main_layout.insertWidget(0, self.logs_widget, 0)" in source
@@ -3640,9 +3641,9 @@ def test_event_log_mode_threshold_uses_actual_home_width_in_each_mode(qt_app):
     from types import SimpleNamespace
     from ui_.window.proxy_window import ProxyWindow
 
-    home_width = {"value": 1319}
+    home_width = {"value": 1179}
     home = SimpleNamespace(width=lambda: home_width["value"])
-    window_width = {"value": 1319}
+    window_width = {"value": 1179}
     window = SimpleNamespace(
         width=lambda: window_width["value"],
         logs_open=True,
@@ -3654,27 +3655,27 @@ def test_event_log_mode_threshold_uses_actual_home_width_in_each_mode(qt_app):
     )
 
     # Docked mode: the drawer takes 360px from the Home layout.
-    assert ProxyWindow._logs_home_available_width(window) == 959
+    assert ProxyWindow._logs_home_available_width(window) == 819
 
     # Floating mode: count the full Home area, including the region underneath
     # the overlay; do not subtract the floating drawer from Home's width.
     window._logs_overlay_mode = True
-    assert ProxyWindow._logs_home_available_width(window) == 1319
+    assert ProxyWindow._logs_home_available_width(window) == 1179
 
-    # With a 360px drawer, floating mode re-docks at 1320px: this leaves
-    # exactly 960px for Home after the drawer is attached again.
-    assert 1319 < 960 + 360
-    home_width["value"] = 1320
-    window_width["value"] = 1320
-    assert ProxyWindow._logs_home_available_width(window) == 1320
-    assert not (ProxyWindow._logs_home_available_width(window) < 960 + 360)
+    # With a 360px drawer, floating mode re-docks at 1180px: this leaves
+    # exactly 820px for Home after the drawer is attached again.
+    assert 1179 < 820 + 360
+    home_width["value"] = 1180
+    window_width["value"] = 1180
+    assert ProxyWindow._logs_home_available_width(window) == 1180
+    assert not (ProxyWindow._logs_home_available_width(window) < 820 + 360)
 
-    # Once docked at that same window size, Home is exactly 960px wide.
+    # Once docked at that same window size, Home is exactly 820px wide.
     window._logs_overlay_mode = False
-    assert ProxyWindow._logs_home_available_width(window) == 960
+    assert ProxyWindow._logs_home_available_width(window) == 820
 
     window.logs_open = False
-    assert ProxyWindow._logs_home_available_width(window) == 1320
+    assert ProxyWindow._logs_home_available_width(window) == 1180
 
 
 def test_floating_event_log_paints_an_opaque_surface_and_labels_tor_log(qt_app):
