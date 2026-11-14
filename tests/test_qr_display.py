@@ -20,6 +20,7 @@ def qt_app():
 
 
 def test_qr_dot_widget_builds_a_matrix_with_a_four_module_quiet_zone(qt_app):
+    from PySide6.QtCore import Qt
     from ui_.window.qr_display import QrCodeDotWidget
 
     widget = QrCodeDotWidget(
@@ -33,7 +34,12 @@ def test_qr_dot_widget_builds_a_matrix_with_a_four_module_quiet_zone(qt_app):
     assert all(not cell for row in matrix[-4:] for cell in row)
     assert all(not row[column] for row in matrix for column in range(4))
     assert all(not row[column] for row in matrix for column in range(len(matrix) - 4, len(matrix)))
-    assert widget._center_icon == "fa6s.shield-halved"
+    assert widget._center_icon == ""
+    assert Path(widget._center_icon_path).name == "icon.png"
+    assert Path(widget._center_icon_path).is_file()
+    assert not widget._center_pixmap.isNull()
+    assert widget.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    assert widget.autoFillBackground() is False
     widget.deleteLater()
     qt_app.processEvents()
 
@@ -83,7 +89,8 @@ def test_qr_button_accepts_a_payload_provider_and_uses_the_shared_window(qt_app,
 
 
 def test_qr_dialog_uses_shared_custom_shell_and_copies_the_payload(qt_app):
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication, QFrame, QLabel
     from ui_.window.dialogs import _FramelessDialog
     from ui_.window.qr_display import QrCodeDisplayDialog
 
@@ -98,7 +105,20 @@ def test_qr_dialog_uses_shared_custom_shell_and_copies_the_payload(qt_app):
 
     assert isinstance(dialog, _FramelessDialog)
     assert dialog.objectName() == "qrCodeDisplayDialog"
-    assert dialog.qr_widget._center_icon == "fa6s.shield-halved"
+    assert dialog.qr_widget._center_icon == ""
+    assert Path(dialog.qr_widget._center_icon_path).name == "icon.png"
+    assert not dialog.qr_widget._center_pixmap.isNull()
+    assert dialog.qr_widget.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    assert dialog.qr_widget.autoFillBackground() is False
+    preview = dialog.findChild(QFrame, "qrDisplayPanel")
+    eyebrow = dialog.findChild(QLabel, "qrDisplayEyebrow")
+    assert preview is not None and preview.autoFillBackground() is False
+    assert eyebrow is not None and eyebrow.autoFillBackground() is False
+    assert dialog.title_bar.icon.objectName() == "dialogTitleIcon"
+    assert dialog.title_bar.icon.autoFillBackground() is False
+    assert 'QFrame#qrDisplayPanel {{\\n                background: transparent;' in dialog.styleSheet()
+    assert 'QLabel#qrDisplayValue {{\\n                color:' in dialog.styleSheet()
+    assert 'background: transparent;' in dialog.styleSheet()
     assert dialog.value_label.text() == "exampleabcdefghijklmnopqrstuvwxyz.onion"
 
     dialog.copy_payload()
