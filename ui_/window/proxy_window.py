@@ -266,6 +266,8 @@ class ProxyWindow(QWidget):
         self.logs_widget = LogWindow(self)
         self.logs_open = False
         self._logs_overlay_mode = False
+        self._logs_overlay_width: int | None = None
+        self._logs_last_docked_width: int | None = None
         self._logs_animation = None
         self._logs_animation_property = None
         self._system_proxy_action_busy = False
@@ -598,6 +600,13 @@ class ProxyWindow(QWidget):
         self.timer_data_usage = QTimer(self)
         self.timer_data_usage.setInterval(1000)
         self.timer_data_usage.timeout.connect(self.change_data_usage)
+        # Coalesce the many native resize events produced while dragging a
+        # window. Responsive layout work is expensive and should run once the
+        # geometry settles, not on every intermediate resize frame.
+        self._home_resize_timer = QTimer(self)
+        self._home_resize_timer.setSingleShot(True)
+        self._home_resize_timer.setInterval(75)
+        self._home_resize_timer.timeout.connect(self._apply_home_resize_update)
         self._update_home_responsive_layout()
         QTimer.singleShot(0, self._update_home_responsive_layout)
 
@@ -605,7 +614,10 @@ class ProxyWindow(QWidget):
         """Size the drawer proportionally while preserving a useful Home area."""
         window_width = max(0, int(self.width()))
         proportional_width = max(220, int(window_width * 0.28))
-        return min(360, proportional_width, max(0, window_width - 96))
+        # The drawer overlays Home on narrow windows, so its width must not be
+        # reduced to preserve arbitrary Home content beside it. Use the same
+        # preferred width in docked and floating modes.
+        return min(360, proportional_width)
 
     def _stop_logs_animation(self) -> None:
         """Cancel the previous transition without leaving a stale animation alive."""
@@ -625,6 +637,8 @@ class ProxyWindow(QWidget):
             self.logs_widget.setGeometry(target_value)
         else:
             self.logs_widget.setMaximumWidth(int(target_value))
+            if self.logs_open and not self._logs_overlay_mode:
+                self._logs_last_docked_width = int(target_value)
         animation.deleteLater()
         self._update_home_responsive_layout()
 
@@ -652,10 +666,8 @@ class ProxyWindow(QWidget):
         )
         animation.setStartValue(start_value)
         animation.setEndValue(target_value)
-        if property_name == b"maximumWidth":
-            animation.valueChanged.connect(
-                lambda _value: self._update_home_responsive_layout()
-            )
+        # Do not reflow Home on each animation frame. One responsive pass is
+        # performed after the transition has settled in _finish_logs_animation.
         animation.finished.connect(
             lambda current=animation, prop=property_name, target=target_value:
             self._finish_logs_animation(current, prop, target)
@@ -678,6 +690,19 @@ class ProxyWindow(QWidget):
         self._stop_logs_animation()
         current_width = max(0, int(self.logs_widget.width()))
         target_width = self._logs_drawer_width() if self.logs_open else 0
+        if target_overlay_mode and self.logs_open:
+            # Freeze the last docked width when moving to the overlay. It must
+            # remain unchanged while the window gets narrower; floating mode
+            # is allowed to cover Home rather than squeezing the log contents.
+            preserved_width = self._logs_last_docked_width or max(current_width, target_width)
+            self._logs_overlay_width = max(220, min(360, int(preserved_width)))
+            target_width = self._logs_overlay_width
+        elif target_overlay_mode:
+            self._logs_overlay_width = None
+        else:
+            self._logs_overlay_width = None
+            if self.logs_open:
+                self._logs_last_docked_width = target_width
         current_geometry = QRect(0, 0, current_width, max(0, int(self.height())))
 
         if target_overlay_mode:
@@ -939,6 +964,8 @@ class ProxyWindow(QWidget):
         self._update_home_responsive_layout()
 
         target_width = (
+            (self._logs_overlay_width or self._logs_last_docked_width or self._logs_drawer_width())
+            if getattr(self, "logs_open", False) and self._logs_overlay_mode else
             self._logs_drawer_width() if getattr(self, "logs_open", False) else 0
         )
         animation = self._logs_animation
@@ -949,14 +976,14 @@ class ProxyWindow(QWidget):
             # Keep an in-flight transition smooth while updating its destination
             # to the latest window size; do not stop/recreate it on every resize.
             if self._logs_overlay_mode and self._logs_animation_property == b"geometry":
-                self._stop_logs_animation()
-                self.logs_widget.setGeometry(
+                # Retarget only the height; keep the frozen overlay width.
+                animation.setEndValue(
                     QRect(0, 0, target_width, max(0, int(self.height())))
                 )
-                self.logs_widget.raise_()
                 return
             if not self._logs_overlay_mode and self._logs_animation_property == b"maximumWidth":
                 animation.setEndValue(target_width)
+                self._logs_last_docked_width = target_width if self.logs_open else self._logs_last_docked_width
                 return
 
         if not self.logs_open:
@@ -970,6 +997,8 @@ class ProxyWindow(QWidget):
                 self.logs_widget.raise_()
         elif self.logs_widget.maximumWidth() != target_width:
             self.logs_widget.setMaximumWidth(target_width)
+            if self.logs_open:
+                self._logs_last_docked_width = target_width
 
     def set_live_resize_active(self, active: bool) -> None:
         """Suspend Connect's decorative animations while Windows is in its size/move loop."""
@@ -979,10 +1008,11 @@ class ProxyWindow(QWidget):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        # Responsive reflow is breakpoint-driven, so checking it synchronously
-        # is cheap; Connect itself also follows the host's resize event directly.
-        if hasattr(self, "_home_responsive_mode"):
-            self._apply_home_resize_update()
+        # Debounce reflow and drawer retargeting until the live resize settles.
+        # This avoids layout thrashing when the parent receives many size events.
+        resize_timer = getattr(self, "_home_resize_timer", None)
+        if resize_timer is not None:
+            resize_timer.start()
 
     def _build_home_endpoint_card(self, title: str, key: str) -> QFrame:
         card = QFrame(self.home_content)
@@ -1610,10 +1640,22 @@ class ProxyWindow(QWidget):
         if self._sync_logs_overlay_mode():
             return
 
-        target_width = self._logs_drawer_width() if opening else 0
         if self._logs_overlay_mode:
             if opening:
+                self._logs_overlay_width = (
+                    self._logs_overlay_width
+                    or self._logs_last_docked_width
+                    or self._logs_drawer_width()
+                )
+                target_width = self._logs_overlay_width
                 self.logs_widget.raise_()
+            else:
+                target_width = 0
+        else:
+            target_width = self._logs_drawer_width() if opening else 0
+            if opening:
+                self._logs_last_docked_width = target_width
+        if self._logs_overlay_mode:
             self._start_logs_animation(
                 b"geometry",
                 QRect(0, 0, target_width, max(0, int(self.height()))),
