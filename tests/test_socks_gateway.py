@@ -54,6 +54,41 @@ def _start_echo_socks_backend(*, connect_delay: float = 0.0):
     return port, thread
 
 
+
+def test_gateway_uses_shorter_connect_budget_for_onion_service_hosts():
+    backend_port, backend_thread = _start_echo_socks_backend(connect_delay=1.2)
+    gateway_port = _free_port()
+    gateway = SocksFailoverGateway(
+        gateway_port,
+        lambda: [("127.0.0.1", backend_port)],
+        connect_timeout=1,
+        handshake_timeout=2,
+        backend_connect_timeout=2.0,
+        onion_connect_timeout=0.3,
+        idle_timeout=5,
+    )
+    gateway.start()
+    try:
+        with socket.create_connection(("127.0.0.1", gateway_port), timeout=2) as client:
+            client.settimeout(2)
+            client.sendall(b"\\x05\\x01\\x00")
+            assert _recv_exact(client, 2) == b"\\x05\\x00"
+            host = b"new-address.onion"
+            request = b"\\x05\\x01\\x00\\x03" + bytes((len(host),)) + host + b"\\x00\\x50"
+            started = time.monotonic()
+            client.sendall(request)
+            response = _recv_exact(client, 10)
+            elapsed = time.monotonic() - started
+
+            assert response[0] == 5
+            assert response[1] != 0
+            assert elapsed < 0.9
+    finally:
+        gateway.stop()
+        backend_thread.join(timeout=2)
+
+    assert not backend_thread.is_alive()
+
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.bind(("127.0.0.1", 0))
