@@ -683,6 +683,7 @@ class ProxyWindow(QWidget):
         if target_overlay_mode:
             self.main_layout.removeWidget(self.logs_widget)
             self._logs_overlay_mode = True
+            self.logs_widget.set_overlay_mode(True)
             self.logs_widget.setMaximumWidth(16777215)
             self.logs_widget.setGeometry(current_geometry)
             self.logs_widget.raise_()
@@ -699,6 +700,7 @@ class ProxyWindow(QWidget):
             self.logs_widget.setMaximumWidth(current_width)
             self.main_layout.insertWidget(0, self.logs_widget, 0)
             self._logs_overlay_mode = False
+            self.logs_widget.set_overlay_mode(False)
             self.main_layout.invalidate()
             self.main_layout.activate()
             self._start_logs_animation(b"maximumWidth", target_width)
@@ -1769,7 +1771,7 @@ class ProxyWindow(QWidget):
                 background: {field}; color: {muted}; border-color: {border};
             }}
             QFrame#systemTunnelHint {{
-                background: {surface}; border: 1px solid {border}; border-radius: 12px;
+                background: {surface}; border: 1px solid {border}; border-radius: 9px;
             }}
             QLabel#systemTunnelHintLabel {{
                 color: {muted}; background: transparent; border: none; font-size: 10px;
