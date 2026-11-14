@@ -21,6 +21,7 @@ class LogWindow(QWidget):
         super().__init__(parent)
         self.parent_ = parent
         self.setObjectName("logsDrawer")
+        self.setProperty("overlay", "false")
         self.setMinimumWidth(0)
         self.setMinimumHeight(0)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
@@ -81,6 +82,16 @@ class LogWindow(QWidget):
     def _clear_logs(self):
         self.text_edit.clear()
 
+    def set_overlay_mode(self, enabled: bool) -> None:
+        """Give the floating drawer a distinct surface without changing log contents."""
+        value = "true" if enabled else "false"
+        if self.property("overlay") == value:
+            return
+        self.setProperty("overlay", value)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
+
     def apply_theme(self, mode):
         dark = mode == "dark"
         self._dark_mode = dark
@@ -89,8 +100,18 @@ class LogWindow(QWidget):
         text = "#e8edf3" if dark else "#253041"
         muted = "#9ba7b5" if dark else "#657386"
         editor = "#171c23" if dark else "#ffffff"
+        overlay_surface = "#263342" if dark else "#f5f8fc"
+        overlay_border = "#607b99" if dark else "#b8c9dc"
         self.setStyleSheet(f"""
-            QWidget#logsDrawer {{ background: {surface}; border-right: 1px solid {border}; }}
+            QWidget#logsDrawer {{
+                background: {surface}; border-right: 1px solid {border};
+                border-radius: 0;
+            }}
+            QWidget#logsDrawer[overlay="true"] {{
+                background: {overlay_surface};
+                border: 1px solid {overlay_border}; border-left: none;
+                border-top-right-radius: 14px; border-bottom-right-radius: 14px;
+            }}
             QLabel#logTitle {{ background: transparent; color: {text}; font-size: 11px; font-weight: 800; letter-spacing: 1px; }}
             QLabel#logSubtitle {{ background: transparent; color: {muted}; font-size: 10px; }}
             QTextEdit#logText {{ background: {editor}; color: {text}; border: 1px solid {border}; border-radius: 8px; padding: 8px; font-family: Consolas, 'Cascadia Mono', monospace; font-size: 10px; }}
