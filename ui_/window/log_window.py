@@ -110,7 +110,8 @@ class LogWindow(QWidget):
             QWidget#logsDrawer[overlay="true"] {{
                 background: {overlay_surface};
                 border: 1px solid {overlay_border}; border-left: none;
-                border-top-right-radius: 14px; border-bottom-right-radius: 14px;
+                border-right: 2px solid {accent};
+                border-top-right-radius: 18px; border-bottom-right-radius: 18px;
             }}
             QLabel#logTitle {{ background: transparent; color: {text}; font-size: 11px; font-weight: 800; letter-spacing: 1px; }}
             QLabel#logSubtitle {{ background: transparent; color: {muted}; font-size: 10px; }}
