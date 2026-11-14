@@ -4,6 +4,8 @@ All notable changes are recorded here. Dates and release numbers are added only 
 
 ## Unreleased
 
+- Added a dedicated 45-second CONNECT budget for `.onion` destinations, so unreachable Onion Services fail faster while ordinary Tor destinations retain the 125-second budget needed for delayed circuit attachment.
+
 ## v1.4.0 — 2026-11-14
 
 - Improved first-window startup responsiveness by deferring global hotkey initialization until after the Home window is shown and moving the initialization off the GUI thread.
