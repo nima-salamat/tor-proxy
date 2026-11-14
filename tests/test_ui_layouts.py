@@ -1686,6 +1686,12 @@ def test_home_proxy_controls_hide_explanatory_copy_and_use_consistent_surfaces()
     assert "proxy_controls_layout.addWidget(self.proxy_status_label)" not in source
     assert "QComboBox#systemProxyMode" in source
     assert 'proxy_controls = QWidget(self.home_content)' in source
+    assert 'QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding' in source
+    assert 'self.system_proxy_mode.setSizePolicy(' in source
+    assert 'self.system_tunnel_hint.setSizePolicy(' in source
+    assert 'shared_service_control_height = max(' in source
+    assert 'self._home_proxy_controls.setMinimumHeight(shared_service_control_height)' in source
+    assert 'self.system_tunnel_hint.setMinimumHeight(shared_service_control_height)' in source
     assert 'proxy_controls.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)' in source
     assert 'proxy_controls.setAutoFillBackground(False)' in source
     assert "QWidget#systemProxyControls {{\n                background: transparent; border: none;" in source
@@ -3178,6 +3184,18 @@ def test_home_endpoint_cards_have_clear_copy_targets_and_consistent_exit_ip_summ
 
 
 
+def test_home_exit_ip_card_matches_listener_cards_and_centers_its_value():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+
+    assert "self.tor_ip_label.setAlignment(Qt.AlignmentFlag.AlignCenter)" in source
+    assert "exit_ip_layout.addWidget(self.tor_ip_label, 1)" in source
+    assert "endpoint_card_height = max(" in source
+    assert "for card in endpoint_cards:\n            card.setFixedHeight(endpoint_card_height)" in source
+    assert "self.exit_ip_card.setFixedHeight(endpoint_card_height)" in source
+    assert 'exit_ip_title = QLabel("TOR EXIT IP", self.exit_ip_card)' in source
+
+
 def test_developer_tor_separates_runtime_logs_from_service_activity_and_exposes_traffic_tools():
     repository = Path(__file__).resolve().parents[1]
     page = (repository / "ui_/window/onion_hosting_page.py").read_text(encoding="utf-8")
@@ -3552,10 +3570,14 @@ def test_home_keeps_status_at_top_with_a_minimum_gap_and_polishes_bottom_actions
     assert "button.setMinimumHeight(42)" in source
     assert "button.setMaximumHeight(48)" in source
 
-    assert 'utility_row.addWidget(self.btn_change_identity, 1)' in source
-    assert 'utility_row.addWidget(self.btn_log, 1)' in source
-    assert 'utility_row.addWidget(self.btn_whatismyip, 1)' in source
-    assert 'utility_row.addWidget(self.btn_open_browser, 1)' in source
+    action_order = [
+        source.index('utility_row.addWidget(self.btn_log, 1)'),
+        source.index('utility_row.addWidget(self.btn_open_browser, 1)'),
+        source.index('utility_row.addWidget(self.btn_change_identity, 1)'),
+        source.index('utility_row.addWidget(self.btn_whatismyip, 1)'),
+    ]
+    assert action_order == sorted(action_order)
+    assert 'self._home_utility_buttons = (\n            self.btn_log,\n            self.btn_open_browser,' in source
     assert 'self.btn_log.setIcon(qta.icon("fa6s.list-ul", color=icon_color))' in source
     assert 'qta.icon("fa6s.arrow-up-right-from-square", color=icon_color)' in source
     assert "button.setIconSize(QSize(14, 14) if compact else QSize(16, 16))" in source
