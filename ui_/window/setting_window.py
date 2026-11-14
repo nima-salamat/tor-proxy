@@ -79,6 +79,10 @@ class SettingWindow(QWidget):
         self._http_proxy_test_worker = None
         self._http_proxy_test_pool = QThreadPool(self)
         self._http_proxy_test_pool.setMaxThreadCount(1)
+        # The Ports page is lazy-loaded, but connection startup can sync
+        # resolved listener ports before that page has ever been opened.
+        self._listener_port_inputs: dict[str, QLineEdit] = {}
+        self._listener_port_status_labels: dict[str, QLabel] = {}
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(10, 8, 10, 8)
         main_layout.setSpacing(8)
