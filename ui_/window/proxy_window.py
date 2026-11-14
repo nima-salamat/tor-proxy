@@ -701,8 +701,9 @@ class ProxyWindow(QWidget):
 
         # Home's real width depends on the mode: docked mode loses the drawer
         # width, while overlay mode includes the area underneath the floating
-        # drawer. Only dock again when that full Home width can fit the drawer
-        # and still leave the same 960px minimum Home area.
+        # drawer. Use 820px as the minimum docked Home width: this is the
+        # responsive compact-layout breakpoint, so the drawer can re-dock
+        # earlier without squeezing Home below its supported compact width.
         available_home_width = self._logs_home_available_width()
         if self._logs_overlay_mode:
             drawer_width = (
@@ -710,9 +711,9 @@ class ProxyWindow(QWidget):
                 or self._logs_last_docked_width
                 or self._logs_drawer_width()
             )
-            target_overlay_mode = available_home_width < (960 + int(drawer_width))
+            target_overlay_mode = available_home_width < (820 + int(drawer_width))
         else:
-            target_overlay_mode = available_home_width < 960
+            target_overlay_mode = available_home_width < 820
         if target_overlay_mode == self._logs_overlay_mode:
             return False
 
