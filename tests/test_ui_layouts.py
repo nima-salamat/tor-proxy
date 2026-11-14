@@ -3588,8 +3588,10 @@ def test_home_event_log_uses_an_overlay_on_narrow_windows_and_docks_on_wide_wind
 
     assert "self._logs_overlay_mode = False" in source
     assert "def _sync_logs_overlay_mode(self) -> bool:" in source
-    assert "window_width < 1040 if self._logs_overlay_mode" in source
-    assert "else window_width < 960" in source
+    assert "def _logs_home_available_width(self) -> int:" in source
+    assert "window_width - int(drawer_width)" in source
+    assert "available_home_width < 1040 if self._logs_overlay_mode" in source
+    assert "else available_home_width < 960" in source
     assert "self.main_layout.removeWidget(self.logs_widget)" in source
     assert "self.main_layout.insertWidget(0, self.logs_widget, 0)" in source
     assert 'QPropertyAnimation(self.logs_widget, property_name, self)' in source
@@ -3629,6 +3631,33 @@ def test_home_event_log_uses_an_overlay_on_narrow_windows_and_docks_on_wide_wind
     overlay_switch = source.index("self.main_layout.removeWidget(self.logs_widget)")
     dock_switch = source.index("self.main_layout.insertWidget(0, self.logs_widget, 0)")
     assert overlay_switch < dock_switch
+
+
+def test_event_log_mode_threshold_uses_home_width_excluding_drawer(qt_app):
+    from types import SimpleNamespace
+    from ui_.window.proxy_window import ProxyWindow
+
+    window = SimpleNamespace(
+        width=lambda: 1350,
+        logs_open=True,
+        _logs_overlay_mode=False,
+        _logs_overlay_width=None,
+        _logs_last_docked_width=360,
+        _logs_drawer_width=lambda: 360,
+    )
+    docked_home_width = ProxyWindow._logs_home_available_width(window)
+    assert docked_home_width == 990
+
+    # Floating must use exactly the same projected content width. Counting
+    # the full 1350px window here would make the drawer immediately re-dock.
+    window._logs_overlay_mode = True
+    window._logs_overlay_width = 360
+    assert ProxyWindow._logs_home_available_width(window) == docked_home_width
+
+    window.width = lambda: 1400
+    assert ProxyWindow._logs_home_available_width(window) == 1040
+    window.logs_open = False
+    assert ProxyWindow._logs_home_available_width(window) == 1400
 
 
 def test_floating_event_log_paints_an_opaque_surface_and_labels_tor_log(qt_app):
