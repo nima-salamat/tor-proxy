@@ -924,13 +924,18 @@ class ProxyWindow(QWidget):
 
     def _apply_home_resize_update(self) -> None:
         """Retarget the drawer and reflow Home without animating every resize tick."""
-        if getattr(self, "logs_open", False):
+        animation = self._logs_animation
+        animation_running = (
+            animation is not None
+            and animation.state() == QAbstractAnimation.State.Running
+        )
+        if getattr(self, "logs_open", False) or animation_running:
             self._sync_logs_overlay_mode()
         self._update_home_responsive_layout()
-        if not getattr(self, "logs_open", False):
-            return
 
-        target_width = self._logs_drawer_width()
+        target_width = (
+            self._logs_drawer_width() if getattr(self, "logs_open", False) else 0
+        )
         animation = self._logs_animation
         if (
             animation is not None
@@ -946,6 +951,8 @@ class ProxyWindow(QWidget):
                 animation.setEndValue(target_width)
             return
 
+        if not self.logs_open:
+            return
         if self._logs_overlay_mode:
             target_geometry = QRect(
                 0, 0, target_width, max(0, int(self.height()))
