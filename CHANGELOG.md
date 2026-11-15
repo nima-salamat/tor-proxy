@@ -4,7 +4,29 @@ All notable changes are recorded here. Dates and release numbers are added only 
 
 ## Unreleased
 
+## v1.5.0 — 2026-11-15
+
+### Routing and reliability
+
 - Added a dedicated 45-second CONNECT budget for `.onion` destinations, so unreachable Onion Services fail faster while ordinary Tor destinations retain the 125-second budget needed for delayed circuit attachment.
+- Routed local requests to hosted public Onion Services through loopback, keeping the local forwarding path explicit.
+- Allocated Tor DNSPort from the UDP ephemeral range and covered Windows-safe dual-protocol port allocation.
+
+### Developer Tor
+
+- Serialized dashboard ControlPort snapshots to prevent overlapping controller reads.
+- Decoupled Onion relay traffic from SQLite telemetry writes and batched per-service traffic snapshots, so storage activity does not stall active relay connections.
+
+### Desktop experience
+
+- Added reusable, dotted QR displays and a per-service QR action for Developer Tor Onion Services.
+- Refined Home proxy controls, endpoint cards, copy/browser feedback, and responsive alignment.
+- Made the Event Log adapt between a floating overlay and a docked panel, preserving its width during resize and using a consistent transition threshold.
+- Improved native launcher startup and lazy listener-port synchronization.
+
+### Validation
+
+- Added regression coverage for Onion routing and relay behavior, DNS port allocation, QR rendering, responsive Home/Event Log layouts, and startup timing.
 
 ## v1.4.0 — 2026-11-14
 
