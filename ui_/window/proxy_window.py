@@ -2003,11 +2003,54 @@ class ProxyWindow(QWidget):
     def _on_identity_finished(self, result):
         self._identity_busy = False
         self.btn_change_identity.setEnabled(True)
-        if str(result).strip().lower() != "true":
-            self.logs_widget.update_log("Identity request was not accepted; Tor may be rate-limiting NEWNYM.")
-            logger.info("Identity request was not accepted (not ready or rate-limited).")
+        try:
+            report = json.loads(str(result))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            # Accept a legacy worker result during mixed-version upgrades.
+            if str(result).strip().lower() == "true":
+                report = {"attempted": 1, "accepted": 1, "rate_limited": [], "failed": []}
+            else:
+                report = {"attempted": 1, "accepted": 0, "rate_limited": [], "failed": []}
+
+        attempted = max(0, int(report.get("attempted", 0) or 0))
+        accepted = max(0, int(report.get("accepted", 0) or 0))
+        rate_limited = report.get("rate_limited", [])
+        failed = report.get("failed", [])
+        details = []
+        for item in rate_limited:
+            try:
+                instance = int(item.get("instance", 0))
+                wait = max(0.0, float(item.get("retry_after", 0.0)))
+            except (AttributeError, TypeError, ValueError, OverflowError):
+                continue
+            label = f"instance {instance}" if instance else "an instance"
+            details.append(f"{label} rate-limited NEWNYM for about {wait:.0f}s")
+        for item in failed:
+            try:
+                instance = int(item.get("instance", 0))
+                error = str(item.get("error", "unknown error")).strip()
+            except (AttributeError, TypeError, ValueError):
+                continue
+            label = f"instance {instance}" if instance else "an instance"
+            details.append(f"{label} failed: {error[:240]}")
+
+        if accepted:
+            message = (
+                f"Tor accepted NEWNYM on {accepted} of {attempted} active instance(s). "
+                "Existing connections may retain their circuits; a different exit IP is not guaranteed."
+            )
+            if details:
+                message += " " + " | ".join(details)
+            self.logs_widget.update_log(message, level="success" if accepted == attempted else "warning")
+            logger.info(message)
         else:
-            self.logs_widget.update_log("Tor accepted NEWNYM. Existing connections may retain their circuits; a different IP is not guaranteed.")
+            message = f"NEWNYM was not accepted by any of the {attempted} active Tor instance(s)."
+            if details:
+                message += " " + " | ".join(details)
+            elif report.get("error"):
+                message += " " + str(report["error"])
+            self.logs_widget.update_log(message, level="warning")
+            logger.info(message)
 
     def _on_identity_error(self, error):
         self._identity_busy = False
@@ -2018,19 +2061,35 @@ class ProxyWindow(QWidget):
     def change_identity(self):
         if not self.connected:
             logger.warning("Identity change requested while Tor is not connected.")
-            return False
+            return json.dumps({
+                "attempted": 0,
+                "accepted": 0,
+                "rate_limited": [],
+                "failed": [],
+                "error": "Tor is not connected.",
+            })
 
         try:
-            wait = float(self.tor.request_new_identity())
-            if wait > 0:
-                message = f"Tor rate-limits identity requests; try again in about {wait:.0f} seconds."
-                logger.info(message)
-                return False
-            logger.info("Tor accepted the NEWNYM request; a different exit IP is not guaranteed.")
-            return True
+            request_all = getattr(self.tor, "request_new_identity_report", None)
+            if callable(request_all):
+                report = request_all()
+            else:
+                # Compatibility for an older Tor adapter used by downstream code.
+                wait = float(self.tor.request_new_identity())
+                report = {
+                    "attempted": 1,
+                    "accepted": 0 if wait > 0 else 1,
+                    "rate_limited": (
+                        [{"instance": 1, "retry_after": wait, "status": "rate_limited"}]
+                        if wait > 0 else []
+                    ),
+                    "failed": [],
+                    "results": [],
+                }
+            return json.dumps(report, ensure_ascii=False)
         except Exception as exc:
             logger.warning("Tor identity request failed: %s", exc)
-            return False
+            raise
 
     def _set_home_connected_feedback(self, connected: bool) -> bool:
         """Update the Home button only when aggregate Tor readiness crosses zero."""
