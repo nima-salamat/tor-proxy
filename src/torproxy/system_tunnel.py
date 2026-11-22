@@ -2222,12 +2222,14 @@ def _validate_helper_paths(args: Any) -> Path:
     system_root = data_root / "system-tunnel"
     engine_root = system_root / "engine"
     state_dir = state_root / "system-tunnel"
-    for folder, label, uid_to_check in (
-        (system_root, "runtime data", uid),
-        (engine_root, "engine", uid),
-        (state_dir, "tunnel state", uid),
+    for folder, label, approved_root, uid_to_check, required in (
+        (system_root, "runtime data", data_root, uid, args.action == "start"),
+        (engine_root, "engine", data_root, uid, args.action == "start"),
+        (state_dir, "tunnel state", state_root, uid, True),
     ):
-        folder = _reject_path_symlinks(folder, root=data_root if label != "tunnel state" else state_root, label=label)
+        folder = _reject_path_symlinks(folder, root=approved_root, label=label)
+        if not folder.exists() and not required:
+            continue
         try:
             info = folder.stat()
         except OSError as exc:
@@ -2268,7 +2270,7 @@ def _validate_helper_paths(args: Any) -> Path:
         raise SystemTunnelError("The privileged helper rejected a relative helper result path.")
     if result_path.parent.resolve(strict=True) != state_dir.resolve(strict=True):
         raise SystemTunnelError("The privileged helper rejected a result path outside its private state directory.")
-    if not re.fullmatch(r"helper-result-[0-9a-f]{32}\\.json", result_path.name):
+    if not re.fullmatch(r"helper-result-[0-9a-f]{32}\.json", result_path.name):
         raise SystemTunnelError("The privileged helper rejected an unexpected helper result filename.")
     if result_path.exists() or result_path.is_symlink():
         raise SystemTunnelError("The privileged helper refuses to overwrite an existing result file.")

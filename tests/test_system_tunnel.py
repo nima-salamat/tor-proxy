@@ -1342,3 +1342,61 @@ def test_helper_start_refuses_corrupt_process_record_before_launch():
     spawn = source.index('process = subprocess.Popen(')
     assert malformed_guard < spawn
     assert "refusing to start another tunnel instance" in source[malformed_guard:spawn]
+
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Validates POSIX pkexec result-path guard.")
+def test_elevated_helper_never_writes_an_unvalidated_result_path(tmp_path, monkeypatch, capsys):
+    uid = os.getuid()
+    home = Path.home().resolve()
+    roots = {
+        "config_root": tmp_path / "config",
+        "data_root": tmp_path / "data",
+        "state_root": tmp_path / "state",
+        "logs_root": tmp_path / "logs",
+    }
+    for root in roots.values():
+        root.mkdir()
+        root.chmod(0o700)
+    (roots["data_root"] / "system-tunnel" / "engine").mkdir(parents=True)
+    (roots["state_root"] / "system-tunnel").mkdir(parents=True)
+
+    result_path = tmp_path / "outside-result.json"
+    args = [
+        "stop",
+        "--version", "1.14.4",
+        "--engine", str(roots["data_root"] / "system-tunnel/engine/sing-box"),
+        "--config", str(roots["state_root"] / "system-tunnel/sing-box.json"),
+        "--policy-dir", str(roots["config_root"]),
+        "--state", str(roots["state_root"] / "system-tunnel/sing-box-process.json"),
+        "--log", str(roots["logs_root"] / "system-tunnel.log"),
+        "--user-home", str(home),
+        "--user-uid", str(uid),
+        "--config-root", str(roots["config_root"]),
+        "--data-root", str(roots["data_root"]),
+        "--state-root", str(roots["state_root"]),
+        "--logs-root", str(roots["logs_root"]),
+        "--sha256", "",
+        "--archive", str(roots["data_root"] / "system-tunnel/sing-box-1.14.4-linux.archive"),
+        "--archive-sha256", "a" * 64,
+        "--release-sha256", "",
+        "--source-url", "https://example.invalid/sing-box.tar.gz",
+        "--archive-type", "tar.gz",
+        "--interface", system_tunnel.TUN_INTERFACE_LINUX,
+        "--result", str(result_path),
+    ]
+    monkeypatch.setenv("PKEXEC_UID", str(uid))
+    monkeypatch.setattr(system_tunnel, "_require_elevation", lambda: None)
+    write_calls = []
+    monkeypatch.setattr(
+        system_tunnel,
+        "_atomic_json",
+        lambda *a, **kw: write_calls.append((a, kw)),
+    )
+
+    exit_code = system_tunnel.system_tunnel_helper_main(args)
+
+    assert exit_code == 1
+    assert not write_calls
+    assert not result_path.exists()
+    assert '"ok": false' in capsys.readouterr().out.lower()
