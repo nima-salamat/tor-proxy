@@ -241,13 +241,16 @@ class OnionTrafficStore:
                     (key, key, _MAX_EVENT_ROWS_PER_SERVICE),
                 )
 
-    def _start_writer(self) -> None:
+    def _start_writer(self, *, timeout: float = 5.0) -> None:
         with self._writer_lock:
             current = self._writer_thread
             if current is not None and current.is_alive():
-                if self._writer_stop.is_set():
+                if not self._writer_stop.is_set():
+                    return
+                if current is not threading.current_thread():
+                    current.join(timeout=max(0.1, float(timeout)))
+                if current.is_alive():
                     raise RuntimeError("The previous Onion traffic writer is still shutting down.")
-                return
             self._writer_stop.clear()
             self._closed = False
             thread = threading.Thread(

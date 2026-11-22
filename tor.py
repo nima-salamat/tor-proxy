@@ -354,6 +354,28 @@ class TorRunner(QObject):
 
     def _start_backend_event_monitor(self, index: int, manager: TorManager) -> None:
         """Attach aggregate ControlPort monitoring to the exact managed process."""
+        with self._backend_lock:
+            previous = self._backend_event_monitors.get(index)
+            stopping = self._stopping.is_set()
+        if stopping:
+            return
+        # Retire the old collector before opening another ControlPort connection.
+        # If it is still draining, retain its reference and skip the replacement.
+        if previous is not None:
+            try:
+                previous.stop()
+            except Exception:
+                logger.warning(
+                    "Could not stop the previous Tor event monitor for instance %s; "
+                    "the replacement monitor was not started.",
+                    index + 1,
+                    exc_info=True,
+                )
+                return
+            with self._backend_lock:
+                if self._backend_event_monitors.get(index) is previous:
+                    self._backend_event_monitors.pop(index, None)
+
         settings = getattr(manager, "settings", None)
         process = getattr(manager, "process", None)
         control_port = getattr(settings, "control_port", None)
@@ -376,37 +398,8 @@ class TorRunner(QObject):
             )
             return
         with self._backend_lock:
-            previous = self._backend_event_monitors.get(index)
-            stopping = self._stopping.is_set()
-        if stopping:
-            monitor.stop()
-            return
-        if previous is not None:
-            try:
-                previous.stop()
-            except Exception:
-                # Keep the previous reference: never hide a live collector and
-                # never start a second listener against the same ControlPort.
-                logger.warning(
-                    "Could not stop the previous Tor event monitor for instance %s; "
-                    "the replacement monitor was not started.",
-                    index + 1,
-                    exc_info=True,
-                )
-                monitor.stop()
-                return
-            with self._backend_lock:
-                if self._backend_event_monitors.get(index) is previous:
-                    self._backend_event_monitors.pop(index, None)
-
-        with self._backend_lock:
+            self._backend_event_monitors[index] = monitor
             install = not self._stopping.is_set()
-            if install:
-                self._backend_event_monitors[index] = monitor
-            else:
-                # Let the ordinary stop path own the join/reference if shutdown
-                # raced the monitor's controller authentication.
-                self._backend_event_monitors[index] = monitor
         if not install:
             self._stop_backend_event_monitor(index)
 
