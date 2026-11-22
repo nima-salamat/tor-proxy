@@ -1889,25 +1889,111 @@ class TorRunner(QObject):
             if self._stopping.is_set():
                 self.proc = None
 
-    def request_new_identity(self) -> float:
-        """Rotate every healthy worker through its own authenticated ControlPort."""
-        managers = self._healthy_managers()
-        if not managers and self.manager is not None and self.state == "READY":
-            managers = [self.manager]
-        if not managers:
-            raise TorManagerError("Tor is not ready; identity changes are unavailable.")
-        waits = []
-        failures = []
-        for manager in managers:
+    def request_new_identity_report(self) -> dict[str, object]:
+        """Request NEWNYM from every live, bootstrap-ready primary Tor instance.
+
+        Do not use the traffic-routing health filter here: a worker can be READY
+        and have a healthy authenticated ControlPort before it has passed its
+        first external connectivity probe. Identity rotation is a control-plane
+        operation and must reach every running instance, not only routing winners.
+        """
+        ready = self._process_ready_managers()
+        if (
+            not ready
+            and not self._backend_managers
+            and self.manager is not None
+            and str(self.state).upper() == "READY"
+        ):
+            # Preserve the legacy single-instance adapter contract. Production
+            # TorManager instances still validate READY state and ControlPort.
+            process = getattr(self.manager, "process", None)
+            if process is None or getattr(process, "poll", lambda: 0)() is None:
+                ready = [(0, self.manager)]
+
+        if not ready:
+            raise TorManagerError("Tor is not ready; no live primary instance can accept NEWNYM.")
+
+        def request_one(item: tuple[int, TorManager]) -> dict[str, object]:
+            index, manager = item
             try:
-                waits.append(float(manager.request_new_identity()))
+                wait = max(0.0, float(manager.request_new_identity()))
+                if wait > 0:
+                    return {
+                        "instance": index + 1,
+                        "status": "rate_limited",
+                        "retry_after": wait,
+                        "error": "",
+                    }
+                return {
+                    "instance": index + 1,
+                    "status": "accepted",
+                    "retry_after": 0.0,
+                    "error": "",
+                }
             except Exception as exc:
-                failures.append(exc)
-        if not waits:
-            raise TorManagerError("No healthy Tor instance accepted the identity request.") from failures[0]
-        if len(failures) == len(managers):
-            raise TorManagerError("No healthy Tor instance accepted the identity request.") from failures[0]
-        return max(waits, default=0.0)
+                return {
+                    "instance": index + 1,
+                    "status": "failed",
+                    "retry_after": 0.0,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+
+        # Each ControlPort has its own cooldown and socket. Fan out concurrently
+        # so a slow/unresponsive instance cannot delay requests to the others.
+        with ThreadPoolExecutor(
+            max_workers=min(4, len(ready)),
+            thread_name_prefix="tor-newnym",
+        ) as executor:
+            results = list(executor.map(request_one, ready))
+
+        accepted = sum(result["status"] == "accepted" for result in results)
+        rate_limited = [result for result in results if result["status"] == "rate_limited"]
+        failed = [result for result in results if result["status"] == "failed"]
+        report: dict[str, object] = {
+            "attempted": len(results),
+            "accepted": accepted,
+            "rate_limited": rate_limited,
+            "failed": failed,
+            "results": results,
+        }
+        logger.info(
+            "NEWNYM fan-out completed: %d/%d accepted, %d rate-limited, %d failed.",
+            accepted,
+            len(results),
+            len(rate_limited),
+            len(failed),
+        )
+        for result in results:
+            if result["status"] == "failed":
+                logger.warning(
+                    "NEWNYM failed for primary Tor instance %s: %s",
+                    result["instance"],
+                    result["error"],
+                )
+            elif result["status"] == "rate_limited":
+                logger.info(
+                    "Primary Tor instance %s rate-limited NEWNYM for %.1f more seconds.",
+                    result["instance"],
+                    result["retry_after"],
+                )
+        return report
+
+    def request_new_identity(self) -> float:
+        """Compatibility wrapper returning zero when at least one instance accepted NEWNYM."""
+        report = self.request_new_identity_report()
+        if int(report["accepted"]) > 0:
+            return 0.0
+        rate_limited = report["rate_limited"]
+        if rate_limited:
+            return max(float(result["retry_after"]) for result in rate_limited)
+        failures = report["failed"]
+        detail = "; ".join(
+            f"instance {result['instance']}: {result['error']}" for result in failures
+        )
+        raise TorManagerError(
+            "No live primary Tor instance accepted the identity request."
+            + (f" {detail}" if detail else "")
+        )
 
     def stop(self):
         self.state = "STOPPING"
