@@ -576,10 +576,14 @@ class Window(QMainWindow):
         self.tray_icon.setToolTip("TorProxy")
         self.tray_menu = QMenu(self)
         self.tray_menu.setObjectName("trayContextMenu")
+        # A translucent popup lets the stylesheet draw one rounded surface only;
+        # otherwise the native popup backing can show through as a second frame.
+        self.tray_menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.tray_menu.setAutoFillBackground(False)
         self.tray_menu.setMinimumWidth(286)
         self.tray_menu.setSeparatorsCollapsible(False)
 
-        self.tray_toggle_action = QAction("Show / Hide TorProxy", self)
+        self.tray_toggle_action = QAction("Hide window", self)
         self.tray_toggle_action.triggered.connect(self._toggle_visibility)
         self.tray_menu.addAction(self.tray_toggle_action)
         self.tray_menu.addSeparator()
@@ -588,39 +592,72 @@ class Window(QMainWindow):
         # handler used by Home; never change OS proxy settings through a second path.
         self.tray_proxy_section = QWidget(self.tray_menu)
         self.tray_proxy_section.setObjectName("trayMenuSection")
+        self.tray_proxy_section.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        self.tray_proxy_section.setAutoFillBackground(False)
         proxy_section_layout = QHBoxLayout(self.tray_proxy_section)
         proxy_section_layout.setContentsMargins(14, 3, 12, 0)
         self.tray_proxy_section_label = QLabel("SYSTEM PROXY", self.tray_proxy_section)
         self.tray_proxy_section_label.setObjectName("trayMenuSectionLabel")
+        self.tray_proxy_section_label.setAttribute(
+            Qt.WidgetAttribute.WA_StyledBackground, False
+        )
+        self.tray_proxy_section_label.setAutoFillBackground(False)
         proxy_section_layout.addWidget(self.tray_proxy_section_label)
         self.tray_proxy_section_action = QWidgetAction(self.tray_menu)
         self.tray_proxy_section_action.setDefaultWidget(self.tray_proxy_section)
         self.tray_menu.addAction(self.tray_proxy_section_action)
 
-        self.tray_system_proxy_action_group = QActionGroup(self)
-        self.tray_system_proxy_action_group.setExclusive(True)
         self.tray_system_proxy_mode_actions = {}
+        self.tray_system_proxy_mode_rows = {}
         tray_proxy_modes = (
             ("set", "Set system proxy"),
             ("unchanged", "Do not change system proxy"),
             ("clear", "Clear system proxy"),
         )
         for mode, label in tray_proxy_modes:
-            action = QAction(label, self)
-            action.setCheckable(True)
-            action.setData(mode)
-            action.triggered.connect(
+            action = QWidgetAction(self.tray_menu)
+            row = QWidget(self.tray_menu)
+            row.setObjectName("trayPolicyRow")
+            row.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+            row.setAutoFillBackground(False)
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(2, 1, 2, 1)
+            row_layout.setSpacing(4)
+
+            button = QPushButton(label, row)
+            button.setObjectName("trayPolicyButton")
+            button.setIconSize(QSize(16, 16))
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            button.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+            )
+            button.setMinimumHeight(32)
+            button.clicked.connect(
                 lambda _checked=False, selected_mode=mode:
                     self._set_tray_system_proxy_mode(selected_mode)
             )
-            self.tray_system_proxy_action_group.addAction(action)
-            # Keep every choice visible; the native check mark shows the
-            # selected policy while each option keeps its own semantic icon color.
+            row_layout.addWidget(button, 1)
+
+            check_label = QLabel("", row)
+            check_label.setObjectName("trayPolicyCheck")
+            check_label.setFixedWidth(22)
+            check_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            check_label.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+            check_label.setAutoFillBackground(False)
+            row_layout.addWidget(check_label, 0)
+
+            action.setDefaultWidget(row)
             self.tray_menu.addAction(action)
             self.tray_system_proxy_mode_actions[mode] = action
+            self.tray_system_proxy_mode_rows[mode] = {
+                "widget": row,
+                "button": button,
+                "check": check_label,
+            }
 
         self.tray_menu.addSeparator()
-        self.tray_exit_action = QAction("Exit TorProxy", self)
+        self.tray_exit_action = QAction("Exit", self)
         self.tray_exit_action.triggered.connect(self.ask_close)
         self.tray_menu.addAction(self.tray_exit_action)
 
@@ -1807,17 +1844,22 @@ class Window(QMainWindow):
 
     def _sync_tray_system_proxy_actions(self, *_args):
         """Keep tray radio actions consistent with the saved Home policy."""
-        actions = getattr(self, "tray_system_proxy_mode_actions", {})
+        rows = getattr(self, "tray_system_proxy_mode_rows", {})
         current_mode = CONFIG.get("system_proxy_mode", "unchanged")
-        for mode, action in actions.items():
-            action.setChecked(mode == current_mode)
+        for mode, row in rows.items():
+            # Keep the check column reserved so labels never shift on selection.
+            check = row["check"]
+            check.setText("✓" if mode == current_mode else "")
+            check.setAccessibleName(
+                "Selected system proxy policy" if mode == current_mode else ""
+            )
 
     def _show_tray_context_menu(self):
         """Open the app menu just above its tray icon, inside the work area."""
         if not hasattr(self, "tray_menu"):
             return
         hidden = self.isHidden() or self.isMinimized()
-        self.tray_toggle_action.setText("Show TorProxy" if hidden else "Hide TorProxy")
+        self.tray_toggle_action.setText("Show window" if hidden else "Hide window")
         self._sync_tray_menu_theme()
         self.tray_menu.ensurePolished()
         size = self.tray_menu.sizeHint()
@@ -2575,7 +2617,11 @@ class Window(QMainWindow):
                 background-color: {divider};
                 margin: 4px 12px;
             }}
-            QWidget#trayMenuSection {{
+            QWidget#trayMenuSection, QWidget#trayPolicyRow {{
+                background: transparent;
+                border: none;
+            }}
+            QLabel#trayMenuSectionLabel, QLabel#trayPolicyCheck {{
                 background: transparent;
                 border: none;
             }}
@@ -2583,6 +2629,26 @@ class Window(QMainWindow):
                 color: {muted};
                 font-size: 8pt;
                 font-weight: 700;
+            }}
+            QLabel#trayPolicyCheck {{
+                color: {text};
+                font-size: 13pt;
+                font-weight: 800;
+                padding: 0;
+            }}
+            QPushButton#trayPolicyButton {{
+                color: {text};
+                background: transparent;
+                border: none;
+                border-radius: 8px;
+                text-align: left;
+                padding: 6px 9px;
+                margin: 0;
+                min-height: 32px;
+                font-size: 9pt;
+            }}
+            QPushButton#trayPolicyButton:hover {{
+                background: {hover};
             }}
         """)
 
@@ -2601,12 +2667,13 @@ class Window(QMainWindow):
             "unchanged": "#94a2b5" if dark else "#758397",
             "clear": danger,
         }
-        for proxy_mode, action in self.tray_system_proxy_mode_actions.items():
-            action.setIcon(
-                qta.icon(
-                    proxy_icons[proxy_mode],
-                    color=proxy_icon_colors[proxy_mode],
-                )
+        for proxy_mode, row in self.tray_system_proxy_mode_rows.items():
+            icon_color = proxy_icon_colors[proxy_mode]
+            row["button"].setIcon(
+                qta.icon(proxy_icons[proxy_mode], color=icon_color)
+            )
+            row["check"].setStyleSheet(
+                f"QLabel#trayPolicyCheck {{ color: {icon_color}; background: transparent; border: none; }}"
             )
         self.tray_exit_action.setIcon(
             qta.icon("fa6s.right-from-bracket", color=danger)
