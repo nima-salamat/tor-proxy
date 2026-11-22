@@ -481,3 +481,35 @@ def test_bridge_check_can_be_cancelled_while_waiting_for_another_wave(tmp_path, 
     assert len(results) == 1
     assert results[0].retained == BRIDGES
     assert results[0].should_prune is False
+
+
+
+def test_bridge_check_does_not_launch_new_workers_when_stale_probe_cannot_stop(tmp_path, monkeypatch):
+    settings = _settings(tmp_path)
+    root = tmp_path / "probe-state"
+    root.mkdir()
+    stale = root / "probe-stale"
+    stale.mkdir()
+    (stale / "torrc").write_text("SocksPort 19450\\n", encoding="utf-8")
+    monkeypatch.setattr(bridge_health_module, "_probe_state_root", lambda _settings: root)
+
+    class UnstoppableManager:
+        def __init__(self, settings):
+            self.settings = settings
+
+        def stop(self):
+            raise RuntimeError("verified process could not be stopped")
+
+    monkeypatch.setattr(bridge_health_module, "TorManager", UnstoppableManager)
+    launched = []
+
+    result = check_bridges(
+        settings,
+        probe=lambda *_args: launched.append(True) or True,
+    )
+
+    assert launched == []
+    assert result.retained == BRIDGES
+    assert result.should_prune is False
+    assert "stale_probe_cleanup_failed" in result.issues
+    assert stale.exists()

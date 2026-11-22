@@ -222,28 +222,47 @@ class _BridgeCheckLock:
         return False
 
 
-def _cleanup_stale_probe_directories(settings: TorSettings) -> None:
-    """Reconcile previous probe children before creating a new bridge-health wave."""
+def _cleanup_stale_probe_directories(settings: TorSettings) -> bool:
+    """Reconcile previous probe children; block new probes if any process may remain."""
     root = _probe_state_root(settings)
+    process_cleanup_failed = False
     for directory in tuple(root.iterdir()):
         if not directory.is_dir() or directory.is_symlink():
             continue
-        try:
-            if (directory / "torrc").exists() or (directory / ".torproxy-process.json").exists():
-                probe_settings = replace(
-                    settings,
-                    data_directory=directory,
-                    log_path=directory / "tor-probe.log",
-                    dns_port=None,
-                )
+
+        if (directory / "torrc").exists() or (directory / ".torproxy-process.json").exists():
+            probe_settings = replace(
+                settings,
+                data_directory=directory,
+                log_path=directory / "tor-probe.log",
+                dns_port=None,
+            )
+            try:
                 TorManager(probe_settings).stop()
+            except Exception:
+                # A new probe wave would multiply live Tor children while the
+                # previous owner is still unresolved. Keep the complete state
+                # and refuse to launch more workers until this is reconciled.
+                process_cleanup_failed = True
+                LOGGER.warning(
+                    "A previous isolated bridge-check process could not be reconciled; "
+                    "new bridge probes are blocked and %s was retained.",
+                    directory,
+                    exc_info=True,
+                )
+                continue
+
+        # File cleanup failure alone does not imply a Tor child is still alive;
+        # manager.stop() is the authoritative process/lock confirmation.
+        try:
             shutil.rmtree(directory)
-        except Exception:
+        except OSError:
             LOGGER.warning(
-                "A previous isolated bridge-check process could not be reconciled; retaining %s.",
+                "A stopped bridge-check state directory could not be removed: %s",
                 directory,
                 exc_info=True,
             )
+    return not process_cleanup_failed
 
 
 def _probe_single_bridge(
@@ -482,7 +501,12 @@ def _check_bridges_locked(
     """
     parsed = TorManager._parse_bridges(settings.bridges)
     original = tuple(record for _kind, record in parsed)
-    _cleanup_stale_probe_directories(settings)
+    if not _cleanup_stale_probe_directories(settings):
+        # Retain every configured Bridge and do not add more Tor processes on
+        # top of an old probe that is still running or cannot be verified.
+        return BridgeHealthResult(
+            original, (), (), original, ("stale_probe_cleanup_failed",)
+        )
     unique_records = tuple(dict.fromkeys(original))
     if not unique_records:
         return BridgeHealthResult(original, (), (), ())
