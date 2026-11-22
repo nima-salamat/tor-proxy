@@ -189,8 +189,7 @@ jobs:
           & $compiler "/DAppVersion=$version" "packaging/torproxy.iss"
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup compilation failed." }
 
-          $installer = "dist/TorProxy-Setup-windows-x64.exe"
-          if (-not (Test-Path $installer)) { throw "Installer output was not created: $installer" }
+          $installer = (Resolve-Path "dist/TorProxy-Setup-windows-x64.exe").Path
           $installRoot = Join-Path $env:RUNNER_TEMP "torproxy-installer-smoke"
           & $installer /VERYSILENT /SUPPRESSMSGBOXES /NORESTART "/DIR=$installRoot"
           if ($LASTEXITCODE -ne 0) { throw "The lightweight installer failed to install." }
