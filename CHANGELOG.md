@@ -17,6 +17,7 @@ All notable changes are recorded here. Dates and release numbers are added only 
 
 - Added a Windows x64 setup installer for the lightweight (no bundled Tor) build, alongside the existing portable ZIP.
 - The installer deploys the application, native launcher and Windows firewall helper, and adds Start Menu shortcuts with an optional desktop shortcut.
+- Added a second, complete Windows installer that also embeds the latest signature-verified Tor Expert Bundle and the pinned sing-box engine; the lightweight installer and portable archives remain available.
 
 ### Reliability
 
