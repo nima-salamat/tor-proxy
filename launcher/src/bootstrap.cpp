@@ -1279,7 +1279,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         DispatchMessageW(&msg);
     }
     state.logo.reset();
-        state.staticFrame.reset();
+    state.staticFrame.reset();
     Gdiplus::GdiplusShutdown(gdiplusToken);
     return static_cast<int>(msg.wParam);
 }
