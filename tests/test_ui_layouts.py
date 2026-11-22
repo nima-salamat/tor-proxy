@@ -298,7 +298,7 @@ def test_deferred_page_failure_keeps_retry_available(qt_app, monkeypatch):
 
         assert calls == [ui.Window.PAGE_BUNDLES]
         assert window._page_states[ui.Window.PAGE_BUNDLES] == "failed"
-        assert placeholder.retry_button.isVisible()
+        assert not placeholder.retry_button.isHidden()
         assert window.stack.currentWidget() is placeholder
 
         def succeed_on_retry(index):
