@@ -68,7 +68,7 @@ OpenPGP publisher-signature verification is optional and disabled by default in 
 
 ## Identity workflow
 
-A manual identity request checks Stem's `get_newnym_wait()`. When Tor reports a cooldown, the UI declines the request and logs the wait; otherwise it sends `NEWNYM`. Neither signal acceptance nor a completed request guarantees an exit-IP change. Existing connections may remain on their current circuits.
+A Home **New Identity** request fans out to every live, bootstrap-ready worker in the primary Tor pool through that worker's own authenticated ControlPort. It deliberately does not use the routing-health shortlist: a worker can be READY before it has passed its first external connectivity probe, and must still receive the identity request. Calls are sent concurrently so one slow ControlPort does not delay the other instances. Each worker checks Stem's `get_newnym_wait()`; the UI reports accepted, rate-limited, and failed instances separately. A rate-limited worker does not hide a successful request to another worker. Neither signal acceptance nor a completed request guarantees an exit-IP change. Existing connections may remain on their current circuits.
 
 
 ## Legacy firewall configuration
