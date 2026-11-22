@@ -4,6 +4,24 @@ All notable changes are recorded here. Dates and release numbers are added only 
 
 ## Unreleased
 
+## v1.6.0 — 2026-11-22
+
+### Desktop experience
+
+- Added a compact tray control surface for the three System Proxy policies, with selected-state indicators and theme-aware colors matching Home.
+- Reworked the tray popup as a single opaque rounded window surface, removing the nested native menu frame and keeping its background solid in both themes.
+- Deferred secondary page construction until after Home is visible, with loading placeholders and retry handling for pages that fail to initialize.
+- Improved the native launcher startup path and its splash rendering to reduce work before the main window appears.
+
+### Packaging
+
+- Added a Windows x64 setup installer for the lightweight (no bundled Tor) build, alongside the existing portable ZIP.
+- The installer deploys the application, native launcher and Windows firewall helper, and adds Start Menu shortcuts with an optional desktop shortcut.
+
+### Reliability
+
+- Added multi-instance New Identity handling and regression coverage for tray controls, deferred startup, and packaging behavior.
+
 ## v1.5.0 — 2026-11-15
 
 ### Routing and reliability
