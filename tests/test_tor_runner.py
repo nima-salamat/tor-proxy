@@ -1018,3 +1018,50 @@ def test_tor_runner_serializes_start_and_stop_lifecycle(monkeypatch, tmp_path):
     assert not starter.is_alive()
     assert not stopper.is_alive()
     assert stop_entered.is_set()
+
+
+
+def test_http_listener_restart_waits_for_previous_server_workers(monkeypatch):
+    runner = tor.Runner(0, 19490, app_window=None)
+
+    class FakeServer:
+        def __init__(self):
+            self.shutdown_event = threading.Event()
+            self.active_operations = 1
+            self.closed = False
+
+        @property
+        def client_metrics(self):
+            return {"active_clients": 0, "active_operations": self.active_operations}
+
+        def begin_shutdown(self):
+            self.shutdown_event.set()
+
+        def shutdown(self):
+            pass
+
+        def server_close(self):
+            self.closed = True
+
+    class DeadThread:
+        def join(self, timeout=None):
+            pass
+
+        def is_alive(self):
+            return False
+
+    server = FakeServer()
+    previous_thread = DeadThread()
+    runner.server = server
+    runner.thread = previous_thread
+
+    def complete_resolver(_seconds):
+        server.active_operations = 0
+
+    monkeypatch.setattr(tor.time, "sleep", complete_resolver)
+    runner._start_http_listener()
+
+    assert server.closed is True
+    assert runner.server is not server
+    assert runner.thread is not previous_thread
+    runner.stop()

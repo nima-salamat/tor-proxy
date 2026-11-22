@@ -4,6 +4,10 @@ All notable changes are recorded here. Dates and release numbers are added only 
 
 ## Unreleased
 
+- Serialized Main Tor Start/Stop and worker replacement registration; retained health-monitor, ControlPort, hotkey and HTTP-proxy worker ownership until each shutdown is confirmed.
+- Tracked blocking HTTP proxy DNS/connect workers separately from request handlers so a returned handler cannot hide a still-running resolver worker or permit premature listener restart.
+- Developer Tor now serializes every Onion Service profile mutation against runtime shutdown, and keeps retryable relay/telemetry cleanup state when any sidecar fails to stop.
+
 - Added a durable, PID-reuse-resistant process identity record to every Tor DataDirectory (PID, creation time, executable, exact torrc and optional systemd scope), with verified orphan reconciliation shared by Main Tor, Tor Services, Developer Tor and bridge-check workers.
 - Tor Services and Developer Tor now surface verified processes left by a previous UI session and allow explicit Stop/reconciliation; Main Tor diagnostics expose each worker PID and its identity-verification state.
 - Bridge health probes retain their private state directory when shutdown cannot be confirmed and retry stale-child cleanup before the next probe wave.

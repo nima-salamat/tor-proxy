@@ -838,3 +838,63 @@ def test_http_proxy_relay_can_defer_tor_routed_accounting_to_socks_gateway(monke
             peer.close()
     assert not worker.is_alive()
     assert recorded == ([(6, "upload"), (8, "download")] if record_traffic else [])
+
+
+
+def test_interruptible_upstream_worker_remains_owned_until_operation_exits():
+    class FakeServer:
+        def __init__(self):
+            self.shutdown_event = threading.Event()
+            self.workers = set()
+
+        def register_operation_worker(self, worker):
+            if self.shutdown_event.is_set():
+                return False
+            self.workers.add(worker)
+            return True
+
+        def unregister_operation_worker(self, worker):
+            self.workers.discard(worker)
+
+        @property
+        def client_metrics(self):
+            return {"active_clients": 0, "active_operations": len(self.workers)}
+
+    server = FakeServer()
+    entered = threading.Event()
+    release = threading.Event()
+    errors = []
+
+    def blocking_resolution():
+        entered.set()
+        assert release.wait(timeout=3)
+        return ["resolved"]
+
+    def handler_operation():
+        try:
+            proxy_module._run_interruptible_upstream_operation(
+                blocking_resolution,
+                server,
+                thread_name="test-proxy-dns",
+            )
+        except Exception as exc:
+            errors.append(exc)
+
+    handler = threading.Thread(target=handler_operation)
+    handler.start()
+    assert entered.wait(timeout=2)
+    assert server.client_metrics["active_operations"] == 1
+
+    server.shutdown_event.set()
+    handler.join(timeout=2)
+    assert not handler.is_alive()
+    assert errors and isinstance(errors[0], OSError)
+    # The request handler has returned, but getaddrinfo's worker is still
+    # tracked by its owning HTTP server until the blocking operation returns.
+    assert server.client_metrics["active_operations"] == 1
+
+    release.set()
+    deadline = time.monotonic() + 2
+    while server.client_metrics["active_operations"] and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert server.client_metrics["active_operations"] == 0
