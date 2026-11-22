@@ -146,6 +146,7 @@ class TorManager:
         self._lock = threading.RLock()
         self._start_lock = threading.Lock()
         self._termination_lock = threading.Lock()
+        self._stop_requests = 0
         self._stop_requested = threading.Event()
         self._start_cancel_event: threading.Event | None = None
         self.process: subprocess.Popen | None = None
@@ -1105,10 +1106,15 @@ class TorManager:
                 cancel_event is not None and cancel_event.is_set()
             )
 
-        if not self._start_lock.acquire(blocking=False):
-            raise TorManagerError("A Tor start operation is already in progress.")
+        with self._lock:
+            if self._stop_requests:
+                raise TorManagerError("A Tor stop operation is still in progress.")
+            if not self._start_lock.acquire(blocking=False):
+                raise TorManagerError("A Tor start operation is already in progress.")
         try:
             with self._lock:
+                if self._stop_requests:
+                    raise TorManagerError("Tor startup was cancelled because a stop operation is pending.")
                 if self.process is not None and self.process.poll() is None:
                     if self.state is TorState.READY:
                         return
@@ -1597,9 +1603,11 @@ class TorManager:
 
     def _stop_serialized(self, *, force: bool) -> None:
         """Cancel startup, wait for its owner to unwind, then reconcile the child once."""
-        self._stop_requested.set()
-        if self._start_cancel_event is not None:
-            self._start_cancel_event.set()
+        with self._lock:
+            self._stop_requests += 1
+            self._stop_requested.set()
+            if self._start_cancel_event is not None:
+                self._start_cancel_event.set()
 
         # start() owns this lock from before DataDirectory acquisition through
         # its failure cleanup. Waiting here prevents Stop from releasing a
@@ -1610,17 +1618,18 @@ class TorManager:
             float(self.settings.startup_timeout_seconds) + 10.0,
             float(self.settings.shutdown_timeout_seconds) + 5.0,
         )
-        if not self._start_lock.acquire(timeout=wait_seconds):
-            message = (
-                "Tor startup did not unwind after cancellation within the bounded shutdown window. "
-                "Its DataDirectory lock and process ownership were retained; retry Stop after inspecting the worker."
-            )
-            self.last_error = message
-            self.state = TorState.FAILED
-            self._emit(None, TorState.FAILED, None, message)
-            raise TorManagerError(message)
-
+        acquired = self._start_lock.acquire(timeout=wait_seconds)
         try:
+            if not acquired:
+                message = (
+                    "Tor startup did not unwind after cancellation within the bounded shutdown window. "
+                    "Its DataDirectory lock and process ownership were retained; retry Stop after inspecting the worker."
+                )
+                self.last_error = message
+                self.state = TorState.FAILED
+                self._emit(None, TorState.FAILED, None, message)
+                raise TorManagerError(message)
+
             detail = "Force-stopping the managed Tor process." if force else "Stopping the managed Tor process."
             self._emit(None, TorState.STOPPING, None, detail)
             if self.process is None and (self.process_state_path.exists() or self.torrc_path.exists()):
@@ -1641,7 +1650,10 @@ class TorManager:
             self._emit(None, TorState.FAILED, None, self.last_error)
             raise
         finally:
-            self._start_lock.release()
+            if acquired:
+                self._start_lock.release()
+            with self._lock:
+                self._stop_requests = max(0, self._stop_requests - 1)
 
     def stop(self) -> None:
         self._stop_serialized(force=False)

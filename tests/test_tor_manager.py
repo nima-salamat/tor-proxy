@@ -1238,3 +1238,23 @@ def test_stop_during_popen_never_leaves_a_late_tor_child(tmp_path, monkeypatch):
     assert manager.process is None
     assert manager.state is TorState.STOPPED
     assert manager._data_directory_lock_handle is None
+
+
+
+def test_tor_start_is_rejected_while_a_stop_request_is_in_progress(tmp_path, monkeypatch):
+    executable = tmp_path / ("tor.exe" if os.name == "nt" else "tor")
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    executable.write_text("fake tor", encoding="utf-8")
+    manager = TorManager(TorSettings(
+        executable=executable,
+        socks_port=19192,
+        control_port=19193,
+        data_directory=tmp_path / "tor-state",
+    ))
+    manager._stop_requests = 1
+
+    with pytest.raises(TorManagerError, match="stop operation is still in progress"):
+        manager.start()
+
+    assert manager.process is None
+    assert manager._stop_requests == 1
