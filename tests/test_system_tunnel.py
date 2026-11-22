@@ -1261,6 +1261,7 @@ def test_privileged_helper_accepts_only_invoking_users_private_tunnel_paths(tmp_
     (roots["logs_root"] / "system-tunnel.log").parent.mkdir(parents=True, exist_ok=True)
 
     args = SimpleNamespace(
+        action="start",
         version="1.14.4",
         interface=system_tunnel.TUN_INTERFACE_LINUX,
         user_home=str(home),
@@ -1300,7 +1301,7 @@ def test_privileged_helper_rejects_an_unowned_or_symlinked_root(tmp_path, monkey
     (roots["data_root"] / "system-tunnel" / "engine").mkdir(parents=True)
     (roots["state_root"] / "system-tunnel").mkdir(parents=True)
     args = SimpleNamespace(
-        version="1.14.4", interface=system_tunnel.TUN_INTERFACE_LINUX,
+        action="start", version="1.14.4", interface=system_tunnel.TUN_INTERFACE_LINUX,
         user_home=str(Path.home()), user_uid=str(uid), **{key: str(value) for key,value in roots.items()},
         policy_dir=str(roots["config_root"]),
         engine=str(roots["data_root"] / "system-tunnel/engine/sing-box"),
@@ -1418,3 +1419,39 @@ def test_system_tunnel_helper_lock_serializes_concurrent_posix_helpers(tmp_path)
     # The OS releases the lock after the elevated helper exits or raises.
     with system_tunnel._system_tunnel_helper_lock(state_dir):
         pass
+
+
+
+def test_system_tunnel_is_running_fails_closed_for_malformed_process_record(tmp_path, monkeypatch):
+    manager = _manager(tmp_path)
+    manager.process_state_path.parent.mkdir(parents=True)
+    manager.process_state_path.write_text("{corrupt", encoding="utf-8")
+    monkeypatch.setattr(system_tunnel, "_interface_exists", lambda _name: False)
+
+    assert manager.is_running() is True
+
+
+def test_system_tunnel_is_running_fails_closed_for_reused_pid(tmp_path, monkeypatch):
+    manager = _manager(tmp_path)
+    manager.process_state_path.parent.mkdir(parents=True)
+    manager.process_state_path.write_text(
+        json.dumps({
+            "pid": 98765,
+            "create_time": 100.0,
+            "engine": str(manager.engine_path),
+            "config": str(manager.config_path),
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(system_tunnel, "_process_matches", lambda _state: None)
+    monkeypatch.setattr(system_tunnel.psutil, "pid_exists", lambda _pid: True)
+    monkeypatch.setattr(system_tunnel, "_interface_exists", lambda _name: False)
+
+    assert manager.is_running() is True
+
+
+def test_system_tunnel_is_running_detects_untracked_adapter(tmp_path, monkeypatch):
+    manager = _manager(tmp_path)
+    monkeypatch.setattr(system_tunnel, "_interface_exists", lambda _name: True)
+
+    assert manager.is_running() is True

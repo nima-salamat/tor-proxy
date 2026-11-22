@@ -1131,10 +1131,23 @@ class SystemTunnelManager:
             raise SystemTunnelError(detail[-1200:])
 
     def is_running(self) -> bool:
+        """Fail closed when a process record, PID or TUN adapter remains unverified."""
         state = _read_json(self.process_state_path)
         if not state:
-            return False
-        return _process_matches(state) is not None
+            # A corrupt state file or orphaned adapter must block binary upgrades.
+            return self.process_state_path.exists() or _interface_exists(self.interface_name)
+        process = _process_matches(state)
+        if process is not None:
+            return True
+        try:
+            saved_pid = int(state.get("pid", 0))
+        except (AttributeError, TypeError, ValueError):
+            saved_pid = 0
+        if saved_pid > 0 and psutil.pid_exists(saved_pid):
+            # The PID is live but its image/start-time/config does not match.
+            # Do not let an installer replace a binary while ownership is unclear.
+            return True
+        return _interface_exists(self.interface_name)
 
     def status(self) -> dict[str, Any]:
         state = _read_json(self.process_state_path)
@@ -2081,17 +2094,17 @@ def _helper_stop(state_path: Path, interface_name: str) -> dict[str, Any]:
             saved_pid = int(state.get("pid", 0))
         except (TypeError, ValueError):
             saved_pid = 0
+        if _interface_exists(interface_name):
+            raise SystemTunnelError(
+                f"The {interface_name} adapter remains after its process exited or its identity became invalid. "
+                "The helper retained the stale record instead of claiming that routes were restored."
+            )
         if saved_pid <= 0:
             raise SystemTunnelError(
                 "The saved sing-box process identity record has no valid PID; refusing to delete it or assume no child is running."
             )
         if psutil.pid_exists(saved_pid):
             raise SystemTunnelError("The saved tunnel PID still identifies another process; refusing to terminate it.")
-        if _interface_exists(interface_name):
-            raise SystemTunnelError(
-                f"The {interface_name} adapter remains after its process exited or its identity became invalid. "
-                "The helper retained the stale record instead of claiming that routes were restored."
-            )
         state_path.unlink(missing_ok=True)
         detail = (
             "Removed a stale tunnel record; its process has already exited."
