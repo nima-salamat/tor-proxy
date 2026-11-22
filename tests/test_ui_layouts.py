@@ -1097,16 +1097,14 @@ def test_tray_menu_is_custom_anchored_above_tray_icon():
     assert "self._set_tray_system_proxy_mode(selected_mode)" in source
     assert "def _sync_tray_system_proxy_actions(self, *_args)" in source
     assert "proxy_mode_combo.currentIndexChanged.connect(self._sync_tray_system_proxy_actions)" in source
-    assert 'self.tray_proxy_status_label = QLabel("CHECKING"' in source
-    assert "def _read_tray_system_proxy_status(self)" in source
-    assert "get_system_proxy_status(\"127.0.0.1\", port)" in source
-    assert "def _refresh_tray_system_proxy_status_async(self, force=False)" in source
-    assert "QThreadPool.globalInstance().start(worker)" in source
-    assert 'text = "ACTIVE · TORPROXY"' in source
-    assert 'text = "ENABLED · EXTERNAL"' in source
-    assert 'text = "DISABLED"' in source
-    assert 'text = "UNKNOWN"' in source
-    assert "self._refresh_tray_system_proxy_status_async(force=True)" in source
+    assert "self.tray_proxy_status_label" not in source
+    assert "_refresh_tray_system_proxy_status_async" not in source
+    assert "get_system_proxy_status" not in source
+    assert "self.tray_menu_header" not in source
+    assert "proxy_icon_colors" in source
+    assert '"set": "#43b982" if dark else "#168653"' in source
+    assert '"unchanged": "#94a2b5" if dark else "#758397"' in source
+    assert '"clear": danger' in source
 
 
 def test_theme_switch_thumb_can_be_dragged_in_both_directions(qt_app):
@@ -2235,8 +2233,8 @@ def test_tray_menu_uses_a_modern_theme_aware_floating_surface():
     assert "QWidgetAction" in source
     assert 'self.tray_menu.setObjectName("trayContextMenu")' in source
     assert "self.tray_menu.setMinimumWidth(286)" in source
-    assert 'self.tray_menu_header_action.setDefaultWidget(self.tray_menu_header)' in source
-    assert 'QLabel("Quick controls", self.tray_menu_header)' in source
+    assert "self.tray_menu_header" not in source
+    assert "self.tray_proxy_status_label" not in source
     assert 'QLabel("SYSTEM PROXY", self.tray_proxy_section)' in source
 
     theme_start = source.index("def _sync_tray_menu_theme(self, mode=None):")
@@ -2246,6 +2244,8 @@ def test_tray_menu_uses_a_modern_theme_aware_floating_surface():
     assert "QMenu#trayContextMenu::item:selected" in theme_sync
     assert "QMenu#trayContextMenu::separator" in theme_sync
     assert "QMenu#trayContextMenu::indicator:checked" in theme_sync
+    assert "border-radius: 4px;" in theme_sync
+    assert "proxy_icon_colors[proxy_mode]" in theme_sync
     assert 'surface = "#171e29"' in theme_sync
     assert 'surface = "#ffffff"' in theme_sync
     assert 'hover = "#29384d"' in theme_sync
