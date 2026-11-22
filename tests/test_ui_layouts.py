@@ -1114,7 +1114,8 @@ def test_tray_menu_is_custom_anchored_above_tray_icon():
     assert "row[\"button\"].setIcon(" in source
     assert "row[\"check\"].setStyleSheet(" in source
     assert "WA_TranslucentBackground" in source
-    assert "tray_toggle_action.setText(\"Show window\" if hidden else \"Hide window\")" in source
+    assert 'toggle_text = "Show window" if hidden else "Hide window"' in source
+    assert "self.tray_toggle_button.setText(toggle_text)" in source
     assert '"set": "#43b982" if dark else "#168653"' in source
     assert '"unchanged": "#94a2b5" if dark else "#758397"' in source
     assert '"clear": danger' in source
