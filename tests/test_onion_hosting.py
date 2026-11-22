@@ -77,6 +77,14 @@ def hosting(tmp_path, monkeypatch):
 
     monkeypatch.setattr(onion_module.socket, "create_connection", fake_connection)
     yield manager, config, fake_tor
+    # Tests may override this API with a fixed live-PID snapshot to model a
+    # surviving systemd Tor child. Restore a process-backed result before
+    # fixture teardown so FakeTorManager.stop() can report that it really exited.
+    fake_tor.process_identity_snapshot = lambda: {
+        "pid": getattr(fake_tor.process, "pid", None),
+        "alive": fake_tor.process is not None,
+        "verified": fake_tor.process is not None,
+    }
     manager.close()
 
 
