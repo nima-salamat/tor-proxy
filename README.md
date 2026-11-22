@@ -108,12 +108,13 @@ Get the latest portable build from **[GitHub Releases](https://github.com/nima-s
 
 | Package | Description |
 |---|---|
+| **Windows x64 Installer** | Setup wizard for the lightweight build, without a preinstalled Tor bundle |
 | **Windows x64** | Portable app, without a preinstalled Tor bundle |
 | **Windows x64 · With Tor** | Portable app with a verified Tor Expert Bundle |
 | **Linux x86_64** | Portable app, without a preinstalled Tor bundle |
 | **Linux x86_64 · With Tor** | Portable app with a verified Tor Expert Bundle |
 
-The **With Tor** packages also include the pinned sing-box engine used by the optional system tunnel. Portable packages include the application runtime; a separate Python installation is not required.
+The **Windows x64 Installer** is the lightweight edition: it installs the application and native helpers but does not include a Tor Expert Bundle or sing-box runtime. The **With Tor** packages also include the pinned sing-box engine used by the optional system tunnel. Portable packages include the application runtime; a separate Python installation is not required.
 
 - **Windows:** extract the complete archive and run \`TorProxyLauncher.exe\`.
 - **Linux:** extract the archive and run \`./TorProxy/TorProxyLauncher\`.
