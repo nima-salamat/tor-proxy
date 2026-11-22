@@ -1082,13 +1082,20 @@ def test_tray_menu_is_custom_anchored_above_tray_icon():
     assert "self.tray_icon.activated.connect(self._on_tray_activated)" in source
     assert "QSystemTrayIcon.ActivationReason.Context" in source
     assert "y = anchor.y() - size.height() - 12" in source
-    assert "self.tray_menu.exec(QPoint(x, y))" in source
-    assert "setContextMenu(self.tray_menu)" not in source
+    assert "self.tray_menu.move(QPoint(x, y))" in source
+    assert "self.tray_menu.show()" in source
+    assert "self.tray_menu.exec(" not in source
+    assert "QFrame(self," in source
+    assert "Qt.WindowType.Popup" in source
+    assert "Qt.WindowType.FramelessWindowHint" in source
+    assert "Qt.WindowType.NoDropShadowWindowHint" in source
+    assert "QMenu(self)" not in source[source.index("self.tray_icon = QSystemTrayIcon"):source.index("def start_deferred_startup")]
 
     # All three system-proxy policies are directly visible in the tray menu.
     assert "self.tray_system_proxy_menu" not in source
     assert "self.tray_menu.addMenu(" not in source
-    assert "self.tray_menu.addAction(action)" in source
+    assert "self.tray_menu_layout.addWidget(row)" in source
+    assert "self.tray_menu.addAction(action)" not in source
     assert 'row.setObjectName("trayPolicyRow")' in source
     assert 'button.setObjectName("trayPolicyButton")' in source
     assert 'check_label.setObjectName("trayPolicyCheck")' in source
@@ -2240,6 +2247,8 @@ def test_tray_menu_uses_a_modern_theme_aware_floating_surface():
     # platform-default menu with a few isolated actions.
     assert "QWidgetAction" in source
     assert 'self.tray_menu.setObjectName("trayContextMenu")' in source
+    assert "self.tray_menu.setFrameShape(QFrame.Shape.NoFrame)" in source
+    assert "self.tray_menu.setLineWidth(0)" in source
     assert "self.tray_menu.setMinimumWidth(286)" in source
     assert "self.tray_menu_header" not in source
     assert "self.tray_proxy_status_label" not in source
@@ -2248,11 +2257,12 @@ def test_tray_menu_uses_a_modern_theme_aware_floating_surface():
     theme_start = source.index("def _sync_tray_menu_theme(self, mode=None):")
     theme_end = source.index("def _theme_reveal_origin", theme_start)
     theme_sync = source[theme_start:theme_end]
-    assert "QMenu#trayContextMenu" in theme_sync
-    assert "QMenu#trayContextMenu::item:selected" in theme_sync
+    assert "QFrame#trayContextMenu" in theme_sync
+    assert "QMenu#trayContextMenu" not in theme_sync
+    assert "QFrame#trayMenuSeparator" in theme_sync
+    assert "QPushButton#trayPopupAction:hover" in theme_sync
     assert "border-radius: 14px;" in theme_sync
     assert "border-radius: 8px;" in theme_sync
-    assert "QMenu#trayContextMenu::separator" in theme_sync
     assert "QMenu#trayContextMenu::indicator" not in theme_sync
     assert "proxy_icon_colors[proxy_mode]" in theme_sync
     assert "QWidget#trayPolicyRow" in theme_sync
@@ -2312,10 +2322,10 @@ def test_tray_menu_uses_compact_vertical_spacing():
     theme_start = source.index("def _sync_tray_menu_theme(self, mode=None):")
     theme_end = source.index("def _theme_reveal_origin", theme_start)
     theme = source[theme_start:theme_end]
-    assert "padding: 6px;" in theme
-    assert "padding: 7px 14px 7px 12px;" in theme
-    assert "margin: 1px 4px;" in theme
-    assert "margin: 4px 12px;" in theme
+    assert "setContentsMargins(8, 8, 8, 8)" in source
+    assert "padding: 0;" in theme
+    assert "padding: 6px 9px;" in theme
+    assert "max-height: 1px;" in theme
 
 
 def test_open_browser_action_button_colors_follow_the_active_theme():
