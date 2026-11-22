@@ -852,12 +852,12 @@ class Window(QMainWindow):
             # Constructors and theme hooks may fail after allocating a QWidget.
             # Dispose of any unattached instance and clear its public references
             # so Retry always creates a fresh, internally consistent page.
-            if page is not None and self.stack.indexOf(page) >= 0:
+            if isinstance(page, QWidget) and self.stack.indexOf(page) >= 0:
                 self._page_placeholders.pop(index, None)
                 self._page_states[index] = "ready"
                 placeholder.deleteLater()
             else:
-                if page is not None:
+                if isinstance(page, QWidget):
                     page.deleteLater()
                 if self.stack.indexOf(placeholder) < 0:
                     self.stack.insertWidget(index, placeholder)
