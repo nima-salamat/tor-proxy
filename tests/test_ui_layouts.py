@@ -1089,8 +1089,10 @@ def test_tray_menu_is_custom_anchored_above_tray_icon():
     assert "self.tray_system_proxy_menu" not in source
     assert "self.tray_menu.addMenu(" not in source
     assert "self.tray_menu.addAction(action)" in source
-    assert "action.setCheckable(True)" in source
-    assert "self.tray_system_proxy_action_group.setExclusive(True)" in source
+    assert 'row.setObjectName("trayPolicyRow")' in source
+    assert 'button.setObjectName("trayPolicyButton")' in source
+    assert 'check_label.setObjectName("trayPolicyCheck")' in source
+    assert 'check.setText("✓" if mode == current_mode else "")' in source
     assert '("set", "Set system proxy"' in source
     assert '("unchanged", "Do not change system proxy"' in source
     assert '("clear", "Clear system proxy"' in source
@@ -1102,6 +1104,10 @@ def test_tray_menu_is_custom_anchored_above_tray_icon():
     assert "get_system_proxy_status" not in source
     assert "self.tray_menu_header" not in source
     assert "proxy_icon_colors" in source
+    assert "row[\"button\"].setIcon(" in source
+    assert "row[\"check\"].setStyleSheet(" in source
+    assert "WA_TranslucentBackground" in source
+    assert "tray_toggle_action.setText(\"Show window\" if hidden else \"Hide window\")" in source
     assert '"set": "#43b982" if dark else "#168653"' in source
     assert '"unchanged": "#94a2b5" if dark else "#758397"' in source
     assert '"clear": danger' in source
@@ -2245,6 +2251,10 @@ def test_tray_menu_uses_a_modern_theme_aware_floating_surface():
     assert "QMenu#trayContextMenu::separator" in theme_sync
     assert "QMenu#trayContextMenu::indicator" not in theme_sync
     assert "proxy_icon_colors[proxy_mode]" in theme_sync
+    assert "QWidget#trayPolicyRow" in theme_sync
+    assert "QLabel#trayPolicyCheck" in theme_sync
+    assert "QPushButton#trayPolicyButton:hover" in theme_sync
+    assert "background: transparent;" in theme_sync
     assert "proxy_icons[proxy_mode]" in theme_sync
     assert 'surface = "#171e29"' in theme_sync
     assert 'surface = "#ffffff"' in theme_sync
