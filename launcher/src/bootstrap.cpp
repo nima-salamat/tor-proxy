@@ -31,6 +31,9 @@ struct State {
     HWND window = nullptr;
     HICON icon = nullptr;
     std::unique_ptr<Gdiplus::Bitmap> logo;
+    std::unique_ptr<Gdiplus::Bitmap> staticFrame;
+    int staticFrameWidth = 0, staticFrameHeight = 0;
+    bool staticFrameDirty = true;
     HDC backBufferDc = nullptr;
     HBITMAP backBufferBitmap = nullptr;
     HGDIOBJ backBufferPreviousBitmap = nullptr;
@@ -58,6 +61,7 @@ bool loadSplashLogo(State &s) {
         auto image = std::make_unique<Gdiplus::Bitmap>(candidatePath.c_str());
         if (image->GetLastStatus() == Gdiplus::Ok) {
             s.logo = std::move(image);
+            s.staticFrameDirty = true;
             return true;
         }
     }
@@ -575,7 +579,7 @@ int hitAction(const State &s, int x, int y) {
     }
     return -1;
 }
-void paintFrame(State &s, HDC dc) {
+void paintFrameUncached(State &s, HDC dc) {
     using namespace Gdiplus;
     const ThemePalette colors = themePalette(s.darkTheme);
     Graphics graphics(dc);
@@ -706,6 +710,202 @@ void paintFrame(State &s, HDC dc) {
     graphics.DrawLine(&footerLine, 34.0f, 461.0f, 726.0f, 461.0f);
 }
 
+void paintStaticFrame(State &s, Gdiplus::Graphics &graphics) {
+    using namespace Gdiplus;
+    const ThemePalette colors = themePalette(s.darkTheme);
+    graphics.Clear(colors.backgroundEnd);
+    graphics.SetSmoothingMode(SmoothingModeAntiAlias);
+    graphics.SetPixelOffsetMode(PixelOffsetModeHighQuality);
+    graphics.SetCompositingQuality(CompositingQualityHighQuality);
+    graphics.SetInterpolationMode(InterpolationModeHighQualityBicubic);
+    graphics.SetTextRenderingHint(TextRenderingHintAntiAliasGridFit);
+    graphics.ScaleTransform(s.scale, s.scale);
+
+    const RectF canvas(0.0f, 0.0f, static_cast<float>(kDesignWidth),
+                       static_cast<float>(kDesignHeight));
+    GraphicsPath panel;
+    addRoundedPath(panel, canvas, kPanelCornerRadius);
+    LinearGradientBrush background(
+        canvas, colors.backgroundStart, colors.backgroundEnd,
+        LinearGradientModeForwardDiagonal
+    );
+    graphics.FillPath(&background, &panel);
+
+    GraphicsPath glowPath;
+    glowPath.AddEllipse(RectF(210.0f, 20.0f, 340.0f, 300.0f));
+    PathGradientBrush glow(&glowPath);
+    glow.SetCenterColor(colors.glowCenter);
+    Color glowEdges[] = {colors.glowEdge};
+    INT edgeCount = 1;
+    glow.SetSurroundColors(glowEdges, &edgeCount);
+    graphics.FillPath(&glow, &glowPath);
+
+    Pen outline(colors.outline, 1.0f);
+    graphics.DrawPath(&outline, &panel);
+    LinearGradientBrush accent(RectF(30.0f, 0.0f, 700.0f, 3.0f),
+                               colors.accentStart, colors.accentEnd,
+                               LinearGradientModeHorizontal);
+    graphics.FillRectangle(&accent, RectF(30.0f, 0.0f, 700.0f, 3.0f));
+
+    drawText(graphics, L"TORPROXY  /  DESKTOP",
+             RectF(42.0f, 25.0f, 300.0f, 24.0f), 11.0f,
+             colors.eyebrow, true, StringAlignmentNear);
+    drawText(graphics, L"WINDOWS",
+             RectF(610.0f, 25.0f, 70.0f, 24.0f), 10.0f,
+             colors.metadata, false, StringAlignmentFar);
+
+    if (s.logo && s.logo->GetLastStatus() == Ok) {
+        SolidBrush logoHalo(colors.logoHalo);
+        graphics.FillEllipse(&logoHalo, RectF(319.0f, 73.0f, 122.0f, 122.0f));
+        graphics.DrawImage(s.logo.get(), RectF(331.0f, 85.0f, 98.0f, 98.0f));
+    }
+
+    Pen footerLine(s.darkTheme ? Color(30, 137, 174, 187) : Color(55, 92, 119, 132), 1.0f);
+    graphics.DrawLine(&footerLine, 34.0f, 461.0f, 726.0f, 461.0f);
+}
+
+void paintDynamicFrame(State &s, Gdiplus::Graphics &graphics) {
+    using namespace Gdiplus;
+    const ThemePalette colors = themePalette(s.darkTheme);
+    graphics.SetSmoothingMode(SmoothingModeAntiAlias);
+    graphics.SetPixelOffsetMode(PixelOffsetModeHighQuality);
+    graphics.SetCompositingQuality(CompositingQualityHighQuality);
+    graphics.SetInterpolationMode(InterpolationModeHighQualityBicubic);
+    graphics.SetTextRenderingHint(TextRenderingHintAntiAliasGridFit);
+    graphics.ScaleTransform(s.scale, s.scale);
+
+    const RectF closeRect(698.0f, 18.0f, 46.0f, 46.0f);
+    if (s.closeHover) {
+        GraphicsPath closeBg;
+        addRoundedPath(closeBg, closeRect, 14.0f);
+        SolidBrush hover(colors.closeHoverFill);
+        graphics.FillPath(&hover, &closeBg);
+    }
+    Pen closePen(s.closeHover ? colors.closePenHover : colors.closePen,
+                 s.closeHover ? 2.2f : 1.8f);
+    closePen.SetStartCap(LineCapRound);
+    closePen.SetEndCap(LineCapRound);
+    graphics.DrawLine(&closePen, 714.0f, 34.0f, 728.0f, 48.0f);
+    graphics.DrawLine(&closePen, 728.0f, 34.0f, 714.0f, 48.0f);
+
+    if (!s.failed) {
+        drawText(graphics, L"TorProxy", RectF(60.0f, 190.0f, 640.0f, 55.0f),
+                 35.0f, colors.title, true);
+        drawText(graphics, L"Private connections, simplified",
+                 RectF(80.0f, 245.0f, 600.0f, 30.0f), 14.0f,
+                 colors.subtitle);
+
+        Pen spinnerTrack(colors.spinnerTrack, 3.6f);
+        spinnerTrack.SetStartCap(LineCapRound);
+        spinnerTrack.SetEndCap(LineCapRound);
+        graphics.DrawEllipse(&spinnerTrack, RectF(367.0f, 309.0f, 26.0f, 26.0f));
+        Pen spinner(colors.spinner, 3.8f);
+        spinner.SetStartCap(LineCapRound);
+        spinner.SetEndCap(LineCapRound);
+        graphics.DrawArc(&spinner, RectF(367.0f, 309.0f, 26.0f, 26.0f),
+                         static_cast<REAL>(s.angle), 255.0f);
+        drawText(graphics, s.status, RectF(58.0f, 345.0f, 644.0f, 30.0f),
+                 13.0f, colors.status, true);
+
+        const RectF track(52.0f, 402.0f, 656.0f, 5.0f);
+        GraphicsPath trackPath;
+        addRoundedPath(trackPath, track, 2.5f);
+        SolidBrush trackBrush(colors.progressTrack);
+        graphics.FillPath(&trackBrush, &trackPath);
+        const float segmentWidth = 115.0f;
+        const float travel = track.Width + segmentWidth;
+        const float offset = static_cast<float>(s.progress % 500) / 500.0f * travel;
+        RectF moving(track.X + offset - segmentWidth, track.Y, segmentWidth, track.Height);
+        const float visibleLeft = std::max(moving.X, track.X);
+        const float visibleTop = std::max(moving.Y, track.Y);
+        const float visibleRight = std::min(moving.GetRight(), track.GetRight());
+        const float visibleBottom = std::min(moving.GetBottom(), track.GetBottom());
+        if (visibleRight > visibleLeft && visibleBottom > visibleTop) {
+            RectF visible(visibleLeft, visibleTop,
+                          visibleRight - visibleLeft, visibleBottom - visibleTop);
+            GraphicsPath movingPath;
+            addRoundedPath(movingPath, visible, 2.5f);
+            LinearGradientBrush movingBrush(visible, colors.progressStart,
+                                             colors.progressEnd, LinearGradientModeHorizontal);
+            graphics.FillPath(&movingBrush, &movingPath);
+        }
+        drawText(graphics, L"Loading Python and desktop components",
+                 RectF(65.0f, 423.0f, 630.0f, 22.0f), 10.5f,
+                 colors.footer);
+    } else {
+        drawText(graphics, L"Startup needs attention",
+                 RectF(55.0f, 190.0f, 650.0f, 52.0f), 30.0f,
+                 colors.errorTitle, true);
+        drawText(graphics, L"The desktop process stopped before it became ready.",
+                 RectF(68.0f, 242.0f, 624.0f, 30.0f), 13.0f,
+                 colors.errorSubtitle);
+        std::wstring detail = s.error;
+        if (detail.size() > 700) {
+            detail = detail.substr(0, 690) + L"…";
+        }
+        drawText(graphics, detail, RectF(80.0f, 284.0f, 600.0f, 92.0f),
+                 11.0f, colors.errorDetail, false,
+                 StringAlignmentNear, StringAlignmentNear, true);
+
+        drawButton(graphics, RectF(73.0f, 394.0f, 192.0f, 46.0f),
+                   L"Try again", true, s.hoverAction == 0, colors);
+        drawButton(graphics, RectF(281.0f, 394.0f, 192.0f, 46.0f),
+                   L"Open logs", false, s.hoverAction == 1, colors);
+        drawButton(graphics, RectF(489.0f, 394.0f, 192.0f, 46.0f),
+                   L"Close", false, s.hoverAction == 2, colors);
+    }
+}
+
+void paintFrame(State &s, HDC dc) {
+    RECT client{};
+    if (!GetClientRect(s.window, &client)) {
+        return;
+    }
+    const int width = client.right - client.left;
+    const int height = client.bottom - client.top;
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+
+    const bool cacheNeedsRebuild =
+        s.staticFrameDirty || !s.staticFrame ||
+        s.staticFrameWidth != width || s.staticFrameHeight != height;
+    if (cacheNeedsRebuild) {
+        auto cache = std::make_unique<Gdiplus::Bitmap>(
+            width, height, PixelFormat32bppPARGB
+        );
+        if (!cache || cache->GetLastStatus() != Gdiplus::Ok) {
+            paintFrameUncached(s, dc);
+            return;
+        }
+        Gdiplus::Graphics cacheGraphics(cache.get());
+        paintStaticFrame(s, cacheGraphics);
+        if (cacheGraphics.GetLastStatus() != Gdiplus::Ok) {
+            paintFrameUncached(s, dc);
+            return;
+        }
+        s.staticFrame = std::move(cache);
+        s.staticFrameWidth = width;
+        s.staticFrameHeight = height;
+        s.staticFrameDirty = false;
+    }
+
+    Gdiplus::Graphics graphics(dc);
+    graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+    const auto drawStatus = graphics.DrawImage(
+        s.staticFrame.get(),
+        Gdiplus::Rect(0, 0, width, height),
+        0, 0, width, height,
+        Gdiplus::UnitPixel
+    );
+    if (drawStatus != Gdiplus::Ok) {
+        s.staticFrameDirty = true;
+        paintFrameUncached(s, dc);
+        return;
+    }
+    paintDynamicFrame(s, graphics);
+}
+
 
 void releaseBackBuffer(State &s) {
     if (s.backBufferDc && s.backBufferPreviousBitmap) {
@@ -786,6 +986,7 @@ void paint(State &s, HDC targetDc) {
 
 void updateMonitorLayout(State &s, UINT dpi) {
     if (!s.window) return;
+    s.staticFrameDirty = true;
     MONITORINFO monitorInfo{};
     monitorInfo.cbSize = sizeof(monitorInfo);
     HMONITOR monitor = MonitorFromWindow(s.window, MONITOR_DEFAULTTONEAREST);
@@ -828,14 +1029,17 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     switch (msg) {
     case WM_CREATE:
-        SetTimer(hwnd, kTimer, 50, nullptr);
+        SetTimer(hwnd, kTimer, 100, nullptr);
         return 0;
     case WM_TIMER:
-        // Keep the splash smooth without competing with Python startup for CPU.
-        s->angle = (s->angle + 17) % 360;
-        s->progress = (s->progress + 8) % 500;
+        // Static splash artwork is cached; animate at a restrained 10 FPS so
+        // rendering never competes heavily with the Python cold-start path.
+        if (!s->failed) {
+            s->angle = (s->angle + 17) % 360;
+            s->progress = (s->progress + 8) % 500;
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
         if (++s->pollCount >= 2) { s->pollCount = 0; poll(*s); }
-        InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
     case WM_DPICHANGED: {
         const UINT newDpi = HIWORD(wp);
@@ -1064,6 +1268,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     startApp(state);
     state.darkTheme = resolveConfiguredDarkTheme();
     loadSplashLogo(state); // A decorative asset must not block the app from running.
+    state.staticFrameDirty = true;
     InvalidateRect(state.window, nullptr, FALSE);
 
     MSG msg{};
