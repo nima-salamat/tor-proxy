@@ -200,6 +200,14 @@ class HotkeyManager:
                 raise
             # Retain a best-effort fallback if an unusual Windows installation
             # blocks native window creation. Native registration remains primary.
+            native_backend = self._backend
+            try:
+                native_backend.stop()
+            except Exception as stop_error:
+                raise RuntimeError(
+                    "The native global-hotkey thread could not be stopped safely; "
+                    "the fallback backend was not started."
+                ) from stop_error
             fallback = _KeyboardBackend(self._report_error)
             fallback.set_bindings(self._backend_snapshot())
             fallback.start()
@@ -312,6 +320,7 @@ if os.name == "nt":
             self._registered: set[int] = set()
             self._id_to_name: dict[int, str] = {}
             self._lock = threading.RLock()
+            self._lifecycle_lock = threading.Lock()
             self._started = threading.Event()
             self._thread: threading.Thread | None = None
             self._hwnd = None
@@ -341,16 +350,58 @@ if os.name == "nt":
                 raise RuntimeError("; ".join(self._reconfigure_errors))
 
         def start(self) -> None:
-            if self._thread and self._thread.is_alive():
-                return
-            self._started.clear()
-            self._startup_error = None
-            self._thread = threading.Thread(target=self._run, name="TorProxyNativeHotkeys", daemon=True)
-            self._thread.start()
-            if not self._started.wait(8):
-                raise RuntimeError("Timed out while starting the Windows hotkey manager.")
-            if self._startup_error:
-                raise RuntimeError(self._startup_error)
+            with self._lifecycle_lock:
+                previous = self._thread
+                if previous is not None and previous.is_alive():
+                    if self._started.is_set():
+                        return
+                    if previous is not threading.current_thread():
+                        previous.join(timeout=3)
+                    if previous.is_alive():
+                        raise RuntimeError(
+                            "The previous Windows hotkey thread is still shutting down; "
+                            "a duplicate message window was refused."
+                        )
+                if self._thread is previous:
+                    self._thread = None
+                self._started.clear()
+                self._startup_error = None
+                thread = threading.Thread(
+                    target=self._run,
+                    name="TorProxyNativeHotkeys",
+                    daemon=True,
+                )
+                self._thread = thread
+                try:
+                    thread.start()
+                except Exception:
+                    if self._thread is thread:
+                        self._thread = None
+                    raise
+                if not self._started.wait(8):
+                    # Ask an initialized message window to close if startup
+                    # eventually completes; retain the thread if it will not exit.
+                    hwnd, user32 = self._hwnd, self._user32
+                    if hwnd and user32:
+                        user32.PostMessageW(hwnd, self.WM_CLOSE, 0, 0)
+                    thread.join(timeout=3)
+                    if thread.is_alive():
+                        raise RuntimeError(
+                            "Windows hotkey startup timed out and its owner thread is still active."
+                        )
+                    if self._thread is thread:
+                        self._thread = None
+                    raise RuntimeError("Timed out while starting the Windows hotkey manager.")
+                if self._startup_error:
+                    thread.join(timeout=3)
+                    if thread.is_alive():
+                        raise RuntimeError(
+                            "Windows hotkey initialization failed but its owner thread is still active: "
+                            + self._startup_error
+                        )
+                    if self._thread is thread:
+                        self._thread = None
+                    raise RuntimeError(self._startup_error)
 
         def _apply_hotkeys(self) -> list[str]:
             with self._lock:
@@ -519,13 +570,51 @@ if os.name == "nt":
                 LOGGER.exception("Native Windows hotkey backend failed.")
                 self._started.set()
             finally:
+                # WM_CLOSE performs the normal cleanup. This finalizer also
+                # handles GetMessageW errors and exceptions after window creation.
+                with self._recovery_lock:
+                    for timer in self._recovery_timers:
+                        timer.cancel()
+                    self._recovery_timers.clear()
+                hwnd, user32 = self._hwnd, self._user32
+                if hwnd and user32:
+                    for hotkey_id in tuple(self._registered):
+                        try:
+                            user32.UnregisterHotKey(hwnd, hotkey_id)
+                        except Exception:
+                            LOGGER.debug("Could not unregister a Windows hotkey during cleanup.", exc_info=True)
+                    self._registered.clear()
+                    self._id_to_name.clear()
+                    if self._wts is not None:
+                        try:
+                            self._wts.WTSUnRegisterSessionNotification(hwnd)
+                        except Exception:
+                            LOGGER.debug("Could not unregister Windows session notifications.", exc_info=True)
+                    try:
+                        user32.DestroyWindow(hwnd)
+                    except Exception:
+                        LOGGER.debug("Could not destroy the Windows hotkey message window.", exc_info=True)
                 self._hwnd = None
+                self._started.clear()
 
         def stop(self) -> None:
-            hwnd, user32 = self._hwnd, self._user32
-            if hwnd and user32:
-                user32.PostMessageW(hwnd, self.WM_CLOSE, 0, 0)
-            thread = self._thread
-            if thread and thread.is_alive() and thread is not threading.current_thread():
-                thread.join(timeout=3)
-            self._thread = None
+            with self._lifecycle_lock:
+                thread = self._thread
+                self._started.clear()
+                hwnd, user32 = self._hwnd, self._user32
+                if hwnd and user32:
+                    if not user32.PostMessageW(hwnd, self.WM_CLOSE, 0, 0):
+                        raise ctypes.WinError(ctypes.get_last_error())
+                if thread is None or thread is threading.current_thread():
+                    # The owner thread will consume WM_CLOSE as soon as the
+                    # current hotkey callback returns.
+                    return
+                if thread.is_alive():
+                    thread.join(timeout=3)
+                if thread.is_alive():
+                    raise RuntimeError(
+                        "The Windows hotkey message thread is still active; "
+                        "its reference was retained so shutdown can be retried."
+                    )
+                if self._thread is thread:
+                    self._thread = None
