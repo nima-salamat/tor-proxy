@@ -96,3 +96,8 @@ End-to-end verification is an explicit **Test traffic** action available while t
 ## Persistent Tor process ownership
 
 Every TorManager DataDirectory contains a private `.torproxy-process.json` identity record written atomically after launch. The record binds PID to process creation time, executable path, exact torrc path and (when used) the systemd scope. Recovery verifies all identity fields before signalling a saved PID, so PID reuse cannot target an unrelated process. Orphan cleanup must first acquire the per-DataDirectory cross-process lock. Main Tor workers, independent Tor Services, Developer Tor and isolated bridge-health probes all use this shared TorManager lifecycle. Probe directories are retained when shutdown cannot be confirmed and reconciled before a later bridge-check wave.
+
+
+## Privileged helper input validation
+
+The System Tunnel helper is invoked before the GUI and runs with elevated privileges. Its CLI paths are therefore treated as untrusted, even though normal launches are built internally. Before the helper starts or stops sing-box, it validates the invoking user, private user-owned roots, exact expected filenames and TUN interface, and rejects symlinked path components. The helper's result JSON is written only after the result path has itself passed validation. This prevents a malformed or direct helper invocation from turning an elevated error-reporting path into an arbitrary file write or unlink.
