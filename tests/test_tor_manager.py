@@ -1376,3 +1376,89 @@ def test_malformed_tor_identity_record_blocks_legacy_process_scan(tmp_path, monk
     with pytest.raises(TorManagerError, match="malformed or unreadable"):
         manager._stop_recorded_process()
     assert manager.process_state_path.is_file()
+
+
+
+def test_tor_owned_transport_children_are_terminated_and_force_escalated(monkeypatch, tmp_path):
+    manager = TorManager(TorSettings(
+        executable=tmp_path / "tor.exe",
+        data_directory=tmp_path / "state" / "tor-children",
+    ))
+
+    class FakeChild:
+        def __init__(self, pid):
+            self.pid = pid
+            self.alive = True
+            self.terminated = False
+            self.killed = False
+
+        def is_running(self):
+            return self.alive
+
+        def status(self):
+            return "running"
+
+        def terminate(self):
+            self.terminated = True
+            # Simulate a managed transport that ignores graceful shutdown.
+
+        def kill(self):
+            self.killed = True
+            self.alive = False
+
+    child = FakeChild(98765)
+
+    def fake_wait_procs(processes, timeout):
+        alive = [process for process in processes if process.alive]
+        gone = [process for process in processes if not process.alive]
+        return gone, alive
+
+    monkeypatch.setattr(tor_manager_module.psutil, "wait_procs", fake_wait_procs)
+
+    manager._stop_owned_descendants([child], force=False)
+
+    assert child.terminated is True
+    assert child.killed is True
+    assert child.alive is False
+
+
+def test_force_stop_kills_tracked_tor_children_without_graceful_wait(monkeypatch, tmp_path):
+    manager = TorManager(TorSettings(
+        executable=tmp_path / "tor.exe",
+        data_directory=tmp_path / "state" / "tor-child-force",
+    ))
+
+    class FakeChild:
+        pid = 98766
+        alive = True
+        killed = False
+        terminated = False
+
+        def is_running(self):
+            return self.alive
+
+        def status(self):
+            return "running"
+
+        def terminate(self):
+            self.terminated = True
+
+        def kill(self):
+            self.killed = True
+            self.alive = False
+
+    child = FakeChild()
+    monkeypatch.setattr(
+        tor_manager_module.psutil,
+        "wait_procs",
+        lambda processes, timeout: (
+            [process for process in processes if not process.alive],
+            [process for process in processes if process.alive],
+        ),
+    )
+
+    manager._stop_owned_descendants([child], force=True)
+
+    assert child.killed is True
+    assert child.terminated is False
+    assert child.alive is False

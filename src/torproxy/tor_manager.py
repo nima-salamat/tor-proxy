@@ -435,6 +435,78 @@ class TorManager:
             "scope_unit": self._scope_unit or "",
         }
 
+    @staticmethod
+    def _snapshot_owned_descendants(roots: list[psutil.Process]) -> list[psutil.Process]:
+        """Capture the verified Tor process trees before stopping their root processes."""
+        descendants: dict[int, psutil.Process] = {}
+        for root in roots:
+            if root is None:
+                continue
+            try:
+                for child in root.children(recursive=True):
+                    descendants[int(child.pid)] = child
+            except psutil.NoSuchProcess:
+                continue
+            except (psutil.AccessDenied, psutil.Error) as exc:
+                raise TorManagerError(
+                    "Could not inspect the managed Tor transport process tree; refusing to release ownership."
+                ) from exc
+        return list(descendants.values())
+
+    @staticmethod
+    def _stop_owned_descendants(
+        descendants: list[psutil.Process],
+        *,
+        force: bool = False,
+    ) -> None:
+        """Stop Tor-owned transport children and verify they exit before state is released."""
+        active: list[psutil.Process] = []
+        for child in descendants:
+            try:
+                if child.is_running() and child.status() != psutil.STATUS_ZOMBIE:
+                    active.append(child)
+            except psutil.NoSuchProcess:
+                continue
+            except (psutil.AccessDenied, psutil.Error) as exc:
+                raise TorManagerError(
+                    "Could not verify a Tor transport child process; its ownership record was retained."
+                ) from exc
+
+        if not active:
+            return
+
+        for child in active:
+            try:
+                child.kill() if force else child.terminate()
+            except psutil.NoSuchProcess:
+                continue
+            except psutil.AccessDenied as exc:
+                raise TorManagerError(
+                    f"Permission was denied while stopping a Tor-owned transport child (PID {child.pid})."
+                ) from exc
+
+        _, alive = psutil.wait_procs(active, timeout=0.5 if force else 1.5)
+        if alive and not force:
+            for child in alive:
+                try:
+                    child.kill()
+                except psutil.NoSuchProcess:
+                    continue
+                except psutil.AccessDenied as exc:
+                    raise TorManagerError(
+                        f"Tor-owned transport child PID {child.pid} could not be force-stopped."
+                    ) from exc
+            _, alive = psutil.wait_procs(alive, timeout=2.0)
+        elif alive:
+            _, alive = psutil.wait_procs(alive, timeout=2.0)
+
+        if alive:
+            pids = ", ".join(str(child.pid) for child in alive)
+            raise TorManagerError(
+                "Tor stopped, but transport child process(es) are still active "
+                f"({pids}); the DataDirectory ownership record was retained."
+            )
+
     def _clear_process_identity(self) -> None:
         try:
             self.process_state_path.unlink(missing_ok=True)
@@ -578,6 +650,7 @@ class TorManager:
             if not matching:
                 return
 
+        descendants = self._snapshot_owned_descendants(matching)
         process_ids = [process.pid for process in matching]
         LOGGER.warning(
             "Found stale Tor process(es) %s still using TorProxy's dedicated torrc; stopping them "
@@ -613,6 +686,10 @@ class TorManager:
                     ", ".join(str(process.pid) for process in alive)
                 )
             )
+        # A force-exited Tor process may leave a pluggable transport (for
+        # example Lyrebird) running as an orphan. Stop its previously captured
+        # descendants before deleting the saved identity or reusing this dir.
+        self._stop_owned_descendants(descendants)
         self._clear_process_identity()
 
     def _release_data_directory_lock(self) -> None:
@@ -1549,6 +1626,13 @@ class TorManager:
             self._terminate_process_locked(force=force)
 
     def _terminate_process_locked(self, *, force: bool = False) -> None:
+        # Capture children while the authenticated Tor process still exists.
+        # Popen.kill() only kills the root process on Windows and POSIX; managed
+        # bridge transports must not be left behind when Tor is force-stopped.
+        tor_process = self._recorded_tor_process()
+        owned_descendants = self._snapshot_owned_descendants(
+            [tor_process] if tor_process is not None else []
+        )
         with self._lock:
             controller, self._controller = self._controller, None
             process = self.process
@@ -1605,6 +1689,9 @@ class TorManager:
                 self.last_error = message
                 self.state = TorState.FAILED
                 raise TorManagerError(message)
+        # systemd scopes normally kill all descendants together, but verify the
+        # captured process tree on every platform before discarding ownership.
+        self._stop_owned_descendants(owned_descendants, force=force)
         if self.settings.cgroup_callback is not None and (
             self._scope_unit is not None or self._tor_cgroup_id is not None
         ):
