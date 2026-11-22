@@ -1483,6 +1483,99 @@ def _require_elevation() -> None:
         raise SystemTunnelError("The system TUN helper must run as root through pkexec.")
 
 
+def _stop_failed_sing_box_launch(
+    process: subprocess.Popen,
+    interface_name: str,
+    state_path: Path,
+    record: dict[str, Any] | None,
+) -> None:
+    """Stop a child whose PID record could not be persisted; fail closed if anything remains."""
+    try:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=3)
+    except subprocess.TimeoutExpired as exc:
+        if record is not None:
+            try:
+                _atomic_json(state_path, record, mode=0o600)
+            except OSError:
+                logger.exception("Could not preserve the emergency sing-box identity record.")
+        raise SystemTunnelError(
+            "sing-box process record persistence failed and the newly launched child could not be stopped; "
+            "its state was retained where possible."
+        ) from exc
+    except OSError as exc:
+        if process.poll() is None and record is not None:
+            try:
+                _atomic_json(state_path, record, mode=0o600)
+            except OSError:
+                logger.exception("Could not preserve the emergency sing-box identity record.")
+        raise SystemTunnelError(
+            "sing-box process record persistence failed and the newly launched child could not be stopped safely."
+        ) from exc
+
+    if process.poll() is None:
+        if record is not None:
+            try:
+                _atomic_json(state_path, record, mode=0o600)
+            except OSError:
+                logger.exception("Could not preserve the emergency sing-box identity record.")
+        raise SystemTunnelError(
+            "sing-box process record persistence failed and the newly launched child is still alive."
+        )
+    if _interface_exists(interface_name):
+        if record is not None:
+            try:
+                _atomic_json(state_path, record, mode=0o600)
+            except OSError:
+                logger.exception("Could not preserve the emergency sing-box identity record.")
+        raise SystemTunnelError(
+            f"sing-box stopped after its process record failed to persist, but {interface_name} is still present; "
+            "the tunnel state was retained."
+        )
+    state_path.unlink(missing_ok=True)
+
+
+def _persist_sing_box_process_identity(
+    process: subprocess.Popen,
+    engine: Path,
+    config_path: Path,
+    interface_name: str,
+    digest: str,
+    state_path: Path,
+) -> dict[str, Any]:
+    """Write the process identity before waiting for TUN readiness, rolling back on failure."""
+    record: dict[str, Any] | None = None
+    try:
+        created = psutil.Process(process.pid).create_time()
+        record = {
+            "pid": process.pid,
+            "create_time": created,
+            "engine": str(engine),
+            "config": str(config_path),
+            "interface": interface_name,
+            "sha256": digest,
+        }
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_json(state_path, record, mode=0o600)
+        return record
+    except Exception as exc:
+        try:
+            _stop_failed_sing_box_launch(process, interface_name, state_path, record)
+        except Exception as cleanup_error:
+            raise SystemTunnelError(
+                f"Could not persist sing-box process identity ({type(exc).__name__}); "
+                f"child cleanup is incomplete: {cleanup_error}"
+            ) from cleanup_error
+        raise SystemTunnelError(
+            "Could not persist sing-box process identity; the new child was stopped before the helper returned."
+        ) from exc
+
+
 def _helper_start(args: Any) -> dict[str, Any]:
     engine = Path(args.engine).resolve()
     config_path = Path(args.config).resolve()
@@ -1765,16 +1858,14 @@ def _helper_start(args: Any) -> dict[str, Any]:
     # interface appears. If startup is interrupted between those events, the
     # next Connect can still stop this exact child instead of seeing an
     # unexplained sing-box process.
-    record = {
-        "pid": process.pid,
-        "create_time": psutil.Process(process.pid).create_time(),
-        "engine": str(engine),
-        "config": str(config_path),
-        "interface": args.interface,
-        "sha256": args.sha256,
-    }
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    _atomic_json(state_path, record, mode=0o644)
+    record = _persist_sing_box_process_identity(
+        process,
+        engine,
+        config_path,
+        args.interface,
+        args.sha256,
+        state_path,
+    )
 
     deadline = time.monotonic() + HELPER_START_TIMEOUT_SECONDS
     while time.monotonic() < deadline:

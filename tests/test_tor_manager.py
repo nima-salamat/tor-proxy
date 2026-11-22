@@ -1,5 +1,6 @@
 import json
 import os
+import time
 
 import pytest
 
@@ -1188,8 +1189,6 @@ def test_stop_during_popen_never_leaves_a_late_tor_child(tmp_path, monkeypatch):
         poll=lambda: child.returncode,
         wait=lambda timeout=None: child.returncode,
     )
-    run_calls = []
-
     def verify_config(*_args, **_kwargs):
         return SimpleNamespace(returncode=0, stdout="")
 

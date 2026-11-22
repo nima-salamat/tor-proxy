@@ -903,11 +903,11 @@ def test_helper_persists_process_identity_before_waiting_for_the_tun_adapter():
     import inspect
 
     source = inspect.getsource(system_tunnel._helper_start)
-    record_write = source.index("_atomic_json(state_path, record, mode=0o644)")
+    record_write = source.index("_persist_sing_box_process_identity(")
     wait_for_interface = source.index("while time.monotonic() < deadline")
 
     assert record_write < wait_for_interface
-    assert '"create_time": psutil.Process(process.pid).create_time()' in source
+    assert "mode=0o600" in inspect.getsource(system_tunnel._persist_sing_box_process_identity)
 
 def test_stop_removes_corrupt_state_record_only_when_no_tun_adapter_exists(tmp_path, monkeypatch):
     state_path = tmp_path / "tunnel-state.json"
@@ -1008,3 +1008,58 @@ def test_windows_tunnel_stop_uses_verified_terminate_when_ctrl_break_fails(monke
 
     assert fake.terminated is True
     assert fake.waited == [3]
+
+
+
+def test_sing_box_child_is_stopped_when_persisting_its_identity_fails(tmp_path, monkeypatch):
+    state_path = tmp_path / "state" / "sing-box-process.json"
+    engine = tmp_path / "engine" / "sing-box"
+    config_path = tmp_path / "state" / "sing-box.json"
+    interface_name = system_tunnel.TUN_INTERFACE_LINUX
+
+    class FakeChild:
+        pid = 32191
+
+        def __init__(self):
+            self.returncode = None
+            self.terminate_calls = 0
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.terminate_calls += 1
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+    child = FakeChild()
+    monkeypatch.setattr(
+        system_tunnel.psutil,
+        "Process",
+        lambda _pid: type("FakePsutilProcess", (), {"create_time": lambda self: 123.0})(),
+    )
+    monkeypatch.setattr(system_tunnel, "_interface_exists", lambda _name: False)
+
+    def fail_write(*_args, **_kwargs):
+        raise OSError("simulated state disk failure")
+
+    monkeypatch.setattr(system_tunnel, "_atomic_json", fail_write)
+
+    with pytest.raises(SystemTunnelError, match="new child was stopped"):
+        system_tunnel._persist_sing_box_process_identity(
+            child,
+            engine,
+            config_path,
+            interface_name,
+            "a" * 64,
+            state_path,
+        )
+
+    assert child.terminate_calls == 1
+    assert child.poll() is not None
+    assert not state_path.exists()
