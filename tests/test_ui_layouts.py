@@ -1106,7 +1106,7 @@ def test_tray_menu_is_custom_anchored_above_tray_icon():
     assert 'text = "ENABLED · EXTERNAL"' in source
     assert 'text = "DISABLED"' in source
     assert 'text = "UNKNOWN"' in source
-    assert "self._refresh_tray_system_proxy_status_async()" in source
+    assert "self._refresh_tray_system_proxy_status_async(force=True)" in source
 
 
 def test_theme_switch_thumb_can_be_dragged_in_both_directions(qt_app):
