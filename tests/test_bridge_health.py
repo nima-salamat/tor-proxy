@@ -515,3 +515,45 @@ def test_bridge_check_does_not_launch_new_workers_when_stale_probe_cannot_stop(t
     assert result.should_prune is False
     assert "stale_probe_cleanup_failed" in result.issues
     assert stale.exists()
+
+
+
+def test_shutdown_cleanup_retries_stale_bridge_probes_and_preserves_live_records(tmp_path, monkeypatch):
+    settings = _settings(tmp_path)
+    root = tmp_path / "bridge-probe-state"
+    root.mkdir()
+    stale = root / "probe-leftover"
+    stale.mkdir()
+    (stale / "torrc").write_text("SocksPort 19460\\n", encoding="utf-8")
+    monkeypatch.setattr(bridge_health_module, "_probe_state_root", lambda _settings: root)
+
+    class UnstoppableManager:
+        def __init__(self, settings):
+            self.settings = settings
+
+        def stop(self):
+            raise RuntimeError("process remains alive")
+
+    monkeypatch.setattr(bridge_health_module, "TorManager", UnstoppableManager)
+
+    with pytest.raises(RuntimeError, match="still active"):
+        bridge_health_module.cleanup_bridge_probes(settings)
+
+    assert stale.is_dir()
+    assert (stale / "torrc").is_file()
+
+
+def test_shutdown_cleanup_does_not_touch_an_independent_bridge_check(tmp_path, monkeypatch):
+    settings = _settings(tmp_path)
+    root = tmp_path / "bridge-probe-state"
+    root.mkdir()
+    monkeypatch.setattr(bridge_health_module, "_probe_state_root", lambda _settings: root)
+
+    lock_path = root / ".bridge-health.lock"
+    with bridge_health_module._BridgeCheckLock(lock_path):
+        cleaned = bridge_health_module.cleanup_bridge_probes(
+            settings,
+            timeout_seconds=0.1,
+        )
+
+    assert cleaned is False

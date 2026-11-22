@@ -4,6 +4,7 @@ All notable changes are recorded here. Dates and release numbers are added only 
 
 ## Unreleased
 
+- Main Tor shutdown now retries cleanup of abandoned isolated bridge-probe Tor processes after its own workers have joined; it leaves another application's active bridge-check lock untouched and reports unresolved owned probes as incomplete shutdown.
 - Serialized Main Tor Start/Stop and worker replacement registration; retained health-monitor, ControlPort, hotkey and HTTP-proxy worker ownership until each shutdown is confirmed.
 - Tracked blocking HTTP proxy DNS/connect workers separately from request handlers so a returned handler cannot hide a still-running resolver worker or permit premature listener restart.
 - Developer Tor now serializes every Onion Service profile mutation against runtime shutdown, and keeps retryable relay/telemetry cleanup state when any sidecar fails to stop.

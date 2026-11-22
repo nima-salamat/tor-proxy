@@ -265,6 +265,30 @@ def _cleanup_stale_probe_directories(settings: TorSettings) -> bool:
     return not process_cleanup_failed
 
 
+def cleanup_bridge_probes(
+    settings: TorSettings,
+    *,
+    timeout_seconds: float = 1.0,
+) -> bool:
+    """Reconcile abandoned probe Tor processes during Main Tor shutdown.
+
+    Returns False when another bridge-check wave currently owns the workspace;
+    callers must leave that independent process untouched. Raises when a saved
+    probe process cannot be verified/stopped, so its identity record is retained
+    and the caller can report incomplete cleanup instead of pretending Exit is clean.
+    """
+    lock_path = _probe_state_root(settings) / ".bridge-health.lock"
+    try:
+        with _BridgeCheckLock(lock_path, timeout=timeout_seconds):
+            if not _cleanup_stale_probe_directories(settings):
+                raise RuntimeError(
+                    "One or more previous bridge-check Tor processes are still active or cannot be verified."
+                )
+        return True
+    except TimeoutError:
+        return False
+
+
 def _probe_single_bridge(
     settings: TorSettings,
     record: str,

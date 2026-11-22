@@ -2219,6 +2219,36 @@ class TorRunner(QObject):
             getattr(manager, "_data_directory_lock_handle", None) is not None
             for manager in managers
         )
+        # Bridge preflight workers use their own isolated Tor DataDirectories.
+        # Once our supervisor and worker threads are gone, retry cleanup of any
+        # probe left by an earlier failed stop. Never break another process's
+        # bridge-check lock: False means a different check currently owns it.
+        if not thread_alive and not worker_alive:
+            try:
+                from torproxy.bridge_health import cleanup_bridge_probes
+
+                probe_roots = set()
+                for manager in managers:
+                    settings = getattr(manager, "settings", None)
+                    if settings is None:
+                        continue
+                    data_directory = Path(
+                        settings.data_directory or (user_directories().data / "tor")
+                    )
+                    probe_root = os.path.normcase(
+                        str(data_directory.expanduser().resolve(strict=False).parent)
+                    )
+                    if probe_root in probe_roots:
+                        continue
+                    probe_roots.add(probe_root)
+                    cleaned = cleanup_bridge_probes(settings, timeout_seconds=1.0)
+                    if not cleaned:
+                        logger.info(
+                            "Skipped bridge-probe cleanup because another TorProxy process owns the bridge-check lock."
+                        )
+            except Exception as exc:
+                stop_errors.append(f"Isolated bridge-probe cleanup failed: {exc}")
+
         if thread_alive or worker_alive or monitors_alive or process_alive or locks_held:
             detail = (
                 "Tor did not stop completely; its supervisor/process is still active or event monitors remain. "
