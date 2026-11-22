@@ -1,6 +1,7 @@
 from collections import deque
 from contextlib import contextmanager
 import ctypes
+import math
 import time
 from ctypes import wintypes
 
@@ -18,8 +19,7 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QFrame,
     QSystemTrayIcon,
-    QWidgetAction,
-    QProgressBar
+    QWidgetAction
 )
 from PySide6.QtGui import (
     QAction,
@@ -282,6 +282,72 @@ class HoverIconButton(QPushButton):
         super().leaveEvent(event)
 
 
+class PageSpinner(QWidget):
+    """Small, theme-aware circular activity indicator for deferred page loading."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._phase = 0
+        self._accent = QColor("#47a3f2")
+        self.setFixedSize(30, 30)
+        self._timer = QTimer(self)
+        self._timer.setInterval(85)
+        self._timer.timeout.connect(self._advance)
+        self.hide()
+
+    def set_accent(self, color: str) -> None:
+        selected = QColor(str(color))
+        if selected.isValid() and selected != self._accent:
+            self._accent = selected
+            self.update()
+
+    def start(self) -> None:
+        if not self._timer.isActive():
+            self._timer.start()
+        self.show()
+
+    def stop(self) -> None:
+        self._timer.stop()
+
+    def _advance(self) -> None:
+        self._phase = (self._phase + 1) % 12
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        if not self.isVisible():
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        center_x = self.width() / 2.0
+        center_y = self.height() / 2.0
+        inner_radius = 5.0
+        outer_radius = 11.5
+        for index in range(12):
+            distance = (self._phase - index) % 12
+            alpha = max(28, int(255 * (1.0 - distance / 12.0) ** 1.7))
+            color = QColor(self._accent)
+            color.setAlpha(alpha)
+            angle = (index * math.tau / 12.0) - math.pi / 2.0
+            start = QPointF(
+                center_x + math.cos(angle) * inner_radius,
+                center_y + math.sin(angle) * inner_radius,
+            )
+            finish = QPointF(
+                center_x + math.cos(angle) * outer_radius,
+                center_y + math.sin(angle) * outer_radius,
+            )
+            painter.setPen(
+                QPen(
+                    color,
+                    2.2,
+                    Qt.PenStyle.SolidLine,
+                    Qt.PenCapStyle.RoundCap,
+                )
+            )
+            painter.drawLine(start, finish)
+        painter.end()
+
+
 class DeferredPagePlaceholder(QWidget):
     """Visible, retryable loading surface for a page that is not ready yet."""
 
@@ -314,11 +380,7 @@ class DeferredPagePlaceholder(QWidget):
         self.detail_label.setWordWrap(True)
         self.detail_label.setMaximumWidth(440)
 
-        self.progress = QProgressBar(self.content)
-        self.progress.setObjectName("deferredPageProgress")
-        self.progress.setRange(0, 0)
-        self.progress.setTextVisible(False)
-        self.progress.setFixedSize(260, 5)
+        self.spinner = PageSpinner(self.content)
 
         self.retry_button = QPushButton("Try again", self.content)
         self.retry_button.setObjectName("deferredPageRetry")
@@ -328,13 +390,13 @@ class DeferredPagePlaceholder(QWidget):
 
         content_layout.addWidget(self.title_label)
         content_layout.addWidget(self.detail_label)
-        content_layout.addWidget(self.progress, 0, Qt.AlignmentFlag.AlignHCenter)
+        content_layout.addWidget(self.spinner, 0, Qt.AlignmentFlag.AlignHCenter)
         content_layout.addWidget(self.retry_button, 0, Qt.AlignmentFlag.AlignHCenter)
         outer.addWidget(self.content, 0, Qt.AlignmentFlag.AlignHCenter)
         outer.addStretch(1)
 
         self.apply_theme(CONFIG.get("mode", "dark"))
-        self.set_loading()
+        self.set_queued()
 
     def apply_theme(self, mode: str) -> None:
         dark = str(mode).strip().lower() == "dark"
@@ -349,10 +411,7 @@ class DeferredPagePlaceholder(QWidget):
         self.detail_label.setStyleSheet(
             f"background: transparent; color: {detail}; font-size: 12px;"
         )
-        self.progress.setStyleSheet(
-            f"QProgressBar#deferredPageProgress {{ background: {track}; border: none; border-radius: 2px; }}"
-            f"QProgressBar#deferredPageProgress::chunk {{ background: {accent}; border-radius: 2px; }}"
-        )
+        self.spinner.set_accent(accent)
         self.retry_button.setStyleSheet(
             f"QPushButton#deferredPageRetry {{ color: {title}; background: {track}; "
             f"border: 1px solid {accent}; border-radius: 8px; padding: 0 16px; }}"
@@ -360,12 +419,19 @@ class DeferredPagePlaceholder(QWidget):
         )
         self._torproxy_theme_mode = "dark" if dark else "light"
 
+    def set_queued(self) -> None:
+        self.title_label.setText(f"{self._page_title} is queued")
+        self.detail_label.setText("This section will prepare automatically after Home is ready.")
+        self.spinner.stop()
+        self.spinner.hide()
+        self.retry_button.hide()
+
     def set_loading(self) -> None:
         self.title_label.setText(f"Loading {self._page_title}")
         self.detail_label.setText(
             "Preparing this section. It will appear here automatically when it is ready."
         )
-        self.progress.show()
+        self.spinner.start()
         self.retry_button.hide()
 
     def set_error(self, error: Exception | str) -> None:
@@ -376,7 +442,8 @@ class DeferredPagePlaceholder(QWidget):
         self.detail_label.setText(
             f"{detail}\nYou can retry without restarting TorProxy."
         )
-        self.progress.hide()
+        self.spinner.stop()
+        self.spinner.hide()
         self.retry_button.show()
 
 
@@ -749,6 +816,9 @@ class Window(QMainWindow):
         state = self._page_states.get(index)
         if state in {"ready", "loading", "failed"}:
             return
+        placeholder = self._page_placeholders.get(index)
+        if placeholder is not None:
+            placeholder.set_loading()
         if prioritize:
             try:
                 self._page_load_queue.remove(index)
