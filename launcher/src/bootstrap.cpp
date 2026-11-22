@@ -891,7 +891,7 @@ void paintFrame(State &s, HDC dc) {
     }
 
     Gdiplus::Graphics graphics(dc);
-    graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+    graphics.SetInterpolationMode(Gdiplus::InterpolationModeNearestNeighbor);
     const auto drawStatus = graphics.DrawImage(
         s.staticFrame.get(),
         Gdiplus::Rect(0, 0, width, height),
@@ -1282,10 +1282,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
 }
 #else
 #include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
+#include <thread>
 #include <limits.h>
 #include <signal.h>
 #include <string>
@@ -1308,6 +1310,31 @@ bool isHelperLaunch(int argc, char *argv[]) {
            hasArgument(argc, argv, "--killswitch-helper") ||
            hasArgument(argc, argv, "--self-test") ||
            hasArgument(argc, argv, "--version");
+}
+
+bool reapChildWithin(pid_t child, int timeoutMs) {
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(timeoutMs);
+    int childStatus = 0;
+    do {
+        const pid_t result = waitpid(child, &childStatus, WNOHANG);
+        if (result == child || (result < 0 && errno == ECHILD)) return true;
+        if (result < 0 && errno != EINTR) return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    } while (std::chrono::steady_clock::now() < deadline);
+    return false;
+}
+
+bool terminateAndReapChild(pid_t child) {
+    if (child <= 0) return true;
+    if (kill(child, SIGTERM) < 0 && errno != ESRCH) {
+        std::perror("TorProxyLauncher: could not request child termination");
+    }
+    if (reapChildWithin(child, 500)) return true;
+    if (kill(child, SIGKILL) < 0 && errno != ESRCH) {
+        std::perror("TorProxyLauncher: could not force child termination");
+    }
+    return reapChildWithin(child, 1500);
 }
 
 bool createPrivateStartupChannel(std::string &statusPath, std::string &token) {
@@ -1430,8 +1457,9 @@ int main(int argc, char *argv[]) {
             if (applicationPid > 0) {
                 const std::string pidText = std::to_string(applicationPid);
                 if (setenv("TORPROXY_LAUNCHER_PID", pidText.c_str(), 1) != 0) {
-                    kill(applicationPid, SIGTERM);
-                    while (waitpid(applicationPid, nullptr, 0) < 0 && errno == EINTR) {}
+                    if (!terminateAndReapChild(applicationPid)) {
+                        std::fprintf(stderr, "TorProxyLauncher: startup child is still terminating.\\n");
+                    }
                     applicationPid = -1;
                     clearStartupEnvironment();
                 }
@@ -1458,9 +1486,8 @@ int main(int argc, char *argv[]) {
 
     const int launchError = errno;
     std::perror("TorProxyLauncher: cannot start native splash runtime");
-    if (applicationPid > 0) {
-        kill(applicationPid, SIGTERM);
-        while (waitpid(applicationPid, nullptr, 0) < 0 && errno == EINTR) {}
+    if (applicationPid > 0 && !terminateAndReapChild(applicationPid)) {
+        std::fprintf(stderr, "TorProxyLauncher: startup child did not exit within the bounded cleanup window.\\n");
     }
     if (!statusPath.empty()) unlink(statusPath.c_str());
     return launchError == 0 ? 127 : launchError;
