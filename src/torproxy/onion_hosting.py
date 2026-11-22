@@ -567,9 +567,7 @@ class OnionHostingManager:
         process = manager.process
         identity = process_identity
         orphaned = process is None and bool(identity.get("alive")) and bool(identity.get("verified"))
-        identity_unverified = (
-            process is None and bool(identity.get("alive")) and not bool(identity.get("verified"))
-        )
+        identity_unverified = bool(identity.get("alive")) and not bool(identity.get("verified"))
         if orphaned:
             state = "orphaned"
             message = message or (
@@ -812,9 +810,9 @@ class OnionHostingManager:
                 process_alive = bool(process_identity.get("alive"))
                 process_verified = bool(process_identity.get("verified"))
                 lock_held = getattr(manager, "_data_directory_lock_handle", None) is not None
-                if process_alive or not process_verified or lock_held:
+                if process_alive or lock_held:
                     raise OnionHostingError(
-                        "Developer Tor still owns a live, unverified, or locked process after shutdown. "
+                        "Developer Tor still owns a live or locked process after shutdown. "
                         "Its manager reference was retained so cleanup can be retried safely."
                     )
 

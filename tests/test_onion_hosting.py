@@ -780,3 +780,36 @@ def test_developer_runtime_suspends_relays_when_process_identity_is_unverified(h
     assert snapshot["process_identity_verified"] is False
     assert profile_id not in manager._traffic_relays
     assert manager.services_snapshot()[0]["running"] is False
+
+
+
+def test_developer_runtime_snapshot_marks_unverified_tor_even_with_launcher_handle(hosting):
+    manager, _config, tor = hosting
+
+    class ExitedLauncher:
+        pid = 4256
+
+        def poll(self):
+            return 0
+
+    tor.process = ExitedLauncher()
+    tor.process_identity_snapshot = lambda: {
+        "pid": 4257,
+        "alive": True,
+        "verified": False,
+        "identity_unverifiable": True,
+    }
+
+    snapshot = manager.runtime_snapshot()
+
+    assert snapshot["state"] == "process-identity-unverified"
+    assert snapshot["process_alive"] is True
+    assert snapshot["process_identity_verified"] is False
+
+
+def test_developer_runtime_stop_accepts_a_confirmed_stopped_fake_process(hosting):
+    manager, _config, _tor = hosting
+
+    manager.stop_runtime()
+
+    assert manager.runtime_snapshot()["state"] == "stopped"
