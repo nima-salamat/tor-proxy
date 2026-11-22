@@ -191,15 +191,40 @@ jobs:
 
           $installer = (Resolve-Path "dist/TorProxy-Setup-windows-x64.exe").Path
           $installRoot = Join-Path $env:RUNNER_TEMP "torproxy-installer-smoke"
-          & $installer /VERYSILENT /SUPPRESSMSGBOXES /NORESTART "/DIR=$installRoot"
-          if ($LASTEXITCODE -ne 0) { throw "The lightweight installer failed to install." }
-          foreach ($relativePath in @("TorProxy.exe", "TorProxyLauncher.exe", "TorProxyWfpHelper.exe", "assets\icon.ico")) {
+          $installerLog = Join-Path $env:RUNNER_TEMP "torproxy-installer.log"
+          if (Test-Path $installRoot) { Remove-Item -LiteralPath $installRoot -Recurse -Force }
+          New-Item -ItemType Directory -Path $installRoot | Out-Null
+
+          $installArguments = @(
+            "/VERYSILENT",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART",
+            "/DIR=`"$installRoot`"",
+            "/LOG=`"$installerLog`""
+          )
+          $installProcess = Start-Process -FilePath $installer -ArgumentList $installArguments -Wait -PassThru
+          if ($installProcess.ExitCode -ne 0) {
+            if (Test-Path $installerLog) { Get-Content $installerLog -Tail 100 }
+            throw "The lightweight installer failed with exit code $($installProcess.ExitCode)."
+          }
+
+          if (Test-Path $installerLog) {
+            Write-Host "Inno Setup installation log:"
+            Get-Content $installerLog -Tail 100
+          }
+          Write-Host "Installer destination: $installRoot"
+          Get-ChildItem -LiteralPath $installRoot -Force -Recurse | Select-Object -First 40 -ExpandProperty FullName
+
+          foreach ($relativePath in @("TorProxy.exe", "TorProxyLauncher.exe", "TorProxyWfpHelper.exe", "_internal\assets\icon.ico")) {
             if (-not (Test-Path (Join-Path $installRoot $relativePath))) {
               throw "Installer did not deploy required file: $relativePath"
             }
           }
-          & (Join-Path $installRoot "unins000.exe") /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
-          if ($LASTEXITCODE -ne 0) { throw "The installer uninstall smoke test failed." }
+
+          $uninstaller = Join-Path $installRoot "unins000.exe"
+          if (-not (Test-Path $uninstaller)) { throw "Installer did not create its uninstaller at: $uninstaller" }
+          $uninstallProcess = Start-Process -FilePath $uninstaller -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -Wait -PassThru
+          if ($uninstallProcess.ExitCode -ne 0) { throw "The installer uninstall smoke test failed with exit code $($uninstallProcess.ExitCode)." }
           if (Test-Path (Join-Path $installRoot "TorProxy.exe")) { throw "Uninstaller left application binaries behind." }
 
       - name: Create Linux package without Tor
