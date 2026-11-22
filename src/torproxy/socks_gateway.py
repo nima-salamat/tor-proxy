@@ -217,13 +217,16 @@ class SocksFailoverGateway:
                 self._session_threads.add(worker)
             try:
                 worker.start()
-            except RuntimeError:
+            except Exception:
                 with self._lock:
                     self._session_threads.discard(worker)
                     self._rejected_sessions += 1
                 self._session_slots.release()
                 self._track(client, False)
-                client.close()
+                try:
+                    client.close()
+                except OSError:
+                    pass
                 LOGGER.exception("Could not start a SOCKS client session thread.")
 
     def _run_client_session(self, client: socket.socket) -> None:

@@ -646,3 +646,46 @@ def test_gateway_refuses_restart_while_previous_accept_loop_is_still_exiting(mon
     thread.join(timeout=2)
     assert not thread.is_alive()
     gateway.stop(timeout=1)
+
+
+
+def test_gateway_releases_client_and_session_slot_when_worker_thread_cannot_start(monkeypatch):
+    import torproxy.socks_gateway as gateway_module
+
+    gateway = SocksFailoverGateway(_free_port(), lambda: [])
+
+    class FakeClient:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    class FakeListener:
+        def __init__(self, client):
+            self.client = client
+            self.calls = 0
+
+        def accept(self):
+            self.calls += 1
+            if self.calls == 1:
+                return self.client, ("127.0.0.1", 12345)
+            raise OSError("end accept loop")
+
+    class FailedThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            raise OSError("simulated thread creation failure")
+
+    client = FakeClient()
+    gateway._listener = FakeListener(client)
+    monkeypatch.setattr(gateway_module.threading, "Thread", FailedThread)
+
+    gateway._accept_loop()
+
+    assert client.closed is True
+    assert client not in gateway._clients
+    assert not gateway._session_threads
+    assert gateway._session_slots._value == gateway._max_sessions
