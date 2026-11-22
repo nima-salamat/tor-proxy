@@ -18,29 +18,7 @@ def test_release_version_is_consistent_across_python_and_native_launcher():
     assert re.search(r'^__version__ = "([^"]+)"$', package_init, re.MULTILINE).group(1) == expected
     assert f"project(TorProxyLauncher VERSION {expected} LANGUAGES CXX)" in cmake
     assert re.search(r'^#define TORPROXY_VERSION "([^"]+)"$', splash, re.MULTILINE).group(1) == expected
-    assert re.search(r'^\s*#define AppVersion "([^"]+)".group(1) == expected
-    assert 'Source: "..\\dist\\TorProxy\\*"' in installer
-    assert '"{app}\\TorProxyLauncher.exe"' in installer
-
-
-def test_release_workflow_publishes_tagged_versions_after_both_builds():
-    repository = Path(__file__).resolve().parents[1]
-    workflow = (repository / ".github/workflows/release.yml").read_text(encoding="utf-8")
-
-    assert "if: startsWith(github.ref, 'refs/tags/v')" in workflow
-    assert "startsWith(github.event.head_commit.message, 'Publish TorProxy v')" in workflow
-    assert "endsWith(github.event.head_commit.message, 'to GitHub Releases')" in workflow
-    assert "steps.release_version.outputs.tag" in workflow
-    assert "needs: build" in workflow
-    assert "TorProxy-windows-x64.zip" in workflow
-    assert "TorProxy-Setup-windows-x64.exe" in workflow
-    assert "ISCC.exe" in workflow
-    assert "TorProxy-linux-x64.tar.gz" in workflow
-    assert "prepare_release_sing_box.py --output-dir release-sing-box" in workflow
-    assert 'Copy-Item -Path "release-sing-box/*" -Destination $singBoxDestination' in workflow
-    assert 'cp -a release-sing-box/. "$stage_root/TorProxy/bundles/sing-box/"' in workflow
-    assert "package_bundle_smoke_test.py" in workflow
-, installer, re.MULTILINE).group(1) == expected
+    assert re.search(r'^\s*#define AppVersion "([^"]+)"$', installer, re.MULTILINE).group(1) == expected
     assert 'Source: "..\\dist\\TorProxy\\*"' in installer
     assert '"{app}\\TorProxyLauncher.exe"' in installer
 
