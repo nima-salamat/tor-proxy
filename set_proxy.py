@@ -426,6 +426,7 @@ def get_system_proxy_status(host: str = "127.0.0.1", port: int | None = None) ->
                 )
             owns_proxy = (
                 proxy_enabled
+                and not automatic
                 and _proxy_server_matches_endpoint(proxy_server, target_host, target_port)
             )
             if owns_proxy:
