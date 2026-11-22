@@ -524,3 +524,38 @@ def test_independent_profile_distinguishes_reachable_unverified_from_tor_verifie
     finally:
         pool.stop_service("separate")
         pool.close()
+
+
+
+def test_verified_previous_session_process_is_reported_as_orphaned_and_can_be_stopped(tmp_path):
+    class OrphanManager(FakeManager):
+        def __init__(self, settings):
+            super().__init__(settings)
+            self.orphaned = True
+
+        def process_identity_snapshot(self):
+            return {
+                "pid": 43210 if self.orphaned else None,
+                "alive": self.orphaned,
+                "verified": self.orphaned,
+            }
+
+        def stop(self):
+            self.orphaned = False
+            super().stop()
+
+    pool = _pool(tmp_path, manager_factory=OrphanManager, health_interval=0)
+    pool.register("leftover", _settings(tmp_path, 21250, 21251))
+    status = pool.status()["leftover"]
+
+    assert status["state"] == "orphaned"
+    assert status["pid"] == 43210
+    assert status["process_alive"] is True
+    assert status["process_identity_verified"] is True
+    assert status["network_healthy"] is False
+
+    pool.stop_service("leftover")
+    reconciled = pool.status()["leftover"]
+    assert reconciled["state"] == "stopped"
+    assert reconciled["process_alive"] is False
+    pool.close()

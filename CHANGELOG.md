@@ -4,6 +4,10 @@ All notable changes are recorded here. Dates and release numbers are added only 
 
 ## Unreleased
 
+- Added a durable, PID-reuse-resistant process identity record to every Tor DataDirectory (PID, creation time, executable, exact torrc and optional systemd scope), with verified orphan reconciliation shared by Main Tor, Tor Services, Developer Tor and bridge-check workers.
+- Tor Services and Developer Tor now surface verified processes left by a previous UI session and allow explicit Stop/reconciliation; Main Tor diagnostics expose each worker PID and its identity-verification state.
+- Bridge health probes retain their private state directory when shutdown cannot be confirmed and retry stale-child cleanup before the next probe wave.
+
 - Fixed Windows primary Tor pool startup when the OS chooses a UDP ephemeral port that is excluded for TCP. Dual-protocol worker DNSPort allocation now selects a TCP-available candidate first and verifies the same port over UDP while the TCP reservation is held.
 
 ## v1.6.0 — 2026-11-22

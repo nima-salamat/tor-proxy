@@ -368,3 +368,37 @@ def test_bridge_probes_are_run_concurrently(tmp_path):
 
     assert len(result.working) == 3
     assert peak_active == 3
+
+
+
+def test_bridge_probe_retains_state_directory_when_tor_stop_cannot_be_confirmed(tmp_path, monkeypatch):
+    root = tmp_path / "probe-state"
+    root.mkdir()
+    monkeypatch.setattr(bridge_health_module, "_probe_state_root", lambda _settings: root)
+
+    class UnstoppableManager:
+        def __init__(self, settings):
+            self.settings = settings
+
+        def start(self, on_status=None):
+            raise RuntimeError("simulated bootstrap timeout")
+
+        def _recent_tor_log_detail(self, max_lines=20):
+            return ""
+
+        def stop(self):
+            raise RuntimeError("simulated process still alive")
+
+    monkeypatch.setattr(bridge_health_module, "TorManager", UnstoppableManager)
+    result = bridge_health_module._probe_single_bridge(
+        _settings(tmp_path),
+        BRIDGES[0],
+        1.0,
+        set(),
+        set(),
+        threading.Lock(),
+        None,
+    )
+
+    assert result is None
+    assert len(list(root.iterdir())) == 1

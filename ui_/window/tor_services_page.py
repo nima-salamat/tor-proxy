@@ -1713,6 +1713,8 @@ class TorServicesPage(QWidget):
         if health == "unhealthy":
             detail = str(status.get("last_health_error") or "Tor egress could not be verified.")
             return "Tor network unavailable · " + detail
+        if health == "orphaned":
+            return "A verified Tor process survived the previous TorProxy session · Stop it to reconcile ownership."
         if health == "checking":
             return "Checking real Tor network connectivity…"
         if health == "stopped":
@@ -1776,6 +1778,9 @@ class TorServicesPage(QWidget):
             elif manager_state == "failed":
                 state_label.setText("PROCESS EXITED · STOP TO RECONCILE")
                 service_state = "failed"
+            elif manager_state == "orphaned":
+                state_label.setText("PREVIOUS SESSION PROCESS · STOP TO RECONCILE")
+                service_state = "failed"
             else:
                 state_label.setText(manager_state.replace("_", " ").upper())
                 service_state = manager_state
@@ -1821,6 +1826,12 @@ class TorServicesPage(QWidget):
             f"Control  127.0.0.1:{profile.get('control_port')}    ·    "
             f"DNS  {dns if dns else 'off'}"
         )
+        process_pid = status.get("pid")
+        if process_pid:
+            detail += (
+                f"    ·    PID {process_pid}"
+                + (" · identity verified" if status.get("process_identity_verified") else " · identity unverified")
+            )
         details = QLabel(detail)
         details.setObjectName("settingsDescription")
         outer.addWidget(details)

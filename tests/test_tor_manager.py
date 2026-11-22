@@ -1,3 +1,4 @@
+import json
 import os
 
 import pytest
@@ -200,6 +201,8 @@ def test_webtunnel_handshake_errors_do_not_abort_other_bridge_attempts(tmp_path,
     manager._recent_tor_log_detail = lambda **_kwargs: diagnostic
     manager._port_ready = lambda _port, **_kwargs: True
     manager._connect_controller = lambda: FakeController()
+    # This test uses a fake in-memory Popen child, not a real OS process.
+    manager._persist_process_identity = lambda _pid: None
 
     manager.start()
 
@@ -860,3 +863,55 @@ def test_force_stop_kills_the_managed_tor_child_without_graceful_wait(tmp_path):
     assert child.killed is True
     assert manager.process is None
     assert manager.state is TorState.STOPPED
+
+
+
+def test_tor_process_identity_is_persisted_and_rejects_reused_pid(tmp_path, monkeypatch):
+    executable = tmp_path / ("tor.exe" if os.name == "nt" else "tor")
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    executable.write_text("fake tor", encoding="utf-8")
+    manager = TorManager(TorSettings(
+        executable=executable,
+        socks_port=19180,
+        control_port=19181,
+        data_directory=tmp_path / "tor-state",
+    ))
+    manager.data_directory.mkdir(parents=True)
+    manager.torrc_path.write_text("SocksPort 19180\\n", encoding="utf-8")
+
+    class FakeProcess:
+        created = 100.0
+
+        def __init__(self, pid):
+            self.pid = pid
+
+        def is_running(self):
+            return True
+
+        def status(self):
+            return "running"
+
+        def create_time(self):
+            return self.created
+
+        def exe(self):
+            return str(executable)
+
+        def cmdline(self):
+            return [str(executable), "-f", str(manager.torrc_path)]
+
+    monkeypatch.setattr(tor_manager_module.psutil, "Process", FakeProcess)
+    manager._persist_process_identity(54321)
+
+    identity = manager.process_identity_snapshot()
+    assert identity["pid"] == 54321
+    assert identity["alive"] is True
+    assert identity["verified"] is True
+    record = json.loads(manager.process_state_path.read_text(encoding="utf-8"))
+    assert record["torrc"] == manager._normalized_process_path(manager.torrc_path)
+    if os.name != "nt":
+        assert manager.process_state_path.stat().st_mode & 0o777 == 0o600
+
+    # A recycled numeric PID must not be mistaken for the previous Tor child.
+    FakeProcess.created = 105.0
+    assert manager.process_identity_snapshot()["alive"] is False
