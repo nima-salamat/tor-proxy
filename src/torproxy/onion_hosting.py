@@ -441,6 +441,39 @@ class OnionHostingManager:
             # Never include a command in the exception: it can contain private keys.
             raise OnionHostingError(f"Tor ControlPort rejected the Onion Service operation: {exc}") from exc
 
+    @staticmethod
+    def _manager_process_identity(manager: TorManager) -> dict[str, Any]:
+        """Describe the actual Tor child; do not confuse systemd-run with Tor."""
+        getter = getattr(manager, "process_identity_snapshot", None)
+        if callable(getter):
+            try:
+                identity = getter()
+            except Exception:
+                return {
+                    "pid": None,
+                    "alive": True,
+                    "verified": False,
+                    "identity_unverifiable": True,
+                }
+            if isinstance(identity, dict) and identity:
+                return identity
+
+        # Backward compatibility for adapters that only expose their owned
+        # Popen handle. A live handle is not inferred from an arbitrary PID.
+        process = getattr(manager, "process", None)
+        if process is None:
+            return {"pid": None, "alive": False, "verified": False}
+        try:
+            alive = process.poll() is None
+        except Exception:
+            alive = True
+        return {
+            "pid": getattr(process, "pid", None),
+            "alive": alive,
+            "verified": alive,
+            "identity_unverifiable": False,
+        }
+
     def _discover_orphaned_manager(self) -> TorManager | None:
         """Reattach an inspection manager when a verified Developer Tor child survived the UI."""
         with self._lock:
@@ -473,24 +506,51 @@ class OnionHostingManager:
             manager = self._manager
         if manager is None:
             manager = self._discover_orphaned_manager()
+        process_identity = (
+            self._manager_process_identity(manager)
+            if manager is not None else
+            {"pid": None, "alive": False, "verified": False}
+        )
         with self._lock:
             if manager is not None and self._manager is None:
                 self._manager = manager
             started_at = self._started_at
             message = self._last_status_message
             process = getattr(manager, "process", None) if manager is not None else None
-            if process is not None and process.poll() is not None:
-                # A child may exit after READY. Reconcile the dashboard so it
-                # never displays stale active Onion Services or a false READY.
+            manager_state = getattr(getattr(manager, "state", None), "value", "")
+            manager_state = str(manager_state).lower().split(".")[-1]
+            process_alive = bool(process_identity.get("alive"))
+            process_verified = bool(process_identity.get("verified"))
+            runtime_was_active = manager_state in {"ready", "starting", "bootstrapping", "failed", "stopping"}
+            if runtime_was_active and (not process_alive or not process_verified):
+                # The Tor child, not the systemd-run wrapper, is authoritative.
+                # Suspend local relay endpoints when it is dead or cannot be
+                # verified; retain the manager and PID record for a safe Stop.
                 try:
                     manager.state = TorState.FAILED
-                    manager.last_error = "Developer Tor exited unexpectedly."
+                    manager.last_error = (
+                        "Developer Tor exited unexpectedly."
+                        if not process_alive else
+                        "Developer Tor process identity could not be verified."
+                    )
                 except Exception:
                     pass
-                self._last_status_message = "Developer Tor exited unexpectedly. Restart the runtime to restore persistent services."
+                if not process_alive:
+                    self._last_status_message = (
+                        "Developer Tor exited unexpectedly. Stop and restart the runtime to restore persistent services."
+                    )
+                else:
+                    self._last_status_message = (
+                        f"Developer Tor PID {process_identity.get('pid')} is alive but its identity cannot be verified. "
+                        "Local relay endpoints were suspended; process ownership must be verified before stopping it."
+                    )
                 message = self._last_status_message
                 for profile_id in self._active_services:
-                    self._service_errors[profile_id] = "Developer Tor exited; this Onion Service is no longer published."
+                    self._service_errors[profile_id] = (
+                        "Developer Tor exited; this Onion Service is no longer published."
+                        if not process_alive else
+                        "Developer Tor process identity is unverified; this Onion Service has been suspended."
+                    )
                 self._active_services.clear()
                 stale_relays = list(self._traffic_relays.values())
                 self._traffic_relays.clear()
@@ -505,11 +565,7 @@ class OnionHostingManager:
             }
         state = getattr(manager.state, "value", str(manager.state)).lower()
         process = manager.process
-        identity_getter = getattr(manager, "process_identity_snapshot", None)
-        try:
-            identity = identity_getter() if callable(identity_getter) else {}
-        except Exception:
-            identity = {}
+        identity = process_identity
         orphaned = process is None and bool(identity.get("alive")) and bool(identity.get("verified"))
         identity_unverified = (
             process is None and bool(identity.get("alive")) and not bool(identity.get("verified"))
@@ -633,14 +689,17 @@ class OnionHostingManager:
                 if self._shutdown_requested:
                     raise OnionHostingError("Developer Tor is shutting down and cannot be started again.")
                 previous = self._manager
-                if previous is not None and getattr(previous.state, "value", "") == "ready":
-                    process = getattr(previous, "process", None)
-                    if process is not None and process.poll() is None:
-                        return
                 if previous is not None:
-                    process = getattr(previous, "process", None)
-                    if process is not None and process.poll() is None:
+                    previous_identity = self._manager_process_identity(previous)
+                    if previous_identity.get("alive") and previous_identity.get("verified"):
+                        if getattr(previous.state, "value", "") == "ready":
+                            return
                         raise OnionHostingError("Developer Tor is already starting or stopping.")
+                    if previous_identity.get("alive") and not previous_identity.get("verified"):
+                        raise OnionHostingError(
+                            "A previous Developer Tor PID is still alive but its identity cannot be verified. "
+                            "It will not be replaced or signalled automatically."
+                        )
                     # Reap the previous manager object to release its exclusive
                     # DataDirectory lock before a replacement process is created.
                     try:
@@ -738,21 +797,24 @@ class OnionHostingManager:
                     try:
                         manager.force_stop()
                     except Exception as force_error:
-                        process = getattr(manager, "process", None)
-                        process_alive = bool(process is not None and process.poll() is None)
+                        process_identity = self._manager_process_identity(manager)
+                        process_alive = bool(process_identity.get("alive"))
+                        process_verified = bool(process_identity.get("verified"))
                         lock_held = getattr(manager, "_data_directory_lock_handle", None) is not None
                         raise OnionHostingError(
                             "Developer Tor could not be stopped completely. "
-                            f"Process still running: {process_alive}; DataDirectory lock retained: {lock_held}. "
+                            f"Process still running: {process_alive}; identity verified: {process_verified}; "
+                            f"DataDirectory lock retained: {lock_held}. "
                             f"Graceful stop: {stop_error}; force-stop: {force_error}"
                         ) from force_error
 
-                process = getattr(manager, "process", None)
-                process_alive = bool(process is not None and process.poll() is None)
+                process_identity = self._manager_process_identity(manager)
+                process_alive = bool(process_identity.get("alive"))
+                process_verified = bool(process_identity.get("verified"))
                 lock_held = getattr(manager, "_data_directory_lock_handle", None) is not None
-                if process_alive or lock_held:
+                if process_alive or not process_verified or lock_held:
                     raise OnionHostingError(
-                        "Developer Tor still owns a live process or DataDirectory lock after shutdown. "
+                        "Developer Tor still owns a live, unverified, or locked process after shutdown. "
                         "Its manager reference was retained so cleanup can be retried safely."
                     )
 
@@ -1112,13 +1174,9 @@ class OnionHostingManager:
                 or getattr(getattr(manager, "state", None), "value", "") != "ready"
             ):
                 return None
-            process = getattr(manager, "process", None)
-            if process is not None:
-                try:
-                    if process.poll() is not None:
-                        return None
-                except Exception:
-                    return None
+            process_identity = self._manager_process_identity(manager)
+            if not process_identity.get("alive") or not process_identity.get("verified"):
+                return None
 
             for profile_id, active_id in tuple(self._active_services.items()):
                 if str(active_id).casefold() != onion_id:
@@ -1158,6 +1216,12 @@ class OnionHostingManager:
         manager = self._manager
         if manager is None or getattr(manager.state, "value", "") != "ready":
             raise OnionHostingError("Start Developer Tor and wait for bootstrap to reach 100% first.")
+        process_identity = self._manager_process_identity(manager)
+        if not process_identity.get("alive") or not process_identity.get("verified"):
+            raise OnionHostingError(
+                "Developer Tor's actual process is not alive with a verified identity; "
+                "the Onion Service will not be published."
+            )
         with self._lock:
             if profile_id in self._active_services:
                 return self._active_services[profile_id]

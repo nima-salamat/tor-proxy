@@ -706,3 +706,77 @@ def test_service_start_and_runtime_shutdown_are_serialized(hosting, monkeypatch)
     assert manager.manager is None
     assert manager._traffic_relays == {}
     assert manager._traffic_store._writer_thread is None
+
+
+
+def test_developer_runtime_snapshot_uses_verified_tor_child_when_launcher_exits(hosting):
+    manager, _config, tor = hosting
+
+    class ExitedLauncher:
+        pid = 4243
+
+        def poll(self):
+            return 0
+
+    tor.process = ExitedLauncher()
+    tor.process_identity_snapshot = lambda: {
+        "pid": 4244,
+        "alive": True,
+        "verified": True,
+    }
+
+    snapshot = manager.runtime_snapshot()
+
+    assert snapshot["state"] == "ready"
+    assert snapshot["pid"] == 4244
+    assert snapshot["process_alive"] is True
+    assert snapshot["process_identity_verified"] is True
+
+
+def test_developer_start_does_not_replace_a_verified_child_when_launcher_exits(hosting):
+    manager, _config, tor = hosting
+
+    class ExitedLauncher:
+        pid = 4253
+
+        def poll(self):
+            return 0
+
+    tor.process = ExitedLauncher()
+    tor.process_identity_snapshot = lambda: {
+        "pid": 4254,
+        "alive": True,
+        "verified": True,
+    }
+
+    manager.start_runtime()
+
+    assert manager.manager is tor
+    assert tor.stop_called is False
+
+
+def test_developer_runtime_suspends_relays_when_process_identity_is_unverified(hosting):
+    manager, _config, tor = hosting
+    profile_id = manager.create_service(
+        display_name="Website",
+        local_host="127.0.0.1",
+        local_port=9002,
+        persistent=True,
+    )
+    manager.start_service(profile_id)
+    assert profile_id in manager._traffic_relays
+
+    tor.process_identity_snapshot = lambda: {
+        "pid": 4255,
+        "alive": True,
+        "verified": False,
+        "identity_unverifiable": True,
+    }
+
+    snapshot = manager.runtime_snapshot()
+
+    assert snapshot["state"] == "process-identity-unverified"
+    assert snapshot["process_alive"] is True
+    assert snapshot["process_identity_verified"] is False
+    assert profile_id not in manager._traffic_relays
+    assert manager.services_snapshot()[0]["running"] is False

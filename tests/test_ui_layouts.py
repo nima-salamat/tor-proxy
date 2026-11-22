@@ -4547,3 +4547,17 @@ def test_shutdown_closes_empty_isolated_tor_pool_health_monitor():
     assert "if services_stopped:" in shutdown
     assert "self.tor_service_pool.close()" in shutdown
     assert shutdown.index("if services_stopped:") < shutdown.index("self.tor_service_pool.close()")
+
+
+
+def test_shutdown_failure_status_uses_tor_child_identity_not_launcher_liveness():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+    start = source.index("    def _on_services_stop_failed(")
+    end = source.index("    def ", start + 10)
+    handler = source[start:end]
+
+    assert "identity_available = callable(identity_getter)" in handler
+    assert 'process_verified = bool(identity.get("verified"))' in handler
+    assert "process_alive = process.poll() is None" in handler
+    assert 'process_alive and process_verified and manager_state == "ready"' in handler

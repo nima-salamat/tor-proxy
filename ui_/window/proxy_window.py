@@ -2272,25 +2272,36 @@ class ProxyWindow(QWidget):
         tor_ready = False
         for current in backend_managers:
             process = getattr(current, "process", None)
-            process_alive = False
             identity_getter = getattr(current, "process_identity_snapshot", None)
-            if callable(identity_getter):
+            identity_available = callable(identity_getter)
+            process_verified = False
+            if identity_available:
                 try:
                     identity = identity_getter()
-                    process_alive = bool(identity.get("alive"))
+                    if identity:
+                        process_alive = bool(identity.get("alive"))
+                        process_verified = bool(identity.get("verified"))
+                    else:
+                        process_alive = False
                 except Exception:
-                    # A process that cannot be inspected is not safe to report stopped.
+                    # An OS inspection error is not evidence that Tor exited.
                     process_alive = True
-            if process is not None:
+            elif process is not None:
+                # Legacy adapters own this Popen handle directly.
                 try:
-                    process_alive = process_alive or process.poll() is None
+                    process_alive = process.poll() is None
+                    process_verified = process_alive
                 except Exception:
                     process_alive = True
+            else:
+                process_alive = False
             tor_process_active = tor_process_active or process_alive
 
             manager_state = getattr(current, "state", None)
             manager_state = str(getattr(manager_state, "value", manager_state)).lower().split(".")[-1]
-            tor_ready = tor_ready or (process_alive and manager_state == "ready")
+            tor_ready = tor_ready or (
+                process_alive and process_verified and manager_state == "ready"
+            )
 
         tor_supervisor = getattr(self.tor, "thread", None)
         tor_supervisor_active = bool(tor_supervisor is not None and tor_supervisor.is_alive())
