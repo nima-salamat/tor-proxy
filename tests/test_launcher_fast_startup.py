@@ -113,3 +113,17 @@ def test_tor_connection_only_dependencies_are_imported_on_demand():
     ):
         assert f"from {optional_module} import" not in module_imports
         assert f"from {optional_module} import" in source
+
+
+
+def test_linux_qt_launcher_does_not_exit_when_startup_child_stop_fails():
+    source = (ROOT / "launcher" / "src" / "main.cpp").read_text(encoding="utf-8")
+    start = source.index("    void stopAndQuit()")
+    end = source.index("\n    SplashWindow *m_splash", start)
+    shutdown = source[start:end]
+
+    assert "if (!stopCurrentProcess())" in shutdown
+    assert shutdown.index("if (!stopCurrentProcess())") < shutdown.index("QCoreApplication::quit()")
+    failure = shutdown.split("if (!stopCurrentProcess())", 1)[1].split("m_server.close()", 1)[0]
+    assert "showStartupError(" in failure
+    assert "return;" in failure

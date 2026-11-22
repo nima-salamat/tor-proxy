@@ -547,7 +547,20 @@ private:
     }
 
     void stopAndQuit() {
-        stopCurrentProcess();
+        // The child must be reaped before the launcher exits. If TERM/KILL
+        // could not be confirmed within the bounded wait, keep this controller
+        // and its QProcess/PID reference alive so the user can retry instead
+        // of orphaning a Python startup process.
+        if (!stopCurrentProcess()) {
+            m_splash->showStartupError(
+                QStringLiteral(
+                    "TorProxy's startup process is still running and could not be stopped safely. "
+                    "The launcher has retained its process reference. Retry Close to attempt cleanup again."
+                ),
+                m_logPath
+            );
+            return;
+        }
         m_server.close();
         if (!m_serverName.isEmpty()) {
             QLocalServer::removeServer(m_serverName);
