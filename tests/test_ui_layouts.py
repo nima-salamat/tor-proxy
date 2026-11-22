@@ -766,6 +766,13 @@ def test_connect_button_exposes_actual_lifecycle_states_and_white_theme_explicit
     assert "def _stop_services_worker(self)" in home_source
     assert "self._parent._on_proxy_shutdown_complete(True, \"\")" in home_source
     assert "Tor startup failed" in home_source
+    failure_handler = home_source[
+        home_source.index("    def _on_tor_failed("):
+        home_source.index("    def _on_services_stopped(", home_source.index("    def _on_tor_failed("))
+    ]
+    assert "tor_resources_owned" in failure_handler
+    assert "backend_managers" in failure_handler
+    assert "self._request_stop_services(final_status=" in failure_handler
     assert "Tor rejected its configuration" in manager_source
     assert "Recent Tor log" in manager_source
     assert "QComboBox#systemProxyMode QAbstractItemView" in home_source

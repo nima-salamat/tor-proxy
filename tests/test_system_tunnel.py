@@ -1063,3 +1063,52 @@ def test_sing_box_child_is_stopped_when_persisting_its_identity_fails(tmp_path, 
     assert child.terminate_calls == 1
     assert child.poll() is not None
     assert not state_path.exists()
+
+
+
+def test_failed_sing_box_launch_escalates_to_kill_when_terminate_errors(tmp_path, monkeypatch):
+    state_path = tmp_path / "state" / "sing-box-process.json"
+
+    class FakeChild:
+        pid = 32192
+
+        def __init__(self):
+            self.returncode = None
+            self.terminate_calls = 0
+            self.kill_calls = 0
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.terminate_calls += 1
+            raise OSError("terminate denied")
+
+        def kill(self):
+            self.kill_calls += 1
+            self.returncode = -9
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    child = FakeChild()
+    monkeypatch.setattr(system_tunnel, "_interface_exists", lambda _name: False)
+
+    system_tunnel._stop_failed_sing_box_launch(
+        child,
+        "torproxy-tun",
+        state_path,
+        {
+            "pid": child.pid,
+            "create_time": 123.0,
+            "engine": "/opt/torproxy/sing-box",
+            "config": "/opt/torproxy/sing-box.json",
+            "interface": "torproxy-tun",
+            "sha256": "a" * 64,
+        },
+    )
+
+    assert child.terminate_calls == 1
+    assert child.kill_calls == 1
+    assert child.poll() is not None
+    assert not state_path.exists()

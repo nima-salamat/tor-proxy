@@ -2177,7 +2177,22 @@ class ProxyWindow(QWidget):
         if self._parent is not None and hasattr(self._parent, "notify_user"):
             self._parent.notify_user("Tor startup failed", str(message), level="warning")
 
-        if self.running:
+        runner = self.tor
+        backend_managers = tuple(getattr(runner, "_backend_managers", ()) or ())
+        gateway = getattr(runner, "_gateway", None)
+        supervisor = getattr(runner, "thread", None)
+        backend_workers = tuple(getattr(runner, "_backend_threads", ()) or ())
+        tor_resources_owned = bool(
+            backend_managers
+            or gateway is not None
+            or (supervisor is not None and supervisor.is_alive())
+            or any(
+                getattr(worker, "ident", None) is not None
+                and worker.is_alive()
+                for worker in backend_workers
+            )
+        )
+        if self.running or tor_resources_owned:
             self._request_stop_services(final_status="TOR STARTUP FAILED · SEE EVENT LOG")
         else:
             self.connect_btn.set_connected(False)
