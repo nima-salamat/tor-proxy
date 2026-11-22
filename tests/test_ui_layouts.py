@@ -2244,9 +2244,8 @@ def test_tray_menu_uses_a_modern_theme_aware_floating_surface():
     assert "QMenu#trayContextMenu::item:selected" in theme_sync
     assert "QMenu#trayContextMenu::separator" in theme_sync
     assert "QMenu#trayContextMenu::indicator" not in theme_sync
-    assert '"fa6s.circle-check"' in theme_sync
-    assert "action.isChecked()" in theme_sync
     assert "proxy_icon_colors[proxy_mode]" in theme_sync
+    assert "proxy_icons[proxy_mode]" in theme_sync
     assert 'surface = "#171e29"' in theme_sync
     assert 'surface = "#ffffff"' in theme_sync
     assert 'hover = "#29384d"' in theme_sync
