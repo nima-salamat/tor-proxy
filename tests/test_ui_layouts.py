@@ -1097,6 +1097,16 @@ def test_tray_menu_is_custom_anchored_above_tray_icon():
     assert "self._set_tray_system_proxy_mode(selected_mode)" in source
     assert "def _sync_tray_system_proxy_actions(self, *_args)" in source
     assert "proxy_mode_combo.currentIndexChanged.connect(self._sync_tray_system_proxy_actions)" in source
+    assert 'self.tray_proxy_status_label = QLabel("CHECKING"' in source
+    assert "def _read_tray_system_proxy_status(self)" in source
+    assert "get_system_proxy_status(\"127.0.0.1\", port)" in source
+    assert "def _refresh_tray_system_proxy_status_async(self, force=False)" in source
+    assert "QThreadPool.globalInstance().start(worker)" in source
+    assert 'text = "ACTIVE · TORPROXY"' in source
+    assert 'text = "ENABLED · EXTERNAL"' in source
+    assert 'text = "DISABLED"' in source
+    assert 'text = "UNKNOWN"' in source
+    assert "self._refresh_tray_system_proxy_status_async()" in source
 
 
 def test_theme_switch_thumb_can_be_dragged_in_both_directions(qt_app):
