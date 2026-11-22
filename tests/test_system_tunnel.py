@@ -1204,3 +1204,35 @@ def test_sing_box_identity_requires_config_after_run_c_flag(tmp_path, monkeypatc
     }
 
     assert system_tunnel._process_matches(state) is None
+
+
+
+def test_sing_box_process_identity_rejects_nonfinite_creation_time(tmp_path, monkeypatch):
+    engine = tmp_path / "sing-box"
+    config = tmp_path / "sing-box.json"
+
+    class FakeProcess:
+        def is_running(self):
+            return True
+
+        def status(self):
+            return "running"
+
+        def create_time(self):
+            return float("nan")
+
+        def exe(self):
+            return str(engine)
+
+        def cmdline(self):
+            return ["sing-box", "run", "-c", str(config)]
+
+    monkeypatch.setattr(system_tunnel.psutil, "Process", lambda _pid: FakeProcess())
+    state = {
+        "pid": 44125,
+        "create_time": float("nan"),
+        "engine": str(engine),
+        "config": str(config),
+    }
+
+    assert system_tunnel._process_matches(state) is None

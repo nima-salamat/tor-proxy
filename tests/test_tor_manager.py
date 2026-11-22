@@ -1346,3 +1346,33 @@ def test_tor_process_identity_requires_config_to_follow_tor_config_flag(tmp_path
         [str(executable), str(manager.torrc_path)],
         manager.torrc_path,
     )
+
+
+
+def test_malformed_tor_identity_record_blocks_legacy_process_scan(tmp_path, monkeypatch):
+    executable = tmp_path / ("tor.exe" if os.name == "nt" else "tor")
+    manager = TorManager(TorSettings(
+        executable=executable,
+        data_directory=tmp_path / "tor-state",
+    ))
+    manager.data_directory.mkdir(parents=True)
+    manager.torrc_path.write_text("SocksPort 19194\\n", encoding="utf-8")
+    manager.process_state_path.write_text(
+        json.dumps({"schema": 1, "pid": 54325, "create_time": float("nan")}),
+        encoding="utf-8",
+    )
+
+    def forbidden_scan(*_args, **_kwargs):
+        raise AssertionError("Malformed saved identity must not trigger a legacy process scan")
+
+    monkeypatch.setattr(tor_manager_module.psutil, "process_iter", forbidden_scan)
+
+    snapshot = manager.process_identity_snapshot()
+    assert snapshot["alive"] is True
+    assert snapshot["verified"] is False
+    assert snapshot["identity_unverifiable"] is True
+    with pytest.raises(TorManagerError, match="malformed or unreadable"):
+        manager._stop_stale_managed_tor_processes()
+    with pytest.raises(TorManagerError, match="malformed or unreadable"):
+        manager._stop_recorded_process()
+    assert manager.process_state_path.is_file()

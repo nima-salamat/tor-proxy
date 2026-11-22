@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import socket
@@ -249,7 +250,12 @@ class TorManager:
                 return None
             pid = payload.get("pid")
             created = payload.get("create_time")
-            if type(pid) is not int or pid <= 0 or type(created) not in (int, float):
+            if (
+                type(pid) is not int or pid <= 0
+                or type(created) not in (int, float)
+                or not math.isfinite(float(created))
+                or float(created) <= 0
+            ):
                 return None
             if not all(isinstance(payload.get(key), str) and payload[key] for key in ("executable", "torrc")):
                 return None
@@ -297,7 +303,9 @@ class TorManager:
         """Return true when a saved PID is live but its complete identity does not match."""
         record = self._read_process_identity()
         if record is None:
-            return False
+            # A present but unreadable/malformed record is an ownership conflict,
+            # not a legacy session with permission to scan and signal by torrc.
+            return self.process_state_path.exists()
         try:
             process = psutil.Process(int(record["pid"]))
             if not process.is_running():
@@ -438,9 +446,14 @@ class TorManager:
         if process is None:
             if self._process_identity_unverifiable():
                 record = self._read_process_identity() or {}
+                saved_pid = record.get("pid")
+                detail = (
+                    f"Saved Tor PID {saved_pid} is still alive but its process identity differs or cannot be verified."
+                    if saved_pid else
+                    "The saved Tor process identity record is malformed or unreadable."
+                )
                 raise TorManagerError(
-                    f"Saved Tor PID {record.get('pid')} is still alive but its process identity differs or cannot be verified; "
-                    "refusing to signal it and retaining the ownership record."
+                    detail + " Refusing to signal another process and retaining the ownership record."
                 )
             self._clear_process_identity()
             return
@@ -518,6 +531,11 @@ class TorManager:
     def _stop_stale_managed_tor_processes(self) -> None:
         """Reap a verified saved child; use torrc matching only for legacy sessions."""
         saved_identity = self._read_process_identity()
+        if saved_identity is None and self.process_state_path.exists():
+            raise TorManagerError(
+                "The saved Tor process identity record is malformed or unreadable. "
+                "Refusing legacy torrc scanning; inspect or remove the record manually before retrying."
+            )
         if saved_identity is not None:
             recorded = self._recorded_tor_process()
             if recorded is None:

@@ -11,6 +11,7 @@ import hashlib
 import ipaddress
 import json
 import logging
+import math
 import os
 import platform
 import re
@@ -323,6 +324,8 @@ def _process_matches(state: dict[str, Any]) -> psutil.Process | None:
     try:
         pid = int(state["pid"])
         expected_created = float(state["create_time"])
+        if not math.isfinite(expected_created) or expected_created <= 0:
+            return None
         expected_exe = os.path.normcase(str(Path(state["engine"]).resolve()))
         expected_config = str(Path(state["config"]).resolve())
         process = psutil.Process(pid)
@@ -1586,7 +1589,9 @@ def _persist_sing_box_process_identity(
     """Write the process identity before waiting for TUN readiness, rolling back on failure."""
     record: dict[str, Any] | None = None
     try:
-        created = psutil.Process(process.pid).create_time()
+        created = float(psutil.Process(process.pid).create_time())
+        if not math.isfinite(created) or created <= 0:
+            raise SystemTunnelError("The sing-box process creation time could not be verified.")
         record = {
             "pid": process.pid,
             "create_time": created,
