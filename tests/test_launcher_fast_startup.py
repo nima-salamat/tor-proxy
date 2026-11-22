@@ -52,6 +52,22 @@ def test_windows_native_splash_caches_static_artwork_and_uses_low_cpu_animation(
     assert "SetTimer(hwnd, kTimer, 100, nullptr)" in source
 
 
+def test_windows_launcher_releases_cached_gdi_frame_before_renderer_shutdown():
+    source = (ROOT / "launcher" / "src" / "bootstrap.cpp").read_text(encoding="utf-8")
+    win_main = source[source.index("int WINAPI wWinMain"):source.rfind("#else\\n#include <cerrno>")]
+    assert win_main.count("state.staticFrame.reset();") == 3
+    assert win_main.count("state.logo.reset();") == 3
+    for marker in ("state.staticFrame.reset();",):
+        position = 0
+        while True:
+            position = win_main.find(marker, position)
+            if position < 0:
+                break
+            shutdown = win_main.find("Gdiplus::GdiplusShutdown", position)
+            assert shutdown > position
+            position += len(marker)
+
+
 def test_linux_launcher_shutdown_never_waits_forever_for_child_reaping():
     source = (ROOT / "launcher" / "src" / "main.cpp").read_text(encoding="utf-8")
     stop = source[source.index("bool stopCurrentProcess()"):source.index("void stopAndQuit()")]
