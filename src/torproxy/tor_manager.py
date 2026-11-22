@@ -145,6 +145,7 @@ class TorManager:
         self._controller_factory = controller_factory
         self._lock = threading.RLock()
         self._start_lock = threading.Lock()
+        self._termination_lock = threading.Lock()
         self._stop_requested = threading.Event()
         self._start_cancel_event: threading.Event | None = None
         self.process: subprocess.Popen | None = None
@@ -1504,6 +1505,11 @@ class TorManager:
             return 0.0
 
     def _terminate_process(self, *, force: bool = False) -> None:
+        """Serialize every controller/process termination attempt for this instance."""
+        with self._termination_lock:
+            self._terminate_process_locked(force=force)
+
+    def _terminate_process_locked(self, *, force: bool = False) -> None:
         with self._lock:
             controller, self._controller = self._controller, None
             process = self.process

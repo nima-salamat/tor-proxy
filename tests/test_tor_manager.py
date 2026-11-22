@@ -1088,3 +1088,73 @@ def test_orphan_recovery_releases_a_lock_retained_by_an_earlier_failed_stop(tmp_
     assert stopped == [("torproxy-tor-0123456789ab.scope", 12345, 2, False)]
     assert released == [True]
     assert manager._data_directory_lock_handle is None
+
+
+
+def test_concurrent_tor_termination_is_serialized(tmp_path):
+    import threading
+    import time
+
+    manager = TorManager(TorSettings(
+        executable=tmp_path / "tor.exe",
+        socks_port=19188,
+        control_port=19189,
+        data_directory=tmp_path / "tor-state",
+    ))
+    entered_terminate = threading.Event()
+    release_wait = threading.Event()
+
+    class BlockingProcess:
+        pid = 76543
+
+        def __init__(self):
+            self.returncode = None
+            self.terminate_calls = 0
+            self.wait_calls = 0
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.terminate_calls += 1
+            entered_terminate.set()
+
+        def wait(self, timeout=None):
+            self.wait_calls += 1
+            assert release_wait.wait(timeout=3)
+            self.returncode = 0
+            return 0
+
+    child = BlockingProcess()
+    manager.process = child
+    first_errors = []
+    second_errors = []
+    first = threading.Thread(
+        target=lambda: _capture_tor_error(manager._terminate_process, first_errors)
+    )
+    second = threading.Thread(
+        target=lambda: _capture_tor_error(manager._terminate_process, second_errors)
+    )
+
+    first.start()
+    assert entered_terminate.wait(timeout=2)
+    second.start()
+    time.sleep(0.05)
+    assert child.terminate_calls == 1
+
+    release_wait.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert not first_errors
+    assert not second_errors
+    assert child.terminate_calls == 1
+    assert manager.process is None
+
+
+def _capture_tor_error(operation, errors):
+    try:
+        operation()
+    except Exception as exc:
+        errors.append(exc)
