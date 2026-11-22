@@ -1444,8 +1444,15 @@ class OnionHostingPage(QWidget):
             memory = int(runtime.get("memory_bytes") or 0)
             memory_text = f"{memory / (1024 * 1024):.1f} MiB" if memory else "—"
             uptime = int(runtime.get("uptime_seconds") or 0)
+            pid = runtime.get("pid")
+            if pid:
+                identity = "verified" if runtime.get("process_identity_verified") else "unverified"
+                process_text = f"PID {pid} · {identity}"
+            else:
+                process_text = "PID —"
             self.runtime_metrics.setText(
-                f"{version}  ·  {memory_text}  ·  {uptime // 3600:02d}:{(uptime // 60) % 60:02d}:{uptime % 60:02d}"
+                f"{version}  ·  {memory_text}  ·  "
+                f"{uptime // 3600:02d}:{(uptime // 60) % 60:02d}:{uptime % 60:02d}  ·  {process_text}"
             )
 
         self._last_services = [dict(item) for item in services]

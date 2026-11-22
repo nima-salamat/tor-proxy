@@ -4513,3 +4513,20 @@ def test_developer_tor_copy_url_is_icon_only_next_to_qr_and_title_is_not_clipped
             card.deleteLater()
         page.deleteLater()
         qt_app.processEvents()
+
+
+
+def test_tor_instance_dashboards_show_persistent_process_identity():
+    repository = Path(__file__).resolve().parents[1]
+    developer_page = (
+        repository / "ui_/window/onion_hosting_page.py"
+    ).read_text(encoding="utf-8")
+    services_page = (
+        repository / "ui_/window/tor_services_page.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'pid = runtime.get("pid")' in developer_page
+    assert 'runtime.get("process_identity_verified")' in developer_page
+    assert 'process_pid = item.get("pid")' in services_page
+    assert 'item.get("process_identity_verified")' in services_page
+    assert 'pid_suffix = f" · PID {process_pid} ({identity_label})"' in services_page

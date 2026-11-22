@@ -1201,6 +1201,12 @@ class TorServicesPage(QWidget):
             except (TypeError, ValueError):
                 bridge_count = 0
             bridge_suffix = f" · {bridge_count} bridge record(s)" if bridge_count else ""
+            process_pid = item.get("pid")
+            if process_pid:
+                identity_label = "verified" if item.get("process_identity_verified") else "unverified"
+                pid_suffix = f" · PID {process_pid} ({identity_label})"
+            else:
+                pid_suffix = " · PID unavailable"
             try:
                 active_connections = max(0, int(item.get("active_connections", 0) or 0))
                 backend_failures = max(0, int(item.get("gateway_failures", 0) or 0))
@@ -1213,7 +1219,7 @@ class TorServicesPage(QWidget):
                 load_suffix += f" · {backend_failures} recent gateway failure(s)"
             if cooldown > 0:
                 load_suffix += f" · fallback cooldown {cooldown:.0f}s"
-            labels.append(f"Instance {index}: {description}{bridge_suffix}{load_suffix}")
+            labels.append(f"Instance {index}: {description}{pid_suffix}{bridge_suffix}{load_suffix}")
 
         detail = "  |  ".join(labels) if labels else "Waiting for instance status."
         gateway = health.get("gateway")
