@@ -1230,6 +1230,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
 
     if (!createWindow(state, instance)) {
         state.logo.reset();
+        state.staticFrame.reset();
         Gdiplus::GdiplusShutdown(gdiplusToken);
         MessageBoxW(nullptr, L"Could not create the TorProxy startup window.",
                     L"TorProxy", MB_OK | MB_ICONERROR);
@@ -1258,6 +1259,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
             state.backBufferHeight == bounds.bottom - bounds.top;
         DestroyWindow(state.window);
         state.logo.reset();
+        state.staticFrame.reset();
         Gdiplus::GdiplusShutdown(gdiplusToken);
         return (frameless && sizeValid && iconLoaded && logoLoaded &&
                 bufferedPaintReady && themeMatches) ? 0 : 4;
@@ -1277,6 +1279,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         DispatchMessageW(&msg);
     }
     state.logo.reset();
+        state.staticFrame.reset();
     Gdiplus::GdiplusShutdown(gdiplusToken);
     return static_cast<int>(msg.wParam);
 }
