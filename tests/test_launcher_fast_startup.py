@@ -41,6 +41,25 @@ def test_windows_launcher_starts_application_before_optional_logo_decode():
 
 
 
+
+def test_windows_native_splash_caches_static_artwork_and_uses_low_cpu_animation():
+    source = (ROOT / "launcher" / "src" / "bootstrap.cpp").read_text(encoding="utf-8")
+    assert "std::unique_ptr<Gdiplus::Bitmap> staticFrame" in source
+    assert "paintStaticFrame(" in source
+    assert "paintDynamicFrame(" in source
+    assert "PixelFormat32bppPARGB" in source
+    assert "graphics.DrawImage(" in source
+    assert "SetTimer(hwnd, kTimer, 100, nullptr)" in source
+
+
+def test_linux_launcher_shutdown_never_waits_forever_for_child_reaping():
+    source = (ROOT / "launcher" / "src" / "main.cpp").read_text(encoding="utf-8")
+    stop = source[source.index("bool stopCurrentProcess()"):source.index("void stopAndQuit()")]
+    assert "waitpid(child, &childStatus, 0)" not in stop
+    assert "waitpid(child, &childStatus, WNOHANG)" in stop
+    assert "elapsed.elapsed() < 1500" in stop
+    assert "return false;" in stop
+
 def test_startup_stylesheet_is_reused_by_window_theme_setup():
     repository = Path(__file__).resolve().parents[1]
     main_source = (repository / "main.py").read_text(encoding="utf-8")
