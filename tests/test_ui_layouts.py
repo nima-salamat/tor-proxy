@@ -2250,10 +2250,10 @@ def test_tray_menu_uses_a_modern_theme_aware_floating_surface():
     # The tray popup is a designed application surface, not an unstyled
     # platform-default menu with a few isolated actions.
     assert "QWidgetAction" in source
-    assert 'self.tray_menu.setObjectName("trayContextMenu")' in source
     tray_frame_start = source.index("class TrayPopupFrame(QFrame):")
     tray_frame_end = source.index("class Window(QMainWindow):", tray_frame_start)
     tray_frame = source[tray_frame_start:tray_frame_end]
+    assert 'self.setObjectName("trayContextMenu")' in tray_frame
     assert "WA_TranslucentBackground" in tray_frame
     assert "WA_NoSystemBackground" in tray_frame
     assert "painter.setBrush(self._surface_color)" in tray_frame
