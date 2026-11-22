@@ -125,7 +125,7 @@ class TorServicePool:
             except Exception:
                 identity = {"alive": False}
             if bool(identity.get("alive")) and process is None:
-                return "orphaned"
+                return "orphaned" if bool(identity.get("verified")) else "process-identity-unverified"
         if state == "ready" and process is not None:
             try:
                 if process.poll() is not None:
@@ -286,6 +286,7 @@ class TorServicePool:
                 if reported_pid is None and process is not None:
                     reported_pid = getattr(process, "pid", None)
                 orphaned = state == "orphaned"
+                identity_unverified = state == "process-identity-unverified"
                 result[entry.service_id] = {
                     "state": state,
                     "socks_port": entry.settings.socks_port,
@@ -295,17 +296,22 @@ class TorServicePool:
                     "pid": reported_pid,
                     "process_alive": bool(identity.get("alive", process is not None)),
                     "process_identity_verified": bool(identity.get("verified", False)),
-                    "network_healthy": bool(entry.network_healthy and not process_exited and not orphaned),
+                    "process_identity_unverifiable": bool(identity.get("identity_unverifiable", identity_unverified)),
+                    "network_healthy": bool(entry.network_healthy and not process_exited and not orphaned and not identity_unverified),
                     "network_health": (
-                        "orphaned" if orphaned else "unhealthy" if process_exited else entry.network_health
+                        "orphaned" if orphaned else
+                        "identity_unverified" if identity_unverified else
+                        "unhealthy" if process_exited else entry.network_health
                     ),
-                    "verified_tor": bool(entry.verified_tor and not process_exited and not orphaned),
-                    "latency_ms": None if process_exited or orphaned else entry.health_latency_ms,
+                    "verified_tor": bool(entry.verified_tor and not process_exited and not orphaned and not identity_unverified),
+                    "latency_ms": None if process_exited or orphaned or identity_unverified else entry.health_latency_ms,
                     "consecutive_health_failures": entry.consecutive_health_failures,
                     "last_health_check": entry.last_health_check,
                     "last_health_error": (
                         "Tor process exited unexpectedly; cleanup is pending."
-                        if process_exited else entry.last_health_error
+                        if process_exited else
+                        "A saved Tor PID is alive but its identity cannot be verified; refusing to signal it."
+                        if identity_unverified else entry.last_health_error
                     ),
                 }
         return result[service_id] if service_id is not None else result

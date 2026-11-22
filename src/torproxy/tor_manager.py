@@ -270,6 +270,35 @@ class TorManager:
         except (psutil.Error, OSError, RuntimeError, TypeError, ValueError):
             return None
 
+    def _process_identity_unverifiable(self) -> bool:
+        """Return true when a saved PID is live but OS permissions block ownership checks."""
+        record = self._read_process_identity()
+        if record is None:
+            return False
+        try:
+            process = psutil.Process(int(record["pid"]))
+            if not process.is_running():
+                return False
+            created = float(process.create_time())
+        except psutil.NoSuchProcess:
+            return False
+        except (psutil.AccessDenied, psutil.Error, OSError):
+            return True
+        if abs(created - float(record["create_time"])) > 0.25:
+            return False
+        try:
+            if process.status() == psutil.STATUS_ZOMBIE:
+                return False
+            executable = self._normalized_process_path(process.exe())
+            command = process.cmdline()
+        except psutil.NoSuchProcess:
+            return False
+        except (psutil.AccessDenied, psutil.Error, OSError, RuntimeError, ValueError):
+            return True
+        # A readable but different executable/torrc is a recycled or unrelated PID,
+        # not a TorProxy process that may be signalled.
+        return False
+
     def _persist_process_identity(self, pid: int) -> None:
         """Atomically persist an independently verified Tor child identity for crash recovery."""
         try:
@@ -333,8 +362,19 @@ class TorManager:
                 "pid": int(recorded.pid),
                 "alive": True,
                 "verified": True,
+                "identity_unverifiable": False,
                 "create_time": float(recorded.create_time()),
                 "scope_unit": str((self._read_process_identity() or {}).get("scope_unit") or ""),
+            }
+        if self._process_identity_unverifiable():
+            record = self._read_process_identity() or {}
+            return {
+                "pid": record.get("pid"),
+                "alive": True,
+                "verified": False,
+                "identity_unverifiable": True,
+                "create_time": record.get("create_time"),
+                "scope_unit": str(record.get("scope_unit") or ""),
             }
         process = self.process
         if process is not None:
@@ -347,6 +387,7 @@ class TorManager:
                     "pid": int(self._tor_pid or process.pid),
                     "alive": True,
                     "verified": False,
+                    "identity_unverifiable": False,
                     "create_time": None,
                     "scope_unit": self._scope_unit or "",
                 }
@@ -354,6 +395,7 @@ class TorManager:
             "pid": None,
             "alive": False,
             "verified": False,
+            "identity_unverifiable": False,
             "create_time": None,
             "scope_unit": self._scope_unit or "",
         }
@@ -367,6 +409,12 @@ class TorManager:
     def _stop_recorded_process(self, *, force: bool = False) -> None:
         process = self._recorded_tor_process()
         if process is None:
+            if self._process_identity_unverifiable():
+                record = self._read_process_identity() or {}
+                raise TorManagerError(
+                    f"Saved Tor PID {record.get('pid')} is alive but its identity cannot be verified with current permissions; "
+                    "the process was not touched and its ownership record was retained."
+                )
             self._clear_process_identity()
             return
         try:
@@ -399,6 +447,11 @@ class TorManager:
             raise TorManagerError(
                 f"Verified Tor process {remaining.pid} is still running; its ownership record is retained."
             )
+        if self._process_identity_unverifiable():
+            raise TorManagerError(
+                "The saved Tor PID remains alive but its identity can no longer be verified; "
+                "the process record and DataDirectory lock are retained."
+            )
         self._clear_process_identity()
 
     def _stop_orphaned_process(self) -> None:
@@ -406,14 +459,22 @@ class TorManager:
         acquired_here = self._data_directory_lock_handle is None
         if acquired_here:
             self._acquire_data_directory_lock()
+        reconciled = False
         try:
             self._stop_stale_managed_tor_processes()
             if self._recorded_tor_process() is not None:
                 raise TorManagerError(
                     "A verified Tor process is still active after orphan reconciliation; its state was retained."
                 )
+            if self._process_identity_unverifiable():
+                raise TorManagerError(
+                    "A saved Tor PID is live but its identity cannot be verified; cleanup is deferred and the state is retained."
+                )
+            reconciled = True
         finally:
-            if acquired_here:
+            # Keep the OS lock while a failed cleanup remains represented by this
+            # manager. A successful stop releases it normally.
+            if acquired_here and reconciled:
                 self._release_data_directory_lock()
 
     def _stop_stale_managed_tor_processes(self) -> None:
@@ -452,6 +513,12 @@ class TorManager:
             matching.append(recorded)
         matching = list({process.pid: process for process in matching}.values())
         if not matching:
+            if self._process_identity_unverifiable():
+                record = self._read_process_identity() or {}
+                raise TorManagerError(
+                    f"Saved Tor PID {record.get('pid')} is live but cannot be inspected; "
+                    "the process was not terminated and its ownership record was retained."
+                )
             self._clear_process_identity()
             return
         process_ids = [process.pid for process in matching]

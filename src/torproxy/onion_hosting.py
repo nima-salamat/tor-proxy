@@ -451,7 +451,7 @@ class OnionHostingManager:
             if not callable(identity_getter):
                 return None
             identity = identity_getter()
-            if not bool(identity.get("alive")) or not bool(identity.get("verified")):
+            if not bool(identity.get("alive")):
                 return None
         except Exception:
             LOGGER.debug("Could not inspect a previous Developer Tor process.", exc_info=True)
@@ -510,11 +510,20 @@ class OnionHostingManager:
         except Exception:
             identity = {}
         orphaned = process is None and bool(identity.get("alive")) and bool(identity.get("verified"))
+        identity_unverified = (
+            process is None and bool(identity.get("alive")) and not bool(identity.get("verified"))
+        )
         if orphaned:
             state = "orphaned"
             message = message or (
                 f"Verified Developer Tor process {identity.get('pid')} survived the previous application session. "
                 "Stop it to reconcile before starting another runtime."
+            )
+        elif identity_unverified:
+            state = "process-identity-unverified"
+            message = message or (
+                f"PID {identity.get('pid')} is alive, but TorProxy cannot verify its executable identity with current permissions. "
+                "The process will not be terminated automatically."
             )
         pid = identity.get("pid") if identity else None
         if pid is None:
@@ -555,6 +564,7 @@ class OnionHostingManager:
             "pid": pid,
             "process_alive": bool(identity.get("alive", process is not None)),
             "process_identity_verified": bool(identity.get("verified", False)),
+            "process_identity_unverifiable": bool(identity.get("identity_unverifiable", False)),
             "network_summary": self._network_summary(manager, state),
         }
 
@@ -701,8 +711,9 @@ class OnionHostingManager:
             manager_cancel = getattr(manager, "_start_cancel_event", None)
         if manager is None:
             manager = self._discover_orphaned_manager()
-            if callable(getattr(manager_cancel, "set", None)):
-                manager_cancel.set()
+        manager_cancel = getattr(manager, "_start_cancel_event", None)
+        if callable(getattr(manager_cancel, "set", None)):
+            manager_cancel.set()
 
         if not self._runtime_start_lock.acquire(timeout=30.0):
             raise OnionHostingError(
