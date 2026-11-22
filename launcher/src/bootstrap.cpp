@@ -1319,7 +1319,8 @@ bool reapChildWithin(pid_t child, int timeoutMs) {
         if (result == child || (result < 0 && errno == ECHILD)) return true;
         if (result < 0 && errno != EINTR) return false;
         timespec pause{0, 10 * 1000 * 1000};
-        while (nanosleep(&pause, &pause) < 0 && errno == EINTR) {}
+        // An interrupted pause still counts toward the fixed retry budget.
+        nanosleep(&pause, nullptr);
     }
     const pid_t result = waitpid(child, &childStatus, WNOHANG);
     return result == child || (result < 0 && errno == ECHILD);
