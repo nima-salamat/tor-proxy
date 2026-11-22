@@ -589,6 +589,9 @@ def _run_interruptible_upstream_operation(operation, server=None, *, thread_name
         except Exception as exc:
             errors.append(exc)
         finally:
+            unregister = getattr(server, "unregister_operation_worker", None)
+            if callable(unregister):
+                unregister(threading.current_thread())
             finished.set()
 
     worker = threading.Thread(
@@ -596,7 +599,17 @@ def _run_interruptible_upstream_operation(operation, server=None, *, thread_name
         name=thread_name,
         daemon=True,
     )
-    worker.start()
+    register = getattr(server, "register_operation_worker", None)
+    registered = bool(callable(register))
+    if registered and not register(worker):
+        raise OSError("The local HTTP proxy is shutting down.")
+    try:
+        worker.start()
+    except Exception:
+        unregister = getattr(server, "unregister_operation_worker", None)
+        if registered and callable(unregister):
+            unregister(worker)
+        raise
     while not finished.wait(RELAY_SHUTDOWN_POLL_SECONDS):
         if stop_event.is_set():
             raise OSError("The local HTTP proxy is shutting down.")
@@ -1019,6 +1032,7 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
         self._client_lock = threading.RLock()
         self._active_clients: set[socket.socket] = set()
         self._active_upstreams: set[socket.socket] = set()
+        self._active_operations: set[threading.Thread] = set()
         self.shutdown_event = threading.Event()
         self._rejected_clients = 0
         host = addr[0]
@@ -1036,9 +1050,22 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
         with self._client_lock:
             return {
                 "active_clients": len(self._active_clients),
+                "active_operations": len(self._active_operations),
                 "max_clients": self._max_clients,
                 "rejected_clients": self._rejected_clients,
             }
+
+    def register_operation_worker(self, worker: threading.Thread) -> bool:
+        """Track blocking resolver/connect workers independently of their HTTP handler."""
+        with self._client_lock:
+            if self.shutdown_event.is_set():
+                return False
+            self._active_operations.add(worker)
+            return True
+
+    def unregister_operation_worker(self, worker: threading.Thread) -> None:
+        with self._client_lock:
+            self._active_operations.discard(worker)
 
     def register_upstream(self, remote: socket.socket) -> bool:
         """Track outbound sockets before connect so shutdown can cancel the dial."""

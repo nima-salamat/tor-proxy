@@ -2206,14 +2206,15 @@ class Runner:
             return bool(self.server is not None and self.thread is not None and self.thread.is_alive())
 
     def _start_http_listener(self) -> None:
-        if self.server is not None and self.thread is not None and self.thread.is_alive():
-            return
         if self.server is not None:
-            try:
-                self.server.server_close()
-            finally:
-                self.server = None
-                self.thread = None
+            thread = self.thread
+            shutdown_event = getattr(self.server, "shutdown_event", None)
+            shutting_down = bool(shutdown_event is not None and shutdown_event.is_set())
+            if thread is not None and thread.is_alive() and not shutting_down:
+                return
+            # Keep the old server registered until all handlers and resolver
+            # workers have exited; never reuse its port while work remains.
+            self._stop_http_listener()
 
         ProxyHandler.app_window = self.app_window
         bind_host = "0.0.0.0" if self.http_bind_all_interfaces else "127.0.0.1"
@@ -2257,25 +2258,28 @@ class Runner:
         if thread is not None and thread.is_alive():
             raise RuntimeError("HTTP listener is still active; shutdown is incomplete.")
 
-        def active_http_clients() -> int:
+        def active_http_work() -> tuple[int, int]:
             metrics = getattr(server, "client_metrics", None)
             if callable(metrics):
                 metrics = metrics()
             if isinstance(metrics, dict):
                 try:
-                    return max(0, int(metrics.get("active_clients", 0) or 0))
+                    clients = max(0, int(metrics.get("active_clients", 0) or 0))
+                    operations = max(0, int(metrics.get("active_operations", 0) or 0))
+                    return clients, operations
                 except (TypeError, ValueError):
-                    return 0
-            return 0
+                    return 0, 0
+            return 0, 0
 
         deadline = time.monotonic() + 5.0
-        active_clients = active_http_clients()
-        while active_clients and time.monotonic() < deadline:
+        active_clients, active_operations = active_http_work()
+        while (active_clients or active_operations) and time.monotonic() < deadline:
             time.sleep(0.05)
-            active_clients = active_http_clients()
-        if active_clients:
+            active_clients, active_operations = active_http_work()
+        if active_clients or active_operations:
             raise RuntimeError(
-                f"Local HTTP proxy shutdown is incomplete; {active_clients} client handler(s) are still active."
+                "Local HTTP proxy shutdown is incomplete; "
+                f"{active_clients} client handler(s) and {active_operations} resolver/connect worker(s) remain active."
             )
         self.server = None
         self.thread = None
