@@ -1363,6 +1363,12 @@ class SystemTunnelManager:
             "--policy-dir", str(self.directories.config),
             "--state", str(self.process_state_path),
             "--log", str(self.log_path),
+            "--user-home", str(Path.home()),
+            "--user-uid", str(os.getuid()) if hasattr(os, "getuid") else "",
+            "--config-root", str(self.directories.config),
+            "--data-root", str(self.directories.data),
+            "--state-root", str(self.directories.state),
+            "--logs-root", str(self.directories.logs),
             "--sha256", self.engine_sha256 if action == "start" else "",
             "--archive", str(self.archive_path),
             "--archive-sha256", str(manifest.get("archive_sha256") or asset.get("sha256") or ""),
@@ -2087,6 +2093,169 @@ def _helper_stop(state_path: Path, interface_name: str) -> dict[str, Any]:
     return {"ok": True, "active": False, "detail": "System tunnel stopped; sing-box released its TUN routes."}
 
 
+def _helper_user_uid(args: Any) -> int | None:
+    """Resolve the unprivileged account that invoked the elevated helper."""
+    if os.name == "nt":
+        raw_home = os.environ.get("USERPROFILE") or os.environ.get("HOME")
+        if not raw_home:
+            raise SystemTunnelError("The elevated helper cannot identify the invoking Windows user profile.")
+        expected_home = Path(raw_home).resolve(strict=True)
+        declared_home = Path(args.user_home).resolve(strict=True)
+        if os.path.normcase(str(expected_home)) != os.path.normcase(str(declared_home)):
+            raise SystemTunnelError("The elevated helper rejected a user-home path that differs from the invoking account.")
+        return None
+
+    raw_uid = os.environ.get("PKEXEC_UID") or os.environ.get("SUDO_UID")
+    if raw_uid is None:
+        if os.geteuid() == 0:
+            raise SystemTunnelError(
+                "The privileged helper requires PKEXEC_UID or SUDO_UID to identify the unprivileged caller."
+            )
+        uid = os.getuid()
+    else:
+        try:
+            uid = int(raw_uid)
+        except ValueError as exc:
+            raise SystemTunnelError("The privileged helper received an invalid invoking-user identity.") from exc
+    if str(uid) != str(args.user_uid):
+        raise SystemTunnelError("The privileged helper rejected a mismatched invoking-user UID.")
+    try:
+        import pwd
+        expected_home = Path(pwd.getpwuid(uid).pw_dir).resolve(strict=True)
+    except (ImportError, KeyError, OSError) as exc:
+        raise SystemTunnelError("The privileged helper could not resolve the invoking user's home directory.") from exc
+    declared_home = Path(args.user_home).resolve(strict=True)
+    if expected_home != declared_home:
+        raise SystemTunnelError("The elevated helper rejected a user-home path that differs from the invoking account.")
+    return uid
+
+
+def _safe_user_root(raw_path: str, *, label: str, uid: int | None) -> Path:
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute() or path.is_symlink():
+        raise SystemTunnelError(f"The privileged helper rejected an unsafe {label} directory.")
+    try:
+        resolved = path.resolve(strict=True)
+        info = resolved.stat()
+    except OSError as exc:
+        raise SystemTunnelError(f"The privileged helper could not inspect the {label} directory.") from exc
+    if not resolved.is_dir():
+        raise SystemTunnelError(f"The privileged helper requires the {label} path to be a directory.")
+    if uid is not None and info.st_uid != uid:
+        raise SystemTunnelError(f"The privileged helper rejected a {label} directory not owned by the invoking user.")
+    if uid is not None and (stat.S_IMODE(info.st_mode) & 0o077):
+        raise SystemTunnelError(f"The privileged helper rejected a {label} directory with group/world permissions.")
+    return resolved
+
+
+def _reject_path_symlinks(path: Path, *, root: Path, label: str) -> Path:
+    """Reject symlinks in every TorProxy-controlled component beneath an approved root."""
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        raise SystemTunnelError(f"The privileged helper rejected a relative {label} path.")
+    try:
+        relative = candidate.relative_to(root)
+    except ValueError as exc:
+        raise SystemTunnelError(f"The privileged helper rejected a {label} path outside its approved root.") from exc
+    current = root
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise SystemTunnelError(f"The privileged helper rejected a symlink in the {label} path.")
+    normalized = candidate.resolve(strict=False)
+    if normalized != candidate:
+        raise SystemTunnelError(f"The privileged helper rejected a redirected {label} path.")
+    return candidate
+
+
+def _validate_helper_paths(args: Any) -> Path:
+    """Validate every filesystem path before the elevated helper reads, writes or unlinks it."""
+    uid = _helper_user_uid(args)
+    home = Path(args.user_home).resolve(strict=True)
+    if os.name != "nt":
+        try:
+            home_stat = home.stat()
+        except OSError as exc:
+            raise SystemTunnelError("The privileged helper could not inspect the invoking user's home directory.") from exc
+        if uid is None or home_stat.st_uid != uid:
+            raise SystemTunnelError("The privileged helper rejected a home directory not owned by the invoking user.")
+
+    config_root = _safe_user_root(args.config_root, label="configuration", uid=uid)
+    data_root = _safe_user_root(args.data_root, label="data", uid=uid)
+    state_root = _safe_user_root(args.state_root, label="state", uid=uid)
+    logs_root = _safe_user_root(args.logs_root, label="logs", uid=uid)
+
+    if os.name == "nt":
+        for label, root in (
+            ("configuration", config_root),
+            ("data", data_root),
+            ("state", state_root),
+            ("logs", logs_root),
+        ):
+            try:
+                root.relative_to(home)
+            except ValueError as exc:
+                raise SystemTunnelError(
+                    f"The privileged helper rejected the {label} root outside the invoking user's profile."
+                ) from exc
+
+    system_root = data_root / "system-tunnel"
+    engine_root = system_root / "engine"
+    state_dir = state_root / "system-tunnel"
+    for folder, label, uid_to_check in (
+        (system_root, "runtime data", uid),
+        (engine_root, "engine", uid),
+        (state_dir, "tunnel state", uid),
+    ):
+        folder = _reject_path_symlinks(folder, root=data_root if label != "tunnel state" else state_root, label=label)
+        try:
+            info = folder.stat()
+        except OSError as exc:
+            raise SystemTunnelError(f"The privileged helper could not inspect its {label} directory.") from exc
+        if not folder.is_dir() or (uid_to_check is not None and info.st_uid != uid_to_check):
+            raise SystemTunnelError(f"The privileged helper rejected an unsafe {label} directory.")
+
+    expected_interface = TUN_INTERFACE_WINDOWS if os.name == "nt" else TUN_INTERFACE_LINUX
+    if args.interface != expected_interface:
+        raise SystemTunnelError("The privileged helper rejected an unexpected TUN interface name.")
+    if not SING_BOX_VERSION_PATTERN.fullmatch(str(args.version)):
+        raise SystemTunnelError("The privileged helper rejected an invalid sing-box version.")
+
+    executable_name = "sing-box.exe" if os.name == "nt" else "sing-box"
+    expected_engine = engine_root / executable_name
+    expected_config = state_dir / "sing-box.json"
+    expected_state = state_dir / "sing-box-process.json"
+    expected_log = logs_root / "system-tunnel.log"
+    expected_archive = system_root / f"sing-box-{args.version}-{platform.system().lower()}.archive"
+
+    paths_to_check = (
+        (Path(args.engine), expected_engine, data_root, "sing-box executable"),
+        (Path(args.config), expected_config, state_root, "sing-box configuration"),
+        (Path(args.state), expected_state, state_root, "sing-box process state"),
+        (Path(args.log), expected_log, logs_root, "sing-box log"),
+        (Path(args.archive), expected_archive, data_root, "sing-box archive"),
+        (Path(args.policy_dir), config_root, config_root, "host policy"),
+    )
+    for supplied, expected, root, label in paths_to_check:
+        normalized_expected = expected.resolve(strict=False)
+        normalized_supplied = supplied.expanduser().resolve(strict=False)
+        if normalized_supplied != normalized_expected:
+            raise SystemTunnelError(f"The privileged helper rejected an unexpected {label} path.")
+        _reject_path_symlinks(expected, root=root, label=label)
+
+    result_path = Path(args.result).expanduser()
+    if not result_path.is_absolute():
+        raise SystemTunnelError("The privileged helper rejected a relative helper result path.")
+    if result_path.parent.resolve(strict=True) != state_dir.resolve(strict=True):
+        raise SystemTunnelError("The privileged helper rejected a result path outside its private state directory.")
+    if not re.fullmatch(r"helper-result-[0-9a-f]{32}\\.json", result_path.name):
+        raise SystemTunnelError("The privileged helper rejected an unexpected helper result filename.")
+    if result_path.exists() or result_path.is_symlink():
+        raise SystemTunnelError("The privileged helper refuses to overwrite an existing result file.")
+    _reject_path_symlinks(result_path, root=state_dir, label="helper result")
+    return result_path
+
+
 def system_tunnel_helper_main(argv: list[str] | None = None) -> int:
     """Narrow privileged entry point; called before Qt starts in main.py."""
     import argparse
@@ -2099,6 +2268,12 @@ def system_tunnel_helper_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--policy-dir", required=True)
     parser.add_argument("--state", required=True)
     parser.add_argument("--log", required=True)
+    parser.add_argument("--user-home", required=True)
+    parser.add_argument("--user-uid", required=True)
+    parser.add_argument("--config-root", required=True)
+    parser.add_argument("--data-root", required=True)
+    parser.add_argument("--state-root", required=True)
+    parser.add_argument("--logs-root", required=True)
     parser.add_argument("--sha256", required=True)
     parser.add_argument("--archive", required=True)
     parser.add_argument("--archive-sha256", required=True)
@@ -2110,17 +2285,22 @@ def system_tunnel_helper_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--result", required=True)
     args = parser.parse_args(argv)
     result: dict[str, Any]
+    safe_result_path: Path | None = None
     try:
         _require_elevation()
+        safe_result_path = _validate_helper_paths(args)
         if args.action == "start":
             result = _helper_start(args)
         else:
             result = _helper_stop(Path(args.state).resolve(), args.interface)
     except Exception as exc:
         result = {"ok": False, "active": False, "error": f"{type(exc).__name__}: {exc}"}
-    try:
-        _atomic_json(Path(args.result).resolve(), result, mode=0o644)
-    except OSError:
-        pass
+    # Never write to args.result after a path-validation error. The elevated
+    # helper may publish a result only beneath the verified private state root.
+    if safe_result_path is not None:
+        try:
+            _atomic_json(safe_result_path, result, mode=0o644)
+        except OSError:
+            pass
     print(json.dumps(result, sort_keys=True), flush=True)
     return 0 if result.get("ok") else 1

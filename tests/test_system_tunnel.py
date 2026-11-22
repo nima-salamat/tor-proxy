@@ -269,6 +269,12 @@ def test_windows_and_linux_helpers_share_one_complete_argument_builder(tmp_path,
             index += 2
     assert mapping["--version"] == manager.version
     assert mapping["--policy-dir"] == str(manager.directories.config)
+    assert mapping["--config-root"] == str(manager.directories.config)
+    assert mapping["--data-root"] == str(manager.directories.data)
+    assert mapping["--state-root"] == str(manager.directories.state)
+    assert mapping["--logs-root"] == str(manager.directories.logs)
+    assert mapping["--user-home"] == str(Path.home())
+    assert "--user-uid" in mapping
     assert mapping["--source-url"] == manager.platform_asset["url"]
     assert mapping["--archive-type"] == manager.platform_asset["archive"]
     assert "--release-sha256" in mapping
@@ -1236,3 +1242,81 @@ def test_sing_box_process_identity_rejects_nonfinite_creation_time(tmp_path, mon
     }
 
     assert system_tunnel._process_matches(state) is None
+
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Validates POSIX pkexec caller identity and ownership.")
+def test_privileged_helper_accepts_only_invoking_users_private_tunnel_paths(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    uid = os.getuid()
+    home = Path.home().resolve()
+    roots = {
+        "config_root": tmp_path / "config",
+        "data_root": tmp_path / "data",
+        "state_root": tmp_path / "state",
+        "logs_root": tmp_path / "logs",
+    }
+    for root in roots.values():
+        root.mkdir(parents=True)
+        root.chmod(0o700)
+    (roots["data_root"] / "system-tunnel" / "engine").mkdir(parents=True)
+    (roots["state_root"] / "system-tunnel").mkdir(parents=True)
+    (roots["logs_root"] / "system-tunnel.log").parent.mkdir(parents=True, exist_ok=True)
+
+    args = SimpleNamespace(
+        version="1.14.4",
+        interface=system_tunnel.TUN_INTERFACE_LINUX,
+        user_home=str(home),
+        user_uid=str(uid),
+        config_root=str(roots["config_root"]),
+        data_root=str(roots["data_root"]),
+        state_root=str(roots["state_root"]),
+        logs_root=str(roots["logs_root"]),
+        policy_dir=str(roots["config_root"]),
+        engine=str(roots["data_root"] / "system-tunnel" / "engine" / "sing-box"),
+        config=str(roots["state_root"] / "system-tunnel" / "sing-box.json"),
+        state=str(roots["state_root"] / "system-tunnel" / "sing-box-process.json"),
+        log=str(roots["logs_root"] / "system-tunnel.log"),
+        archive=str(roots["data_root"] / "system-tunnel" / "sing-box-1.14.4-linux.archive"),
+        result=str(roots["state_root"] / "system-tunnel" / ("helper-result-" + "a" * 32 + ".json")),
+    )
+    monkeypatch.setenv("PKEXEC_UID", str(uid))
+
+    assert system_tunnel._validate_helper_paths(args) == Path(args.result)
+
+    args.result = str(tmp_path / "outside.json")
+    with pytest.raises(SystemTunnelError, match="private state directory"):
+        system_tunnel._validate_helper_paths(args)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Validates POSIX pkexec caller identity and ownership.")
+def test_privileged_helper_rejects_an_unowned_or_symlinked_root(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    uid = os.getuid()
+    roots = {}
+    for key in ("config_root", "data_root", "state_root", "logs_root"):
+        root = tmp_path / key
+        root.mkdir()
+        root.chmod(0o700)
+        roots[key] = root
+    (roots["data_root"] / "system-tunnel" / "engine").mkdir(parents=True)
+    (roots["state_root"] / "system-tunnel").mkdir(parents=True)
+    args = SimpleNamespace(
+        version="1.14.4", interface=system_tunnel.TUN_INTERFACE_LINUX,
+        user_home=str(Path.home()), user_uid=str(uid), **{key: str(value) for key,value in roots.items()},
+        policy_dir=str(roots["config_root"]),
+        engine=str(roots["data_root"] / "system-tunnel/engine/sing-box"),
+        config=str(roots["state_root"] / "system-tunnel/sing-box.json"),
+        state=str(roots["state_root"] / "system-tunnel/sing-box-process.json"),
+        log=str(roots["logs_root"] / "system-tunnel.log"),
+        archive=str(roots["data_root"] / "system-tunnel/sing-box-1.14.4-linux.archive"),
+        result=str(roots["state_root"] / "system-tunnel" / ("helper-result-" + "b" * 32 + ".json")),
+    )
+    monkeypatch.setenv("PKEXEC_UID", str(uid))
+    symlink = tmp_path / "external-data"
+    symlink.symlink_to(roots["data_root"], target_is_directory=True)
+    args.data_root = str(symlink)
+    with pytest.raises(SystemTunnelError, match="unsafe data directory"):
+        system_tunnel._validate_helper_paths(args)
