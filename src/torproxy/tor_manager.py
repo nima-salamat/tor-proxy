@@ -1611,8 +1611,17 @@ class TorManager:
 
     def _stop_serialized(self, *, force: bool) -> None:
         """Cancel startup, wait for its owner to unwind, then reconcile the child once."""
+        # Signal cancellation before taking the manager lock. The start thread
+        # may currently be inside a slow Popen/CreateProcess call while holding
+        # that lock; Stop must still publish the cancellation immediately.
+        self._stop_requested.set()
+        cancel_event = self._start_cancel_event
+        if cancel_event is not None:
+            cancel_event.set()
         with self._lock:
             self._stop_requests += 1
+            # Reapply under the lock in case a racing start cleared the shared
+            # event between the early signal and acquiring this lock.
             self._stop_requested.set()
             if self._start_cancel_event is not None:
                 self._start_cancel_event.set()

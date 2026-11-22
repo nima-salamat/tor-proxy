@@ -970,7 +970,7 @@ def test_tor_process_stop_refuses_to_signal_live_pid_when_identity_is_unreadable
     assert manager.process_state_path.is_file()
 
 
-def test_recycled_tor_pid_is_not_terminated_and_stale_record_is_cleared(tmp_path, monkeypatch):
+def test_recycled_tor_pid_is_not_terminated_and_ownership_record_is_retained(tmp_path, monkeypatch):
     executable = tmp_path / ("tor.exe" if os.name == "nt" else "tor")
     executable.write_text("fake tor", encoding="utf-8")
     manager = TorManager(TorSettings(
@@ -1004,10 +1004,11 @@ def test_recycled_tor_pid_is_not_terminated_and_stale_record_is_cleared(tmp_path
     manager._persist_process_identity(54323)
     process.create_time = lambda: 105.0
 
-    manager._stop_recorded_process()
+    with pytest.raises(TorManagerError, match="identity differs"):
+        manager._stop_recorded_process()
 
     assert process.terminated is False
-    assert not manager.process_state_path.exists()
+    assert manager.process_state_path.is_file()
 
 
 
