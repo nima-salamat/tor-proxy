@@ -2126,7 +2126,7 @@ class TorRunner(QObject):
         )
         if thread_alive or worker_alive or monitors_alive or process_alive or locks_held:
             detail = (
-                "Tor did not stop completely; its supervisor/process/event monitors are still active. "
+                "Tor did not stop completely; its supervisor/process is still active or event monitors remain. "
                 "The service remains registered and its data-directory locks must not be reused."
             )
             if stop_errors:

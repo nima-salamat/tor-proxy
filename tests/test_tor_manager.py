@@ -1042,6 +1042,12 @@ def test_tor_process_identity_persists_systemd_scope_and_cgroup_metadata(tmp_pat
     assert record["scope_unit"] == "torproxy-tor-0123456789ab.scope"
     assert record["cgroup_id"] == 56789
     assert record["cgroup_level"] == 3
+    assert manager._read_process_identity() == record
+
+    # A malformed or foreign systemd scope must invalidate the whole record.
+    record["scope_unit"] = "unrelated-user-service.scope"
+    manager.process_state_path.write_text(json.dumps(record), encoding="utf-8")
+    assert manager._read_process_identity() is None
 
 
 def test_orphan_recovery_releases_a_lock_retained_by_an_earlier_failed_stop(tmp_path, monkeypatch):

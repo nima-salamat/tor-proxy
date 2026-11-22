@@ -248,7 +248,7 @@ class TorManager:
                 return None
             scope_unit = payload.get("scope_unit", "")
             if not isinstance(scope_unit, str) or (
-                scope_unit and not re.fullmatch(r"torproxy-tor-[0-9a-f]{12}\\.scope", scope_unit)
+                scope_unit and not re.fullmatch(r"torproxy-tor-[0-9a-f]{12}\.scope", scope_unit)
             ):
                 return None
             cgroup_id = payload.get("cgroup_id")
