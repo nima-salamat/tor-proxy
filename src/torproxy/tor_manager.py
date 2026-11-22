@@ -223,11 +223,18 @@ class TorManager:
 
     @classmethod
     def _command_uses_torrc(cls, command: list[str], torrc_path: str | Path) -> bool:
+        """Require Tor's -f/--torrc option to point at the exact managed file."""
         expected = cls._normalized_process_path(torrc_path)
-        for argument in command:
-            value = str(argument).strip('"')
+        for index, argument in enumerate(command):
+            value = str(argument)
+            if value in {"-f", "--torrc"} and index + 1 < len(command):
+                candidate = str(command[index + 1]).strip('"')
+            elif value.startswith("--torrc="):
+                candidate = value.partition("=")[2].strip('"')
+            else:
+                continue
             try:
-                if cls._normalized_process_path(value) == expected:
+                if cls._normalized_process_path(candidate) == expected:
                     return True
             except (OSError, RuntimeError, ValueError):
                 continue
@@ -539,11 +546,7 @@ class TorManager:
                     executable_name = Path(str(command[0])).name.casefold() if command else ""
                     if name not in {"tor", "tor.exe"} and executable_name not in {"tor", "tor.exe"}:
                         continue
-                    uses_managed_torrc = any(
-                        argument
-                        and os.path.normcase(str(Path(str(argument).strip('"')).resolve())) == target_torrc
-                        for argument in command[1:]
-                    )
+                    uses_managed_torrc = self._command_uses_torrc(command, target_torrc)
                     if uses_managed_torrc:
                         matching.append(process)
                 except (psutil.NoSuchProcess, psutil.ZombieProcess):

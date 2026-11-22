@@ -334,7 +334,15 @@ def _process_matches(state: dict[str, Any]) -> psutil.Process | None:
         if actual_exe != expected_exe:
             return None
         command = process.cmdline()
-        if "run" not in command or expected_config not in command:
+        uses_managed_config = any(
+            index >= 1
+            and command[index - 1] == "run"
+            and command[index] == "-c"
+            and index + 1 < len(command)
+            and os.path.normcase(str(Path(command[index + 1]).resolve())) == expected_config
+            for index in range(1, len(command))
+        )
+        if not uses_managed_config:
             return None
         return process
     except (KeyError, TypeError, ValueError, OSError, psutil.Error):

@@ -1320,3 +1320,28 @@ def test_tor_pid_reuse_never_falls_back_to_torrc_process_scan(tmp_path, monkeypa
         manager._stop_orphaned_process()
     assert manager._data_directory_lock_handle is not None
     manager._release_data_directory_lock()
+
+
+
+def test_tor_process_identity_requires_config_to_follow_tor_config_flag(tmp_path):
+    executable = tmp_path / ("tor.exe" if os.name == "nt" else "tor")
+    manager = TorManager(TorSettings(
+        executable=executable,
+        data_directory=tmp_path / "tor-state",
+    ))
+    assert manager._command_uses_torrc(
+        [str(executable), "-f", str(manager.torrc_path)],
+        manager.torrc_path,
+    )
+    assert manager._command_uses_torrc(
+        [str(executable), "--torrc=" + str(manager.torrc_path)],
+        manager.torrc_path,
+    )
+    assert not manager._command_uses_torrc(
+        [str(executable), "--log-file", str(manager.torrc_path)],
+        manager.torrc_path,
+    )
+    assert not manager._command_uses_torrc(
+        [str(executable), str(manager.torrc_path)],
+        manager.torrc_path,
+    )

@@ -1172,3 +1172,35 @@ def test_sing_box_process_identity_rejects_a_reused_pid_with_matching_image_and_
     }
 
     assert system_tunnel._process_matches(state) is None
+
+
+
+def test_sing_box_identity_requires_config_after_run_c_flag(tmp_path, monkeypatch):
+    engine = tmp_path / "sing-box"
+    config = tmp_path / "sing-box.json"
+
+    class FakeProcess:
+        def is_running(self):
+            return True
+
+        def status(self):
+            return "running"
+
+        def create_time(self):
+            return 123.456
+
+        def exe(self):
+            return str(engine)
+
+        def cmdline(self):
+            return ["sing-box", "run", "--log-file", str(config)]
+
+    monkeypatch.setattr(system_tunnel.psutil, "Process", lambda _pid: FakeProcess())
+    state = {
+        "pid": 44124,
+        "create_time": 123.456,
+        "engine": str(engine),
+        "config": str(config),
+    }
+
+    assert system_tunnel._process_matches(state) is None
