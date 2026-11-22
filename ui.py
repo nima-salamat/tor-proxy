@@ -1811,6 +1811,8 @@ class Window(QMainWindow):
         current_mode = CONFIG.get("system_proxy_mode", "unchanged")
         for mode, action in actions.items():
             action.setChecked(mode == current_mode)
+        if getattr(self, "tray_menu", None) is not None:
+            self._sync_tray_menu_theme()
 
     def _show_tray_context_menu(self):
         """Open the app menu just above its tray icon, inside the work area."""
@@ -2575,18 +2577,6 @@ class Window(QMainWindow):
                 background-color: {divider};
                 margin: 4px 12px;
             }}
-            QMenu#trayContextMenu::indicator {{
-                width: 14px;
-                height: 14px;
-                border: 1px solid {border};
-                border-radius: 4px;
-                background: transparent;
-                margin-left: 4px;
-            }}
-            QMenu#trayContextMenu::indicator:checked {{
-                background-color: {accent};
-                border: 1px solid {accent};
-            }}
             QWidget#trayMenuSection {{
                 background: transparent;
                 border: none;
@@ -2614,11 +2604,13 @@ class Window(QMainWindow):
             "clear": danger,
         }
         for proxy_mode, action in self.tray_system_proxy_mode_actions.items():
+            icon_name = (
+                "fa6s.circle-check"
+                if action.isChecked()
+                else proxy_icons[proxy_mode]
+            )
             action.setIcon(
-                qta.icon(
-                    proxy_icons[proxy_mode],
-                    color=proxy_icon_colors[proxy_mode],
-                )
+                qta.icon(icon_name, color=proxy_icon_colors[proxy_mode])
             )
         self.tray_exit_action.setIcon(
             qta.icon("fa6s.right-from-bracket", color=danger)
