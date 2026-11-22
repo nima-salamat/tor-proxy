@@ -1291,3 +1291,59 @@ def test_main_pool_does_not_keep_a_stale_ready_health_when_tor_child_exited(monk
     assert instance["state"] == "failed"
     assert instance["healthy"] is False
     assert instance["verified_tor"] is False
+
+
+
+def test_main_runner_liveness_uses_verified_tor_child_not_exited_systemd_launcher(monkeypatch, tmp_path):
+    runner, _config = _runner(monkeypatch, tmp_path, "")
+
+    class ExitedLauncher:
+        pid = 71231
+
+        def poll(self):
+            return 0
+
+    manager = SimpleNamespace(
+        process=ExitedLauncher(),
+        process_identity_snapshot=lambda: {
+            "pid": 71232,
+            "alive": True,
+            "verified": True,
+        },
+    )
+
+    assert runner._manager_process_liveness(manager) == (True, True)
+
+
+def test_main_runner_liveness_fails_closed_when_process_identity_cannot_be_read(monkeypatch, tmp_path):
+    runner, _config = _runner(monkeypatch, tmp_path, "")
+
+    class LiveLauncher:
+        pid = 71241
+
+        def poll(self):
+            return None
+
+    def fail_identity():
+        raise PermissionError("process metadata access denied")
+
+    manager = SimpleNamespace(
+        process=LiveLauncher(),
+        process_identity_snapshot=fail_identity,
+    )
+
+    assert runner._manager_process_liveness(manager) == (True, False)
+
+
+def test_main_runner_legacy_process_handle_remains_supported(monkeypatch, tmp_path):
+    runner, _config = _runner(monkeypatch, tmp_path, "")
+
+    class LiveLegacyProcess:
+        pid = 71251
+
+        def poll(self):
+            return None
+
+    manager = SimpleNamespace(process=LiveLegacyProcess())
+
+    assert runner._manager_process_liveness(manager) == (True, True)

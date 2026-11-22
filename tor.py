@@ -588,6 +588,31 @@ class TorRunner(QObject):
             new_circuit_period_seconds=max(10, min(86400, int(self.NewCircuitPeriod))),
         ))
 
+    @staticmethod
+    def _manager_process_liveness(manager: TorManager) -> tuple[bool, bool]:
+        """Return (alive, verified) for the actual Tor child, not its launcher wrapper."""
+        identity_getter = getattr(manager, "process_identity_snapshot", None)
+        if callable(identity_getter):
+            try:
+                identity = identity_getter()
+            except Exception:
+                # Permission / OS inspection failure is not evidence of exit.
+                # Fail closed: do not route through, replace, or forget this child.
+                return True, False
+            if isinstance(identity, dict) and identity:
+                return bool(identity.get("alive")), bool(identity.get("verified"))
+
+        # Legacy adapters may expose only the Popen handle. That handle is an
+        # owned process reference in the current process; it is safer to rely on
+        # it than to infer liveness from a PID found elsewhere.
+        process = getattr(manager, "process", None)
+        if process is None:
+            return False, False
+        try:
+            return process.poll() is None, True
+        except Exception:
+            return True, False
+
     def _process_ready_managers(self) -> list[tuple[int, TorManager]]:
         """Return Tor processes that passed bootstrap and remain alive."""
         with self._backend_lock:
@@ -1785,18 +1810,25 @@ class TorRunner(QObject):
                         # workers are still bootstrapping.
                         next_health_probe = now + 2.0
                 # TorManager reports READY only after authenticated ControlPort
-                # verification and a live SOCKS listener. Re-check process
-                # liveness so an exited worker is removed from future routing.
+                # verification and a live SOCKS listener. Re-check the actual
+                # Tor PID: systemd-run's Popen handle may exit while its scoped
+                # Tor child is still alive and must remain eligible for routing.
                 for index, current in enumerate(tuple(self._backend_managers)):
                     state_value = getattr(current, "state", None)
                     state_value = str(getattr(state_value, "value", state_value)).lower().split(".")[-1]
-                    process = getattr(current, "process", None)
-                    if state_value == "ready" and (process is None or process.poll() is not None):
-                        detail = "The managed Tor worker process exited unexpectedly."
+                    process_alive, process_verified = self._manager_process_liveness(current)
+                    if state_value == "ready" and (not process_alive or not process_verified):
+                        detail = (
+                            "The managed Tor worker process exited unexpectedly."
+                            if not process_alive else
+                            "The Tor worker is alive but its process identity cannot be verified; it was removed from routing."
+                        )
                         self._stop_backend_event_monitor(index)
                         try:
-                            current._terminate_process()
-                            current._release_data_directory_lock()
+                            # Use the serialized public lifecycle API. It retains
+                            # the DataDirectory lock and identity record if a live
+                            # or unverifiable process cannot be safely stopped.
+                            current.stop()
                         except Exception as cleanup_error:
                             detail += " Cleanup failed: " + str(cleanup_error)
                         current.state = TorState.FAILED
@@ -1852,10 +1884,9 @@ class TorRunner(QObject):
                             try:
                                 current.stop()
                             except Exception as cleanup_error:
-                                process = getattr(current, "process", None)
-                                process_alive = bool(process is not None and process.poll() is None)
+                                process_alive, process_verified = self._manager_process_liveness(current)
                                 lock_handle = getattr(current, "_data_directory_lock_handle", None)
-                                if process_alive or lock_handle is not None:
+                                if process_alive or not process_verified or lock_handle is not None:
                                     with self._backend_lock:
                                         self._backend_restart_attempts[index] = 3
                                         self._backend_errors[index] = (
@@ -2178,12 +2209,11 @@ class TorRunner(QObject):
             try:
                 manager.stop()
             except Exception as exc:
-                process = getattr(manager, "process", None)
-                process_alive = bool(process is not None and process.poll() is None)
+                process_alive, process_verified = self._manager_process_liveness(manager)
                 lock_handle = getattr(manager, "_data_directory_lock_handle", None)
                 state_value = getattr(manager, "state", None)
                 state_value = str(getattr(state_value, "value", state_value)).lower().split(".")[-1]
-                if process_alive or lock_handle is not None or state_value in {
+                if process_alive or not process_verified or lock_handle is not None or state_value in {
                     "starting", "bootstrapping", "ready", "stopping"
                 }:
                     stop_errors.append(str(exc))
@@ -2211,8 +2241,7 @@ class TorRunner(QObject):
         with self._backend_lock:
             monitors_alive = bool(self._backend_event_monitors)
         process_alive = any(
-            getattr(manager, "process", None) is not None
-            and manager.process.poll() is None
+            self._manager_process_liveness(manager)[0]
             for manager in managers
         )
         locks_held = any(
