@@ -2644,7 +2644,6 @@ class Window(QMainWindow):
             text = "#e8edf6"
             muted = "#94a2b5"
             hover = "#29384d"
-            accent = "#5797ed"
             divider = "#303b4c"
             danger = "#ef7777"
         else:
@@ -2653,7 +2652,6 @@ class Window(QMainWindow):
             text = "#253246"
             muted = "#7b8798"
             hover = "#edf3fb"
-            accent = "#2878d0"
             divider = "#e7ecf2"
             danger = "#c94343"
 
