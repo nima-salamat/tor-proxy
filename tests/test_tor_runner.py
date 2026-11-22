@@ -984,3 +984,37 @@ def test_stop_backend_event_monitor_keeps_reference_when_thread_has_not_stopped(
     runner._stop_backend_event_monitor(2)
     assert 2 not in runner._backend_event_monitors
     assert monitor.calls == 2
+
+
+
+def test_tor_runner_serializes_start_and_stop_lifecycle(monkeypatch, tmp_path):
+    import threading
+
+    runner, _config = _runner(monkeypatch, tmp_path, "\\n".join(BRIDGES))
+    start_entered = threading.Event()
+    release_start = threading.Event()
+    stop_entered = threading.Event()
+
+    def fake_start():
+        start_entered.set()
+        assert release_start.wait(timeout=3)
+
+    def fake_stop():
+        stop_entered.set()
+
+    monkeypatch.setattr(runner, "_start_locked", fake_start)
+    monkeypatch.setattr(runner, "_stop_locked", fake_stop)
+
+    starter = threading.Thread(target=runner.start)
+    stopper = threading.Thread(target=runner.stop)
+    starter.start()
+    assert start_entered.wait(timeout=2)
+    stopper.start()
+
+    assert not stop_entered.wait(timeout=0.1)
+    release_start.set()
+    starter.join(timeout=2)
+    stopper.join(timeout=2)
+    assert not starter.is_alive()
+    assert not stopper.is_alive()
+    assert stop_entered.is_set()

@@ -200,6 +200,7 @@ class TorRunner(QObject):
         self.manager: TorManager | None = None
         self.app_window = None
         self._stopping = threading.Event()
+        self._lifecycle_lock = threading.RLock()
         self._last_report: tuple[str, int | None, str] | None = None
         self._last_bridge_usage_report: tuple[object, ...] | None = None
         self._last_bridge_fingerprint_refresh = 0.0
@@ -918,6 +919,10 @@ class TorRunner(QObject):
         return self._make_manager().render_torrc()
 
     def start(self):
+        with self._lifecycle_lock:
+            return self._start_locked()
+
+    def _start_locked(self):
         if self.thread and self.thread.is_alive():
             return
         # Keep the strict integrity check on every launch path. The normal Home
@@ -1818,7 +1823,7 @@ class TorRunner(QObject):
                                         "last_error": "Tor worker restarted; waiting for fresh multi-target probes.",
                                     }
                                     self._backend_quality_windows[index] = NetworkQualityWindow()
-                                retry_thread.start()
+                                    retry_thread.start()
                                 self.log_message.emit(
                                     f"Restarting primary Tor instance {index + 1} "
                                     f"(attempt {attempts + 1}/3)."
@@ -2038,6 +2043,10 @@ class TorRunner(QObject):
         )
 
     def stop(self):
+        with self._lifecycle_lock:
+            return self._stop_locked()
+
+    def _stop_locked(self):
         self.state = "STOPPING"
         # Stop new supervisor work before publishing final state. In
         # particular, do not query ControlPort immediately before closing
@@ -2074,7 +2083,7 @@ class TorRunner(QObject):
                 logger.debug("Initial stop raced a primary Tor worker operation.", exc_info=True)
 
         for worker in workers:
-            if worker is not threading.current_thread():
+            if worker is not threading.current_thread() and worker.ident is not None:
                 worker.join(timeout=15)
 
         stop_errors = []

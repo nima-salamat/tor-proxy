@@ -82,6 +82,7 @@ class TorServicePool:
         self._health_interval = max(0.0, min(3600.0, float(health_interval)))
         self._health_stop = threading.Event()
         self._health_thread: threading.Thread | None = None
+        self._health_lifecycle_lock = threading.Lock()
 
     @staticmethod
     def _validate_port(port: int) -> int:
@@ -482,26 +483,51 @@ class TorServicePool:
     def _ensure_health_monitor(self) -> None:
         if self._health_interval <= 0:
             return
-        with self._lock:
-            if self._health_thread is not None and self._health_thread.is_alive():
-                return
-            self._health_stop.clear()
-            self._health_thread = threading.Thread(
-                target=self._health_monitor_loop,
-                name="torproxy-isolated-service-health",
-                daemon=True,
-            )
-            self._health_thread.start()
+        with self._health_lifecycle_lock:
+            with self._lock:
+                previous = self._health_thread
+                stopping = self._health_stop.is_set()
+                if previous is not None and previous.is_alive() and not stopping:
+                    return
+            if previous is not None and previous.is_alive():
+                if previous is threading.current_thread():
+                    raise TorServicePoolError("The health monitor cannot restart itself while exiting.")
+                previous.join(timeout=5.0)
+                if previous.is_alive():
+                    raise TorServicePoolError(
+                        "The previous isolated Tor health monitor is still shutting down; "
+                        "a duplicate monitor was refused."
+                    )
+            with self._lock:
+                self._health_stop.clear()
+                thread = threading.Thread(
+                    target=self._health_monitor_loop,
+                    name="torproxy-isolated-service-health",
+                    daemon=True,
+                )
+                self._health_thread = thread
+                try:
+                    thread.start()
+                except Exception:
+                    self._health_thread = None
+                    self._health_stop.set()
+                    raise
 
     def close(self, *, timeout: float = 10.0) -> None:
-        """Stop the health monitor; callers must stop Tor services separately."""
-        self._health_stop.set()
-        thread = self._health_thread
-        if thread is not None and thread is not threading.current_thread():
-            thread.join(timeout=max(0.1, float(timeout)))
-        if thread is not None and thread.is_alive():
-            raise TorServicePoolError("The isolated Tor service health monitor is still active.")
-        self._health_thread = None
+        """Stop and join the health monitor; retain ownership when shutdown is incomplete."""
+        with self._health_lifecycle_lock:
+            with self._lock:
+                self._health_stop.set()
+                thread = self._health_thread
+            if thread is not None and thread is not threading.current_thread():
+                thread.join(timeout=max(0.1, float(timeout)))
+            if thread is not None and thread.is_alive():
+                raise TorServicePoolError(
+                    "The isolated Tor service health monitor is still active; its reference was retained."
+                )
+            with self._lock:
+                if self._health_thread is thread:
+                    self._health_thread = None
 
     def start_service(self, service_id: str) -> None:
         with self._lock:

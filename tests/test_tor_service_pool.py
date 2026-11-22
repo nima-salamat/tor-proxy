@@ -562,3 +562,36 @@ def test_verified_previous_session_process_is_reported_as_orphaned_and_can_be_st
     assert reconciled["process_alive"] is False
     pool.unregister("leftover")
     pool.close()
+
+
+
+def test_health_monitor_close_retains_reference_until_thread_exits(tmp_path, monkeypatch):
+    pool = _pool(tmp_path, health_interval=0.01)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocked_probe():
+        entered.set()
+        assert release.wait(timeout=3)
+
+    monkeypatch.setattr(pool, "_probe_running_services", blocked_probe)
+    pool._ensure_health_monitor()
+    monitor = pool._health_thread
+    assert monitor is not None
+    assert entered.wait(timeout=2)
+
+    with pytest.raises(TorServicePoolError, match="reference was retained"):
+        pool.close(timeout=0.05)
+    assert pool._health_thread is monitor
+    assert monitor.is_alive()
+
+    release.set()
+    monitor.join(timeout=2)
+    assert not monitor.is_alive()
+    pool.close(timeout=1)
+    assert pool._health_thread is None
+
+    pool._ensure_health_monitor()
+    replacement = pool._health_thread
+    assert replacement is not None and replacement is not monitor
+    pool.close(timeout=2)
