@@ -2249,16 +2249,75 @@ class ProxyWindow(QWidget):
     def _on_services_stop_failed(self, error: str) -> None:
         detail = str(error or "Unknown disconnect error.")
         manager = getattr(self.tor, "manager", None)
-        process = getattr(manager, "process", None) if manager is not None else None
-        tor_process_active = bool(process is not None and process.poll() is None)
+        backend_managers = tuple(getattr(self.tor, "_backend_managers", ()) or ())
+        if not backend_managers and manager is not None:
+            backend_managers = (manager,)
+
+        tor_process_active = False
+        tor_ready = False
+        for current in backend_managers:
+            process = getattr(current, "process", None)
+            process_alive = False
+            identity_getter = getattr(current, "process_identity_snapshot", None)
+            if callable(identity_getter):
+                try:
+                    identity = identity_getter()
+                    process_alive = bool(identity.get("alive"))
+                except Exception:
+                    # A process that cannot be inspected is not safe to report stopped.
+                    process_alive = True
+            if process is not None:
+                try:
+                    process_alive = process_alive or process.poll() is None
+                except Exception:
+                    process_alive = True
+            tor_process_active = tor_process_active or process_alive
+
+            manager_state = getattr(current, "state", None)
+            manager_state = str(getattr(manager_state, "value", manager_state)).lower().split(".")[-1]
+            tor_ready = tor_ready or (process_alive and manager_state == "ready")
+
         tor_supervisor = getattr(self.tor, "thread", None)
         tor_supervisor_active = bool(tor_supervisor is not None and tor_supervisor.is_alive())
-        tor_active = tor_process_active or tor_supervisor_active
-        proxy_active = bool(getattr(self.proxy, "server", None) is not None)
+        backend_threads_active = any(
+            getattr(worker, "is_alive", lambda: False)()
+            for worker in tuple(getattr(self.tor, "_backend_threads", ()) or ())
+        )
+        monitors_active = bool(getattr(self.tor, "_backend_event_monitors", {}))
 
-        manager_state = getattr(manager, "state", None) if manager is not None else None
-        manager_state = str(getattr(manager_state, "value", manager_state)).lower()
-        tor_ready = tor_active and manager_state == "ready"
+        gateway = getattr(self.tor, "_gateway", None)
+        gateway_thread = getattr(gateway, "_thread", None) if gateway is not None else None
+        gateway_sessions = tuple(getattr(gateway, "_session_threads", ()) or ()) if gateway is not None else ()
+        gateway_active = bool(
+            gateway is not None
+            and (
+                getattr(gateway, "running", False)
+                or (gateway_thread is not None and gateway_thread.is_alive())
+                or any(worker.is_alive() for worker in gateway_sessions)
+            )
+        )
+        tor_active = (
+            tor_process_active or tor_supervisor_active or backend_threads_active
+            or monitors_active or gateway_active
+        )
+
+        proxy_server = getattr(self.proxy, "server", None)
+        proxy_thread = getattr(self.proxy, "thread", None)
+        proxy_active = bool(
+            proxy_server is not None
+            or (proxy_thread is not None and proxy_thread.is_alive())
+        )
+        if proxy_server is not None:
+            metrics = getattr(proxy_server, "client_metrics", None)
+            if callable(metrics):
+                try:
+                    metrics = metrics()
+                except Exception:
+                    metrics = {"active_clients": 1}
+            if isinstance(metrics, dict):
+                proxy_active = proxy_active or bool(
+                    metrics.get("active_clients") or metrics.get("active_operations")
+                )
         self.running = tor_active or proxy_active
         self.connected = bool(tor_ready and proxy_active)
         self._stopping = False
