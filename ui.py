@@ -859,6 +859,8 @@ class Window(QMainWindow):
             else:
                 if page is not None:
                     page.deleteLater()
+                if self.stack.indexOf(placeholder) < 0:
+                    self.stack.insertWidget(index, placeholder)
                 if index == self.PAGE_SETTINGS:
                     self.settingWidget = None
                     self.block_host_window = None
