@@ -721,7 +721,12 @@ class OnionHostingManager:
                 "Developer Tor did not finish its current start/stop operation within 30 seconds. "
                 "Its process ownership is retained; retry shutdown after inspecting the runtime."
             )
-        self._service_lifecycle_lock.acquire()
+        if not self._service_lifecycle_lock.acquire(timeout=30.0):
+            self._runtime_start_lock.release()
+            raise OnionHostingError(
+                "An Onion Service operation is still active; Tor shutdown was not allowed to race it. "
+                "Retry after that service operation finishes."
+            )
         try:
             with self._lock:
                 manager = self._manager
@@ -754,9 +759,10 @@ class OnionHostingManager:
             with self._lock:
                 relays = dict(self._traffic_relays)
             relay_errors: list[str] = []
+            relay_deadline = time.monotonic() + 15.0
             for profile_id, relay in relays.items():
                 try:
-                    relay.close()
+                    relay.close(timeout=max(0.1, relay_deadline - time.monotonic()))
                 except Exception as exc:
                     relay_errors.append(f"{profile_id}: {exc}")
             if relay_errors:
@@ -834,6 +840,33 @@ class OnionHostingManager:
         access_mode: str = "public",
         auto_start: bool = True,
     ) -> str:
+        with self._service_lifecycle_lock:
+            with self._lock:
+                if self._shutdown_requested:
+                    raise OnionHostingError("Developer Tor is shutting down; services cannot be changed.")
+            return self._create_service_locked(
+                display_name=display_name,
+                local_host=local_host,
+                local_port=local_port,
+                onion_port=onion_port,
+                port_mappings=port_mappings,
+                persistent=persistent,
+                access_mode=access_mode,
+                auto_start=auto_start,
+            )
+
+    def _create_service_locked(
+        self,
+        *,
+        display_name: str,
+        local_host: str,
+        local_port: int,
+        onion_port: int = 80,
+        port_mappings: list[dict[str, Any]] | None = None,
+        persistent: bool = True,
+        access_mode: str = "public",
+        auto_start: bool = True,
+    ) -> str:
         name = str(display_name).strip()
         if not name or len(name) > 80:
             raise OnionHostingError("Service name is required and must contain at most 80 characters.")
@@ -880,6 +913,13 @@ class OnionHostingManager:
         return service_id
 
     def update_service(self, service_id: str, **changes) -> None:
+        with self._service_lifecycle_lock:
+            with self._lock:
+                if self._shutdown_requested:
+                    raise OnionHostingError("Developer Tor is shutting down; services cannot be changed.")
+            self._update_service_locked(service_id, **changes)
+
+    def _update_service_locked(self, service_id: str, **changes) -> None:
         allowed = {"display_name", "local_host", "local_port", "onion_port", "port_mappings", "persistent", "access_mode", "auto_start"}
         if set(changes) - allowed:
             raise OnionHostingError("Unsupported Onion Service setting.")
@@ -1222,6 +1262,13 @@ class OnionHostingManager:
             relay.close()
 
     def delete_service(self, profile_id: str) -> None:
+        with self._service_lifecycle_lock:
+            with self._lock:
+                if self._shutdown_requested:
+                    raise OnionHostingError("Developer Tor is shutting down; services cannot be changed.")
+            self._delete_service_locked(profile_id)
+
+    def _delete_service_locked(self, profile_id: str) -> None:
         self.stop_service(profile_id)
         with self._lock:
             temporary = profile_id in self._temporary_services
@@ -1236,6 +1283,13 @@ class OnionHostingManager:
         self._traffic_store.delete_service(profile_id)
 
     def rotate_service_identity(self, profile_id: str) -> None:
+        with self._service_lifecycle_lock:
+            with self._lock:
+                if self._shutdown_requested:
+                    raise OnionHostingError("Developer Tor is shutting down; service identities cannot be changed.")
+            self._rotate_service_identity_locked(profile_id)
+
+    def _rotate_service_identity_locked(self, profile_id: str) -> None:
         """Discard the stopped service's Ed25519 identity so its next start gets a new .onion address."""
         with self._lock:
             if profile_id in self._active_services:

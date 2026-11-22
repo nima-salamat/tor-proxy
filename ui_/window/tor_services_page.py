@@ -1717,6 +1717,8 @@ class TorServicesPage(QWidget):
             return "A verified Tor process survived the previous TorProxy session · Stop it to reconcile ownership."
         if health == "identity_unverified":
             return "A saved Tor PID is alive but its identity cannot be verified · it will not be signalled or reused."
+        if health == "identity_unverified":
+            return "A saved Tor PID is alive but its identity cannot be verified · it will not be signalled or reused."
         if health == "checking":
             return "Checking real Tor network connectivity…"
         if health == "stopped":
@@ -1754,7 +1756,9 @@ class TorServicesPage(QWidget):
             stop_button = self._service_stop_buttons.get(service_id)
             if start_button is not None:
                 start_button.setEnabled(bool(pool) and manager_state == "stopped" and not is_busy)
-            can_stop = manager_state not in {"stopped", "bundle unavailable", "not registered"}
+            can_stop = manager_state not in {
+                "stopped", "bundle unavailable", "not registered", "process-identity-unverified",
+            }
             pending_stop = service_id in self._pending_stops
             pending_force = service_id in self._pending_force_stops
             if stop_button is not None:
@@ -1786,9 +1790,6 @@ class TorServicesPage(QWidget):
             elif manager_state == "process-identity-unverified":
                 state_label.setText("PROCESS IDENTITY UNVERIFIED · MANUAL INSPECTION")
                 service_state = "failed"
-            elif manager_state == "process-identity-unverified":
-                state_label.setText("PROCESS IDENTITY UNVERIFIED · MANUAL INSPECTION")
-                service_state = "failed"
             else:
                 state_label.setText(manager_state.replace("_", " ").upper())
                 service_state = manager_state
@@ -1807,9 +1808,11 @@ class TorServicesPage(QWidget):
         name = QLabel(str(profile.get("display_name") or profile.get("id", "Tor service")))
         name.setObjectName("settingsFieldLabel")
         header.addWidget(name, 1)
-        state_label = QLabel(state.replace("_", " ").upper())
+        state_label = QLabel(state.replace("_", " ").replace("-", " ").upper())
         state_label.setObjectName("torServiceStatus")
         health_state = str(status.get("network_health") or "unchecked").lower()
+        if state == "process-identity-unverified":
+            state_label.setText("PROCESS IDENTITY UNVERIFIED · MANUAL INSPECTION")
         if state == "ready":
             state_label.setText({
                 "healthy": "TOR VERIFIED",
@@ -1820,7 +1823,7 @@ class TorServicesPage(QWidget):
             }.get(health_state, "READY · UNVERIFIED"))
         state_label.setProperty(
             "serviceState",
-            "failed" if state == "failed" or health_state == "unhealthy" else state,
+            "failed" if state in {"failed", "process-identity-unverified"} or health_state == "unhealthy" else state,
         )
         header.addWidget(state_label)
         service_id = str(profile.get("id", ""))
