@@ -7,6 +7,7 @@ can only run/stop the verified sing-box binary with a validated Tor-only config.
 from __future__ import annotations
 
 import ctypes
+import errno
 import hashlib
 import ipaddress
 import json
@@ -27,6 +28,7 @@ import tempfile
 import time
 import uuid
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit
@@ -2278,6 +2280,69 @@ def _validate_helper_paths(args: Any) -> Path:
     return result_path
 
 
+@contextmanager
+def _system_tunnel_helper_lock(state_dir: Path):
+    """Serialize elevated sing-box start/stop actions across TorProxy processes."""
+    lock_path = state_dir / ".sing-box-operation.lock"
+    if lock_path.is_symlink():
+        raise SystemTunnelError("The privileged helper rejected a symlinked tunnel operation lock.")
+    flags = os.O_CREAT | os.O_RDWR
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(str(lock_path), flags, 0o600)
+    except OSError as exc:
+        raise SystemTunnelError("Could not open the private system-tunnel operation lock.") from exc
+
+    handle = None
+    locked = False
+    try:
+        if os.name != "nt":
+            os.fchmod(descriptor, 0o600)
+        if os.fstat(descriptor).st_size == 0:
+            os.write(descriptor, b"0")
+            os.fsync(descriptor)
+        handle = os.fdopen(descriptor, "r+b", buffering=0)
+        descriptor = -1
+        handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                raise SystemTunnelError(
+                    "Another elevated system-tunnel operation is already in progress."
+                ) from exc
+        else:
+            import fcntl
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                if exc.errno in {errno.EACCES, errno.EAGAIN}:
+                    raise SystemTunnelError(
+                        "Another elevated system-tunnel operation is already in progress."
+                    ) from exc
+                raise SystemTunnelError("Could not lock the system-tunnel process state.") from exc
+        locked = True
+        yield
+    finally:
+        if handle is not None:
+            if locked:
+                try:
+                    handle.seek(0)
+                    if os.name == "nt":
+                        import msvcrt
+                        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                    else:
+                        import fcntl
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                except OSError:
+                    logger.exception("Could not release the elevated system-tunnel operation lock.")
+            handle.close()
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
 def system_tunnel_helper_main(argv: list[str] | None = None) -> int:
     """Narrow privileged entry point; called before Qt starts in main.py."""
     import argparse
@@ -2311,10 +2376,20 @@ def system_tunnel_helper_main(argv: list[str] | None = None) -> int:
     try:
         _require_elevation()
         safe_result_path = _validate_helper_paths(args)
-        if args.action == "start":
-            result = _helper_start(args)
-        else:
-            result = _helper_stop(Path(args.state).resolve(), args.interface)
+        # Serialize at the privileged boundary: two app instances or UI entry
+        # points must never launch/stop sing-box against the same global TUN.
+        state_dir = Path(args.state).resolve(strict=False).parent
+        with _system_tunnel_helper_lock(state_dir):
+            if args.action == "start":
+                result = _helper_start(args)
+            else:
+                result = _helper_stop(Path(args.state).resolve(), args.interface)
+            try:
+                _atomic_json(safe_result_path, result, mode=0o644)
+                safe_result_path = None
+            except OSError:
+                # Keep the stdout JSON fallback for a result-file disk failure.
+                pass
     except Exception as exc:
         result = {"ok": False, "active": False, "error": f"{type(exc).__name__}: {exc}"}
     # Never write to args.result after a path-validation error. The elevated

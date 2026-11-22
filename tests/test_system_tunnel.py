@@ -1400,3 +1400,21 @@ def test_elevated_helper_never_writes_an_unvalidated_result_path(tmp_path, monke
     assert not write_calls
     assert not result_path.exists()
     assert '"ok": false' in capsys.readouterr().out.lower()
+
+
+
+def test_system_tunnel_helper_lock_serializes_concurrent_posix_helpers(tmp_path):
+    if os.name == "nt":
+        pytest.skip("The Windows byte-range lock is exercised by Windows CI without same-process reentrancy.")
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    state_dir.chmod(0o700)
+
+    with system_tunnel._system_tunnel_helper_lock(state_dir):
+        with pytest.raises(SystemTunnelError, match="already in progress"):
+            with system_tunnel._system_tunnel_helper_lock(state_dir):
+                pass
+
+    # The OS releases the lock after the elevated helper exits or raises.
+    with system_tunnel._system_tunnel_helper_lock(state_dir):
+        pass
