@@ -1445,6 +1445,8 @@ int main(int argc, char *argv[]) {
         unsetenv("TORPROXY_LAUNCHER_SERVER");
 
         if (environmentReady) {
+            // Never inherit a stale PID from a previous launcher invocation.
+            unsetenv("TORPROXY_LAUNCHER_PID");
             applicationPid = fork();
             if (applicationPid == 0) {
                 std::vector<char *> applicationArgs;
@@ -1461,11 +1463,19 @@ int main(int argc, char *argv[]) {
             if (applicationPid > 0) {
                 const std::string pidText = std::to_string(applicationPid);
                 if (setenv("TORPROXY_LAUNCHER_PID", pidText.c_str(), 1) != 0) {
-                    if (!terminateAndReapChild(applicationPid)) {
-                        std::fprintf(stderr, "TorProxyLauncher: startup child is still terminating.\\n");
+                    if (terminateAndReapChild(applicationPid)) {
+                        applicationPid = -1;
+                        clearStartupEnvironment();
+                    } else {
+                        // Keep the child and its status/token ownership. The
+                        // splash receives the same PID via argv and attaches
+                        // to it; never fall through to a duplicate QProcess.
+                        std::fprintf(
+                            stderr,
+                            "TorProxyLauncher: startup child remains active; attaching the splash to PID %ld.\\n",
+                            static_cast<long>(applicationPid)
+                        );
                     }
-                    applicationPid = -1;
-                    clearStartupEnvironment();
                 }
             } else {
                 std::perror("TorProxyLauncher: cannot create the desktop process");
@@ -1485,14 +1495,27 @@ int main(int argc, char *argv[]) {
     launcherArgs.reserve(static_cast<size_t>(argc) + 1);
     launcherArgs.push_back(const_cast<char *>(gui.c_str()));
     for (int index = 1; index < argc; ++index) launcherArgs.push_back(argv[index]);
-    launcherArgs.push_back(nullptr);
+    if (applicationPid > 0) {
+        const std::string pidArgument =
+            "--torproxy-prestarted-pid=" + std::to_string(applicationPid);
+        launcherArgs.push_back(const_cast<char *>(pidArgument.c_str()));
+        launcherArgs.push_back(nullptr);
+        execv(gui.c_str(), launcherArgs.data());
+        const int launchError = errno;
+        std::perror("TorProxyLauncher: cannot start native splash runtime");
+        if (!terminateAndReapChild(applicationPid)) {
+            std::fprintf(
+                stderr,
+                "TorProxyLauncher: startup child did not exit within the bounded cleanup window.\\n"
+            );
+        }
+        if (!statusPath.empty()) unlink(statusPath.c_str());
+        return launchError == 0 ? 127 : launchError;
+    }
     execv(gui.c_str(), launcherArgs.data());
 
     const int launchError = errno;
     std::perror("TorProxyLauncher: cannot start native splash runtime");
-    if (applicationPid > 0 && !terminateAndReapChild(applicationPid)) {
-        std::fprintf(stderr, "TorProxyLauncher: startup child did not exit within the bounded cleanup window.\\n");
-    }
     if (!statusPath.empty()) unlink(statusPath.c_str());
     return launchError == 0 ? 127 : launchError;
 }

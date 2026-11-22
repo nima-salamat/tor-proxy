@@ -154,6 +154,21 @@ public:
             qEnvironmentVariable("TORPROXY_LAUNCHER_PID").toLongLong(&pidOk);
         if (pidOk && childPid > 0) {
             m_prestartedPid = static_cast<pid_t>(childPid);
+        } else {
+            // Linux bootstrap forwards the exact child PID over argv if
+            // setenv(TORPROXY_LAUNCHER_PID) failed after a successful fork.
+            const QString prefix = QStringLiteral("--torproxy-prestarted-pid=");
+            for (const QString &argument : QCoreApplication::arguments()) {
+                if (!argument.startsWith(prefix)) {
+                    continue;
+                }
+                bool argumentPidOk = false;
+                const qlonglong argumentPid = argument.mid(prefix.size()).toLongLong(&argumentPidOk);
+                if (argumentPidOk && argumentPid > 0) {
+                    m_prestartedPid = static_cast<pid_t>(argumentPid);
+                }
+                break;
+            }
         }
         m_statusPoll.setInterval(60);
         connect(&m_statusPoll, &QTimer::timeout,
@@ -299,6 +314,13 @@ public:
         QStringList arguments = QCoreApplication::arguments();
         if (!arguments.isEmpty()) {
             arguments.removeFirst();
+        }
+        // This is a launcher-private control argument, never an application
+        // option. Remove it before starting a fresh Python process on fallback.
+        for (int index = arguments.size() - 1; index >= 0; --index) {
+            if (arguments.at(index).startsWith(QStringLiteral("--torproxy-prestarted-pid="))) {
+                arguments.removeAt(index);
+            }
         }
         m_process->start(executable, arguments);
         m_timeout.start();

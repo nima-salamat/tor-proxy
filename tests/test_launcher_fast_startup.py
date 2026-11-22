@@ -127,3 +127,24 @@ def test_linux_qt_launcher_does_not_exit_when_startup_child_stop_fails():
     failure = shutdown.split("if (!stopCurrentProcess())", 1)[1].split("m_server.close()", 1)[0]
     assert "showStartupError(" in failure
     assert "return;" in failure
+
+
+
+def test_linux_bootstrap_keeps_child_pid_when_pid_environment_registration_fails():
+    source = (ROOT / "launcher" / "src" / "bootstrap.cpp").read_text(encoding="utf-8")
+    linux = source[source.index("int main(int argc, char *argv[])"):]
+
+    failure = linux.index('if (setenv("TORPROXY_LAUNCHER_PID", pidText.c_str(), 1) != 0)')
+    preserve = linux.index("if (terminateAndReapChild(applicationPid))", failure)
+    fallback = linux.index("--torproxy-prestarted-pid=", preserve)
+    assert failure < preserve < fallback
+    assert "applicationPid = -1;" in linux[preserve:fallback]
+    assert "clearStartupEnvironment();" in linux[preserve:fallback]
+    assert "startup child remains active; attaching the splash to PID" in linux[failure:fallback]
+
+
+def test_linux_qt_splash_accepts_prestarted_pid_argument_fallback():
+    source = (ROOT / "launcher" / "src" / "main.cpp").read_text(encoding="utf-8")
+    assert "--torproxy-prestarted-pid=" in source
+    assert "m_prestartedPid = static_cast<pid_t>(argumentPid);" in source
+    assert "arguments.removeAt(index);" in source
