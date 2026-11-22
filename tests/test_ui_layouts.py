@@ -260,6 +260,79 @@ def test_settings_and_main_window_construct_without_duplicate_layout_warning(qt_
     assert warnings == []
 
 
+
+def test_deferred_page_failure_keeps_retry_available(qt_app, monkeypatch):
+    try:
+        import ui
+        from PySide6.QtWidgets import QWidget
+        from PySide6.QtTest import QTest
+    except (ImportError, OSError) as exc:
+        pytest.skip(f"Desktop UI native dependencies are unavailable in this environment: {exc}")
+
+    class _FakeProxyWidget(QWidget):
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self.tor = SimpleNamespace(path_set=False, MaxCircuitDirtiness=600)
+            self.connected = False
+            self.running = False
+
+        def _stop_services(self):
+            return None
+
+    monkeypatch.setattr(ui, "ProxyWindow", _FakeProxyWidget)
+    monkeypatch.setattr(ui, "IS_WINDOWS", False)
+    window = ui.Window()
+    try:
+        window._page_load_queue.clear()
+        calls = []
+
+        def fail_first_attempt(index):
+            calls.append(index)
+            raise RuntimeError("temporary page initialization failure")
+
+        monkeypatch.setattr(window, "_build_deferred_page", fail_first_attempt)
+        window._show_page(ui.Window.PAGE_BUNDLES)
+        placeholder = window._page_placeholders[ui.Window.PAGE_BUNDLES]
+        QTest.qWait(350)
+
+        assert calls == [ui.Window.PAGE_BUNDLES]
+        assert window._page_states[ui.Window.PAGE_BUNDLES] == "failed"
+        assert placeholder.retry_button.isVisible()
+        assert window.stack.currentWidget() is placeholder
+
+        monkeypatch.setattr(
+            window, "_build_deferred_page", lambda _index: QWidget()
+        )
+        placeholder.retry_button.click()
+        QTest.qWait(350)
+
+        assert window._page_states[ui.Window.PAGE_BUNDLES] == "ready"
+        assert ui.Window.PAGE_BUNDLES not in window._page_placeholders
+        assert window.stack.currentWidget() is window.stack.widget(ui.Window.PAGE_BUNDLES)
+        assert calls == [ui.Window.PAGE_BUNDLES]
+    finally:
+        window.close()
+        window.deleteLater()
+        qt_app.processEvents()
+
+
+def test_deferred_page_loading_is_scheduled_after_home_and_never_builds_qwidgets_in_workers():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui.py").read_text(encoding="utf-8")
+    main_source = (repository / "main.py").read_text(encoding="utf-8")
+
+    assert "QTimer.singleShot(650, self._start_deferred_page_preloading)" in source
+    assert "self._page_build_timer.start(90)" in source
+    assert "self._page_states[index] = \"failed\"" in source
+    assert "placeholder.set_error(" in source
+    assert "placeholder.retry_requested.connect(" in source
+    assert "self._page_load_queue.appendleft(index)" in source
+    assert "Construct one QWidget on the GUI thread" in source
+    assert "win.show()" in main_source
+    assert "app.processEvents()" in main_source
+    assert main_source.index("app.processEvents()") < main_source.index("win.start_deferred_startup()")
+
+
 def test_layout_source_has_one_owner_per_root_and_no_widget_parented_nested_layout():
     repository = Path(__file__).resolve().parents[1]
     paths = [
