@@ -205,10 +205,23 @@ def test_settings_and_main_window_construct_without_duplicate_layout_warning(qt_
         window = ui.Window()
         qt_app.processEvents()
 
-        # Settings itself is also deferred until its top-level destination opens.
+        # Settings remains a lightweight loading surface until its queued
+        # GUI-thread constructor runs. Repeated navigation must not duplicate it.
+        from PySide6.QtTest import QTest
+
         assert window.settingWidget is None
         window._show_setting()
+        settings_placeholder = window._page_placeholders[ui.Window.PAGE_SETTINGS]
+        assert window.stack.currentWidget() is settings_placeholder
+        assert window._page_states[ui.Window.PAGE_SETTINGS] in {"queued", "loading"}
+        window._show_setting()
+        assert window._page_placeholders[ui.Window.PAGE_SETTINGS] is settings_placeholder
+        QTest.qWait(500)
+
+        assert window.settingWidget is not None
         assert window.stack.currentWidget() is window.settingWidget
+        assert window._page_states[ui.Window.PAGE_SETTINGS] == "ready"
+        assert ui.Window.PAGE_SETTINGS not in window._page_placeholders
         assert window.stack.currentIndex() == ui.Window.PAGE_SETTINGS
         assert window.stack.count() == ui.Window.PAGE_DEVELOPER_TOR + 1
         assert window.settingWidget.block_hosts_page is None
