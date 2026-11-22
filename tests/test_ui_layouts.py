@@ -1085,8 +1085,11 @@ def test_tray_menu_is_custom_anchored_above_tray_icon():
     assert "self.tray_menu.move(QPoint(x, y))" in source
     assert "self.tray_menu.show()" in source
     assert "self.tray_menu.exec(" not in source
-    assert "QFrame(self," in source
+    assert "class TrayPopupFrame(QFrame):" in source
+    assert "self.tray_menu = TrayPopupFrame(self)" in source
     assert "Qt.WindowType.Popup" in source
+    assert "Qt.WindowType.FramelessWindowHint" in source
+    assert "Qt.WindowType.NoDropShadowWindowHint" in source
     assert "Qt.WindowType.FramelessWindowHint" in source
     assert "Qt.WindowType.NoDropShadowWindowHint" in source
     assert "QMenu(self)" not in source[source.index("self.tray_icon = QSystemTrayIcon"):source.index("def start_deferred_startup")]
@@ -2248,8 +2251,15 @@ def test_tray_menu_uses_a_modern_theme_aware_floating_surface():
     # platform-default menu with a few isolated actions.
     assert "QWidgetAction" in source
     assert 'self.tray_menu.setObjectName("trayContextMenu")' in source
-    assert "self.tray_menu.setFrameShape(QFrame.Shape.NoFrame)" in source
-    assert "self.tray_menu.setLineWidth(0)" in source
+    tray_frame_start = source.index("class TrayPopupFrame(QFrame):")
+    tray_frame_end = source.index("class Window(QMainWindow):", tray_frame_start)
+    tray_frame = source[tray_frame_start:tray_frame_end]
+    assert "WA_TranslucentBackground" in tray_frame
+    assert "WA_NoSystemBackground" in tray_frame
+    assert "painter.setBrush(self._surface_color)" in tray_frame
+    assert "painter.drawPath(path)" in tray_frame
+    assert "def set_surface_colors(self, surface: str, border: str)" in tray_frame
+    assert "menu.set_surface_colors(surface, border)" in source
     assert "self.tray_menu.setMinimumWidth(286)" in source
     assert "self.tray_menu_header" not in source
     assert "self.tray_proxy_status_label" not in source
@@ -2260,6 +2270,7 @@ def test_tray_menu_uses_a_modern_theme_aware_floating_surface():
     theme_sync = source[theme_start:theme_end]
     assert "QFrame#trayContextMenu" in theme_sync
     assert "QMenu#trayContextMenu" not in theme_sync
+    assert "background: transparent;" in theme_sync
     assert "QFrame#trayMenuSeparator" in theme_sync
     assert "QPushButton#trayPopupAction:hover" in theme_sync
     assert "border-radius: 14px;" in theme_sync
