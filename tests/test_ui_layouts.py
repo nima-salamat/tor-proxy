@@ -209,6 +209,7 @@ def test_settings_and_main_window_construct_without_duplicate_layout_warning(qt_
         # GUI-thread constructor runs. Repeated navigation must not duplicate it.
         from PySide6.QtTest import QTest
 
+        window._page_load_queue.clear()
         assert window.settingWidget is None
         window._show_setting()
         settings_placeholder = window._page_placeholders[ui.Window.PAGE_SETTINGS]
@@ -300,16 +301,19 @@ def test_deferred_page_failure_keeps_retry_available(qt_app, monkeypatch):
         assert placeholder.retry_button.isVisible()
         assert window.stack.currentWidget() is placeholder
 
-        monkeypatch.setattr(
-            window, "_build_deferred_page", lambda _index: QWidget()
-        )
+        def succeed_on_retry(index):
+            calls.append(index)
+            return QWidget()
+
+        monkeypatch.setattr(window, "_build_deferred_page", succeed_on_retry)
         placeholder.retry_button.click()
         QTest.qWait(350)
 
         assert window._page_states[ui.Window.PAGE_BUNDLES] == "ready"
         assert ui.Window.PAGE_BUNDLES not in window._page_placeholders
+        assert window.stack.currentWidget() is not placeholder
         assert window.stack.currentWidget() is window.stack.widget(ui.Window.PAGE_BUNDLES)
-        assert calls == [ui.Window.PAGE_BUNDLES]
+        assert calls == [ui.Window.PAGE_BUNDLES, ui.Window.PAGE_BUNDLES]
     finally:
         window.close()
         window.deleteLater()
