@@ -60,6 +60,16 @@ def test_linux_launcher_shutdown_never_waits_forever_for_child_reaping():
     assert "elapsed.elapsed() < 1500" in stop
     assert "return false;" in stop
 
+
+def test_linux_bootstrap_bounds_child_cleanup_when_splash_exec_fails():
+    source = (ROOT / "launcher" / "src" / "bootstrap.cpp").read_text(encoding="utf-8")
+    linux = source[source.rfind("#else\\n#include <cerrno>"):]
+    assert "terminateAndReapChild(applicationPid)" in linux
+    assert "waitpid(child, &childStatus, WNOHANG)" in linux
+    assert "reapChildWithin(child, 500)" in linux
+    assert "reapChildWithin(child, 1500)" in linux
+    assert "waitpid(applicationPid, nullptr, 0)" not in linux
+
 def test_startup_stylesheet_is_reused_by_window_theme_setup():
     repository = Path(__file__).resolve().parents[1]
     main_source = (repository / "main.py").read_text(encoding="utf-8")
