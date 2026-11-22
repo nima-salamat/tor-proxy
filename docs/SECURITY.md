@@ -59,3 +59,10 @@ The sing-box process and the managed Tor/bridge executables bypass TUN routing s
 Tunnel release checks and engine downloads use the local Tor SOCKS5H listener whenever Tor is READY. When Tor is not ready, each such operation requires separate explicit consent for a direct bootstrap request. TorProxy never retries a failed Tor-routed request directly. The downloaded archive is accepted only after its SHA-256 matches the platform/version digest pinned in the application; an upstream version without a pinned digest is visible but cannot be installed.
 
 The sing-box helper accepts only a pinned release archive for the current supported platform and verifies that the executable it will launch is byte-for-byte the executable in that archive. It validates the generated configuration before starting the privileged process, records PID/image/start-time/config identity, and can reap a stale process only when that identity matches and the TUN interface is absent. A live mismatched PID or an orphaned adapter remains a hard stop; it is never terminated or adopted. The GUI must not disconnect Tor or exit while a tunnel process remains active or unverified.
+
+
+## Process identity and orphan recovery
+
+TorProxy does not treat a numeric PID as proof of ownership. Each Tor DataDirectory stores a private process record containing PID, process creation time, executable path and exact torrc path; optional systemd scope metadata is included for isolated Linux instances. Before terminating a process left by an earlier UI session, TorProxy verifies the complete record and acquires the DataDirectory lock. A mismatched or uninspectable process is not killed, and its state is not advertised as healthy. This policy is shared by Main Tor, custom Tor profiles, Developer Tor and bridge-check workers.
+
+Developer Tor's Onion Service forward targets remain restricted to literal loopback addresses. Private Onion keys and upstream credentials are stored outside config.json; POSIX key directories/files are restricted to 0700/0600. Windows continues to rely on the current user's profile ACLs; this is not equivalent to encrypting those secrets at rest.

@@ -137,3 +137,6 @@ The primary gateway stays protocol-aware and in-process. HAProxy and Envoy are m
 ## Local HTTP proxy shutdown
 
 The HTTP server closes both the client socket and every registered upstream socket before Tor is stopped. New client registration is synchronized with the shutdown flag, preventing a just-accepted connection from slipping past the final socket sweep. Blocking SOCKS connects and direct-route DNS resolution run in daemon workers while the HTTP handler polls the shutdown event; the handler can therefore exit promptly even when Windows does not interrupt a blocking Winsock operation immediately. The handler's socket is closed by the server, and any resolver/connect worker left behind is daemonized and holds no live proxy socket. The application retains service references if an actual handler still fails to leave within the bounded shutdown window.
+
+
+Each profile's DataDirectory also holds a private Tor process identity record. After a TorProxy restart, the service dashboard reports a verified surviving process as **orphaned** rather than stopped; the user can explicitly Stop it to reconcile the old child. An unverified or PID-reused process is never terminated based on its numeric PID alone, and the DataDirectory lock must be acquired before cleanup.
