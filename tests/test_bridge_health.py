@@ -494,6 +494,8 @@ def test_bridge_check_does_not_launch_new_workers_when_stale_probe_cannot_stop(t
     monkeypatch.setattr(bridge_health_module, "_probe_state_root", lambda _settings: root)
 
     class UnstoppableManager:
+        _parse_bridges = staticmethod(TorManager._parse_bridges)
+
         def __init__(self, settings):
             self.settings = settings
 
