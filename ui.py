@@ -827,12 +827,15 @@ class Window(QMainWindow):
             self._schedule_deferred_page_load(0)
             return
 
+        page = None
         try:
             page = self._build_deferred_page(index)
             if not isinstance(page, QWidget):
                 raise TypeError(
                     f"{self._page_titles.get(index, 'Page')} did not create a QWidget."
                 )
+            # Style before inserting so a theme error cannot leave a partially
+            # replaced stack entry or a stale page reference behind.
             self._ensure_page_theme(page)
             self.stack.removeWidget(placeholder)
             self.stack.insertWidget(index, page)
@@ -846,12 +849,38 @@ class Window(QMainWindow):
                 self._page_titles.get(index, index),
             )
         except Exception as exc:
-            self._page_states[index] = "failed"
-            placeholder.set_error(f"{type(exc).__name__}: {exc}")
-            logger.exception(
-                "Could not load deferred page %s.",
-                self._page_titles.get(index, index),
-            )
+            # Constructors and theme hooks may fail after allocating a QWidget.
+            # Dispose of any unattached instance and clear its public references
+            # so Retry always creates a fresh, internally consistent page.
+            if page is not None and self.stack.indexOf(page) >= 0:
+                self._page_placeholders.pop(index, None)
+                self._page_states[index] = "ready"
+                placeholder.deleteLater()
+            else:
+                if page is not None:
+                    page.deleteLater()
+                if index == self.PAGE_SETTINGS:
+                    self.settingWidget = None
+                    self.block_host_window = None
+                    self.exclude_host_window = None
+                elif index == self.PAGE_BUNDLES:
+                    self.updater_window = None
+                elif index == self.PAGE_SYSTEM_TUNNEL:
+                    self.tunnel_window = None
+                elif index == self.PAGE_HELP:
+                    self.shortcutsWidget = None
+                elif index == self.PAGE_STATISTICS:
+                    self.statisticsWidget = None
+                elif index == self.PAGE_CUSTOM_TOR:
+                    self.customTorWidget = None
+                elif index == self.PAGE_DEVELOPER_TOR:
+                    self.developerTorWidget = None
+                self._page_states[index] = "failed"
+                placeholder.set_error(f"{type(exc).__name__}: {exc}")
+                logger.exception(
+                    "Could not load deferred page %s.",
+                    self._page_titles.get(index, index),
+                )
         finally:
             self._page_loading_index = None
             self._update_global_state()
