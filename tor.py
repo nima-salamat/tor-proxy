@@ -599,8 +599,26 @@ class TorRunner(QObject):
         for index, manager in enumerate(managers):
             state = getattr(manager, "state", None)
             state = str(getattr(state, "value", state)).lower().split(".")[-1]
+            if state != "ready":
+                continue
+
+            identity_getter = getattr(manager, "process_identity_snapshot", None)
+            if callable(identity_getter):
+                try:
+                    identity = identity_getter()
+                except Exception:
+                    # An OS-level inspection failure must not make this worker
+                    # eligible for routing or identity-changing commands.
+                    continue
+                if identity:
+                    if bool(identity.get("alive")) and bool(identity.get("verified")):
+                        ready.append((index, manager))
+                    continue
+
+            # Compatibility for test doubles and legacy manager adapters that
+            # do not implement persistent process-identity inspection.
             process = getattr(manager, "process", None)
-            if state != "ready" or process is None:
+            if process is None:
                 continue
             try:
                 if process.poll() is None:
@@ -1105,19 +1123,32 @@ class TorRunner(QObject):
                 if process_pid is None and process is not None:
                     process_pid = getattr(process, "pid", None)
                 process_alive = bool(identity.get("alive"))
+                process_identity_verified = bool(identity.get("verified", False))
                 if not identity and process is not None:
                     try:
                         process_alive = process.poll() is None
                     except Exception:
                         process_alive = True
+
+                # A READY UI status or a successful earlier egress probe cannot
+                # override a dead/unverified process identity. The systemd-run
+                # wrapper is not the Tor daemon; trust its verified child record.
+                if worker_state in {"ready", "healthy", "ready-checking", "unhealthy"}:
+                    if process_alive and not process_identity_verified:
+                        worker_state = "process-identity-unverified"
+                        healthy = False
+                    elif not process_alive and identity:
+                        worker_state = "failed"
+                        healthy = False
+
                 instances.append({
                     "index": index + 1,
                     "state": worker_state,
                     "pid": process_pid,
                     "process_alive": process_alive,
-                    "process_identity_verified": bool(identity.get("verified", False)),
+                    "process_identity_verified": process_identity_verified,
                     "healthy": healthy,
-                    "verified_tor": bool(state.get("verified_tor", False)),
+                    "verified_tor": bool(state.get("verified_tor", False)) and healthy,
                     "latency_ms": state.get("latency_ms"),
                     "latency_p50_ms": state.get("latency_p50_ms"),
                     "latency_p95_ms": state.get("latency_p95_ms"),

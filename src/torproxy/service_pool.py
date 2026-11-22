@@ -120,13 +120,24 @@ class TorServicePool:
         state = cls._state_value(manager)
         process = getattr(manager, "process", None)
         identity_getter = getattr(manager, "process_identity_snapshot", None)
+        identity = None
         if callable(identity_getter):
             try:
                 identity = identity_getter()
             except Exception:
-                identity = {"alive": False}
-            if bool(identity.get("alive")) and process is None:
-                return "orphaned" if bool(identity.get("verified")) else "process-identity-unverified"
+                return "process-identity-unverified"
+            if identity and bool(identity.get("alive")):
+                if not bool(identity.get("verified")):
+                    return "process-identity-unverified"
+                # The actual Tor child may outlive its systemd-run wrapper. A
+                # verified READY child remains usable even if Popen.poll() only
+                # describes the wrapper process.
+                if process is None and state != "ready":
+                    return "orphaned"
+                if state == "ready":
+                    return state
+            elif identity and state == "ready":
+                return "failed"
         if state == "ready" and process is not None:
             try:
                 if process.poll() is not None:

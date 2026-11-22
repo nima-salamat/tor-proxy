@@ -1723,8 +1723,6 @@ class TorServicesPage(QWidget):
             return "A verified Tor process survived the previous TorProxy session · Stop it to reconcile ownership."
         if health == "identity_unverified":
             return "A saved Tor PID is alive but its identity cannot be verified · it will not be signalled or reused."
-        if health == "identity_unverified":
-            return "A saved Tor PID is alive but its identity cannot be verified · it will not be signalled or reused."
         if health == "checking":
             return "Checking real Tor network connectivity…"
         if health == "stopped":

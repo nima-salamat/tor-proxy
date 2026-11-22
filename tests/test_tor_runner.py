@@ -1168,7 +1168,6 @@ def test_primary_event_monitor_uses_verified_tor_child_pid_not_systemd_wrapper(m
 
 def test_primary_event_monitor_skips_cgroup_worker_with_unverified_process_identity(monkeypatch, tmp_path):
     runner, _config = _runner(monkeypatch, tmp_path, "\\n".join(BRIDGES))
-    started = []
 
     class FakeMonitor:
         def __init__(self, *_args, **_kwargs):
@@ -1189,3 +1188,106 @@ def test_primary_event_monitor_skips_cgroup_worker_with_unverified_process_ident
     runner._start_backend_event_monitor(0, manager)
 
     assert runner._backend_event_monitors == {}
+
+
+
+def test_main_pool_keeps_verified_tor_child_when_systemd_launcher_exits(monkeypatch, tmp_path):
+    runner, _config = _runner(monkeypatch, tmp_path, "\\n".join(BRIDGES))
+
+    class ExitedLauncher:
+        pid = 11111
+
+        def poll(self):
+            return 0
+
+    manager = SimpleNamespace(
+        state=TorState.READY,
+        process=ExitedLauncher(),
+        settings=TorSettings(
+            executable=tmp_path / "tor",
+            socks_port=19580,
+            control_port=19581,
+            data_directory=tmp_path / "state" / "verified-child",
+        ),
+        process_identity_snapshot=lambda: {
+            "pid": 22222,
+            "alive": True,
+            "verified": True,
+        },
+    )
+    runner._backend_managers = [manager]
+    runner._backend_statuses = {0: "READY"}
+
+    ready = runner._process_ready_managers()
+
+    assert ready == [(0, manager)]
+
+
+def test_main_pool_excludes_live_but_unverified_tor_worker(monkeypatch, tmp_path):
+    runner, _config = _runner(monkeypatch, tmp_path, "\\n".join(BRIDGES))
+
+    class LiveLauncher:
+        pid = 33333
+
+        def poll(self):
+            return None
+
+    manager = SimpleNamespace(
+        state=TorState.READY,
+        process=LiveLauncher(),
+        settings=TorSettings(
+            executable=tmp_path / "tor",
+            socks_port=19582,
+            control_port=19583,
+            data_directory=tmp_path / "state" / "unverified-child",
+        ),
+        process_identity_snapshot=lambda: {
+            "pid": 44444,
+            "alive": True,
+            "verified": False,
+            "identity_unverifiable": True,
+        },
+    )
+    runner._backend_managers = [manager]
+    runner._backend_statuses = {0: "READY"}
+
+    assert runner._process_ready_managers() == []
+    snapshot = runner.pool_health_snapshot()
+    instance = snapshot["instances"][0]
+    assert instance["state"] == "process-identity-unverified"
+    assert instance["healthy"] is False
+    assert instance["process_alive"] is True
+
+
+def test_main_pool_does_not_keep_a_stale_ready_health_when_tor_child_exited(monkeypatch, tmp_path):
+    runner, _config = _runner(monkeypatch, tmp_path, "\\n".join(BRIDGES))
+
+    class ExitedProcess:
+        pid = 55555
+
+        def poll(self):
+            return 1
+
+    manager = SimpleNamespace(
+        state=TorState.READY,
+        process=ExitedProcess(),
+        settings=TorSettings(
+            executable=tmp_path / "tor",
+            socks_port=19584,
+            control_port=19585,
+            data_directory=tmp_path / "state" / "exited-child",
+        ),
+        process_identity_snapshot=lambda: {
+            "pid": None,
+            "alive": False,
+            "verified": False,
+        },
+    )
+    runner._backend_managers = [manager]
+    runner._backend_statuses = {0: "READY"}
+    runner._backend_health = {0: {"healthy": True, "verified_tor": True}}
+
+    instance = runner.pool_health_snapshot()["instances"][0]
+    assert instance["state"] == "failed"
+    assert instance["healthy"] is False
+    assert instance["verified_tor"] is False
