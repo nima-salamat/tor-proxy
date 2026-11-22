@@ -1004,3 +1004,81 @@ def test_recycled_tor_pid_is_not_terminated_and_stale_record_is_cleared(tmp_path
 
     assert process.terminated is False
     assert not manager.process_state_path.exists()
+
+
+
+def test_tor_process_identity_persists_systemd_scope_and_cgroup_metadata(tmp_path, monkeypatch):
+    executable = tmp_path / ("tor.exe" if os.name == "nt" else "tor")
+    executable.write_text("fake tor", encoding="utf-8")
+    manager = TorManager(TorSettings(
+        executable=executable,
+        socks_port=19186,
+        control_port=19187,
+        data_directory=tmp_path / "tor-state",
+    ))
+    manager.data_directory.mkdir(parents=True)
+    manager.torrc_path.write_text("SocksPort 19186\\n", encoding="utf-8")
+    manager._scope_unit = "torproxy-tor-0123456789ab.scope"
+    manager._tor_cgroup_id = 56789
+    manager._tor_cgroup_level = 3
+
+    class FakeProcess:
+        def __init__(self, _pid):
+            self.pid = 54324
+        def is_running(self):
+            return True
+        def status(self):
+            return "running"
+        def create_time(self):
+            return 100.0
+        def exe(self):
+            return str(executable)
+        def cmdline(self):
+            return [str(executable), "-f", str(manager.torrc_path)]
+
+    monkeypatch.setattr(tor_manager_module.psutil, "Process", FakeProcess)
+    manager._persist_process_identity(54324)
+    record = json.loads(manager.process_state_path.read_text(encoding="utf-8"))
+    assert record["scope_unit"] == "torproxy-tor-0123456789ab.scope"
+    assert record["cgroup_id"] == 56789
+    assert record["cgroup_level"] == 3
+
+
+def test_orphan_recovery_releases_a_lock_retained_by_an_earlier_failed_stop(tmp_path, monkeypatch):
+    manager = TorManager(TorSettings(
+        executable=tmp_path / "tor",
+        data_directory=tmp_path / "tor-state",
+    ))
+    manager._data_directory_lock_handle = object()
+    manager._locked_data_directory = "owned"
+    record = {
+        "scope_unit": "torproxy-tor-0123456789ab.scope",
+        "cgroup_id": 12345,
+        "cgroup_level": 2,
+    }
+    monkeypatch.setattr(manager, "_read_process_identity", lambda: record)
+    monkeypatch.setattr(manager, "_stop_stale_managed_tor_processes", lambda: None)
+    monkeypatch.setattr(manager, "_recorded_tor_process", lambda: None)
+    monkeypatch.setattr(manager, "_process_identity_unverifiable", lambda: False)
+    stopped = []
+
+    def fake_terminate(*, force=False):
+        stopped.append((manager._scope_unit, manager._tor_cgroup_id, manager._tor_cgroup_level, force))
+        manager._scope_unit = None
+        manager._tor_cgroup_id = None
+        manager._tor_cgroup_level = None
+
+    released = []
+    def fake_release():
+        released.append(True)
+        manager._data_directory_lock_handle = None
+        manager._locked_data_directory = None
+
+    monkeypatch.setattr(manager, "_terminate_process", fake_terminate)
+    monkeypatch.setattr(manager, "_release_data_directory_lock", fake_release)
+
+    manager._stop_orphaned_process()
+
+    assert stopped == [("torproxy-tor-0123456789ab.scope", 12345, 2, False)]
+    assert released == [True]
+    assert manager._data_directory_lock_handle is None

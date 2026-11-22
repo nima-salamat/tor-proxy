@@ -246,6 +246,20 @@ class TorManager:
                 return None
             if self._normalized_process_path(payload["torrc"]) != self._normalized_process_path(self.torrc_path):
                 return None
+            scope_unit = payload.get("scope_unit", "")
+            if not isinstance(scope_unit, str) or (
+                scope_unit and not re.fullmatch(r"torproxy-tor-[0-9a-f]{12}\\.scope", scope_unit)
+            ):
+                return None
+            cgroup_id = payload.get("cgroup_id")
+            cgroup_level = payload.get("cgroup_level")
+            if (cgroup_id is None) != (cgroup_level is None):
+                return None
+            if cgroup_id is not None and (
+                type(cgroup_id) is not int or cgroup_id <= 0
+                or type(cgroup_level) is not int or cgroup_level <= 0
+            ):
+                return None
             return payload
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             return None
@@ -336,6 +350,8 @@ class TorManager:
             "torrc": self._normalized_process_path(self.torrc_path),
             "data_directory": self._normalized_process_path(self.data_directory),
             "scope_unit": self._scope_unit or "",
+            "cgroup_id": self._tor_cgroup_id,
+            "cgroup_level": self._tor_cgroup_level,
         }
         fd, temporary = tempfile.mkstemp(prefix=".torproxy-process-", suffix=".tmp", dir=self.data_directory)
         try:
@@ -457,9 +473,17 @@ class TorManager:
         self._clear_process_identity()
 
     def _stop_orphaned_process(self) -> None:
-        """Acquire the instance lock before reconciling a Tor child left by a previous UI process."""
-        acquired_here = self._data_directory_lock_handle is None
-        if acquired_here:
+        """Reconcile an earlier Tor child after claiming its persistent DataDirectory."""
+        record = self._read_process_identity()
+        if record is not None:
+            # Restore only metadata that was validated against TorProxy's
+            # private identity record. This also lets an older UI session's
+            # systemd scope and cgroup firewall exception be cleaned up.
+            self._scope_unit = str(record.get("scope_unit") or "") or None
+            self._tor_cgroup_id = record.get("cgroup_id")
+            self._tor_cgroup_level = record.get("cgroup_level")
+
+        if self._data_directory_lock_handle is None:
             self._acquire_data_directory_lock()
         reconciled = False
         try:
@@ -472,11 +496,14 @@ class TorManager:
                 raise TorManagerError(
                     "A saved Tor PID is live but its identity cannot be verified; cleanup is deferred and the state is retained."
                 )
+            # This stops a persisted systemd scope, clears any associated
+            # cgroup exception, and performs the common final identity cleanup.
+            self._terminate_process(force=False)
             reconciled = True
         finally:
-            # Keep the OS lock while a failed cleanup remains represented by this
-            # manager. A successful stop releases it normally.
-            if acquired_here and reconciled:
+            # Release a lock retained by a previous failed attempt as well as
+            # a lock acquired by this recovery attempt, but only on success.
+            if reconciled:
                 self._release_data_directory_lock()
 
     def _stop_stale_managed_tor_processes(self) -> None:
@@ -1533,7 +1560,9 @@ class TorManager:
                 self.last_error = message
                 self.state = TorState.FAILED
                 raise TorManagerError(message)
-        if self.settings.isolate_in_cgroup and self.settings.cgroup_callback is not None and self._scope_unit is not None:
+        if self.settings.cgroup_callback is not None and (
+            self._scope_unit is not None or self._tor_cgroup_id is not None
+        ):
             try:
                 self.settings.cgroup_callback(None, None)
             except Exception:
@@ -1558,11 +1587,7 @@ class TorManager:
         if self._start_cancel_event is not None:
             self._start_cancel_event.set()
         self._emit(None, TorState.STOPPING, None, "Stopping the managed Tor process.")
-        if (
-            self.process is None
-            and self._data_directory_lock_handle is None
-            and (self.process_state_path.exists() or self.torrc_path.exists())
-        ):
+        if self.process is None and (self.process_state_path.exists() or self.torrc_path.exists()):
             try:
                 self._stop_orphaned_process()
             except Exception as exc:
@@ -1586,11 +1611,7 @@ class TorManager:
         if self._start_cancel_event is not None:
             self._start_cancel_event.set()
         self._emit(None, TorState.STOPPING, None, "Force-stopping the managed Tor process.")
-        if (
-            self.process is None
-            and self._data_directory_lock_handle is None
-            and (self.process_state_path.exists() or self.torrc_path.exists())
-        ):
+        if self.process is None and (self.process_state_path.exists() or self.torrc_path.exists()):
             try:
                 self._stop_orphaned_process()
             except Exception as exc:
