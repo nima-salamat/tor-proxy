@@ -390,6 +390,7 @@ jobs:
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || steps.release_version.outputs.tag }}
           target_commitish: ${{ github.sha }}
+          # Upload only the new files; keep the previous v1.6.0 assets untouched.
           files: |
             TorProxy-Full-Setup-windows-x64.exe
             SHA256-TorProxy-Full-Setup.txt
