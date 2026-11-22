@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_linux_bootstrap_starts_python_before_loading_qt_runtime():
     source = (ROOT / "launcher" / "src" / "bootstrap.cpp").read_text(encoding="utf-8")
-    linux = source[source.rfind("#else\n#include <cerrno>"):]
+    linux = source[source.index("bool reapChildWithin"):]
     assert "fork()" in linux
     assert "TORPROXY_LAUNCHER_STATUS_FILE" in linux
     assert "TORPROXY_LAUNCHER_PID" in linux
