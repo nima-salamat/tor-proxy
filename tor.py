@@ -379,15 +379,40 @@ class TorRunner(QObject):
         settings = getattr(manager, "settings", None)
         process = getattr(manager, "process", None)
         control_port = getattr(settings, "control_port", None)
-        pid = getattr(process, "pid", None)
-        if type(control_port) is not int or not 1 <= control_port <= 65535:
+        identity_getter = getattr(manager, "process_identity_snapshot", None)
+        expected_pid = None
+        if callable(identity_getter):
+            try:
+                identity = identity_getter()
+            except Exception:
+                identity = {}
+            if identity.get("alive") and identity.get("verified"):
+                try:
+                    candidate_pid = int(identity.get("pid"))
+                    expected_pid = candidate_pid if candidate_pid > 0 else None
+                except (TypeError, ValueError):
+                    expected_pid = None
+        # A systemd-run process is only the scope launcher; ControlPort reports
+        # the Tor child PID. Never bind an event monitor to the wrapper PID.
+        if expected_pid is None and not bool(getattr(settings, "isolate_in_cgroup", False)):
+            candidate_pid = getattr(process, "pid", None)
+            if type(candidate_pid) is int and candidate_pid > 0:
+                expected_pid = candidate_pid
+        if (
+            type(control_port) is not int or not 1 <= control_port <= 65535
+            or expected_pid is None
+        ):
+            logger.info(
+                "Tor event monitor was not started for primary instance %s because its process identity is not verified.",
+                index + 1,
+            )
             return
         try:
             from torproxy.circuit_monitor import TorEventMonitor
 
             monitor = TorEventMonitor(
                 control_port,
-                expected_pid=int(pid) if pid is not None else None,
+                expected_pid=expected_pid,
             )
             monitor.start()
         except Exception as exc:

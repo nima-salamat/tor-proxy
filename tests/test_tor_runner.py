@@ -1124,3 +1124,68 @@ def test_primary_tor_supervisor_thread_start_failure_stops_started_gateway(monke
     assert runner.manager is None
     assert runner.thread is None
     assert runner.state == "FAILED"
+
+
+
+def test_primary_event_monitor_uses_verified_tor_child_pid_not_systemd_wrapper(monkeypatch, tmp_path):
+    runner, _config = _runner(monkeypatch, tmp_path, "\\n".join(BRIDGES))
+    captured = {}
+
+    class FakeMonitor:
+        def __init__(self, control_port, *, expected_pid=None):
+            captured["control_port"] = control_port
+            captured["expected_pid"] = expected_pid
+
+        def start(self):
+            captured["started"] = True
+
+        def stop(self):
+            captured["stopped"] = True
+
+    monkeypatch.setattr(
+        "torproxy.circuit_monitor.TorEventMonitor",
+        FakeMonitor,
+    )
+    manager = SimpleNamespace(
+        settings=SimpleNamespace(control_port=19551, isolate_in_cgroup=True),
+        process=SimpleNamespace(pid=11111),  # systemd-run scope wrapper
+        process_identity_snapshot=lambda: {
+            "pid": 22222,  # actual Tor child reported by ControlPort
+            "alive": True,
+            "verified": True,
+        },
+    )
+
+    runner._start_backend_event_monitor(0, manager)
+
+    assert captured == {
+        "control_port": 19551,
+        "expected_pid": 22222,
+        "started": True,
+    }
+    assert 0 in runner._backend_event_monitors
+
+
+def test_primary_event_monitor_skips_cgroup_worker_with_unverified_process_identity(monkeypatch, tmp_path):
+    runner, _config = _runner(monkeypatch, tmp_path, "\\n".join(BRIDGES))
+    started = []
+
+    class FakeMonitor:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("Unverified cgroup process must not get a ControlPort monitor")
+
+    monkeypatch.setattr("torproxy.circuit_monitor.TorEventMonitor", FakeMonitor)
+    manager = SimpleNamespace(
+        settings=SimpleNamespace(control_port=19552, isolate_in_cgroup=True),
+        process=SimpleNamespace(pid=33333),
+        process_identity_snapshot=lambda: {
+            "pid": 44444,
+            "alive": True,
+            "verified": False,
+            "identity_unverifiable": True,
+        },
+    )
+
+    runner._start_backend_event_monitor(0, manager)
+
+    assert runner._backend_event_monitors == {}
