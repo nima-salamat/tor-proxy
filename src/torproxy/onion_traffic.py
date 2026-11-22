@@ -59,6 +59,10 @@ class OnionTrafficStore:
                 pass
         self._lock = threading.RLock()
         self._active_lock = threading.RLock()
+        self._writer_lock = threading.RLock()
+        self._writer_stop = threading.Event()
+        self._writer_thread: threading.Thread | None = None
+        self._closed = False
         self._active_connections: dict[str, int] = {}
         self._deleted_services: set[str] = set()
         self._write_queue: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=2048)
@@ -68,12 +72,7 @@ class OnionTrafficStore:
         # Shared by every service and port mapping in the Developer Tor runtime.
         self.connection_slots = threading.BoundedSemaphore(_MAX_CONNECTIONS_GLOBAL)
         self._initialize()
-        self._writer_thread = threading.Thread(
-            target=self._write_loop,
-            name="onion-traffic-writer",
-            daemon=True,
-        )
-        self._writer_thread.start()
+        self._start_writer()
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(str(self.path), timeout=5.0)
@@ -143,6 +142,8 @@ class OnionTrafficStore:
     def begin_connection(self, service_id: str) -> None:
         """Track active sockets in memory without putting SQLite on the relay path."""
         key = str(service_id)
+        with self._lock:
+            self._deleted_services.discard(key)
         with self._active_lock:
             self._active_connections[key] = self._active_connections.get(key, 0) + 1
 
@@ -240,11 +241,54 @@ class OnionTrafficStore:
                     (key, key, _MAX_EVENT_ROWS_PER_SERVICE),
                 )
 
-    def _write_loop(self) -> None:
-        """Persist bounded telemetry off the socket-forwarding threads."""
-        while True:
+    def _start_writer(self) -> None:
+        with self._writer_lock:
+            current = self._writer_thread
+            if current is not None and current.is_alive():
+                if self._writer_stop.is_set():
+                    raise RuntimeError("The previous Onion traffic writer is still shutting down.")
+                return
+            self._writer_stop.clear()
+            self._closed = False
+            thread = threading.Thread(
+                target=self._write_loop,
+                name="onion-traffic-writer",
+                daemon=True,
+            )
+            self._writer_thread = thread
             try:
-                record = self._write_queue.get(timeout=0.5)
+                thread.start()
+            except Exception:
+                self._writer_thread = None
+                self._closed = True
+                self._writer_stop.set()
+                raise
+
+    def reopen(self) -> None:
+        """Restart telemetry after an application shutdown was rolled back."""
+        self._start_writer()
+
+    def close(self, *, timeout: float = 5.0) -> None:
+        """Drain queued telemetry and join the SQLite writer before application exit."""
+        with self._writer_lock:
+            self._closed = True
+            self._writer_stop.set()
+            thread = self._writer_thread
+            if thread is None:
+                return
+            if thread is not threading.current_thread():
+                thread.join(timeout=max(0.1, float(timeout)))
+            if thread.is_alive():
+                raise RuntimeError(
+                    "Onion traffic history writer is still active; its reference was retained for retry."
+                )
+            self._writer_thread = None
+
+    def _write_loop(self) -> None:
+        """Persist queued telemetry, then exit after shutdown has drained the queue."""
+        while not self._writer_stop.is_set() or not self._write_queue.empty():
+            try:
+                record = self._write_queue.get(timeout=0.2)
             except queue.Empty:
                 continue
             try:
@@ -332,7 +376,10 @@ class OnionTrafficStore:
             "error": error,
         }
         try:
-            self._write_queue.put_nowait(record)
+            with self._writer_lock:
+                if self._closed or self._writer_thread is None or not self._writer_thread.is_alive():
+                    return False
+                self._write_queue.put_nowait(record)
             return True
         except queue.Full:
             now = time.monotonic()
@@ -555,7 +602,14 @@ class _TcpPortRelay:
         )
 
     def start(self) -> int:
-        self._accept_thread.start()
+        try:
+            self._accept_thread.start()
+        except Exception:
+            try:
+                self.listener.close()
+            except OSError:
+                pass
+            raise
         return self.port
 
     def _accept_loop(self) -> None:
@@ -703,7 +757,7 @@ class _TcpPortRelay:
                     bytes_out += len(payload)
         return bytes_in, bytes_out
 
-    def close(self) -> None:
+    def close(self, *, timeout: float = 6.0) -> None:
         self._stop.set()
         try:
             self.listener.close()
@@ -721,19 +775,24 @@ class _TcpPortRelay:
                 endpoint.close()
             except OSError:
                 pass
-        deadline = time.monotonic() + 6.0
-        if self._accept_thread.is_alive():
+        deadline = time.monotonic() + max(0.1, float(timeout))
+        if self._accept_thread.is_alive() and self._accept_thread is not threading.current_thread():
             self._accept_thread.join(timeout=min(0.75, max(0.0, deadline - time.monotonic())))
-        # All client sockets are shut down together above. Join the bounded
-        # worker set against one shared deadline instead of waiting one second
-        # per client (which could multiply into minutes during a busy shutdown).
         for thread in threads:
-            if not thread.is_alive():
+            if not thread.is_alive() or thread is threading.current_thread():
                 continue
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
             thread.join(timeout=remaining)
+        with self._active_lock:
+            accept_alive = self._accept_thread.is_alive()
+            active_workers = tuple(thread for thread in self._connection_threads if thread.is_alive())
+        if accept_alive or active_workers:
+            raise RuntimeError(
+                "Onion TCP relay shutdown is incomplete; "
+                f"accept thread alive: {accept_alive}; active connection workers: {len(active_workers)}."
+            )
 
 
 class OnionServiceRelay:
@@ -791,10 +850,23 @@ class OnionServiceRelay:
                 continue
         return None
 
-    def close(self) -> None:
-        if self._closed:
+    def close(self, *, timeout: float = 6.0) -> None:
+        if not self._listeners:
+            self._closed = True
             return
         self._closed = True
+        deadline = time.monotonic() + max(0.1, float(timeout))
+        remaining: list[_TcpPortRelay] = []
+        errors: list[str] = []
         for relay in reversed(self._listeners):
-            relay.close()
-        self._listeners.clear()
+            try:
+                relay.close(timeout=max(0.1, deadline - time.monotonic()))
+            except Exception as exc:
+                remaining.append(relay)
+                errors.append(str(exc))
+        self._listeners = list(reversed(remaining))
+        if errors:
+            raise RuntimeError(
+                "One or more Onion Service TCP relays could not be confirmed stopped: "
+                + " | ".join(errors)
+            )

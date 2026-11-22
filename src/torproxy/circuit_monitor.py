@@ -132,8 +132,14 @@ class TorEventMonitor:
 
     def start(self) -> None:
         with self._lock:
-            if self.running:
-                return
+            previous = self._thread
+            if previous is not None and previous.is_alive():
+                if not self._stop.is_set():
+                    return
+                raise RuntimeError(
+                    "The previous Tor event collector is still shutting down; a duplicate monitor was refused."
+                )
+            self._thread = None
             self._stop.clear()
             controller = self._make_controller()
             try:
@@ -270,7 +276,6 @@ class TorEventMonitor:
         with self._lock:
             controller, self._controller = self._controller, None
             thread = self._thread
-            self._thread = None
         if controller is not None:
             try:
                 controller.remove_event_listener(self._on_event)
@@ -282,5 +287,12 @@ class TorEventMonitor:
                 pass
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=max(0.1, float(timeout)))
+        if thread is threading.current_thread():
+            return
         if thread is not None and thread.is_alive():
-            LOGGER.warning("Tor event collector did not stop before its bounded shutdown deadline.")
+            raise RuntimeError(
+                "Tor event collector is still active after its shutdown deadline; its reference was retained."
+            )
+        with self._lock:
+            if self._thread is thread:
+                self._thread = None

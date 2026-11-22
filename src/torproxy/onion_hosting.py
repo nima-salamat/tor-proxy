@@ -140,6 +140,7 @@ class OnionHostingManager:
         self._directories = directories or user_directories()
         self._lock = threading.RLock()
         self._runtime_start_lock = threading.Lock()
+        self._service_lifecycle_lock = threading.RLock()
         self._runtime_cancel_event: threading.Event | None = None
         self._shutdown_requested = False
         self._manager: TorManager | None = None
@@ -695,6 +696,7 @@ class OnionHostingManager:
                         self._service_errors[service["id"]] = str(exc)
                         LOGGER.warning("Could not auto-start Onion Service '%s': %s", service["id"], exc)
         finally:
+            self._service_lifecycle_lock.release()
             self._runtime_start_lock.release()
 
     def _stop_runtime_serialized(self, *, force: bool = False, shutdown: bool = False) -> None:
@@ -720,56 +722,53 @@ class OnionHostingManager:
                 "Developer Tor did not finish its current start/stop operation within 30 seconds. "
                 "Its process ownership is retained; retry shutdown after inspecting the runtime."
             )
+        self._service_lifecycle_lock.acquire()
         try:
             with self._lock:
                 manager = self._manager
-            if manager is None:
-                with self._lock:
-                    relays = list(self._traffic_relays.values())
-                    self._traffic_relays.clear()
-                    temporary_ids = tuple(self._temporary_services) if shutdown else ()
-                    if shutdown:
-                        self._started_at = None
-                        self._last_status_message = "Developer Tor stopped."
-                        self._temporary_services.clear()
-                        self._temporary_keys.clear()
-                        self._active_services.clear()
-                        self._service_errors.clear()
-                        self._runtime_cancel_event = None
-                for relay in relays:
-                    relay.close()
-                for profile_id in temporary_ids:
-                    self._traffic_store.delete_service(profile_id)
-                return
 
-            stop_error = None
-            try:
-                manager.force_stop() if force else manager.stop()
-            except Exception as exc:
-                stop_error = exc
-                # Graceful stop already escalates internally. A final explicit
-                # force-stop is the last owned-process cleanup attempt; never
-                # forget the manager if the child or its directory lock survives.
+            if manager is not None:
                 try:
-                    manager.force_stop()
-                    stop_error = None
-                except Exception as force_exc:
-                    process = getattr(manager, "process", None)
-                    process_alive = bool(process is not None and process.poll() is None)
-                    lock_held = getattr(manager, "_data_directory_lock_handle", None) is not None
-                    raise OnionHostingError(
-                        "Developer Tor could not be stopped completely. "
-                        f"Process still running: {process_alive}; DataDirectory lock retained: {lock_held}. "
-                        f"Graceful stop: {stop_error}; force-stop: {force_exc}"
-                    ) from force_exc
+                    manager.force_stop() if force else manager.stop()
+                except Exception as stop_error:
+                    try:
+                        manager.force_stop()
+                    except Exception as force_error:
+                        process = getattr(manager, "process", None)
+                        process_alive = bool(process is not None and process.poll() is None)
+                        lock_held = getattr(manager, "_data_directory_lock_handle", None) is not None
+                        raise OnionHostingError(
+                            "Developer Tor could not be stopped completely. "
+                            f"Process still running: {process_alive}; DataDirectory lock retained: {lock_held}. "
+                            f"Graceful stop: {stop_error}; force-stop: {force_error}"
+                        ) from force_error
 
-            process = getattr(manager, "process", None)
-            process_alive = bool(process is not None and process.poll() is None)
-            lock_held = getattr(manager, "_data_directory_lock_handle", None) is not None
-            if process_alive or lock_held:
+                process = getattr(manager, "process", None)
+                process_alive = bool(process is not None and process.poll() is None)
+                lock_held = getattr(manager, "_data_directory_lock_handle", None) is not None
+                if process_alive or lock_held:
+                    raise OnionHostingError(
+                        "Developer Tor still owns a live process or DataDirectory lock after shutdown. "
+                        "Its manager reference was retained so cleanup can be retried safely."
+                    )
+
+            with self._lock:
+                relays = dict(self._traffic_relays)
+            relay_errors: list[str] = []
+            for profile_id, relay in relays.items():
+                try:
+                    relay.close()
+                except Exception as exc:
+                    relay_errors.append(f"{profile_id}: {exc}")
+            if relay_errors:
+                # Tor is stopped, but retain the failed relays and manager
+                # reference so their socket workers can be joined on retry.
+                with self._lock:
+                    self._active_services.clear()
+                    self._last_status_message = "Tor stopped; Onion relay cleanup is still pending."
                 raise OnionHostingError(
-                    "Developer Tor still owns a live process or DataDirectory lock after shutdown. "
-                    "Its manager reference was retained so cleanup can be retried safely."
+                    "Developer Tor stopped, but one or more Onion relays remain active: "
+                    + " | ".join(relay_errors)
                 )
 
             with self._lock:
@@ -777,20 +776,25 @@ class OnionHostingManager:
                     self._manager = None
                 self._started_at = None
                 self._last_status_message = "Developer Tor stopped."
-                # Tor process exit removes all detached Onion Services. Only
-                # after that is confirmed may temporary credentials be erased.
                 temporary_ids = tuple(self._temporary_services)
                 self._temporary_services.clear()
                 self._temporary_keys.clear()
                 self._active_services.clear()
                 self._service_errors.clear()
                 self._runtime_cancel_event = None
-                relays = list(self._traffic_relays.values())
                 self._traffic_relays.clear()
-            for relay in relays:
-                relay.close()
+
             for profile_id in temporary_ids:
                 self._traffic_store.delete_service(profile_id)
+
+            if shutdown:
+                try:
+                    self._traffic_store.close(timeout=5.0)
+                except Exception as exc:
+                    raise OnionHostingError(
+                        "Developer Tor and its Onion relays stopped, but the traffic history writer "
+                        f"could not be joined: {exc}"
+                    ) from exc
         finally:
             self._runtime_start_lock.release()
 
@@ -810,6 +814,8 @@ class OnionHostingManager:
             with self._lock:
                 if self._manager is not None:
                     raise OnionHostingError("Developer Tor must be fully stopped before resuming its lifecycle.")
+            self._traffic_store.reopen()
+            with self._lock:
                 self._shutdown_requested = False
                 self._runtime_cancel_event = None
                 self._last_status_message = "Developer Tor is stopped."
@@ -1100,6 +1106,10 @@ class OnionHostingManager:
         return None
 
     def start_service(self, profile_id: str) -> str:
+        with self._service_lifecycle_lock:
+            return self._start_service_locked(profile_id)
+
+    def _start_service_locked(self, profile_id: str) -> str:
         with self._lock:
             if self._shutdown_requested:
                 raise OnionHostingError("Developer Tor is shutting down; Onion Services cannot be started.")
@@ -1196,6 +1206,10 @@ class OnionHostingManager:
         return onion_id + ".onion"
 
     def stop_service(self, profile_id: str) -> None:
+        with self._service_lifecycle_lock:
+            self._stop_service_locked(profile_id)
+
+    def _stop_service_locked(self, profile_id: str) -> None:
         with self._lock:
             onion_id = self._active_services.get(profile_id)
         if not onion_id:

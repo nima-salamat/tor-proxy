@@ -128,6 +128,10 @@ class SocksFailoverGateway:
         with self._lock:
             if self.running:
                 return
+            if self._thread is not None and self._thread.is_alive():
+                raise SocksGatewayError(
+                    "The previous SOCKS gateway listener is still shutting down; restart was refused."
+                )
             stale_sessions = tuple(
                 worker for worker in self._session_threads if worker.is_alive()
             )
