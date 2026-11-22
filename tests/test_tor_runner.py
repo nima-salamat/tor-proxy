@@ -9,7 +9,7 @@ import pytest
 import tor
 import torproxy.bridge_health as bridge_health_module
 from torproxy.bridge_health import BridgeHealthResult
-from torproxy.tor_manager import TorSettings
+from torproxy.tor_manager import TorManagerError, TorSettings, TorState
 
 
 FINGERPRINTS = (
@@ -1066,3 +1066,61 @@ def test_http_listener_restart_waits_for_previous_server_workers(monkeypatch):
     assert runner.server is not server
     assert runner.thread is not previous_thread
     runner.stop()
+
+
+
+def test_primary_tor_supervisor_thread_start_failure_stops_started_gateway(monkeypatch, tmp_path):
+    runner, _config = _runner(monkeypatch, tmp_path, "\\n".join(BRIDGES))
+    runner._bundle_preflight_verified = True
+
+    class FakeManager:
+        def __init__(self):
+            self.state = TorState.STOPPED
+            self.process = None
+            self._data_directory_lock_handle = None
+            self.stopped = False
+
+        def stop(self):
+            self.stopped = True
+            self.state = TorState.STOPPED
+
+    class FakeGateway:
+        def __init__(self):
+            self.running = False
+            self.stopped = False
+
+        def start(self):
+            self.running = True
+
+        def stop(self):
+            self.stopped = True
+            self.running = False
+
+    manager = FakeManager()
+    gateway = FakeGateway()
+    monkeypatch.setattr(runner, "_make_manager", lambda _index=0: manager)
+    monkeypatch.setattr(runner, "_build_socks_gateway", lambda _config: gateway)
+
+    class FailedThread:
+        ident = None
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            raise RuntimeError("simulated thread resource exhaustion")
+
+        def is_alive(self):
+            return False
+
+    monkeypatch.setattr("tor.threading.Thread", FailedThread)
+
+    with pytest.raises(TorManagerError, match="thread resource exhaustion"):
+        runner.start()
+
+    assert manager.stopped is True
+    assert gateway.stopped is True
+    assert runner._gateway is None
+    assert runner.manager is None
+    assert runner.thread is None
+    assert runner.state == "FAILED"

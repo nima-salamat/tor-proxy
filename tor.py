@@ -991,8 +991,30 @@ class TorRunner(QObject):
                 self._gateway_access_config = None
             raise
         self.state = "STARTING"
-        self.thread = threading.Thread(target=self._run, name="torproxy-primary-tor-pool", daemon=True)
-        self.thread.start()
+        supervisor = threading.Thread(
+            target=self._run,
+            name="torproxy-primary-tor-pool",
+            daemon=True,
+        )
+        self.thread = supervisor
+        try:
+            supervisor.start()
+        except Exception as start_error:
+            # No supervisor exists to own the resources if Thread.start fails.
+            # Run the same bounded stop path now, and preserve any cleanup error.
+            try:
+                self._stop_locked()
+            except Exception as cleanup_error:
+                detail = (
+                    f"Could not start the primary Tor pool supervisor: {start_error}. "
+                    f"Resource cleanup also failed: {cleanup_error}"
+                )
+                self.state = "FAILED"
+                self.last_error = detail
+                raise TorManagerError(detail) from cleanup_error
+            self.state = "FAILED"
+            self.last_error = f"Could not start the primary Tor pool supervisor: {start_error}"
+            raise TorManagerError(self.last_error) from start_error
         logger.info("Primary Tor pool supervisor started behind the Main SOCKS gateway on port %s.", self.socks_port)
 
     @property
@@ -2118,7 +2140,11 @@ class TorRunner(QObject):
             self._stop_backend_event_monitor(index)
 
         thread = self.thread
-        if thread and thread is not threading.current_thread():
+        if (
+            thread
+            and thread is not threading.current_thread()
+            and getattr(thread, "ident", None) is not None
+        ):
             thread.join(timeout=10)
         thread_alive = bool(thread and thread.is_alive())
         worker_alive = any(worker.is_alive() for worker in workers)

@@ -158,12 +158,34 @@ class TorEventMonitor:
                     pass
                 raise
             self._controller = controller
-            self._thread = threading.Thread(
+            thread = threading.Thread(
                 target=self._consume_loop,
                 name=f"torproxy-events-{self.control_port}",
                 daemon=True,
             )
-            self._thread.start()
+            self._thread = thread
+            try:
+                thread.start()
+            except Exception:
+                if getattr(thread, "ident", None) is None:
+                    # The consumer never began. Undo the authenticated event
+                    # subscription so this monitor can be retried cleanly.
+                    if self._thread is thread:
+                        self._thread = None
+                    if self._controller is controller:
+                        self._controller = None
+                    self._stop.set()
+                    try:
+                        controller.remove_event_listener(self._on_event)
+                    except Exception:
+                        pass
+                    try:
+                        controller.close()
+                    except Exception:
+                        pass
+                # If the thread did begin despite the exception, retain both
+                # references so stop() can still join and close them.
+                raise
 
     def _on_event(self, event: object) -> None:
         kind = _event_kind(event)

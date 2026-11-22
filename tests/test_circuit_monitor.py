@@ -167,3 +167,37 @@ def test_monitor_retains_live_thread_and_refuses_duplicate_start_during_shutdown
     assert not first_thread.is_alive()
     monitor.stop(timeout=1)
     assert monitor._thread is None
+
+
+
+def test_monitor_closes_controller_when_consumer_thread_cannot_start(monkeypatch):
+    controller = FakeController(19354)
+
+    class FailedThread:
+        ident = None
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            raise RuntimeError("simulated thread resource exhaustion")
+
+        def is_alive(self):
+            return False
+
+    monkeypatch.setattr("torproxy.circuit_monitor.threading.Thread", FailedThread)
+    monitor = TorEventMonitor(
+        19354,
+        expected_pid=1234,
+        controller_factory=lambda _port: controller,
+        event_types=("CIRC",),
+    )
+
+    with pytest.raises(RuntimeError, match="resource exhaustion"):
+        monitor.start()
+
+    assert controller.closed is True
+    assert controller.listener is None
+    assert monitor._controller is None
+    assert monitor._thread is None
+    assert monitor._stop.is_set()
