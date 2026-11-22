@@ -51,6 +51,7 @@ def test_release_workflow_builds_and_preserves_complete_windows_installer():
     asset_block = workflow.split("          files: |", 1)[1].split("          generate_release_notes:", 1)[0]
     assert "TorProxy-Full-Setup-windows-x64.exe" in asset_block
     assert "SHA256-TorProxy-Full-Setup.txt" in asset_block
+    assert "cat SHA256-TorProxy-Full-Setup.txt" in workflow
     assert "TorProxy-windows-x64.zip" not in asset_block
     assert "TorProxy-Setup-windows-x64.exe" not in asset_block
     assert "SHA256SUMS.txt" not in asset_block
