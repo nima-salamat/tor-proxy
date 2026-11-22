@@ -575,19 +575,44 @@ class Window(QMainWindow):
         self.tray_icon = QSystemTrayIcon(self)
         self.tray_icon.setIcon(QIcon(resource_path("assets/icon.png")))
         self.tray_icon.setToolTip("TorProxy")
-        self.tray_menu = QMenu(self)
+        # The tray UI is a single frameless popup surface, not a native QMenu.
+        # This avoids combining the platform's rounded menu frame with our own
+        # stylesheet border, which produced two mismatched outlines.
+        self.tray_menu = QFrame(
+            self,
+            Qt.WindowType.Popup
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.NoDropShadowWindowHint,
+        )
         self.tray_menu.setObjectName("trayContextMenu")
-        # A translucent popup lets the stylesheet draw one rounded surface only;
-        # otherwise the native popup backing can show through as a second frame.
         self.tray_menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.tray_menu.setAutoFillBackground(False)
+        self.tray_menu.setFrameShape(QFrame.Shape.NoFrame)
+        self.tray_menu.setLineWidth(0)
         self.tray_menu.setMinimumWidth(286)
-        self.tray_menu.setSeparatorsCollapsible(False)
+
+        self.tray_menu_layout = QVBoxLayout(self.tray_menu)
+        self.tray_menu_layout.setContentsMargins(8, 8, 8, 8)
+        self.tray_menu_layout.setSpacing(2)
+
+        def add_tray_separator():
+            separator = QFrame(self.tray_menu)
+            separator.setObjectName("trayMenuSeparator")
+            separator.setFrameShape(QFrame.Shape.HLine)
+            separator.setFixedHeight(1)
+            self.tray_menu_layout.addWidget(separator)
 
         self.tray_toggle_action = QAction("Hide window", self)
         self.tray_toggle_action.triggered.connect(self._toggle_visibility)
-        self.tray_menu.addAction(self.tray_toggle_action)
-        self.tray_menu.addSeparator()
+        self.tray_toggle_button = QPushButton("Hide window", self.tray_menu)
+        self.tray_toggle_button.setObjectName("trayPopupAction")
+        self.tray_toggle_button.setIconSize(QSize(16, 16))
+        self.tray_toggle_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.tray_toggle_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.tray_toggle_button.clicked.connect(self.tray_toggle_action.trigger)
+        self.tray_toggle_button.clicked.connect(self.tray_menu.hide)
+        self.tray_menu_layout.addWidget(self.tray_toggle_button)
+        add_tray_separator()
 
         # Keep the three tray choices wired to the same policy combo and
         # handler used by Home; never change OS proxy settings through a second path.
@@ -604,9 +629,7 @@ class Window(QMainWindow):
         )
         self.tray_proxy_section_label.setAutoFillBackground(False)
         proxy_section_layout.addWidget(self.tray_proxy_section_label)
-        self.tray_proxy_section_action = QWidgetAction(self.tray_menu)
-        self.tray_proxy_section_action.setDefaultWidget(self.tray_proxy_section)
-        self.tray_menu.addAction(self.tray_proxy_section_action)
+        self.tray_menu_layout.addWidget(self.tray_proxy_section)
 
         self.tray_system_proxy_mode_actions = {}
         self.tray_system_proxy_mode_rows = {}
@@ -616,7 +639,11 @@ class Window(QMainWindow):
             ("clear", "Clear system proxy"),
         )
         for mode, label in tray_proxy_modes:
-            action = QWidgetAction(self.tray_menu)
+            action = QAction(label, self)
+            action.triggered.connect(
+                lambda _checked=False, selected_mode=mode:
+                    self._set_tray_system_proxy_mode(selected_mode)
+            )
             row = QWidget(self.tray_menu)
             row.setObjectName("trayPolicyRow")
             row.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
@@ -634,10 +661,8 @@ class Window(QMainWindow):
                 QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
             )
             button.setMinimumHeight(32)
-            button.clicked.connect(
-                lambda _checked=False, selected_mode=mode:
-                    self._set_tray_system_proxy_mode(selected_mode)
-            )
+            button.clicked.connect(action.trigger)
+            button.clicked.connect(self.tray_menu.hide)
             row_layout.addWidget(button, 1)
 
             check_label = QLabel("", row)
@@ -648,8 +673,7 @@ class Window(QMainWindow):
             check_label.setAutoFillBackground(False)
             row_layout.addWidget(check_label, 0)
 
-            action.setDefaultWidget(row)
-            self.tray_menu.addAction(action)
+            self.tray_menu_layout.addWidget(row)
             self.tray_system_proxy_mode_actions[mode] = action
             self.tray_system_proxy_mode_rows[mode] = {
                 "widget": row,
@@ -657,10 +681,17 @@ class Window(QMainWindow):
                 "check": check_label,
             }
 
-        self.tray_menu.addSeparator()
+        add_tray_separator()
         self.tray_exit_action = QAction("Exit", self)
         self.tray_exit_action.triggered.connect(self.ask_close)
-        self.tray_menu.addAction(self.tray_exit_action)
+        self.tray_exit_button = QPushButton("Exit", self.tray_menu)
+        self.tray_exit_button.setObjectName("trayPopupAction")
+        self.tray_exit_button.setIconSize(QSize(16, 16))
+        self.tray_exit_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.tray_exit_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.tray_exit_button.clicked.connect(self.tray_exit_action.trigger)
+        self.tray_exit_button.clicked.connect(self.tray_menu.hide)
+        self.tray_menu_layout.addWidget(self.tray_exit_button)
 
         proxy_mode_combo = getattr(self.proxyWidget, "system_proxy_mode", None)
         if proxy_mode_combo is not None:
@@ -1844,7 +1875,7 @@ class Window(QMainWindow):
         self._sync_tray_system_proxy_actions()
 
     def _sync_tray_system_proxy_actions(self, *_args):
-        """Keep tray radio actions consistent with the saved Home policy."""
+        """Keep the right-aligned tray checkmark in sync with Home's policy."""
         rows = getattr(self, "tray_system_proxy_mode_rows", {})
         current_mode = CONFIG.get("system_proxy_mode", "unchanged")
         for mode, row in rows.items():
@@ -1860,14 +1891,20 @@ class Window(QMainWindow):
         if not hasattr(self, "tray_menu"):
             return
         hidden = self.isHidden() or self.isMinimized()
-        self.tray_toggle_action.setText("Show window" if hidden else "Hide window")
+        toggle_text = "Show window" if hidden else "Hide window"
+        self.tray_toggle_action.setText(toggle_text)
+        self.tray_toggle_button.setText(toggle_text)
         self._sync_tray_menu_theme()
         self.tray_menu.ensurePolished()
+        self.tray_menu.adjustSize()
         size = self.tray_menu.sizeHint()
         anchor = QCursor.pos()
         screen = QGuiApplication.screenAt(anchor) or QGuiApplication.primaryScreen()
         if screen is None:
-            self.tray_menu.exec(anchor)
+            self.tray_menu.move(anchor)
+            self.tray_menu.show()
+            self.tray_menu.raise_()
+            self.tray_menu.activateWindow()
             return
 
         area = screen.availableGeometry()
@@ -1879,7 +1916,10 @@ class Window(QMainWindow):
             y = anchor.y() + 12
         x = min(max(x, area.left()), area.right() - size.width() + 1)
         y = min(max(y, area.top()), area.bottom() - size.height() + 1)
-        self.tray_menu.exec(QPoint(x, y))
+        self.tray_menu.move(QPoint(x, y))
+        self.tray_menu.show()
+        self.tray_menu.raise_()
+        self.tray_menu.activateWindow()
    
     def _createMenuBar(self):
         # Use regular buttons: their icons and labels render consistently on every
@@ -2591,32 +2631,12 @@ class Window(QMainWindow):
             danger = "#c94343"
 
         menu.setStyleSheet(f"""
-            QMenu#trayContextMenu {{
+            QFrame#trayContextMenu {{
                 background-color: {surface};
                 color: {text};
                 border: 1px solid {border};
                 border-radius: 14px;
-                padding: 6px;
-            }}
-            QMenu#trayContextMenu::item {{
-                color: {text};
-                background: transparent;
-                padding: 7px 14px 7px 12px;
-                margin: 1px 4px;
-                min-height: 20px;
-                border-radius: 8px;
-            }}
-            QMenu#trayContextMenu::item:selected {{
-                color: {text};
-                background-color: {hover};
-            }}
-            QMenu#trayContextMenu::item:disabled {{
-                color: {muted};
-            }}
-            QMenu#trayContextMenu::separator {{
-                height: 1px;
-                background-color: {divider};
-                margin: 4px 12px;
+                padding: 0;
             }}
             QWidget#trayMenuSection, QWidget#trayPolicyRow {{
                 background: transparent;
@@ -2637,7 +2657,7 @@ class Window(QMainWindow):
                 font-weight: 800;
                 padding: 0;
             }}
-            QPushButton#trayPolicyButton {{
+            QPushButton#trayPopupAction, QPushButton#trayPolicyButton {{
                 color: {text};
                 background: transparent;
                 border: none;
@@ -2648,8 +2668,18 @@ class Window(QMainWindow):
                 min-height: 32px;
                 font-size: 9pt;
             }}
+            QPushButton#trayPopupAction:hover,
             QPushButton#trayPolicyButton:hover {{
                 background: {hover};
+            }}
+            QPushButton#trayPopupAction:pressed,
+            QPushButton#trayPolicyButton:pressed {{
+                background: {hover};
+            }}
+            QFrame#trayMenuSeparator {{
+                background: {divider};
+                border: none;
+                max-height: 1px;
             }}
         """)
 
@@ -2658,6 +2688,7 @@ class Window(QMainWindow):
         self.tray_toggle_action.setIcon(
             qta.icon("fa6s.eye" if hidden else "fa6s.eye-slash", color=icon_color)
         )
+        self.tray_toggle_button.setIcon(self.tray_toggle_action.icon())
         proxy_icons = {
             "set": "fa6s.link",
             "unchanged": "fa6s.circle-minus",
@@ -2679,6 +2710,7 @@ class Window(QMainWindow):
         self.tray_exit_action.setIcon(
             qta.icon("fa6s.right-from-bracket", color=danger)
         )
+        self.tray_exit_button.setIcon(self.tray_exit_action.icon())
 
     def _theme_reveal_origin(self):
         """Choose the pointer position as the reveal origin, with a safe fallback."""
