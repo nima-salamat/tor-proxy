@@ -383,7 +383,7 @@ jobs:
         shell: bash
         run: |
           sha256sum TorProxy-Full-Setup-windows-x64.exe > SHA256-TorProxy-Full-Setup.txt
-          cat SHA256SUMS.txt
+          cat SHA256-TorProxy-Full-Setup.txt
 
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
