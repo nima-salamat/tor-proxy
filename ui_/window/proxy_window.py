@@ -2741,6 +2741,7 @@ class ProxyWindow(QWidget):
         # An explicit application exit, however, owns and must stop every child.
         if getattr(self._parent, "_closing", False) and self.tor_service_pool is not None:
             service_ids = self.tor_service_pool.service_ids
+            services_stopped = True
             if service_ids:
                 try:
                     service_results = self.tor_service_pool.stop_all()
@@ -2748,21 +2749,30 @@ class ProxyWindow(QWidget):
                         service_id: error for service_id, error in service_results.items() if error
                     }
                     if service_failures:
+                        services_stopped = False
                         stop_errors.append(
                             "Isolated Tor service shutdown failed: "
                             + "; ".join(f"{key}: {value}" for key, value in service_failures.items())
                         )
                     else:
                         messages.append(f"Stopped {len(service_ids)} isolated Tor service(s).")
-                        try:
-                            self.tor_service_pool.close()
-                        except Exception as monitor_error:
-                            stop_errors.append(
-                                f"Isolated Tor health monitor shutdown failed: {monitor_error}"
-                            )
                 except Exception as exc:
+                    services_stopped = False
                     logger.exception("Error stopping isolated Tor services during application exit.")
                     stop_errors.append(f"Isolated Tor service shutdown failed: {exc}")
+
+            # The monitor is also owned when there are no saved profiles: a
+            # user may have stopped/unregistered the last service before Exit.
+            # Close it whenever all service stops succeeded, including the
+            # empty-pool case. Keep it alive on failure so a retry can inspect
+            # and recover services whose process ownership is still unresolved.
+            if services_stopped:
+                try:
+                    self.tor_service_pool.close()
+                except Exception as monitor_error:
+                    stop_errors.append(
+                        f"Isolated Tor health monitor shutdown failed: {monitor_error}"
+                    )
 
         if stop_errors:
             raise RuntimeError(

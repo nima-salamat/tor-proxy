@@ -4530,3 +4530,20 @@ def test_tor_instance_dashboards_show_persistent_process_identity():
     assert 'process_pid = item.get("pid")' in services_page
     assert 'item.get("process_identity_verified")' in services_page
     assert 'pid_suffix = f" · PID {process_pid} ({identity_label})"' in services_page
+
+
+
+def test_shutdown_closes_empty_isolated_tor_pool_health_monitor():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui_/window/proxy_window.py").read_text(encoding="utf-8")
+    start = source.index(
+        'if getattr(self._parent, "_closing", False) and self.tor_service_pool is not None:'
+    )
+    end = source.index("if stop_errors:", start)
+    shutdown = source[start:end]
+
+    assert "service_ids = self.tor_service_pool.service_ids" in shutdown
+    assert "services_stopped = True" in shutdown
+    assert "if services_stopped:" in shutdown
+    assert "self.tor_service_pool.close()" in shutdown
+    assert shutdown.index("if services_stopped:") < shutdown.index("self.tor_service_pool.close()")
