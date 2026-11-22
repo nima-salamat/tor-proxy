@@ -356,6 +356,53 @@ def test_tor_runner_identity_uses_its_managed_tor_controller(monkeypatch, tmp_pa
     assert runner.request_new_identity() == 7.5
 
 
+def test_new_identity_fans_out_to_every_ready_instance_not_only_healthy_routes(monkeypatch, tmp_path):
+    runner, _config = _runner(monkeypatch, tmp_path, "")
+    calls = []
+    first = _ready_fake_backend(19460)
+    second = _ready_fake_backend(19461)
+    first.request_new_identity = lambda: calls.append(1) or 0.0
+    second.request_new_identity = lambda: calls.append(2) or 0.0
+    runner._backend_managers = [first, second]
+    runner._backend_health = {
+        0: {"healthy": True, "latency_ms": 80.0},
+        1: {"healthy": False, "latency_ms": None},
+    }
+
+    report = runner.request_new_identity_report()
+
+    assert sorted(calls) == [1, 2]
+    assert report["attempted"] == 2
+    assert report["accepted"] == 2
+    assert report["rate_limited"] == []
+    assert report["failed"] == []
+
+
+def test_new_identity_reports_partial_success_rate_limit_and_instance_failure(monkeypatch, tmp_path):
+    runner, _config = _runner(monkeypatch, tmp_path, "")
+    first = _ready_fake_backend(19462)
+    second = _ready_fake_backend(19463)
+    third = _ready_fake_backend(19464)
+    first.request_new_identity = lambda: 0.0
+    second.request_new_identity = lambda: 12.5
+
+    def fail_identity():
+        raise RuntimeError("control port unavailable")
+
+    third.request_new_identity = fail_identity
+    runner._backend_managers = [first, second, third]
+
+    report = runner.request_new_identity_report()
+
+    assert report["attempted"] == 3
+    assert report["accepted"] == 1
+    assert report["rate_limited"] == [
+        {"instance": 2, "status": "rate_limited", "retry_after": 12.5, "error": ""}
+    ]
+    assert report["failed"][0]["instance"] == 3
+    assert "control port unavailable" in report["failed"][0]["error"]
+
+
 def test_tor_runner_stop_does_not_claim_stopped_while_supervisor_is_alive(monkeypatch, tmp_path):
     from torproxy.tor_manager import TorManagerError
 
