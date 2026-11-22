@@ -41,6 +41,7 @@ else()
 
     add_executable(TorProxyLauncher src/bootstrap.cpp)
     target_compile_features(TorProxyLauncher PRIVATE cxx_std_17)
+    target_compile_definitions(TorProxyLauncher PRIVATE _POSIX_C_SOURCE=200809L)
     install(TARGETS TorProxyLauncher RUNTIME DESTINATION .)
 
     qt_add_executable(TorProxyLauncherUI
