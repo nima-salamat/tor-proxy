@@ -1849,6 +1849,10 @@ class Window(QMainWindow):
             # The currentIndexChanged signal invokes the authoritative existing handler.
             combo.setCurrentIndex(index)
         self._sync_tray_system_proxy_actions()
+        QTimer.singleShot(
+            1200,
+            lambda: self._refresh_tray_system_proxy_status_async(force=True),
+        )
 
     def _sync_tray_system_proxy_actions(self, *_args):
         """Keep tray radio actions consistent with the saved Home policy."""
@@ -1949,7 +1953,7 @@ class Window(QMainWindow):
             return
         hidden = self.isHidden() or self.isMinimized()
         self.tray_toggle_action.setText("Show TorProxy" if hidden else "Hide TorProxy")
-        self._refresh_tray_system_proxy_status_async()
+        self._refresh_tray_system_proxy_status_async(force=True)
         self._sync_tray_menu_theme()
         self.tray_menu.ensurePolished()
         size = self.tray_menu.sizeHint()
