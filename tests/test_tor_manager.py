@@ -1158,3 +1158,84 @@ def _capture_tor_error(operation, errors):
         operation()
     except Exception as exc:
         errors.append(exc)
+
+
+
+def test_stop_during_popen_never_leaves_a_late_tor_child(tmp_path, monkeypatch):
+    import threading
+    from types import SimpleNamespace
+
+    executable = tmp_path / ("tor.exe" if os.name == "nt" else "tor")
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    executable.write_text("fake tor", encoding="utf-8")
+    if os.name != "nt":
+        executable.chmod(0o700)
+    manager = TorManager(TorSettings(
+        executable=executable,
+        socks_port=19190,
+        control_port=19191,
+        startup_timeout_seconds=2,
+        data_directory=tmp_path / "tor-state",
+    ))
+
+    entered_popen = threading.Event()
+    release_popen = threading.Event()
+    child = SimpleNamespace(
+        pid=76544,
+        returncode=None,
+        terminate=lambda: setattr(child, "returncode", 0),
+        kill=lambda: setattr(child, "returncode", -9),
+        poll=lambda: child.returncode,
+        wait=lambda timeout=None: child.returncode,
+    )
+    run_calls = []
+
+    def verify_config(*_args, **_kwargs):
+        return SimpleNamespace(returncode=0, stdout="")
+
+    def blocking_popen(*_args, **_kwargs):
+        entered_popen.set()
+        assert release_popen.wait(timeout=3)
+        return child
+
+    manager._run_factory = verify_config
+    manager._popen_factory = blocking_popen
+    manager._persist_process_identity = lambda _pid: None
+
+    start_errors = []
+    stop_errors = []
+
+    def start():
+        try:
+            manager.start()
+        except Exception as exc:
+            start_errors.append(exc)
+
+    def stop():
+        try:
+            manager.stop()
+        except Exception as exc:
+            stop_errors.append(exc)
+
+    starter = threading.Thread(target=start)
+    starter.start()
+    assert entered_popen.wait(timeout=2)
+
+    stopper = threading.Thread(target=stop)
+    stopper.start()
+    deadline = time.monotonic() + 2
+    while not manager._stop_requested.is_set() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert manager._stop_requested.is_set()
+
+    release_popen.set()
+    starter.join(timeout=3)
+    stopper.join(timeout=3)
+    assert not starter.is_alive()
+    assert not stopper.is_alive()
+    assert start_errors
+    assert not stop_errors
+    assert child.returncode is not None
+    assert manager.process is None
+    assert manager.state is TorState.STOPPED
+    assert manager._data_directory_lock_handle is None

@@ -1217,6 +1217,13 @@ class TorManager:
                 self._scope_unit = "torproxy-tor-" + uuid.uuid4().hex[:12] + ".scope"
                 launch_command = [systemd_run, "--user", "--scope", "--unit", self._scope_unit, "--quiet", "--", *launch_command]
             with self._lock:
+                # Stop may have been requested after the earlier preflight check
+                # while Tor configuration was being verified. Recheck under the
+                # same lock used by stop() to snapshot the child reference so a
+                # cancelled start cannot launch after its DataDirectory lock is
+                # released.
+                if cancellation_requested():
+                    raise TorManagerError("Tor startup was cancelled before the child process was launched.")
                 self.process = self._popen_factory(launch_command, **kwargs)
                 launched_process = self.process
             if not self.settings.isolate_in_cgroup:
