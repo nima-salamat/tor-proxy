@@ -813,3 +813,37 @@ def test_developer_runtime_stop_accepts_a_confirmed_stopped_fake_process(hosting
     manager.stop_runtime()
 
     assert manager.runtime_snapshot()["state"] == "stopped"
+
+
+
+def test_developer_runtime_snapshot_does_not_mark_unlaunched_start_as_failed(hosting):
+    manager, _config, tor = hosting
+    tor.state = TorState.STARTING
+    tor.process = None
+
+    snapshot = manager.runtime_snapshot()
+
+    assert snapshot["state"] == "starting"
+    assert snapshot["process_alive"] is False
+    assert tor.state is TorState.STARTING
+
+
+def test_runtime_snapshot_does_not_resurrect_manager_cleared_during_snapshot(hosting, monkeypatch):
+    manager, _config, tor = hosting
+    original_identity = manager._manager_process_identity
+    cleared = threading.Event()
+
+    def clear_during_identity_lookup(current):
+        identity = original_identity(current)
+        with manager._lock:
+            manager._manager = None
+        cleared.set()
+        return identity
+
+    monkeypatch.setattr(manager, "_manager_process_identity", clear_during_identity_lookup)
+
+    snapshot = manager.runtime_snapshot()
+
+    assert cleared.is_set()
+    assert snapshot["state"] == "ready"
+    assert manager.manager is None

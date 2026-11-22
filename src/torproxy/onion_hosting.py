@@ -512,8 +512,9 @@ class OnionHostingManager:
             {"pid": None, "alive": False, "verified": False}
         )
         with self._lock:
-            if manager is not None and self._manager is None:
-                self._manager = manager
+            # _discover_orphaned_manager() registers the manager atomically.
+            # Do not resurrect a manager reference that another thread stopped
+            # and cleared between the snapshot's two lock acquisitions.
             started_at = self._started_at
             message = self._last_status_message
             process = getattr(manager, "process", None) if manager is not None else None
@@ -521,7 +522,10 @@ class OnionHostingManager:
             manager_state = str(manager_state).lower().split(".")[-1]
             process_alive = bool(process_identity.get("alive"))
             process_verified = bool(process_identity.get("verified"))
-            runtime_was_active = manager_state in {"ready", "starting", "bootstrapping", "failed", "stopping"}
+            # During STARTING/BOOTSTRAPPING the child may not have been
+            # launched or its identity record may not yet have been persisted.
+            # Treating that normal window as process death races the start path.
+            runtime_was_active = manager_state in {"ready", "failed", "stopping"}
             if runtime_was_active and (not process_alive or not process_verified):
                 # The Tor child, not the systemd-run wrapper, is authoritative.
                 # Suspend local relay endpoints when it is dead or cannot be
@@ -566,8 +570,15 @@ class OnionHostingManager:
         state = getattr(manager.state, "value", str(manager.state)).lower()
         process = manager.process
         identity = process_identity
-        orphaned = process is None and bool(identity.get("alive")) and bool(identity.get("verified"))
-        identity_unverified = bool(identity.get("alive")) and not bool(identity.get("verified"))
+        startup_in_progress = state in {"starting", "bootstrapping", "stopping"}
+        orphaned = (
+            process is None and bool(identity.get("alive")) and bool(identity.get("verified"))
+            and not startup_in_progress
+        )
+        identity_unverified = (
+            bool(identity.get("alive")) and not bool(identity.get("verified"))
+            and not startup_in_progress
+        )
         if orphaned:
             state = "orphaned"
             message = message or (
