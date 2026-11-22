@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QPushButton,
+    QSizePolicy,
     QToolButton,
     QButtonGroup,
     QFrame,
