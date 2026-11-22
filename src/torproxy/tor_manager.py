@@ -1221,10 +1221,29 @@ class TorManager:
             with self._lock:
                 if self._stop_requests:
                     raise TorManagerError("Tor startup was cancelled because a stop operation is pending.")
-                if self.process is not None and self.process.poll() is None:
-                    if self.state is TorState.READY:
+                identity = self.process_identity_snapshot()
+                if identity.get("alive"):
+                    if self.state is TorState.READY and identity.get("verified"):
+                        # In cgroup mode Popen owns the systemd-run client, not
+                        # Tor itself. The wrapper may have exited while the
+                        # verified Tor child is still serving this instance.
                         return
+                    if not identity.get("verified"):
+                        raise TorManagerError(
+                            "A Tor PID is still alive but its process identity cannot be verified. "
+                            "Stop/reconcile it before attempting another start."
+                        )
                     raise TorManagerError("Tor is already starting or running.")
+
+                # A stale Popen wrapper or process record must be reconciled
+                # before this manager reuses its own DataDirectory lock.
+                if (
+                    self.process is not None
+                    or self._data_directory_lock_handle is not None
+                    or self.process_state_path.exists()
+                ):
+                    self._stop_orphaned_process()
+
                 self._stop_requested.clear()
                 if cancel_event is not None and cancel_event.is_set():
                     raise TorManagerError("Tor startup was cancelled before launch.")

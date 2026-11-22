@@ -1462,3 +1462,66 @@ def test_force_stop_kills_tracked_tor_children_without_graceful_wait(monkeypatch
     assert child.killed is True
     assert child.terminated is False
     assert child.alive is False
+
+
+
+def test_tor_start_is_idempotent_when_verified_child_outlives_systemd_launcher(tmp_path, monkeypatch):
+    manager = TorManager(TorSettings(
+        executable=tmp_path / "tor",
+        data_directory=tmp_path / "tor-state",
+    ))
+    manager.state = TorState.READY
+
+    class ExitedSystemdLauncher:
+        pid = 54321
+
+        def poll(self):
+            return 0
+
+    manager.process = ExitedSystemdLauncher()
+    manager.process_identity_snapshot = lambda: {
+        "pid": 54322,
+        "alive": True,
+        "verified": True,
+    }
+
+    def should_not_start():
+        raise AssertionError("A second Tor process must not be launched")
+
+    monkeypatch.setattr(manager, "_stop_orphaned_process", should_not_start)
+    monkeypatch.setattr(manager, "_acquire_data_directory_lock", should_not_start)
+
+    manager.start()
+
+    assert manager.state is TorState.READY
+
+
+def test_tor_start_refuses_a_live_unverified_pid_without_reusing_data_directory(tmp_path, monkeypatch):
+    manager = TorManager(TorSettings(
+        executable=tmp_path / "tor",
+        data_directory=tmp_path / "tor-state",
+    ))
+    manager.state = TorState.READY
+
+    class ExitedSystemdLauncher:
+        pid = 54331
+
+        def poll(self):
+            return 0
+
+    manager.process = ExitedSystemdLauncher()
+    manager.process_identity_snapshot = lambda: {
+        "pid": 54332,
+        "alive": True,
+        "verified": False,
+        "identity_unverifiable": True,
+    }
+
+    def should_not_reuse():
+        raise AssertionError("An unverified PID must not be replaced")
+
+    monkeypatch.setattr(manager, "_stop_orphaned_process", should_not_reuse)
+    monkeypatch.setattr(manager, "_acquire_data_directory_lock", should_not_reuse)
+
+    with pytest.raises(TorManagerError, match="identity cannot be verified"):
+        manager.start()
