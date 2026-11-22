@@ -1252,7 +1252,7 @@ def test_main_pool_excludes_live_but_unverified_tor_worker(monkeypatch, tmp_path
     runner._backend_statuses = {0: "READY"}
 
     assert runner._process_ready_managers() == []
-    snapshot = runner.pool_health_snapshot()
+    snapshot = runner.pool_health_snapshot
     instance = snapshot["instances"][0]
     assert instance["state"] == "process-identity-unverified"
     assert instance["healthy"] is False
@@ -1287,7 +1287,7 @@ def test_main_pool_does_not_keep_a_stale_ready_health_when_tor_child_exited(monk
     runner._backend_statuses = {0: "READY"}
     runner._backend_health = {0: {"healthy": True, "verified_tor": True}}
 
-    instance = runner.pool_health_snapshot()["instances"][0]
+    instance = runner.pool_health_snapshot["instances"][0]
     assert instance["state"] == "failed"
     assert instance["healthy"] is False
     assert instance["verified_tor"] is False

@@ -1114,10 +1114,12 @@ class TorRunner(QObject):
                 )
                 manager = managers[index]
                 identity_getter = getattr(manager, "process_identity_snapshot", None)
+                identity_check_supported = callable(identity_getter)
                 try:
-                    identity = identity_getter() if callable(identity_getter) else {}
+                    identity = identity_getter() if identity_check_supported else {}
                 except Exception:
-                    identity = {}
+                    identity = {"alive": True, "verified": False}
+                identity_check_available = identity_check_supported and bool(identity)
                 process = getattr(manager, "process", None)
                 process_pid = identity.get("pid") if identity else None
                 if process_pid is None and process is not None:
@@ -1133,11 +1135,13 @@ class TorRunner(QObject):
                 # A READY UI status or a successful earlier egress probe cannot
                 # override a dead/unverified process identity. The systemd-run
                 # wrapper is not the Tor daemon; trust its verified child record.
-                if worker_state in {"ready", "healthy", "ready-checking", "unhealthy"}:
+                if identity_check_available and worker_state in {
+                    "ready", "healthy", "ready-checking", "unhealthy"
+                }:
                     if process_alive and not process_identity_verified:
                         worker_state = "process-identity-unverified"
                         healthy = False
-                    elif not process_alive and identity:
+                    elif not process_alive:
                         worker_state = "failed"
                         healthy = False
 

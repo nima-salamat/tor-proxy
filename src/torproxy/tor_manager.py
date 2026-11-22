@@ -443,7 +443,10 @@ class TorManager:
             if root is None:
                 continue
             try:
-                for child in root.children(recursive=True):
+                children = getattr(root, "children", None)
+                if not callable(children):
+                    continue
+                for child in children(recursive=True):
                     descendants[int(child.pid)] = child
             except psutil.NoSuchProcess:
                 continue
