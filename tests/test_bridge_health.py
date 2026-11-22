@@ -402,3 +402,32 @@ def test_bridge_probe_retains_state_directory_when_tor_stop_cannot_be_confirmed(
 
     assert result is None
     assert len(list(root.iterdir())) == 1
+
+
+
+def test_bridge_check_lock_serializes_probe_cleanup_between_threads(tmp_path):
+    lock_path = tmp_path / "bridge-probes" / ".bridge-health.lock"
+    entered = threading.Event()
+    release = threading.Event()
+    second_entered = threading.Event()
+
+    def first():
+        with bridge_health_module._BridgeCheckLock(lock_path):
+            entered.set()
+            assert release.wait(timeout=3)
+
+    def second():
+        assert entered.wait(timeout=3)
+        with bridge_health_module._BridgeCheckLock(lock_path):
+            second_entered.set()
+
+    first_thread = threading.Thread(target=first)
+    second_thread = threading.Thread(target=second)
+    first_thread.start()
+    second_thread.start()
+    assert entered.wait(timeout=3)
+    assert not second_entered.wait(timeout=0.15)
+    release.set()
+    first_thread.join(timeout=3)
+    second_thread.join(timeout=3)
+    assert second_entered.is_set()

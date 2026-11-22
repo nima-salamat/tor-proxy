@@ -915,3 +915,92 @@ def test_tor_process_identity_is_persisted_and_rejects_reused_pid(tmp_path, monk
     # A recycled numeric PID must not be mistaken for the previous Tor child.
     FakeProcess.created = 105.0
     assert manager.process_identity_snapshot()["alive"] is False
+
+
+
+def test_tor_process_stop_refuses_to_signal_live_pid_when_identity_is_unreadable(tmp_path, monkeypatch):
+    executable = tmp_path / ("tor.exe" if os.name == "nt" else "tor")
+    executable.write_text("fake tor", encoding="utf-8")
+    manager = TorManager(TorSettings(
+        executable=executable,
+        socks_port=19182,
+        control_port=19183,
+        data_directory=tmp_path / "tor-state",
+    ))
+    manager.data_directory.mkdir(parents=True)
+    manager.torrc_path.write_text("SocksPort 19182\\n", encoding="utf-8")
+
+    class OwnedProcess:
+        def __init__(self, _pid):
+            self.pid = 54322
+        def is_running(self):
+            return True
+        def status(self):
+            return "running"
+        def create_time(self):
+            return 100.0
+        def exe(self):
+            return str(executable)
+        def cmdline(self):
+            return [str(executable), "-f", str(manager.torrc_path)]
+
+    monkeypatch.setattr(tor_manager_module.psutil, "Process", OwnedProcess)
+    manager._persist_process_identity(54322)
+
+    class PermissionDeniedProcess:
+        def __init__(self, _pid):
+            self.pid = 54322
+        def is_running(self):
+            return True
+        def create_time(self):
+            return 100.0
+        def status(self):
+            raise tor_manager_module.psutil.AccessDenied(pid=54322)
+        def terminate(self):
+            raise AssertionError("An unverified PID must never be signalled.")
+
+    monkeypatch.setattr(tor_manager_module.psutil, "Process", PermissionDeniedProcess)
+    assert manager.process_identity_snapshot()["identity_unverifiable"] is True
+    with pytest.raises(TorManagerError, match="cannot be verified"):
+        manager._stop_recorded_process()
+    assert manager.process_state_path.is_file()
+
+
+def test_recycled_tor_pid_is_not_terminated_and_stale_record_is_cleared(tmp_path, monkeypatch):
+    executable = tmp_path / ("tor.exe" if os.name == "nt" else "tor")
+    executable.write_text("fake tor", encoding="utf-8")
+    manager = TorManager(TorSettings(
+        executable=executable,
+        socks_port=19184,
+        control_port=19185,
+        data_directory=tmp_path / "tor-state",
+    ))
+    manager.data_directory.mkdir(parents=True)
+    manager.torrc_path.write_text("SocksPort 19184\\n", encoding="utf-8")
+
+    class ReusedProcess:
+        def __init__(self, _pid):
+            self.pid = 54323
+            self.terminated = False
+        def is_running(self):
+            return True
+        def status(self):
+            return "running"
+        def create_time(self):
+            return 100.0
+        def exe(self):
+            return str(executable)
+        def cmdline(self):
+            return [str(executable), "-f", str(manager.torrc_path)]
+        def terminate(self):
+            self.terminated = True
+
+    process = ReusedProcess(54323)
+    monkeypatch.setattr(tor_manager_module.psutil, "Process", lambda _pid: process)
+    manager._persist_process_identity(54323)
+    process.create_time = lambda: 105.0
+
+    manager._stop_recorded_process()
+
+    assert process.terminated is False
+    assert not manager.process_state_path.exists()

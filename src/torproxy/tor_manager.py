@@ -289,14 +289,16 @@ class TorManager:
         try:
             if process.status() == psutil.STATUS_ZOMBIE:
                 return False
-            executable = self._normalized_process_path(process.exe())
-            command = process.cmdline()
+            if self._normalized_process_path(process.exe()) != self._normalized_process_path(record["executable"]):
+                return False
+            if not self._command_uses_torrc(process.cmdline(), record["torrc"]):
+                return False
         except psutil.NoSuchProcess:
             return False
         except (psutil.AccessDenied, psutil.Error, OSError, RuntimeError, ValueError):
             return True
-        # A readable but different executable/torrc is a recycled or unrelated PID,
-        # not a TorProxy process that may be signalled.
+        # If the complete readable identity matches, _recorded_tor_process()
+        # should have returned it. A mismatch is not permission to kill a PID.
         return False
 
     def _persist_process_identity(self, pid: int) -> None:

@@ -8,6 +8,7 @@ import shutil
 import socket
 import threading
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -105,6 +106,52 @@ class _ProbeDirectory:
 
     def __exit__(self, *_args):
         # Deliberately preserve this directory unless manager.stop() succeeded.
+        return False
+
+
+class _BridgeCheckLock:
+    """Cross-process mutex preventing cleanup from deleting another live probe wave."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.handle = None
+
+    def __enter__(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.handle = self.path.open("a+b")
+        if os.name != "nt":
+            os.chmod(self.path, 0o600)
+            import fcntl
+            fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX)
+        else:
+            import msvcrt
+            self.handle.seek(0, os.SEEK_END)
+            if self.handle.tell() == 0:
+                self.handle.write(b"0")
+                self.handle.flush()
+            while True:
+                try:
+                    self.handle.seek(0)
+                    msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    time.sleep(0.05)
+        return self
+
+    def __exit__(self, *_args):
+        if self.handle is None:
+            return False
+        try:
+            self.handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            self.handle.close()
+            self.handle = None
         return False
 
 
@@ -350,7 +397,7 @@ def _probe_single_bridge(
         return None
 
 
-def check_bridges(
+def _check_bridges_locked(
     settings: TorSettings,
     *,
     timeout_seconds: float = DEFAULT_PROBE_TIMEOUT_SECONDS,
@@ -437,3 +484,28 @@ def check_bridges(
     failed = tuple(record for record in unique_records if status_for(record) is False)
     inconclusive = tuple(record for record in unique_records if status_for(record) is None)
     return BridgeHealthResult(original, working, failed, inconclusive, tuple(issues))
+
+
+
+def check_bridges(
+    settings: TorSettings,
+    *,
+    timeout_seconds: float = DEFAULT_PROBE_TIMEOUT_SECONDS,
+    max_workers: int = DEFAULT_MAX_WORKERS,
+    excluded_ports: Iterable[int] = (),
+    cancel_event: threading.Event | None = None,
+    on_result: ProbeCallback | None = None,
+    probe: Callable[..., ProbeStatus] | None = None,
+) -> BridgeHealthResult:
+    """Serialize bridge checks across threads/processes before reconciling probe children."""
+    lock_path = _probe_state_root(settings) / ".bridge-health.lock"
+    with _BridgeCheckLock(lock_path):
+        return _check_bridges_locked(
+            settings,
+            timeout_seconds=timeout_seconds,
+            max_workers=max_workers,
+            excluded_ports=excluded_ports,
+            cancel_event=cancel_event,
+            on_result=on_result,
+            probe=probe,
+        )
