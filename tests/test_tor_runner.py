@@ -753,8 +753,8 @@ def test_primary_pool_fallback_excludes_workers_whose_process_is_not_alive(monke
 
 
 
-def test_internal_worker_dns_port_allocation_retries_tcp_conflicts(monkeypatch):
-    allocated_udp_ports = iter((62001, 62002))
+def test_internal_worker_dns_port_allocation_retries_udp_conflicts(monkeypatch):
+    allocated_tcp_ports = iter((62001, 62002))
     socket_calls = []
 
     class FakeSocket:
@@ -772,11 +772,11 @@ def test_internal_worker_dns_port_allocation_retries_tcp_conflicts(monkeypatch):
             _host, requested_port = address
             socket_calls.append((self.socket_type, requested_port))
             if requested_port == 0:
-                self.port = next(allocated_udp_ports)
+                self.port = next(allocated_tcp_ports)
                 return
             self.port = requested_port
-            if self.socket_type == tor.socket.SOCK_STREAM and requested_port == 62001:
-                raise OSError("TCP port is already in use")
+            if self.socket_type == tor.socket.SOCK_DGRAM and requested_port == 62001:
+                raise OSError("UDP port is excluded or already in use")
 
         def getsockname(self):
             return ("127.0.0.1", self.port)
@@ -789,14 +789,14 @@ def test_internal_worker_dns_port_allocation_retries_tcp_conflicts(monkeypatch):
     assert selected == 62002
     assert reserved == {62002}
     assert socket_calls == [
-        (tor.socket.SOCK_DGRAM, 0),
-        (tor.socket.SOCK_STREAM, 62001),
-        (tor.socket.SOCK_DGRAM, 0),
-        (tor.socket.SOCK_STREAM, 62002),
+        (tor.socket.SOCK_STREAM, 0),
+        (tor.socket.SOCK_DGRAM, 62001),
+        (tor.socket.SOCK_STREAM, 0),
+        (tor.socket.SOCK_DGRAM, 62002),
     ]
 
 
-def test_internal_worker_dns_port_allocation_reports_both_protocol_failures(monkeypatch):
+def test_internal_worker_dns_port_allocation_reports_tcp_bind_failures(monkeypatch):
     class FakeSocket:
         def __init__(self, _family, socket_type):
             self.socket_type = socket_type
@@ -816,9 +816,44 @@ def test_internal_worker_dns_port_allocation_reports_both_protocol_failures(monk
         tor.TorRunner._allocate_local_port(set(), udp=True)
 
     message = str(caught.value)
+    assert "UDP bind failures: 0" in message
+    assert "TCP bind failures: 64" in message
+    assert "simulated" in message
+
+
+def test_internal_worker_dns_port_allocation_reports_udp_bind_failures(monkeypatch):
+    allocated_tcp_ports = iter(range(62100, 62164))
+
+    class FakeSocket:
+        def __init__(self, _family, socket_type):
+            self.socket_type = socket_type
+            self.port = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def bind(self, address):
+            _host, requested_port = address
+            if self.socket_type == tor.socket.SOCK_STREAM:
+                self.port = next(allocated_tcp_ports)
+                return
+            raise OSError(10013, "Access to the socket was denied")
+
+        def getsockname(self):
+            return ("127.0.0.1", self.port)
+
+    monkeypatch.setattr(tor.socket, "socket", FakeSocket)
+
+    with pytest.raises(tor.TorManagerError) as caught:
+        tor.TorRunner._allocate_local_port(set(), udp=True)
+
+    message = str(caught.value)
     assert "UDP bind failures: 64" in message
     assert "TCP bind failures: 0" in message
-    assert "simulated" in message
+    assert "10013" in message
 
 
 def test_primary_pool_allocates_a_dual_protocol_dns_port_only_when_requested(monkeypatch, tmp_path):

@@ -4,6 +4,8 @@ All notable changes are recorded here. Dates and release numbers are added only 
 
 ## Unreleased
 
+- Fixed Windows primary Tor pool startup when the OS chooses a UDP ephemeral port that is excluded for TCP. Dual-protocol worker DNSPort allocation now selects a TCP-available candidate first and verifies the same port over UDP while the TCP reservation is held.
+
 ## v1.6.0 — 2026-11-22
 
 ### Desktop experience

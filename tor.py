@@ -430,24 +430,25 @@ class TorRunner(QObject):
         last_error = None
 
         for _attempt in range(64):
-            failure_stage = "udp" if udp else "tcp"
+            failure_stage = "tcp"
             try:
                 if udp:
-                    # Ask the OS for a UDP ephemeral port first. TCP and UDP
-                    # ephemeral ranges/exclusions can differ on Windows, so a
-                    # TCP-selected port is not guaranteed to be bindable as UDP.
-                    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp_probe:
-                        udp_probe.bind(("127.0.0.1", 0))
-                        port = int(udp_probe.getsockname()[1])
+                    # Select from the TCP ephemeral range first. On Windows,
+                    # UDP and TCP exclusions are independent: a UDP-selected
+                    # port can be excluded for TCP and fail with WinError 10013.
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp_probe:
+                        tcp_probe.bind(("127.0.0.1", 0))
+                        port = int(tcp_probe.getsockname()[1])
                         if port in reserved:
                             reserved_collisions += 1
                             continue
 
-                        # Tor DNSPort may listen on both protocols at the same
-                        # numeric port. Keep UDP bound while validating TCP.
-                        failure_stage = "tcp"
-                        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp_probe:
-                            tcp_probe.bind(("127.0.0.1", port))
+                        # Tor DNSPort uses the same numeric port for both
+                        # protocols. Keep TCP reserved while checking UDP so
+                        # the OS cannot hand this candidate to another process.
+                        failure_stage = "udp"
+                        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp_probe:
+                            udp_probe.bind(("127.0.0.1", port))
                         reserved.add(port)
                         return port
 
