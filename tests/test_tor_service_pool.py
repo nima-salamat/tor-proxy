@@ -553,9 +553,12 @@ def test_verified_previous_session_process_is_reported_as_orphaned_and_can_be_st
     assert status["process_alive"] is True
     assert status["process_identity_verified"] is True
     assert status["network_healthy"] is False
+    with pytest.raises(TorServicePoolError, match="still active"):
+        pool.unregister("leftover")
 
     pool.stop_service("leftover")
     reconciled = pool.status()["leftover"]
     assert reconciled["state"] == "stopped"
     assert reconciled["process_alive"] is False
+    pool.unregister("leftover")
     pool.close()

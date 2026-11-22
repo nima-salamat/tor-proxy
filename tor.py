@@ -359,12 +359,11 @@ class TorRunner(QObject):
             stopping = self._stopping.is_set()
         if stopping:
             return
-        # Retire the old collector before opening another ControlPort connection.
-        # If it is still draining, retain its reference and skip the replacement.
         if previous is not None:
             try:
                 previous.stop()
             except Exception:
+                # Do not hide the old collector or create a duplicate monitor.
                 logger.warning(
                     "Could not stop the previous Tor event monitor for instance %s; "
                     "the replacement monitor was not started.",
@@ -397,10 +396,11 @@ class TorRunner(QObject):
                 type(exc).__name__,
             )
             return
+
         with self._backend_lock:
             self._backend_event_monitors[index] = monitor
-            install = not self._stopping.is_set()
-        if not install:
+            stopping = self._stopping.is_set()
+        if stopping:
             self._stop_backend_event_monitor(index)
 
     def _stop_backend_event_monitor(self, index: int) -> None:

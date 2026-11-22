@@ -18,6 +18,7 @@ from .paths import user_directories
 from .tor_manager import TorManager, TorSettings
 
 LOGGER = logging.getLogger(__name__)
+_BRIDGE_CHECK_THREAD_LOCK = threading.Lock()
 DEFAULT_PROBE_TIMEOUT_SECONDS = 30.0
 DEFAULT_MAX_WORKERS = 8
 MAX_BRIDGE_PROBE_WORKERS = 8
@@ -117,41 +118,53 @@ class _BridgeCheckLock:
         self.handle = None
 
     def __enter__(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.handle = self.path.open("a+b")
-        if os.name != "nt":
-            os.chmod(self.path, 0o600)
-            import fcntl
-            fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX)
-        else:
-            import msvcrt
-            self.handle.seek(0, os.SEEK_END)
-            if self.handle.tell() == 0:
-                self.handle.write(b"0")
-                self.handle.flush()
-            while True:
-                try:
-                    self.handle.seek(0)
-                    msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
-                    break
-                except OSError:
-                    time.sleep(0.05)
-        return self
+        # Windows byte-range locks may be shared by threads in the same process;
+        # this local mutex makes the same-process rule explicit on every OS.
+        _BRIDGE_CHECK_THREAD_LOCK.acquire()
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.handle = self.path.open("a+b")
+            if os.name != "nt":
+                os.chmod(self.path, 0o600)
+                import fcntl
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX)
+            else:
+                import msvcrt
+                self.handle.seek(0, os.SEEK_END)
+                if self.handle.tell() == 0:
+                    self.handle.write(b"0")
+                    self.handle.flush()
+                while True:
+                    try:
+                        self.handle.seek(0)
+                        msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
+                        break
+                    except OSError:
+                        time.sleep(0.05)
+            return self
+        except Exception:
+            if self.handle is not None:
+                self.handle.close()
+                self.handle = None
+            _BRIDGE_CHECK_THREAD_LOCK.release()
+            raise
 
     def __exit__(self, *_args):
-        if self.handle is None:
-            return False
         try:
-            self.handle.seek(0)
-            if os.name == "nt":
-                import msvcrt
-                msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+            if self.handle is not None:
+                try:
+                    self.handle.seek(0)
+                    if os.name == "nt":
+                        import msvcrt
+                        msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
+                    else:
+                        import fcntl
+                        fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+                finally:
+                    self.handle.close()
+                    self.handle = None
         finally:
-            self.handle.close()
-            self.handle = None
+            _BRIDGE_CHECK_THREAD_LOCK.release()
         return False
 
 

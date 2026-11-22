@@ -136,6 +136,15 @@ class TorServicePool:
 
     @staticmethod
     def _process_is_alive(manager: TorManager) -> bool:
+        identity_getter = getattr(manager, "process_identity_snapshot", None)
+        if callable(identity_getter):
+            try:
+                identity = identity_getter()
+                if bool(identity.get("alive")):
+                    return True
+            except Exception:
+                # A failed identity check is not evidence that the child exited.
+                return True
         process = getattr(manager, "process", None)
         try:
             return process is not None and process.poll() is None

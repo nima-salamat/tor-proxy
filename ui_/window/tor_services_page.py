@@ -1715,6 +1715,8 @@ class TorServicesPage(QWidget):
             return "Tor network unavailable · " + detail
         if health == "orphaned":
             return "A verified Tor process survived the previous TorProxy session · Stop it to reconcile ownership."
+        if health == "identity_unverified":
+            return "A saved Tor PID is alive but its identity cannot be verified · it will not be signalled or reused."
         if health == "checking":
             return "Checking real Tor network connectivity…"
         if health == "stopped":
@@ -1780,6 +1782,12 @@ class TorServicesPage(QWidget):
                 service_state = "failed"
             elif manager_state == "orphaned":
                 state_label.setText("PREVIOUS SESSION PROCESS · STOP TO RECONCILE")
+                service_state = "failed"
+            elif manager_state == "process-identity-unverified":
+                state_label.setText("PROCESS IDENTITY UNVERIFIED · MANUAL INSPECTION")
+                service_state = "failed"
+            elif manager_state == "process-identity-unverified":
+                state_label.setText("PROCESS IDENTITY UNVERIFIED · MANUAL INSPECTION")
                 service_state = "failed"
             else:
                 state_label.setText(manager_state.replace("_", " ").upper())
@@ -1872,7 +1880,10 @@ class TorServicesPage(QWidget):
         # A failed service must be explicitly stopped/reconciled before restart.
         # This avoids retrying against a child that may still own its ports or data lock.
         can_start = state in {"stopped", "not registered", "needs attention"}
-        can_stop = state not in {"stopped", "bundle unavailable", "not registered", "needs attention"}
+        can_stop = state not in {
+            "stopped", "bundle unavailable", "not registered", "needs attention",
+            "process-identity-unverified",
+        }
         if pool := self._pool():
             can_start = can_start and not is_busy
 
