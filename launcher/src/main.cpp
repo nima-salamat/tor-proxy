@@ -189,7 +189,14 @@ public:
             return;
         }
         if (m_startedOnce) {
-            stopCurrentProcess();
+            m_errorShown = false;
+            if (!stopCurrentProcess()) {
+                showError(QStringLiteral(
+                    "The previous TorProxy startup process is still terminating. "
+                    "Wait for the operating system to finish stopping it, then retry."
+                ));
+                return;
+            }
             if (!m_statusPath.isEmpty()) {
                 QFile::remove(m_statusPath);
             }
@@ -215,7 +222,12 @@ public:
 
         // Keep a normal QProcess fallback for systems where private IPC or
         // prelaunch setup failed before the Qt runtime was available.
-        stopCurrentProcess();
+        if (!stopCurrentProcess()) {
+            showError(QStringLiteral(
+                "A previous TorProxy process is still terminating; a second instance was not started."
+            ));
+            return;
+        }
         const QString executable = mainApplicationPath();
         const QFileInfo executableInfo(executable);
         if (!executableInfo.isFile() || !executableInfo.isExecutable()) {
@@ -471,7 +483,7 @@ private:
         m_splash->showStartupError(fullMessage, m_logPath);
     }
 
-    void stopCurrentProcess() {
+    bool stopCurrentProcess() {
         m_timeout.stop();
         m_statusPoll.stop();
         if (m_process) {
@@ -479,7 +491,11 @@ private:
                 m_process->terminate();
                 if (!m_process->waitForFinished(1600)) {
                     m_process->kill();
-                    m_process->waitForFinished(1600);
+                    if (!m_process->waitForFinished(1600)) {
+                        // Keep the QProcess object so a retry can continue to
+                        // supervise the same child instead of starting a duplicate.
+                        return false;
+                    }
                 }
             }
             delete m_process;
@@ -504,11 +520,30 @@ private:
             }
             if (!reaped) {
                 kill(child, SIGKILL);
-                while (waitpid(child, &childStatus, 0) < 0 && errno == EINTR) {}
+                elapsed.restart();
+                while (elapsed.elapsed() < 1500) {
+                    const pid_t result = waitpid(child, &childStatus, WNOHANG);
+                    if (result == child || (result < 0 && errno == ECHILD)) {
+                        reaped = true;
+                        break;
+                    }
+                    if (result < 0 && errno != EINTR) break;
+                    QThread::msleep(10);
+                }
+            }
+            if (!reaped) {
+                // Never use a blocking waitpid() on the launcher's GUI thread.
+                // Keep the PID so the next retry can re-check the same child.
+                QFile log(m_logPath);
+                if (log.open(QIODevice::WriteOnly | QIODevice::Append)) {
+                    log.write("Launcher: startup child did not exit within the bounded shutdown window.\\n");
+                }
+                return false;
             }
             m_prestartedPid = -1;
         }
         if (!m_statusPath.isEmpty()) QFile::remove(m_statusPath);
+        return true;
     }
 
     void stopAndQuit() {
