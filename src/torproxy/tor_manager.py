@@ -275,7 +275,7 @@ class TorManager:
             process = psutil.Process(int(record["pid"]))
             if not process.is_running() or process.status() == psutil.STATUS_ZOMBIE:
                 return None
-            if abs(float(process.create_time()) - float(record["create_time"])) > 0.25:
+            if abs(float(process.create_time()) - float(record["create_time"])) > 0.01:
                 return None
             executable = self._normalized_process_path(process.exe())
             if executable != self._normalized_process_path(record["executable"]):
@@ -287,7 +287,7 @@ class TorManager:
             return None
 
     def _process_identity_unverifiable(self) -> bool:
-        """Return true when a saved PID is live but OS permissions block ownership checks."""
+        """Return true when a saved PID is live but its complete identity does not match."""
         record = self._read_process_identity()
         if record is None:
             return False
@@ -300,22 +300,22 @@ class TorManager:
             return False
         except (psutil.AccessDenied, psutil.Error, OSError):
             return True
-        if abs(created - float(record["create_time"])) > 0.25:
-            return False
+        # A PID can be recycled quickly. A live process with a different start
+        # time is a conflict, not an expired record that can be discarded.
+        if abs(created - float(record["create_time"])) > 0.01:
+            return True
         try:
             if process.status() == psutil.STATUS_ZOMBIE:
                 return False
             if self._normalized_process_path(process.exe()) != self._normalized_process_path(record["executable"]):
-                return False
+                return True
             if not self._command_uses_torrc(process.cmdline(), record["torrc"]):
-                return False
+                return True
         except psutil.NoSuchProcess:
             return False
         except (psutil.AccessDenied, psutil.Error, OSError, RuntimeError, ValueError):
             return True
-        # If the complete readable identity matches, _recorded_tor_process()
-        # should have returned it. A mismatch is not permission to kill a PID.
-        return False
+        return self._recorded_tor_process() is None
 
     def _persist_process_identity(self, pid: int) -> None:
         """Atomically persist an independently verified Tor child identity for crash recovery."""
@@ -432,8 +432,8 @@ class TorManager:
             if self._process_identity_unverifiable():
                 record = self._read_process_identity() or {}
                 raise TorManagerError(
-                    f"Saved Tor PID {record.get('pid')} is alive but its identity cannot be verified with current permissions; "
-                    "the process was not touched and its ownership record was retained."
+                    f"Saved Tor PID {record.get('pid')} is still alive but its process identity differs or cannot be verified; "
+                    "refusing to signal it and retaining the ownership record."
                 )
             self._clear_process_identity()
             return
@@ -509,49 +509,54 @@ class TorManager:
                 self._release_data_directory_lock()
 
     def _stop_stale_managed_tor_processes(self) -> None:
-        """Reap Tor children left behind by an exited TorProxy UI, but only for our exact torrc."""
-        target_torrc = os.path.normcase(str(self.torrc_path.resolve()))
-        matching = []
-        for process in psutil.process_iter(["pid", "name", "cmdline"]):
-            try:
-                info = process.info
-                if int(info.get("pid") or 0) == os.getpid():
+        """Reap a verified saved child; use torrc matching only for legacy sessions."""
+        saved_identity = self._read_process_identity()
+        if saved_identity is not None:
+            recorded = self._recorded_tor_process()
+            if recorded is None:
+                if self._process_identity_unverifiable():
+                    raise TorManagerError(
+                        f"Saved Tor PID {saved_identity.get('pid')} is still alive but its complete identity "
+                        "does not match or cannot be inspected. Refusing to scan by torrc or terminate another process."
+                    )
+                # The saved PID exited. Another process using the same torrc is
+                # not automatically ours and must never be killed by fallback.
+                self._clear_process_identity()
+                return
+            matching = [recorded]
+        else:
+            # Older releases had no process identity record. Preserve their
+            # recovery path, scoped to TorProxy's private exact torrc path.
+            target_torrc = os.path.normcase(str(self.torrc_path.resolve()))
+            matching = []
+            for process in psutil.process_iter(["pid", "name", "cmdline"]):
+                try:
+                    info = process.info
+                    if int(info.get("pid") or 0) == os.getpid():
+                        continue
+                    name = str(info.get("name") or "").casefold()
+                    command = info.get("cmdline") or []
+                    executable_name = Path(str(command[0])).name.casefold() if command else ""
+                    if name not in {"tor", "tor.exe"} and executable_name not in {"tor", "tor.exe"}:
+                        continue
+                    uses_managed_torrc = any(
+                        argument
+                        and os.path.normcase(str(Path(str(argument).strip('"')).resolve())) == target_torrc
+                        for argument in command[1:]
+                    )
+                    if uses_managed_torrc:
+                        matching.append(process)
+                except (psutil.NoSuchProcess, psutil.ZombieProcess):
                     continue
-                name = str(info.get("name") or "").casefold()
-                command = info.get("cmdline") or []
-                executable_name = Path(str(command[0])).name.casefold() if command else ""
-                if name not in {"tor", "tor.exe"} and executable_name not in {"tor", "tor.exe"}:
-                    continue
-                # The per-user torrc path is TorProxy's ownership marker. Keep
-                # this check independent of the selected bundle version so a child
-                # from an older Expert Bundle can still be reaped after an update.
-                uses_managed_torrc = any(
-                    argument
-                    and os.path.normcase(str(Path(str(argument).strip('"')).resolve())) == target_torrc
-                    for argument in command[1:]
-                )
-                if uses_managed_torrc:
-                    matching.append(process)
-            except (psutil.NoSuchProcess, psutil.ZombieProcess):
-                continue
-            except psutil.Error:
-                LOGGER.debug("Could not inspect a running process while checking TorProxy's torrc.", exc_info=True)
-            except (OSError, ValueError, TypeError):
-                LOGGER.debug("Could not normalize a process command line while checking TorProxy's torrc.", exc_info=True)
+                except psutil.Error:
+                    LOGGER.debug("Could not inspect a running process while checking TorProxy's torrc.", exc_info=True)
+                except (OSError, ValueError, TypeError):
+                    LOGGER.debug("Could not normalize a process command line while checking TorProxy's torrc.", exc_info=True)
 
-        recorded = self._recorded_tor_process()
-        if recorded is not None and all(existing.pid != recorded.pid for existing in matching):
-            matching.append(recorded)
-        matching = list({process.pid: process for process in matching}.values())
-        if not matching:
-            if self._process_identity_unverifiable():
-                record = self._read_process_identity() or {}
-                raise TorManagerError(
-                    f"Saved Tor PID {record.get('pid')} is live but cannot be inspected; "
-                    "the process was not terminated and its ownership record was retained."
-                )
-            self._clear_process_identity()
-            return
+            matching = list({process.pid: process for process in matching}.values())
+            if not matching:
+                return
+
         process_ids = [process.pid for process in matching]
         LOGGER.warning(
             "Found stale Tor process(es) %s still using TorProxy's dedicated torrc; stopping them "

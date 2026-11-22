@@ -328,7 +328,7 @@ def _process_matches(state: dict[str, Any]) -> psutil.Process | None:
         process = psutil.Process(pid)
         if not process.is_running() or process.status() == psutil.STATUS_ZOMBIE:
             return None
-        if abs(process.create_time() - expected_created) > 2.0:
+        if abs(process.create_time() - expected_created) > 0.01:
             return None
         actual_exe = os.path.normcase(str(Path(process.exe()).resolve()))
         if actual_exe != expected_exe:
@@ -1537,7 +1537,7 @@ def _stop_failed_sing_box_launch(
             record = None
     if record is not None:
         try:
-            _atomic_json(state_path, record, mode=0o600)
+            _atomic_json(state_path, record, mode=0o644)
         except OSError:
             logger.exception("Could not preserve the emergency sing-box identity record.")
             try:
@@ -1551,7 +1551,7 @@ def _stop_failed_sing_box_launch(
                     handle.flush()
                     os.fsync(handle.fileno())
                 if os.name != "nt":
-                    state_path.chmod(0o600)
+                    state_path.chmod(0o644)
             except OSError:
                 logger.exception("Could not write the emergency sing-box process record.")
 
@@ -1588,7 +1588,9 @@ def _persist_sing_box_process_identity(
             "sha256": digest,
         }
         state_path.parent.mkdir(parents=True, exist_ok=True)
-        _atomic_json(state_path, record, mode=0o600)
+        # This non-secret identity record lives in the user's private (0700)
+        # state directory. Keep it readable by the unprivileged desktop UI.
+        _atomic_json(state_path, record, mode=0o644)
         return record
     except Exception as exc:
         try:

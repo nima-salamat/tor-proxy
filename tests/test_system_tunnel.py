@@ -907,7 +907,7 @@ def test_helper_persists_process_identity_before_waiting_for_the_tun_adapter():
     wait_for_interface = source.index("while time.monotonic() < deadline")
 
     assert record_write < wait_for_interface
-    assert "mode=0o600" in inspect.getsource(system_tunnel._persist_sing_box_process_identity)
+    assert "mode=0o644" in inspect.getsource(system_tunnel._persist_sing_box_process_identity)
 
 def test_stop_removes_corrupt_state_record_only_when_no_tun_adapter_exists(tmp_path, monkeypatch):
     state_path = tmp_path / "tunnel-state.json"
@@ -1112,3 +1112,63 @@ def test_failed_sing_box_launch_escalates_to_kill_when_terminate_errors(tmp_path
     assert child.kill_calls == 1
     assert child.poll() is not None
     assert not state_path.exists()
+
+
+
+def test_sing_box_process_identity_file_is_readable_by_the_unprivileged_ui(tmp_path, monkeypatch):
+    state_path = tmp_path / "state" / "sing-box-process.json"
+    engine = tmp_path / "engine" / "sing-box"
+    config_path = tmp_path / "state" / "sing-box.json"
+
+    class FakePsutilProcess:
+        def create_time(self):
+            return 123.456
+
+    class FakeChild:
+        pid = 32192
+
+    monkeypatch.setattr(system_tunnel.psutil, "Process", lambda _pid: FakePsutilProcess())
+    record = system_tunnel._persist_sing_box_process_identity(
+        FakeChild(),
+        engine,
+        config_path,
+        system_tunnel.TUN_INTERFACE_LINUX,
+        "b" * 64,
+        state_path,
+    )
+
+    assert record["pid"] == 32192
+    assert system_tunnel._read_json(state_path)["pid"] == 32192
+    if os.name != "nt":
+        assert state_path.stat().st_mode & 0o777 == 0o644
+
+
+def test_sing_box_process_identity_rejects_a_reused_pid_with_matching_image_and_config(tmp_path, monkeypatch):
+    engine = tmp_path / "sing-box"
+    config = tmp_path / "sing-box.json"
+
+    class FakeProcess:
+        def is_running(self):
+            return True
+
+        def status(self):
+            return "running"
+
+        def create_time(self):
+            return 100.5
+
+        def exe(self):
+            return str(engine)
+
+        def cmdline(self):
+            return ["sing-box", "run", "-c", str(config)]
+
+    monkeypatch.setattr(system_tunnel.psutil, "Process", lambda _pid: FakeProcess())
+    state = {
+        "pid": 44123,
+        "create_time": 100.0,
+        "engine": str(engine),
+        "config": str(config),
+    }
+
+    assert system_tunnel._process_matches(state) is None

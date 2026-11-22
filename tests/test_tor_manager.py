@@ -915,7 +915,10 @@ def test_tor_process_identity_is_persisted_and_rejects_reused_pid(tmp_path, monk
 
     # A recycled numeric PID must not be mistaken for the previous Tor child.
     FakeProcess.created = 105.0
-    assert manager.process_identity_snapshot()["alive"] is False
+    identity = manager.process_identity_snapshot()
+    assert identity["alive"] is True
+    assert identity["verified"] is False
+    assert identity["identity_unverifiable"] is True
 
 
 
@@ -1258,3 +1261,62 @@ def test_tor_start_is_rejected_while_a_stop_request_is_in_progress(tmp_path, mon
 
     assert manager.process is None
     assert manager._stop_requests == 1
+
+
+
+def test_tor_pid_reuse_never_falls_back_to_torrc_process_scan(tmp_path, monkeypatch):
+    executable = tmp_path / ("tor.exe" if os.name == "nt" else "tor")
+    executable.write_text("fake tor", encoding="utf-8")
+    manager = TorManager(TorSettings(
+        executable=executable,
+        socks_port=19182,
+        control_port=19183,
+        data_directory=tmp_path / "tor-state",
+    ))
+    manager.data_directory.mkdir(parents=True)
+    manager.torrc_path.write_text("SocksPort 19182\\n", encoding="utf-8")
+
+    class FakeProcess:
+        created = 100.0
+
+        def __init__(self, pid):
+            self.pid = pid
+
+        def is_running(self):
+            return True
+
+        def status(self):
+            return "running"
+
+        def create_time(self):
+            return self.created
+
+        def exe(self):
+            return str(executable)
+
+        def cmdline(self):
+            return [str(executable), "-f", str(manager.torrc_path)]
+
+        def terminate(self):
+            raise AssertionError("A PID-reused process must never be terminated")
+
+    monkeypatch.setattr(tor_manager_module.psutil, "Process", FakeProcess)
+    manager._persist_process_identity(54322)
+    FakeProcess.created = 105.0
+
+    def forbidden_scan(*_args, **_kwargs):
+        raise AssertionError("A saved PID conflict must not trigger the legacy torrc scan")
+
+    monkeypatch.setattr(tor_manager_module.psutil, "process_iter", forbidden_scan)
+
+    identity = manager.process_identity_snapshot()
+    assert identity["alive"] is True
+    assert identity["verified"] is False
+    assert identity["identity_unverifiable"] is True
+
+    with pytest.raises(TorManagerError, match="complete identity"):
+        manager._stop_stale_managed_tor_processes()
+    with pytest.raises(TorManagerError, match="complete identity"):
+        manager._stop_orphaned_process()
+    assert manager._data_directory_lock_handle is not None
+    manager._release_data_directory_lock()
