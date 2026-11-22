@@ -915,32 +915,28 @@ def test_helper_persists_process_identity_before_waiting_for_the_tun_adapter():
     assert record_write < wait_for_interface
     assert "mode=0o644" in inspect.getsource(system_tunnel._persist_sing_box_process_identity)
 
-def test_stop_removes_corrupt_state_record_only_when_no_tun_adapter_exists(tmp_path, monkeypatch):
+def test_stop_retains_corrupt_state_record_even_when_no_tun_adapter_exists(tmp_path, monkeypatch):
     state_path = tmp_path / "tunnel-state.json"
     state_path.write_text("{corrupt", encoding="utf-8")
     monkeypatch.setattr(system_tunnel, "_interface_exists", lambda _name: False)
 
-    result = system_tunnel._helper_stop(state_path, "torproxy-tun")
+    with pytest.raises(SystemTunnelError, match="unreadable"):
+        system_tunnel._helper_stop(state_path, "torproxy-tun")
 
-    assert result["ok"] is True
-    assert result["active"] is False
-    assert "unreadable stale tunnel record" in result["detail"]
-    assert not state_path.exists()
+    assert state_path.exists()
 
 
 
-def test_stop_removes_malformed_record_only_when_no_process_or_tun_adapter_exists(tmp_path, monkeypatch):
+def test_stop_retains_malformed_record_without_a_verifiable_pid(tmp_path, monkeypatch):
     state_path = tmp_path / "tunnel-state.json"
     state_path.write_text(json.dumps({"unexpected": "no saved PID"}), encoding="utf-8")
     monkeypatch.setattr(system_tunnel, "_process_matches", lambda _state: None)
-    monkeypatch.setattr(system_tunnel.psutil, "pid_exists", lambda _pid: False)
     monkeypatch.setattr(system_tunnel, "_interface_exists", lambda _name: False)
 
-    result = system_tunnel._helper_stop(state_path, "torproxy-tun")
+    with pytest.raises(SystemTunnelError, match="no valid PID"):
+        system_tunnel._helper_stop(state_path, "torproxy-tun")
 
-    assert result["ok"] is True
-    assert "malformed tunnel record" in result["detail"]
-    assert not state_path.exists()
+    assert state_path.exists()
 
 
 def test_stop_retains_malformed_record_when_tun_adapter_is_still_present(tmp_path, monkeypatch):
@@ -1320,3 +1316,29 @@ def test_privileged_helper_rejects_an_unowned_or_symlinked_root(tmp_path, monkey
     args.data_root = str(symlink)
     with pytest.raises(SystemTunnelError, match="unsafe data directory"):
         system_tunnel._validate_helper_paths(args)
+
+
+
+def test_status_marks_corrupt_process_record_unverified_without_an_adapter(tmp_path, monkeypatch):
+    manager = _manager(tmp_path)
+    manager.process_state_path.parent.mkdir(parents=True)
+    manager.process_state_path.write_text("{corrupt", encoding="utf-8")
+    monkeypatch.setattr(system_tunnel, "_interface_exists", lambda _name: False)
+
+    status = manager.status()
+
+    assert status["active"] is False
+    assert status["verified"] is False
+    assert "unreadable" in status["detail"]
+
+
+
+def test_helper_start_refuses_corrupt_process_record_before_launch():
+    # Pin the lifecycle guard independently from bundle/config validation.
+    import inspect
+
+    source = inspect.getsource(system_tunnel._helper_start)
+    malformed_guard = source.index('if state_path.exists() and (')
+    spawn = source.index('process = subprocess.Popen(')
+    assert malformed_guard < spawn
+    assert "refusing to start another tunnel instance" in source[malformed_guard:spawn]

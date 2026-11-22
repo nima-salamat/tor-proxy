@@ -1137,6 +1137,13 @@ class SystemTunnelManager:
     def status(self) -> dict[str, Any]:
         state = _read_json(self.process_state_path)
         if not state:
+            if self.process_state_path.exists():
+                detail = (
+                    "A TUN adapter exists but its saved sing-box identity record is unreadable."
+                    if _interface_exists(self.interface_name)
+                    else "The saved sing-box identity record is unreadable; refusing to assume its process has exited."
+                )
+                return {"active": False, "verified": False, "detail": detail}
             if _interface_exists(self.interface_name):
                 return {
                     "active": False,
@@ -1844,6 +1851,18 @@ def _helper_start(args: Any) -> dict[str, Any]:
         raise SystemTunnelError("The privileged helper rejected an unexpected direct-route executable.")
 
     state = _read_json(state_path)
+    if state_path.exists() and (
+        not isinstance(state, dict)
+        or type(state.get("pid")) is not int
+        or int(state.get("pid", 0)) <= 0
+    ):
+        # A broken record may still describe a live process which has not yet
+        # created the TUN interface. Never overwrite it by launching a second
+        # sing-box child that could race the first child for routes/listeners.
+        raise SystemTunnelError(
+            "The existing sing-box process identity record is malformed or unreadable; "
+            "refusing to start another tunnel instance until it is inspected."
+        )
     if state:
         existing = _process_matches(state)
         if existing is not None:
@@ -2050,12 +2069,9 @@ def _helper_stop(state_path: Path, interface_name: str) -> dict[str, Any]:
                 "The helper refused to claim that the system routes were restored."
             )
         if state_path.exists():
-            state_path.unlink(missing_ok=True)
-            return {
-                "ok": True,
-                "active": False,
-                "detail": "Removed an unreadable stale tunnel record; no TUN interface or process was present.",
-            }
+            raise SystemTunnelError(
+                "The saved sing-box process identity record is unreadable; refusing to delete it or claim the tunnel is stopped."
+            )
         return {"ok": True, "active": False, "detail": "No system tunnel process or TUN interface is recorded."}
     process = _process_matches(state)
     if process is None:
@@ -2063,7 +2079,11 @@ def _helper_stop(state_path: Path, interface_name: str) -> dict[str, Any]:
             saved_pid = int(state.get("pid", 0))
         except (TypeError, ValueError):
             saved_pid = 0
-        if saved_pid > 0 and psutil.pid_exists(saved_pid):
+        if saved_pid <= 0:
+            raise SystemTunnelError(
+                "The saved sing-box process identity record has no valid PID; refusing to delete it or assume no child is running."
+            )
+        if psutil.pid_exists(saved_pid):
             raise SystemTunnelError("The saved tunnel PID still identifies another process; refusing to terminate it.")
         if _interface_exists(interface_name):
             raise SystemTunnelError(
