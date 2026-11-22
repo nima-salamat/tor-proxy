@@ -18,7 +18,8 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QFrame,
     QSystemTrayIcon,
-    QWidgetAction
+    QWidgetAction,
+    QProgressBar
 )
 from PySide6.QtGui import (
     QAction,
@@ -281,6 +282,104 @@ class HoverIconButton(QPushButton):
         super().leaveEvent(event)
 
 
+class DeferredPagePlaceholder(QWidget):
+    """Visible, retryable loading surface for a page that is not ready yet."""
+
+    retry_requested = Signal()
+
+    def __init__(self, title: str, parent=None):
+        super().__init__(parent)
+        self._page_title = str(title)
+        self.setObjectName("deferredPagePlaceholder")
+        self.setMinimumSize(0, 0)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(24, 24, 24, 24)
+        outer.setSpacing(0)
+        outer.addStretch(1)
+
+        self.content = QWidget(self)
+        self.content.setObjectName("deferredPageLoadingContent")
+        content_layout = QVBoxLayout(self.content)
+        content_layout.setContentsMargins(18, 18, 18, 18)
+        content_layout.setSpacing(12)
+
+        self.title_label = QLabel(self.content)
+        self.title_label.setObjectName("deferredPageLoadingTitle")
+        self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.detail_label = QLabel(self.content)
+        self.detail_label.setObjectName("deferredPageLoadingDetail")
+        self.detail_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.detail_label.setWordWrap(True)
+        self.detail_label.setMaximumWidth(440)
+
+        self.progress = QProgressBar(self.content)
+        self.progress.setObjectName("deferredPageProgress")
+        self.progress.setRange(0, 0)
+        self.progress.setTextVisible(False)
+        self.progress.setFixedSize(260, 5)
+
+        self.retry_button = QPushButton("Try again", self.content)
+        self.retry_button.setObjectName("deferredPageRetry")
+        self.retry_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.retry_button.setFixedHeight(36)
+        self.retry_button.clicked.connect(self.retry_requested.emit)
+
+        content_layout.addWidget(self.title_label)
+        content_layout.addWidget(self.detail_label)
+        content_layout.addWidget(self.progress, 0, Qt.AlignmentFlag.AlignHCenter)
+        content_layout.addWidget(self.retry_button, 0, Qt.AlignmentFlag.AlignHCenter)
+        outer.addWidget(self.content, 0, Qt.AlignmentFlag.AlignHCenter)
+        outer.addStretch(1)
+
+        self.apply_theme(CONFIG.get("mode", "dark"))
+        self.set_loading()
+
+    def apply_theme(self, mode: str) -> None:
+        dark = str(mode).strip().lower() == "dark"
+        title = "#edf3fa" if dark else "#202b38"
+        detail = "#9eacbc" if dark else "#627184"
+        track = "#303b49" if dark else "#e2e8f0"
+        accent = "#47a3f2" if dark else "#1876bf"
+        self.content.setStyleSheet("background: transparent;")
+        self.title_label.setStyleSheet(
+            f"background: transparent; color: {title}; font-size: 16px; font-weight: 700;"
+        )
+        self.detail_label.setStyleSheet(
+            f"background: transparent; color: {detail}; font-size: 12px;"
+        )
+        self.progress.setStyleSheet(
+            f"QProgressBar#deferredPageProgress {{ background: {track}; border: none; border-radius: 2px; }}"
+            f"QProgressBar#deferredPageProgress::chunk {{ background: {accent}; border-radius: 2px; }}"
+        )
+        self.retry_button.setStyleSheet(
+            f"QPushButton#deferredPageRetry {{ color: {title}; background: {track}; "
+            f"border: 1px solid {accent}; border-radius: 8px; padding: 0 16px; }}"
+            f"QPushButton#deferredPageRetry:hover {{ background: {accent}; color: #ffffff; }}"
+        )
+        self._torproxy_theme_mode = "dark" if dark else "light"
+
+    def set_loading(self) -> None:
+        self.title_label.setText(f"Loading {self._page_title}")
+        self.detail_label.setText(
+            "Preparing this section. It will appear here automatically when it is ready."
+        )
+        self.progress.show()
+        self.retry_button.hide()
+
+    def set_error(self, error: Exception | str) -> None:
+        detail = " ".join(str(error or "Unknown error").split())
+        if len(detail) > 260:
+            detail = detail[:257] + "..."
+        self.title_label.setText(f"{self._page_title} could not be loaded")
+        self.detail_label.setText(
+            f"{detail}\nYou can retry without restarting TorProxy."
+        )
+        self.progress.hide()
+        self.retry_button.show()
+
+
 class Window(QMainWindow):
     PAGE_HOME = 0
     PAGE_SETTINGS = 1
@@ -323,12 +422,38 @@ class Window(QMainWindow):
         self._native_max_button_hovered = False
         self.proxyWidget = ProxyWindow(self)
         self.stack.addWidget(self.proxyWidget)
+        self._page_titles = {
+            self.PAGE_SETTINGS: "Settings",
+            self.PAGE_BUNDLES: "Updates",
+            self.PAGE_SYSTEM_TUNNEL: "System Tunnel",
+            self.PAGE_HELP: "Keyboard Shortcuts",
+            self.PAGE_STATISTICS: "Statistics",
+            self.PAGE_CUSTOM_TOR: "Custom Tor",
+            self.PAGE_DEVELOPER_TOR: "Developer Tor",
+        }
         self._page_placeholders = {}
+        self._page_states = {}
+        self._page_load_queue = deque(
+            range(self.PAGE_SETTINGS, self.PAGE_DEVELOPER_TOR + 1)
+        )
+        self._page_loading_index = None
+        self._page_preload_started = False
+        self._page_load_timer = QTimer(self)
+        self._page_load_timer.setSingleShot(True)
+        self._page_load_timer.timeout.connect(self._load_next_deferred_page)
+        self._page_build_timer = QTimer(self)
+        self._page_build_timer.setSingleShot(True)
+        self._page_build_timer.timeout.connect(self._construct_active_deferred_page)
         for page_index in range(self.PAGE_SETTINGS, self.PAGE_DEVELOPER_TOR + 1):
-            placeholder = QWidget(self.stack)
-            placeholder.setObjectName("deferredPagePlaceholder")
+            placeholder = DeferredPagePlaceholder(
+                self._page_titles[page_index], self.stack
+            )
+            placeholder.retry_requested.connect(
+                lambda selected=page_index: self._retry_deferred_page(selected)
+            )
             self.stack.addWidget(placeholder)
             self._page_placeholders[page_index] = placeholder
+            self._page_states[page_index] = "queued"
 
         self.settingWidget = None
         self.block_host_window = None
@@ -482,6 +607,9 @@ class Window(QMainWindow):
             except Exception:
                 logger.exception("Could not schedule the deferred system-tunnel status check.")
         self._start_hotkey_manager_async()
+        # Home has already been shown and painted by main.py before this hook.
+        # Warm feature pages afterwards, never as part of the first window frame.
+        QTimer.singleShot(650, self._start_deferred_page_preloading)
 
     def _ensure_hotkey_manager(self):
         """Import and configure the optional global-hotkey backend on demand."""
@@ -568,11 +696,8 @@ class Window(QMainWindow):
         state["last_sample_at"] = timestamp
         state["last_directions"] = dict(directions)
 
-    def _ensure_page_created(self, index):
-        """Create a feature page only when navigation first requests it."""
-        if index not in self._page_placeholders:
-            return self.stack.widget(index) if 0 <= index < self.stack.count() else None
-
+    def _build_deferred_page(self, index):
+        """Construct one QWidget on the GUI thread after its loading surface paints."""
         if index == self.PAGE_SETTINGS:
             from ui_.window.setting_window import SettingWindow
             page = SettingWindow(self)
@@ -604,1451 +729,133 @@ class Window(QMainWindow):
             page = OnionHostingPage(self.proxyWidget, self)
             self.developerTorWidget = page
         else:
-            return self.stack.widget(index)
-
-        # QStackedWidget has no replaceWidget() API. Remove the placeholder
-        # and insert the real page at the same index to preserve navigation IDs.
-        placeholder = self.stack.widget(index)
-        if placeholder is None:
-            raise RuntimeError(f"Missing deferred page placeholder at index {index}.")
-        self.stack.removeWidget(placeholder)
-        self.stack.insertWidget(index, page)
-        self._page_placeholders.pop(index, None)
-        placeholder.deleteLater()
+            raise ValueError(f"Unsupported deferred page index: {index}")
         return page
 
-    def _create_window_system_menu(self):
-        """Create the app-themed equivalent of the Windows caption system menu."""
-        self.window_system_menu = QMenu(self)
-        self.window_system_menu.setObjectName("windowSystemMenu")
-        self.window_system_menu.setMinimumWidth(208)
-        self.window_system_menu.setSeparatorsCollapsible(False)
-        self.window_system_actions = {}
-
-        action_specs = (
-            ("restore", "Restore"),
-            ("move", "Move"),
-            ("size", "Size"),
-        )
-        for key, label in action_specs:
-            self.window_system_actions[key] = self.window_system_menu.addAction(label)
-
-        self.window_system_menu.addSeparator()
-        self.window_system_actions["minimize"] = self.window_system_menu.addAction("Minimize")
-        self.window_system_actions["maximize"] = self.window_system_menu.addAction("Maximize")
-        self.window_system_menu.addSeparator()
-        close_action = QAction("Close", self)
-        close_action.setShortcut(QKeySequence("Alt+F4"))
-        close_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
-        self.addAction(close_action)
-        self.window_system_menu.addAction(close_action)
-        self.window_system_actions["close"] = close_action
-
-        self.window_system_actions["restore"].triggered.connect(self.showNormal)
-        self.window_system_actions["move"].triggered.connect(
-            lambda _checked=False: self._post_native_system_command(_SC_MOVE)
-        )
-        self.window_system_actions["size"].triggered.connect(
-            lambda _checked=False: self._post_native_system_command(_SC_SIZE)
-        )
-        self.window_system_actions["minimize"].triggered.connect(self.showMinimized)
-        self.window_system_actions["maximize"].triggered.connect(self.showMaximized)
-        # Match Windows Alt+F4: Close must use the explicit, confirmed app-exit path.
-        close_action.triggered.connect(self._request_exit)
-        self.window_system_menu.aboutToShow.connect(self._sync_window_system_menu_actions)
-        self._window_system_menu_pending = False
-
-    def _sync_window_system_menu_actions(self):
-        """Enable only the window commands that make sense in its current state."""
-        actions = getattr(self, "window_system_actions", {})
-        maximized = self.isMaximized()
-        minimized = self.isMinimized()
-        enabled = {
-            "restore": maximized or minimized,
-            "move": not maximized and not minimized,
-            "size": not maximized and not minimized,
-            "minimize": not minimized,
-            "maximize": not maximized and not minimized,
-            "close": True,
-        }
-        for key, state in enabled.items():
-            action = actions.get(key)
-            if action is not None:
-                action.setEnabled(state)
-
-    def _sync_window_system_menu_theme(self, mode=None):
-        """Match the caption menu's surface, separators, hover and icons to the app theme."""
-        menu = getattr(self, "window_system_menu", None)
-        if menu is None:
-            return
-
-        dark = (mode or CONFIG.get("mode", "dark")) == "dark"
-        if dark:
-            surface = "#171e29"
-            border = "#303b4c"
-            text = "#e8edf6"
-            muted = "#94a2b5"
-            hover = "#29384d"
-            divider = "#303b4c"
-            danger = "#ef7777"
-            icon_color = "#edf2f9"
-        else:
-            surface = "#ffffff"
-            border = "#dfe6ef"
-            text = "#253246"
-            muted = "#7b8798"
-            hover = "#edf3fb"
-            divider = "#e7ecf2"
-            danger = "#c94343"
-            icon_color = "#344258"
-
-        menu.setStyleSheet(f"""
-            QMenu#windowSystemMenu {{
-                background-color: {surface};
-                color: {text};
-                border: 1px solid {border};
-                border-radius: 12px;
-                padding: 6px;
-            }}
-            QMenu#windowSystemMenu::item {{
-                color: {text};
-                background: transparent;
-                padding: 7px 18px 7px 10px;
-                margin: 1px 3px;
-                min-height: 19px;
-                border-radius: 7px;
-            }}
-            QMenu#windowSystemMenu::item:selected {{
-                color: {text};
-                background-color: {hover};
-            }}
-            QMenu#windowSystemMenu::item:disabled {{
-                color: {muted};
-            }}
-            QMenu#windowSystemMenu::separator {{
-                height: 1px;
-                background-color: {divider};
-                margin: 4px 10px;
-            }}
-        """)
-
-        icon_names = {
-            "restore": "fa6s.window-restore",
-            "move": "fa6s.arrows-up-down-left-right",
-            "size": "fa6s.expand",
-            "minimize": "fa6s.window-minimize",
-            "maximize": "fa6s.window-maximize",
-            "close": "fa6s.xmark",
-        }
-        for key, icon_name in icon_names.items():
-            action = self.window_system_actions.get(key)
-            if action is not None:
-                color = danger if key == "close" else icon_color
-                action.setIcon(qta.icon(icon_name, color=color))
-
-    def _post_native_system_command(self, command):
-        """Let Windows perform its native Move/Size interaction."""
-        if not IS_WINDOWS:
-            return
-        hwnd = int(getattr(self, "_native_snap_hwnd", 0) or self.winId())
-        user32 = getattr(self, "_native_user32", None)
-        if not hwnd or user32 is None:
-            return
-        try:
-            if command == _SC_MOVE:
-                # SC_MOVE starts its drag from the current pointer position.
-                # Place that pointer at the title bar's center first, instead
-                # of leaving it at the edge where the system menu was opened.
-                titlebar = getattr(self, "title_bar", None)
-                if titlebar is not None:
-                    center = titlebar.rect().center()
-                    QCursor.setPos(titlebar.mapToGlobal(center))
-
-            post_message = user32.PostMessageW
-            post_message.argtypes = (
-                wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM
-            )
-            post_message.restype = wintypes.BOOL
-            if not post_message(
-                wintypes.HWND(hwnd),
-                _WM_SYSCOMMAND,
-                wintypes.WPARAM(command),
-                wintypes.LPARAM(0),
-            ):
-                logger.debug("Could not post native window command 0x%X.", command)
-        except (AttributeError, OSError, TypeError, ValueError):
-            logger.debug("Native window command failed.", exc_info=True)
-
-    def _queue_window_system_menu(self, position=None, *, keyboard=False):
-        """Defer popup creation until the current native message has returned."""
-        if getattr(self, "_window_system_menu_pending", False):
-            return
-        self._window_system_menu_pending = True
-        anchor = QPoint(position) if position is not None else None
-        QTimer.singleShot(
-            0,
-            lambda current_anchor=anchor, from_keyboard=keyboard:
-                self._show_window_system_menu(current_anchor, keyboard=from_keyboard),
-        )
-
-    def _show_window_system_menu(self, position=None, *, keyboard=False):
-        self._window_system_menu_pending = False
-        menu = getattr(self, "window_system_menu", None)
-        if menu is None or not self.isVisible() or self.isMinimized():
-            return
-
-        if position is None:
-            titlebar = getattr(self, "title_bar", None)
-            if titlebar is None:
-                return
-            position = titlebar.app_icon.mapToGlobal(
-                QPoint(0, titlebar.app_icon.height())
-            )
-
-        self._sync_window_system_menu_actions()
-        menu.popup(position)
-        if keyboard:
-            first_enabled = next(
-                (
-                    action for action in menu.actions()
-                    if action.isEnabled() and not action.isSeparator()
-                ),
-                None,
-            )
-            if first_enabled is not None:
-                menu.setActiveAction(first_enabled)
-
-    def _enable_native_snap_support(self):
-        """Expose a custom frame as a native, resizable Windows main window."""
-        if not IS_WINDOWS:
-            return
-
-        try:
-            hwnd = int(self.winId())
-            if not hwnd or hwnd == self._native_snap_hwnd:
-                return
-
-            user32 = ctypes.WinDLL("user32", use_last_error=True)
-            # Cache APIs used by WM_NCHITTEST. That message is frequent while
-            # resizing/hovering near the frame; DLL lookup and ctypes signature
-            # setup must not happen in the interactive hit-test path.
-            self._native_user32 = user32
-            map_window_points = user32.MapWindowPoints
-            map_window_points.argtypes = (
-                wintypes.HWND, wintypes.HWND,
-                ctypes.POINTER(wintypes.POINT), wintypes.UINT
-            )
-            map_window_points.restype = ctypes.c_int
-            self._native_map_window_points = map_window_points
-
-            self._native_dpi_scale = max(1.0, float(self.devicePixelRatioF()))
-            get_dpi_for_window = getattr(user32, "GetDpiForWindow", None)
-            if get_dpi_for_window is not None:
-                get_dpi_for_window.argtypes = (wintypes.HWND,)
-                get_dpi_for_window.restype = wintypes.UINT
-                native_dpi = int(get_dpi_for_window(wintypes.HWND(hwnd)))
-                if native_dpi > 0:
-                    self._native_dpi_scale = max(1.0, native_dpi / 96.0)
-
-            get_window_long = getattr(
-                user32, "GetWindowLongPtrW", user32.GetWindowLongW
-            )
-            set_window_long = getattr(
-                user32, "SetWindowLongPtrW", user32.SetWindowLongW
-            )
-            get_window_long.argtypes = (wintypes.HWND, ctypes.c_int)
-            get_window_long.restype = ctypes.c_ssize_t
-            set_window_long.argtypes = (
-                wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t
-            )
-            set_window_long.restype = ctypes.c_ssize_t
-
-            # Qt's FramelessWindowHint initially creates a WS_POPUP window.
-            # Normalize it to WS_OVERLAPPEDWINDOW so Windows owns the normal
-            # taskbar minimize/restore transition and its configured animation.
-            # WM_NCCALCSIZE below keeps the entire client area available to our
-            # custom title bar, so no native caption is painted over the UI.
-            style_index = -16  # GWL_STYLE
-            style = int(get_window_long(wintypes.HWND(hwnd), style_index)) & 0xFFFFFFFF
-            native_style = _native_main_window_style(style)
-            if native_style != style:
-                ctypes.set_last_error(0)
-                previous = set_window_long(
-                    wintypes.HWND(hwnd),
-                    style_index,
-                    ctypes.c_ssize_t(native_style),
-                )
-                error = ctypes.get_last_error()
-                if previous == 0 and error:
-                    raise OSError(error, "SetWindowLongPtrW failed")
-
-                # Recalculate the non-client frame after changing native styles.
-                # The WM_NCCALCSIZE handler preserves our custom client geometry.
-                set_window_pos = user32.SetWindowPos
-                set_window_pos.argtypes = (
-                    wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
-                    ctypes.c_int, ctypes.c_int, wintypes.UINT
-                )
-                set_window_pos.restype = wintypes.BOOL
-                flags = 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020
-                if not set_window_pos(
-                    wintypes.HWND(hwnd), None, 0, 0, 0, 0, flags
-                ):
-                    raise ctypes.WinError(ctypes.get_last_error())
-
-            self._native_snap_hwnd = hwnd
-        except (AttributeError, OSError, TypeError, ValueError):
-            logger.debug(
-                "Could not enable native Windows snap/maximize styles.",
-                exc_info=True,
-            )
-
-    def _set_native_max_button_hovered(self, hovered):
-        """Mirror the non-client hover state to the Qt maximize button."""
-        hovered = bool(hovered)
-        if hovered == self._native_max_button_hovered:
-            return
-        self._native_max_button_hovered = hovered
-        titlebar = getattr(self, "title_bar", None)
-        button = getattr(titlebar, "btn_max", None) if titlebar is not None else None
-        if button is not None:
-            QApplication.sendEvent(
-                button,
-                QEvent(QEvent.Type.Enter if hovered else QEvent.Type.Leave),
-            )
-            button.update()
-
-    def _forward_native_max_button_mouse_event(self, event_type, button, buttons):
-        """Translate native non-client mouse messages to the existing Qt maximize button."""
-        titlebar = getattr(self, "title_bar", None)
-        target = getattr(titlebar, "btn_max", None) if titlebar is not None else None
-        if target is None:
-            return
-
-        global_position = QCursor.pos()
-        local_position = target.mapFromGlobal(global_position)
-        event = QMouseEvent(
-            event_type,
-            QPointF(local_position),
-            QPointF(global_position),
-            button,
-            buttons,
-            Qt.KeyboardModifier.NoModifier,
-        )
-        QApplication.sendEvent(target, event)
-
-    def nativeEvent(self, event_type, message):
-        """Give Windows native drag and maximize hit-testing for the custom title bar."""
-        if not IS_WINDOWS or event_type != b"windows_generic_MSG":
-            return super().nativeEvent(event_type, message)
-
-        try:
-            native_message = wintypes.MSG.from_address(int(message))
-
-            if (
-                native_message.message == _WM_NCRBUTTONUP
-                and (int(native_message.wParam) & 0xFFFF) == _HTCAPTION
-            ):
-                self._queue_window_system_menu(QCursor.pos())
-                return True, 0
-
-            if (
-                native_message.message == _WM_SYSKEYDOWN
-                and int(native_message.wParam) == _VK_SPACE
-                and int(native_message.lParam) & 0x20000000
-            ):
-                self._queue_window_system_menu(keyboard=True)
-                return True, 0
-
-            if native_message.message == _WM_SYSCOMMAND:
-                system_command = int(native_message.wParam) & 0xFFF0
-                if system_command == _SC_CLOSE:
-                    # Alt+F4 arrives as SC_CLOSE on Windows. Keep it on the
-                    # same confirmed shutdown path as the themed menu action.
-                    self._request_exit()
-                    return True, 0
-                if system_command == _SC_KEYMENU and int(native_message.lParam) == _VK_SPACE:
-                    self._queue_window_system_menu(keyboard=True)
-                    return True, 0
-
-            if native_message.message == _WM_DPICHANGED:
-                dpi_x = int(native_message.wParam) & 0xFFFF
-                if dpi_x > 0:
-                    self._native_dpi_scale = max(1.0, dpi_x / 96.0)
-                return super().nativeEvent(event_type, message)
-
-            # The OS uses HTMAXBUTTON for the native Snap Layouts dwell. These
-            # non-client messages do not reach QPushButton normally, so bridge them
-            # to the existing Qt widget rather than drawing a second native control.
-            titlebar = getattr(self, "title_bar", None)
-            max_button = getattr(titlebar, "btn_max", None) if titlebar is not None else None
-
-            if native_message.message == _WM_NCMOUSEMOVE:
-                if self._native_max_button_hovered:
-                    self._forward_native_max_button_mouse_event(
-                        QEvent.Type.MouseMove,
-                        Qt.MouseButton.NoButton,
-                        Qt.MouseButton.NoButton,
-                    )
-                    # Deliver the movement to Qt, not DefWindowProc's classic
-                    # caption-button loop. The OS still sees HTMAXBUTTON in hit-test.
-                    return True, 0
-
-            if native_message.message == _WM_NCMOUSELEAVE:
-                self._set_native_max_button_hovered(False)
-                return True, 0
-
-            if (
-                native_message.message in (_WM_NCLBUTTONDOWN, _WM_NCLBUTTONDBLCLK)
-                and max_button is not None
-                and max_button.rect().contains(max_button.mapFromGlobal(QCursor.pos()))
-            ):
-                self._native_max_button_pressed = True
-                user32 = self._native_user32 or ctypes.WinDLL("user32", use_last_error=True)
-                set_capture = user32.SetCapture
-                set_capture.argtypes = (wintypes.HWND,)
-                set_capture.restype = wintypes.HWND
-                set_capture(wintypes.HWND(native_message.hWnd))
-                self._forward_native_max_button_mouse_event(
-                    QEvent.Type.MouseButtonPress,
-                    Qt.MouseButton.LeftButton,
-                    Qt.MouseButton.LeftButton,
-                )
-                # Use HWND capture so the same Qt button receives move/up even
-                # if the pointer leaves the non-client maximize rectangle.
-                # Never run DefWindowProc's own caption-button click loop.
-                return True, 0
-
-            if native_message.message == _WM_MOUSEMOVE and self._native_max_button_pressed:
-                self._forward_native_max_button_mouse_event(
-                    QEvent.Type.MouseMove,
-                    Qt.MouseButton.NoButton,
-                    Qt.MouseButton.LeftButton,
-                )
-                return True, 0
-
-            if native_message.message in (_WM_LBUTTONUP, _WM_NCLBUTTONUP) and self._native_max_button_pressed:
-                self._native_max_button_pressed = False
-                self._forward_native_max_button_mouse_event(
-                    QEvent.Type.MouseButtonRelease,
-                    Qt.MouseButton.LeftButton,
-                    Qt.MouseButton.NoButton,
-                )
-                user32 = self._native_user32 or ctypes.WinDLL("user32", use_last_error=True)
-                user32.ReleaseCapture.argtypes = ()
-                user32.ReleaseCapture.restype = wintypes.BOOL
-                user32.ReleaseCapture()
-                return True, 0
-
-            if native_message.message == _WM_CAPTURECHANGED and self._native_max_button_pressed:
-                self._native_max_button_pressed = False
-                if max_button is not None:
-                    max_button.setDown(False)
-                self._set_native_max_button_hovered(False)
-                return super().nativeEvent(event_type, message)
-
-            if native_message.message == _WM_ENTERSIZEMOVE:
-                self._native_move_loop_active = True
-                proxy_page = getattr(self, "proxyWidget", None)
-                if proxy_page is not None:
-                    proxy_page.set_live_resize_active(True)
-                return super().nativeEvent(event_type, message)
-            if native_message.message == _WM_EXITSIZEMOVE:
-                self._native_move_loop_active = False
-                proxy_page = getattr(self, "proxyWidget", None)
-                if proxy_page is not None:
-                    proxy_page.set_live_resize_active(False)
-                return super().nativeEvent(event_type, message)
-            if native_message.message == _WM_MOVING:
-                # Keep the off-screen guard for window dragging only. Windows
-                # owns WM_SIZING and its live size loop; querying monitor/DPI
-                # information on every sizing tick was adding avoidable latency.
-                user32 = self._native_user32
-                if user32 is None:
-                    return super().nativeEvent(event_type, message)
-                moving_rect = ctypes.cast(
-                    int(native_message.lParam),
-                    ctypes.POINTER(wintypes.RECT),
-                ).contents
-                monitor_from_rect = user32.MonitorFromRect
-                monitor_from_rect.argtypes = (
-                    ctypes.POINTER(wintypes.RECT), wintypes.DWORD
-                )
-                monitor_from_rect.restype = wintypes.HANDLE
-                monitor = monitor_from_rect(
-                    ctypes.byref(moving_rect), 2  # MONITOR_DEFAULTTONEAREST
-                )
-                if monitor:
-                    info = _MONITORINFO()
-                    info.cbSize = ctypes.sizeof(info)
-                    get_monitor_info = user32.GetMonitorInfoW
-                    get_monitor_info.argtypes = (
-                        wintypes.HANDLE, ctypes.POINTER(_MONITORINFO)
-                    )
-                    get_monitor_info.restype = wintypes.BOOL
-                    if get_monitor_info(monitor, ctypes.byref(info)):
-                        work = info.rcWork
-                        work_area = QRect(
-                            work.left,
-                            work.top,
-                            work.right - work.left,
-                            work.bottom - work.top,
-                        )
-                        width = moving_rect.right - moving_rect.left
-                        height = moving_rect.bottom - moving_rect.top
-
-                        dpi = 96
-                        try:
-                            get_dpi_for_monitor = ctypes.WinDLL("shcore").GetDpiForMonitor
-                            get_dpi_for_monitor.argtypes = (
-                                wintypes.HANDLE,
-                                ctypes.c_int,
-                                ctypes.POINTER(wintypes.UINT),
-                                ctypes.POINTER(wintypes.UINT),
-                            )
-                            get_dpi_for_monitor.restype = ctypes.c_long
-                            dpi_x = wintypes.UINT()
-                            dpi_y = wintypes.UINT()
-                            if get_dpi_for_monitor(
-                                monitor, 0, ctypes.byref(dpi_x), ctypes.byref(dpi_y)
-                            ) == 0 and dpi_x.value:
-                                dpi = dpi_x.value
-                        except (AttributeError, OSError, TypeError):
-                            pass
-
-                        scale = max(1.0, float(dpi) / 96.0)
-                        logical_work_width = work_area.width() / scale
-                        logical_work_height = work_area.height() / scale
-                        visible_width = round(
-                            min(120, max(88, int(logical_work_width // 12))) * scale
-                        )
-                        visible_titlebar = round(
-                            min(40, max(28, int(logical_work_height // 12))) * scale
-                        )
-                        proposed = QRect(
-                            moving_rect.left, moving_rect.top, width, height
-                        )
-                        constrained = _clamp_window_rect_to_work_area(
-                            proposed,
-                            work_area,
-                            visible_width=visible_width,
-                            visible_titlebar=visible_titlebar,
-                        )
-                        moving_rect.left = constrained.left()
-                        moving_rect.top = constrained.top()
-                        moving_rect.right = constrained.left() + width
-                        moving_rect.bottom = constrained.top() + height
-                        return True, 1
-            if native_message.message == _WM_NCCALCSIZE:
-                # Keep the custom Qt frame edge-to-edge while the native
-                # thick-frame style supplies resize and Snap behavior.
-                return True, 0
-            if native_message.message == _WM_NCHITTEST:
-                screen_point = wintypes.POINT(
-                    ctypes.c_short(native_message.lParam & 0xFFFF).value,
-                    ctypes.c_short((native_message.lParam >> 16) & 0xFFFF).value,
-                )
-                map_window_points = self._native_map_window_points
-                if map_window_points is None:
-                    return super().nativeEvent(event_type, message)
-                # WM_NCHITTEST provides physical screen coordinates. Reuse the
-                # cached desktop -> HWND mapping and the last known monitor DPI.
-                map_window_points(
-                    wintypes.HWND(0),
-                    wintypes.HWND(native_message.hWnd),
-                    ctypes.byref(screen_point),
-                    1,
-                )
-
-                ratio = self._native_dpi_scale
-
-                point = QPoint(
-                    round(screen_point.x / ratio),
-                    round(screen_point.y / ratio),
-                )
-
-                # Keep native resize handles available around the window perimeter.
-                # Full-height caption buttons visually reach these edges, but the
-                # thin frame strip still belongs to Windows' resize interaction.
-                if not self.isMaximized() and not self.isFullScreen():
-                    resize_hit = _native_resize_hit_test(
-                        point, QRect(0, 0, self.width(), self.height())
-                    )
-                    if resize_hit is not None:
-                        self._set_native_max_button_hovered(False)
-                        return True, resize_hit
-
-                hit_test = None
-                if hasattr(self, "title_bar"):
-                    titlebar = self.title_bar
-                    titlebar_rect = QRect(
-                        titlebar.mapTo(self, QPoint(0, 0)), titlebar.size()
-                    )
-                    maximize = titlebar.btn_max
-                    maximize_rect = QRect(
-                        maximize.mapTo(self, QPoint(0, 0)), maximize.size()
-                    )
-                    other_button_rects = []
-                    for button in (titlebar.btn_min, titlebar.btn_close):
-                        other_button_rects.append(
-                            QRect(button.mapTo(self, QPoint(0, 0)), button.size())
-                        )
-
-                    hit_test = _native_titlebar_hit_test(
-                        point, titlebar_rect, maximize_rect, other_button_rects
-                    )
-                    self._set_native_max_button_hovered(hit_test == _HTMAXBUTTON)
-                    # Native frame resize handles take priority around the outer
-                    # edges; the remaining controls are handled by Qt. HTMAXBUTTON
-                    # is still returned to Windows for its native Snap Layouts flyout.
-                    if hit_test in (_HTMAXBUTTON, _HTCLIENT):
-                        return True, hit_test
-
-                # Blank title-bar space remains native caption space. Besides
-                # dragging and double-click maximize, this allows Windows to
-                # show its real system menu for Alt+Space and caption right-click.
-                if hit_test is not None:
-                    return True, hit_test
-        except (AttributeError, OSError, TypeError, ValueError):
-            logger.debug("Native title-bar hit testing failed.", exc_info=True)
-
-        return super().nativeEvent(event_type, message)
-
-    def _refresh_layout_after_restore(self):
-        if self.isMinimized() or not hasattr(self, "stack"):
-            return
-        # Windows can restore a frameless QWidget tree before the central
-        # layout has recomputed all child sizes. Activate layouts on the next
-        # event-loop turn and request a fresh paint without changing the window size.
-        for widget in (self.main_widget, self.stack, self.stack.currentWidget()):
-            if widget is None:
-                continue
-            layout = widget.layout()
-            if layout is not None:
-                layout.activate()
-            widget.updateGeometry()
-            widget.update()
-        self.main_layout.activate()
-        self.update()
-        self.repaint()
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        # The OS theme may have changed while TorProxy was hidden in the tray.
-        self._ensure_visible_theme_pages()
-        # Recheck in case Qt recreated the native HWND after a window-flag change.
-        self._enable_native_snap_support()
-        # DWM draws the subtle rounded frame itself, without changing our client area.
-        QTimer.singleShot(0, self._apply_native_window_corners)
-        QTimer.singleShot(0, self._refresh_layout_after_restore)
-
-    def changeEvent(self, event):
-        super().changeEvent(event)
-        if event.type() == QEvent.Type.WindowStateChange:
-            # Keep the custom maximize/restore glyph in sync when Windows
-            # maximizes the window through Snap, Win+Arrow or the taskbar.
-            titlebar = getattr(self, "title_bar", None)
-            if titlebar is not None:
-                titlebar._sync_maximize_button()
-            # DWM suppresses rounding while maximized; re-apply the small
-            # restored-window preference after every maximize/restore transition.
-            QTimer.singleShot(0, self._apply_native_window_corners)
-            if not self.isMinimized():
-                QTimer.singleShot(0, self._refresh_layout_after_restore)
-
-    def _apply_native_window_corners(self):
-        """Request subtle native rounded corners for the restored Windows window."""
-        if not IS_WINDOWS:
-            return
-
-        # Windows 11 exposes this preference through DwmSetWindowAttribute.
-        # Older Windows builds reject the attribute; that is intentionally a no-op.
-        try:
-            hwnd = int(self.winId())
-            if not hwnd:
-                return
-            dwmapi = ctypes.WinDLL("dwmapi", use_last_error=True)
-            set_window_attribute = dwmapi.DwmSetWindowAttribute
-            set_window_attribute.argtypes = (
-                ctypes.c_void_p,
-                ctypes.c_uint,
-                ctypes.c_void_p,
-                ctypes.c_uint,
-            )
-            set_window_attribute.restype = ctypes.c_long
-
-            # DWMWA_WINDOW_CORNER_PREFERENCE = 33
-            # DWMWCP_DONOTROUND = 1; DWMWCP_ROUNDSMALL = 3.
-            preference = ctypes.c_int(
-                1 if self.isMaximized() or self.isFullScreen() else 3
-            )
-            result = set_window_attribute(
-                ctypes.c_void_p(hwnd),
-                33,
-                ctypes.byref(preference),
-                ctypes.sizeof(preference),
-            )
-            if result != 0:
-                logger.debug(
-                    "Windows DWM rounded-corner preference is unavailable (HRESULT 0x%08X).",
-                    result & 0xFFFFFFFF,
-                )
-        except (AttributeError, OSError, TypeError, ValueError):
-            logger.debug("Could not apply native rounded window corners.", exc_info=True)
-
-    def _screen_for_geometry(self, geometry):
-        center = geometry.center()
-        screen = QGuiApplication.screenAt(center)
-        if screen is not None:
-            return screen
-        screens = QGuiApplication.screens()
-        if not screens:
+    def _ensure_page_created(self, index):
+        """Return a ready page or its loading surface and queue one safe creation."""
+        if not 0 <= index < self.stack.count():
             return None
+        placeholder = self._page_placeholders.get(index)
+        if placeholder is None:
+            return self.stack.widget(index)
 
-        def distance_to_screen(candidate):
-            area = candidate.availableGeometry()
-            nearest_x = min(max(center.x(), area.left()), area.right())
-            nearest_y = min(max(center.y(), area.top()), area.bottom())
-            return (center.x() - nearest_x) ** 2 + (center.y() - nearest_y) ** 2
+        self._request_deferred_page(index, prioritize=True)
+        return placeholder
 
-        return min(screens, key=distance_to_screen)
+    def _request_deferred_page(self, index, *, prioritize=False):
+        if index not in self._page_placeholders:
+            return
+        state = self._page_states.get(index)
+        if state in {"ready", "loading", "failed"}:
+            return
+        if prioritize:
+            try:
+                self._page_load_queue.remove(index)
+            except ValueError:
+                pass
+            self._page_load_queue.appendleft(index)
+        elif index not in self._page_load_queue:
+            self._page_load_queue.append(index)
+        self._schedule_deferred_page_load(90)
 
-    def moveEvent(self, event):
-        super().moveEvent(event)
+    def _schedule_deferred_page_load(self, delay_ms=180):
         if (
-            self._constraining_move
-            or self._native_move_loop_active
-            or self.isMinimized()
-            or self.isMaximized()
-            or self.isFullScreen()
+            getattr(self, "_closing", False)
+            or self._page_loading_index is not None
+            or self._page_load_timer.isActive()
+            or self._page_build_timer.isActive()
         ):
             return
-        screen = self._screen_for_geometry(self.frameGeometry())
-        if screen is None:
+        if self._page_load_queue:
+            self._page_load_timer.start(max(0, int(delay_ms)))
+
+    def _start_deferred_page_preloading(self):
+        """Queue every secondary page only after Home has had time to become interactive."""
+        if self._page_preload_started or getattr(self, "_closing", False):
             return
-        area = screen.availableGeometry()
-        visible_width = min(120, max(88, area.width() // 12))
-        visible_titlebar = min(40, max(28, area.height() // 12))
-        frame = self.frameGeometry()
-        min_x = area.left() - frame.width() + visible_width
-        max_x = area.right() - visible_width + 1
-        min_y = area.top()
-        max_y = area.bottom() - visible_titlebar + 1
-        target_x = min(max(self.x(), min_x), max_x)
-        target_y = min(max(self.y(), min_y), max_y)
-        if target_x != self.x() or target_y != self.y():
-            self._constraining_move = True
-            try:
-                self.move(target_x, target_y)
-            finally:
-                self._constraining_move = False
+        self._page_preload_started = True
+        self._schedule_deferred_page_load(0)
 
-    def _toggle_visibility(self):
-        if self.isVisible() and not self.isMinimized():
-            self.hide_to_tray()
+    def _retry_deferred_page(self, index):
+        if index not in self._page_placeholders:
             return
-        self.showNormal()
-        self.show()
-        self.raise_()
-        self.activateWindow()
-
-    def hide_to_tray(self):
-        """Hide the main window without stopping Tor or removing the tray icon."""
-        self.hide()
-        if hasattr(self, "tray_icon") and not self.tray_icon.isVisible():
-            self.tray_icon.show()
-        logger.debug("TorProxy window hidden to the system tray.")
-
-    @contextmanager
-    def shortcut_capture_scope(self):
-        """Suspend every registered shortcut while a key-binding dialog listens.
-
-        Global bindings are unregistered by HotkeyManager and the QActions
-        attached to this main window are disabled temporarily. New navigation
-        or application shortcuts can use these same registries without being
-        triggered by keys being recorded in the capture dialog.
-        """
-        actions = [
-            action for action in self.actions()
-            if not action.shortcut().isEmpty()
-        ]
-        action_states = [(action, action.isEnabled()) for action in actions]
-        manager = getattr(self, "hotkey_manager", None)
-        suspended = False
+        if self._page_states.get(index) != "failed":
+            return
+        placeholder = self._page_placeholders[index]
+        placeholder.set_loading()
+        self._page_states[index] = "queued"
         try:
-            if manager is not None:
-                manager.suspend()
-                suspended = True
-            for action, _was_enabled in action_states:
-                action.setEnabled(False)
-            yield
+            self._page_load_queue.remove(index)
+        except ValueError:
+            pass
+        self._page_load_queue.appendleft(index)
+        self._schedule_deferred_page_load(90)
+
+    def _load_next_deferred_page(self):
+        if getattr(self, "_closing", False) or self._page_loading_index is not None:
+            return
+        while self._page_load_queue:
+            index = self._page_load_queue.popleft()
+            if (
+                index not in self._page_placeholders
+                or self._page_states.get(index) != "queued"
+            ):
+                continue
+            self._page_loading_index = index
+            self._page_states[index] = "loading"
+            self._page_placeholders[index].set_loading()
+            # Give Qt one event-loop turn to paint the progress indicator before
+            # entering a page constructor. Constructors stay on the GUI thread,
+            # as required by QWidget; they are never run in a worker thread.
+            self._page_build_timer.start(90)
+            return
+
+    def _construct_active_deferred_page(self):
+        index = self._page_loading_index
+        if index is None:
+            self._schedule_deferred_page_load(0)
+            return
+        if getattr(self, "_closing", False):
+            self._page_states[index] = "queued"
+            self._page_loading_index = None
+            return
+
+        placeholder = self._page_placeholders.get(index)
+        if placeholder is None:
+            self._page_loading_index = None
+            self._schedule_deferred_page_load(0)
+            return
+
+        try:
+            page = self._build_deferred_page(index)
+            if not isinstance(page, QWidget):
+                raise TypeError(
+                    f"{self._page_titles.get(index, 'Page')} did not create a QWidget."
+                )
+            self._ensure_page_theme(page)
+            self.stack.removeWidget(placeholder)
+            self.stack.insertWidget(index, page)
+            self._page_placeholders.pop(index, None)
+            self._page_states[index] = "ready"
+            placeholder.deleteLater()
+            if self.stack.currentIndex() == index:
+                self.stack.setCurrentWidget(page)
+            logger.debug(
+                "Deferred page %s finished loading.",
+                self._page_titles.get(index, index),
+            )
+        except Exception as exc:
+            self._page_states[index] = "failed"
+            placeholder.set_error(f"{type(exc).__name__}: {exc}")
+            logger.exception(
+                "Could not load deferred page %s.",
+                self._page_titles.get(index, index),
+            )
         finally:
-            for action, was_enabled in action_states:
-                action.setEnabled(was_enabled)
-            if suspended:
-                manager.resume()
-
-    def _set_global_shortcut(self, shortcut):
-        """Apply and persist a global shortcut as one transaction."""
-        from torproxy.hotkeys import parse_hotkey
-
-        normalized = parse_hotkey(shortcut).text
-        previous = str(CONFIG["global_shortcut"])
-        if normalized == previous:
-            return normalized
-
-        # Register first. Native Windows registration is synchronous for edits,
-        # so a conflicting key combination can be rejected before config changes.
-        self._ensure_hotkey_manager()
-        self.hotkey_manager.update_shortcut("window_visibility", normalized)
-        try:
-            CONFIG["global_shortcut"] = normalized
-        except Exception:
-            try:
-                self.hotkey_manager.update_shortcut("window_visibility", previous)
-            except Exception:
-                logger.exception("Failed to roll back the previous global shortcut.")
-            raise
-
-        shortcuts_page = getattr(self, "shortcutsWidget", None)
-        if shortcuts_page is not None:
-            shortcuts_page.update_global_shortcut(normalized)
-        logger.info("Global show/hide shortcut changed to %s.", normalized)
-        self.proxyWidget.logs_widget.update_log(
-            "Global show/hide shortcut changed to {}.".format(normalized), level="success"
-        )
-        return normalized
-
-    def _on_hotkey_error(self, message):
-        """Surface native registration conflicts in Event Log and the tray."""
-        logger.warning("Global shortcut issue: %s", message)
-        try:
-            self.proxyWidget.logs_widget.update_log(
-                "Global shortcut: {}".format(message), level="warning"
-            )
-        except Exception:
-            logger.debug("Could not append hotkey warning to Event Log.", exc_info=True)
-        try:
-            self.tray_icon.showMessage(
-                "Global shortcut", message, QSystemTrayIcon.MessageIcon.Warning, 4500
-            )
-        except Exception:
-            logger.debug("Could not show global-hotkey tray notification.", exc_info=True)
-
-    def show_tray(self):
-        self.hide()
-        # # shold use show becuase tray will delete after system locked in this case windows
-        # self.tray_icon.show()
-        
-    
-    def _on_tray_activated(self, reason):
-        if reason == QSystemTrayIcon.ActivationReason.Context:
-            self._show_tray_context_menu()
-        elif reason in (
-            QSystemTrayIcon.ActivationReason.Trigger,
-            QSystemTrayIcon.ActivationReason.DoubleClick,
-        ):
-            self._toggle_visibility()
-
-    def show_window(self, reason):
-        # Retain the old signal-handler name for integrations and tests.
-        self._on_tray_activated(reason)
-
-    def _set_tray_system_proxy_mode(self, mode):
-        """Route tray choices through Home's existing system-proxy policy control."""
-        combo = getattr(getattr(self, "proxyWidget", None), "system_proxy_mode", None)
-        if combo is None:
-            logger.warning("System proxy tray action is unavailable because the Home policy control is missing.")
-            return
-
-        index = combo.findData(mode)
-        if index < 0:
-            logger.warning("Unknown system proxy mode selected from the tray: %r", mode)
-            self._sync_tray_system_proxy_actions()
-            return
-
-        if combo.currentIndex() == index:
-            # Re-selecting the current tray option is also a useful explicit retry,
-            # for example after Tor finishes connecting or an OS action previously failed.
-            self.proxyWidget._on_system_proxy_mode_changed(index)
-        else:
-            # The currentIndexChanged signal invokes the authoritative existing handler.
-            combo.setCurrentIndex(index)
-        self._sync_tray_system_proxy_actions()
-
-    def _sync_tray_system_proxy_actions(self, *_args):
-        """Keep tray radio actions consistent with the saved Home policy."""
-        actions = getattr(self, "tray_system_proxy_mode_actions", {})
-        current_mode = CONFIG.get("system_proxy_mode", "unchanged")
-        for mode, action in actions.items():
-            action.setChecked(mode == current_mode)
-
-    def _show_tray_context_menu(self):
-        """Open the app menu just above its tray icon, inside the work area."""
-        if not hasattr(self, "tray_menu"):
-            return
-        hidden = self.isHidden() or self.isMinimized()
-        self.tray_toggle_action.setText("Show TorProxy" if hidden else "Hide TorProxy")
-        self._sync_tray_menu_theme()
-        self.tray_menu.ensurePolished()
-        size = self.tray_menu.sizeHint()
-        anchor = QCursor.pos()
-        screen = QGuiApplication.screenAt(anchor) or QGuiApplication.primaryScreen()
-        if screen is None:
-            self.tray_menu.exec(anchor)
-            return
-
-        area = screen.availableGeometry()
-        x = anchor.x() - size.width() // 2
-        y = anchor.y() - size.height() - 12
-        # Prefer opening above the icon. Use below only if the work area really
-        # has insufficient vertical room, and clamp both positions to the screen.
-        if y < area.top():
-            y = anchor.y() + 12
-        x = min(max(x, area.left()), area.right() - size.width() + 1)
-        y = min(max(y, area.top()), area.bottom() - size.height() + 1)
-        self.tray_menu.exec(QPoint(x, y))
-   
-    def _createMenuBar(self):
-        # Use regular buttons: their icons and labels render consistently on every
-        # platform, unlike native menu items whose icon/text style is OS-dependent.
-        menu_bar = QWidget(self.main_widget)
-        menu_bar.setObjectName("topMenuBar")
-        menu_layout = QHBoxLayout(menu_bar)
-        menu_layout.setContentsMargins(6, 3, 6, 3)
-        menu_layout.setSpacing(2)
-        self.menu_bar = menu_bar
-        self.main_layout.addWidget(menu_bar)
-
-        actions = [
-            ("Home", "Home", "Ctrl+H", "fa6s.house", self._show_home, self.stack.indexOf(self.proxyWidget)),
-            ("Settings", "Settings", "Ctrl+S", "fa6s.gear", self._show_setting, self.PAGE_SETTINGS),
-            (
-                "Developer Tor",
-                "Host Onion Services with an isolated Tor runtime",
-                "Ctrl+Alt+D",
-                "fa6s.code",
-                self._show_developer_tor,
-                self.PAGE_DEVELOPER_TOR,
-            ),
-            (
-                "Custom Tor",
-                "Manage independent Tor services and profiles",
-                "Ctrl+Alt+T",
-                "fa6s.server",
-                self._show_custom_tor,
-                self.PAGE_CUSTOM_TOR,
-            ),
-            (
-                "Help",
-                "Keyboard shortcuts",
-                "F1",
-                "fa6s.circle-question",
-                self._show_help,
-                self.PAGE_HELP,
-            ),
-        ]
-        self.page_action_group = QActionGroup(self)
-        self.page_action_group.setExclusive(True)
-        self.page_actions = []
-        self.page_icon_names = []
-        self.page_nav_buttons = []
-        self.page_nav_page_indices = []
-        self.page_action_pages = []
-        self.page_nav_group = QButtonGroup(self)
-        self.page_nav_group.setExclusive(True)
-        icon_color = "#eff1f4" if CONFIG["mode"] == "dark" else "#202832"
-
-        for index, (label, tooltip, shortcut, icon_name, callback, page_index) in enumerate(actions):
-            action = QAction(label, self)
-            action.setIcon(qta.icon(icon_name, color=icon_color))
-            action.setCheckable(True)
-            action.setShortcut(shortcut)
-            action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
-            action.setToolTip("{} ({})".format(tooltip, shortcut))
-            action.triggered.connect(callback)
-            self.page_action_group.addAction(action)
-            self.addAction(action)
-            self.page_actions.append(action)
-            self.page_icon_names.append(icon_name)
-            self.page_action_pages.append(page_index)
-
-            button = QPushButton(label, menu_bar)
-            button.setObjectName("topNavButton")
-            button.setIcon(qta.icon(icon_name, color=icon_color))
-            button.setIconSize(QSize(17, 17))
-            button.setCheckable(True)
-            button.setToolTip("{} ({})".format(tooltip, shortcut))
-            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            button.clicked.connect(callback)
-            menu_layout.addWidget(button)
-            self.page_nav_group.addButton(button, page_index)
-            self.page_nav_buttons.append(button)
-            self.page_nav_page_indices.append(page_index)
-            if label == "Help":
-                self.help_action = action
-                self.help_nav_button = button
-
-        # Preserve the host-rule keyboard shortcuts without taking up top-level
-        # navigation space. Both shortcuts now open the corresponding Settings tab.
-        self.block_hosts_shortcut_action = QAction("Blocked Hosts", self)
-        self.block_hosts_shortcut_action.setShortcut("Ctrl+B")
-        self.block_hosts_shortcut_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
-        self.block_hosts_shortcut_action.triggered.connect(self._show_block_host)
-        self.addAction(self.block_hosts_shortcut_action)
-        self.exclude_hosts_shortcut_action = QAction("Excluded Hosts", self)
-        self.exclude_hosts_shortcut_action.setShortcut("Ctrl+E")
-        self.exclude_hosts_shortcut_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
-        self.exclude_hosts_shortcut_action.triggered.connect(self._show_exclude_host)
-        self.addAction(self.exclude_hosts_shortcut_action)
-
-        self.updates_nav_button = UpdatesMenuButton(menu_bar)
-        self.updates_nav_button.setObjectName("updatesNavButton")
-        self.updates_nav_button.setText("Updates")
-        self._sync_updates_nav_icon()
-        self.updates_nav_button.setIconSize(QSize(17, 17))
-        self.updates_nav_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.updates_nav_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        self.updates_nav_button.setCheckable(True)
-        self.updates_nav_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.updates_nav_button.setToolTip("Manage Tor bundles and the system tunnel")
-        self.updates_menu = QMenu(self.updates_nav_button)
-        self.updates_menu.setObjectName("updatesMenu")
-        self.updates_menu.setMinimumWidth(268)
-        self.updates_menu.setSeparatorsCollapsible(False)
-
-        self.updates_menu_header = QWidget(self.updates_menu)
-        self.updates_menu_header.setObjectName("updatesMenuHeader")
-        updates_header_layout = QVBoxLayout(self.updates_menu_header)
-        updates_header_layout.setContentsMargins(14, 10, 14, 8)
-        updates_header_layout.setSpacing(2)
-        updates_header_title = QLabel("UPDATES", self.updates_menu_header)
-        updates_header_title.setObjectName("updatesMenuEyebrow")
-        updates_header_subtitle = QLabel(
-            "Manage software components", self.updates_menu_header
-        )
-        updates_header_subtitle.setObjectName("updatesMenuSubtitle")
-        updates_header_layout.addWidget(updates_header_title)
-        updates_header_layout.addWidget(updates_header_subtitle)
-        self.updates_menu_header_action = QWidgetAction(self.updates_menu)
-        self.updates_menu_header_action.setDefaultWidget(self.updates_menu_header)
-        self.updates_menu.addAction(self.updates_menu_header_action)
-        self.updates_menu.addSeparator()
-
-        self.bundles_update_action = self.updates_menu.addAction(
-            qta.icon("fa6s.boxes-stacked", color=icon_color), "Bundles"
-        )
-        self.bundles_update_action.setToolTip("Download and manage Tor Expert Bundles")
-        self.bundles_update_action.triggered.connect(self._show_updater)
-        self.bundles_update_action.setShortcut("Ctrl+U")
-        self.bundles_update_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
-        self.addAction(self.bundles_update_action)
-        self.tunnel_update_action = self.updates_menu.addAction(
-            qta.icon("fa6s.network-wired", color=icon_color), "Tunnel"
-        )
-        self.tunnel_update_action.setToolTip("Install and manage the system tunnel engine")
-        self.tunnel_update_action.triggered.connect(self._show_tunnel_page)
-        self.updates_nav_button.setMenu(self.updates_menu)
-        self.updates_menu.aboutToShow.connect(self._on_updates_menu_about_to_show)
-        self.updates_menu.aboutToHide.connect(self._on_updates_menu_about_to_hide)
-        menu_layout.addWidget(self.updates_nav_button)
-
-        self.exit_action = QAction("Exit", self)
-        self.exit_action.setIcon(qta.icon("fa6s.right-from-bracket", color=icon_color))
-        self.exit_action.setShortcut("Ctrl+Q")
-        self.exit_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
-        self.exit_action.setToolTip("Exit TorProxy")
-        self.exit_action.triggered.connect(self.ask_close)
-        self.addAction(self.exit_action)
-
-        self.exit_nav_button = HoverIconButton(
-            "Exit", "fa6s.right-from-bracket", icon_color, menu_bar
-        )
-        self.exit_nav_button.setObjectName("topNavExitButton")
-        self.exit_nav_button.setIconSize(QSize(17, 17))
-        self.exit_nav_button.setToolTip("Exit TorProxy (Ctrl+Q)")
-        self.exit_nav_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.exit_nav_button.clicked.connect(self.ask_close)
-        menu_layout.addWidget(self.exit_nav_button)
-
-        self.global_state = QPushButton("● Checking Tor state…", self)
-        self.global_state.setObjectName("globalState")
-        self.global_state.setFlat(True)
-        self.global_state.setMinimumWidth(74)
-        self.global_state.setToolTip("Open the Home Event Log when Tor reports a failure.")
-        self.global_state.clicked.connect(self._open_event_log)
-        self.global_state.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._notification_entries = []
-        self.notifications_menu = QMenu(self)
-        self.notifications_menu.setObjectName("notificationsMenu")
-        self.notifications_menu.setMinimumWidth(344)
-        self.notifications_menu.setSeparatorsCollapsible(False)
-
-        self.notifications_menu_header = QWidget(self.notifications_menu)
-        self.notifications_menu_header.setObjectName("notificationsMenuHeader")
-        notifications_header_layout = QHBoxLayout(self.notifications_menu_header)
-        notifications_header_layout.setContentsMargins(14, 10, 12, 9)
-        notifications_header_layout.setSpacing(8)
-        notifications_heading_layout = QVBoxLayout()
-        notifications_heading_layout.setContentsMargins(0, 0, 0, 0)
-        notifications_heading_layout.setSpacing(1)
-        notifications_title = QLabel("Notifications", self.notifications_menu_header)
-        notifications_title.setObjectName("notificationsMenuTitle")
-        notifications_subtitle = QLabel(
-            "Recent activity", self.notifications_menu_header
-        )
-        notifications_subtitle.setObjectName("notificationsMenuSubtitle")
-        notifications_heading_layout.addWidget(notifications_title)
-        notifications_heading_layout.addWidget(notifications_subtitle)
-        notifications_header_layout.addLayout(notifications_heading_layout)
-        notifications_header_layout.addStretch(1)
-        self.notification_count_label = QLabel("0", self.notifications_menu_header)
-        self.notification_count_label.setObjectName("notificationCountBadge")
-        self.notification_count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        notifications_header_layout.addWidget(self.notification_count_label)
-        self.notification_clear_button = QToolButton(self.notifications_menu_header)
-        self.notification_clear_button.setObjectName("notificationClearButton")
-        self.notification_clear_button.setText("Clear all")
-        self.notification_clear_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-        self.notification_clear_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.notification_clear_button.clicked.connect(self._clear_notifications)
-        notifications_header_layout.addWidget(self.notification_clear_button)
-        self.notifications_menu_header_action = QWidgetAction(self)
-        self.notifications_menu_header_action.setDefaultWidget(
-            self.notifications_menu_header
-        )
-        self.notifications_menu.addAction(self.notifications_menu_header_action)
-        self.notifications_menu.addSeparator()
-        self._notification_menu_actions = []
-        self.notification_btn = QPushButton(self)
-        self.notification_btn.setObjectName("notificationButton")
-        self.notification_btn.setToolTip("Notifications")
-        self.notification_btn.setFixedSize(38, 30)
-        self.notification_btn.clicked.connect(self._show_notifications)
-
-        self.toggle_btn = QPushButton(self)
-        self.toggle_btn.setObjectName("themeToggle")
-        self.toggle_btn.setToolTip("Toggle light/dark appearance")
-        self.toggle_btn.setFixedSize(34, 30)
-        self.toggle_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.toggle_btn.clicked.connect(self._toggle_theme)
-
-        corner = QWidget(menu_bar)
-        corner.setObjectName("menuBarCorner")
-        corner_layout = QHBoxLayout(corner)
-        corner_layout.setContentsMargins(0, 0, 0, 0)
-        corner_layout.setSpacing(3)
-        corner_layout.addWidget(self.global_state)
-        corner_layout.addWidget(self.notification_btn)
-        corner_layout.addWidget(self.toggle_btn)
-        menu_layout.addStretch(1)
-        menu_layout.addWidget(corner)
-
-    def _show_notifications(self):
-        self.notifications_menu.exec(
-            self.notification_btn.mapToGlobal(self.notification_btn.rect().bottomLeft())
-        )
-
-    def notify_user(self, title, message, level="info"):
-        """Add a persistent, user-openable notification to the top-bar bell."""
-        self._notification_entries.append({
-            "title": str(title),
-            "message": str(message),
-            "level": "warning" if level == "warning" else "info",
-        })
-        self._notification_entries = self._notification_entries[-30:]
-        count = len(self._notification_entries)
-        self.notification_btn.setText(str(count if count < 100 else "99+"))
-        self.notification_btn.setToolTip("{}: {}".format(title, message))
-        self._rebuild_notifications_menu()
-
-    def _rebuild_notifications_menu(self, mode=None):
-        """Refresh the notification popup while keeping its branded header intact."""
-        menu = getattr(self, "notifications_menu", None)
-        if menu is None:
-            return
-
-        for action in getattr(self, "_notification_menu_actions", []):
-            menu.removeAction(action)
-            action.deleteLater()
-        self._notification_menu_actions = []
-
-        dark = (mode or CONFIG.get("mode", "dark")) == "dark"
-        text = "#e8edf6" if dark else "#253246"
-        muted = "#94a2b5" if dark else "#7b8798"
-        accent = "#5797ed" if dark else "#2878d0"
-        warning = "#e5b45b" if dark else "#b87818"
-
-        count = len(self._notification_entries)
-        self.notification_count_label.setText(str(count if count < 100 else "99+"))
-        self.notification_count_label.setToolTip(
-            "{} stored notification{}".format(count, "" if count == 1 else "s")
-        )
-        self.notification_clear_button.setEnabled(count > 0)
-        self.notification_clear_button.setVisible(count > 0)
-
-        if not count:
-            empty_action = menu.addAction(
-                qta.icon("fa6s.inbox", color=muted), "You're all caught up"
-            )
-            empty_action.setEnabled(False)
-            empty_action.setToolTip("New TorProxy activity will appear here.")
-            self._notification_menu_actions.append(empty_action)
-            return
-
-        for index, notice in enumerate(reversed(self._notification_entries)):
-            is_warning = notice["level"] == "warning"
-            icon = qta.icon(
-                "fa6s.triangle-exclamation" if is_warning else "fa6s.circle-info",
-                color=warning if is_warning else accent,
-            )
-            action = menu.addAction(icon, notice["title"])
-            action.setToolTip(notice["message"])
-            action.setStatusTip(notice["message"])
-            action.triggered.connect(
-                lambda _checked=False, t=notice["title"], m=notice["message"], lv=notice["level"]:
-                    self._show_notice(t, m, lv)
-            )
-            self._notification_menu_actions.append(action)
-
-            description_widget = QWidget(menu)
-            description_widget.setObjectName("notificationDescriptionContainer")
-            description_layout = QHBoxLayout(description_widget)
-            description_layout.setContentsMargins(38, 0, 14, 8)
-            description_layout.setSpacing(0)
-            description_label = QLabel(notice["message"], description_widget)
-            description_label.setObjectName("notificationDescription")
-            description_label.setWordWrap(True)
-            description_label.setMinimumWidth(260)
-            description_label.setMaximumWidth(304)
-            description_layout.addWidget(description_label)
-            description_action = QWidgetAction(self)
-            description_action.setDefaultWidget(description_widget)
-            menu.addAction(description_action)
-            self._notification_menu_actions.append(description_action)
-
-            if index < count - 1:
-                separator = menu.addSeparator()
-                self._notification_menu_actions.append(separator)
-
-    def _show_notice(self, title, message, level):
-        if level == "warning":
-            QMessageBox.warning(self, title, message)
-        else:
-            QMessageBox.information(self, title, message)
-
-    def _clear_notifications(self):
-        self._notification_entries.clear()
-        self.notification_btn.setText("0")
-        self.notification_btn.setToolTip("No new notifications")
-        self._rebuild_notifications_menu()
-
-    def _on_updates_menu_about_to_show(self):
-        """Point the dropdown chevron upward while the menu is visible."""
-        self.updates_nav_button.setMenuIndicatorOpen(True)
-        self._sync_updates_nav_icon()
-
-    def _on_updates_menu_about_to_hide(self):
-        """Restore the dropdown chevron after the menu closes."""
-        self.updates_nav_button.setMenuIndicatorOpen(False)
-        self._sync_updates_nav_icon()
-
-    def _sync_updates_nav_icon(self, mode=None):
-        """Make the Updates text, cloud icon, and dropdown chevron share one state."""
-        dark = (mode or CONFIG.get("mode", "dark")) == "dark"
-        selected = self.stack.currentWidget() in (
-            getattr(self, "updater_window", None),
-            getattr(self, "tunnel_window", None),
-        )
-        self.updates_nav_button.setChecked(selected)
-        color = "#ffffff" if selected else ("#eff1f4" if dark else "#202832")
-        self.updates_nav_button.setIcon(qta.icon("fa6s.cloud-arrow-down", color=color))
-        self.updates_nav_button.setMenuIndicatorColor(color)
-    def _apply_shell_styles(self, mode=None):
-        dark = (mode or CONFIG["mode"]) == "dark"
-        border = "#3b4552" if dark else "#d7dee7"
-        surface = "#272c33" if dark else "#ffffff"
-        menu_surface = "#202630" if dark else "#edf1f6"
-        text = "#eff1f4" if dark else "#202832"
-        accent = "#287db5"
-        hover = "rgba(71, 163, 242, 0.15)" if dark else "rgba(24, 118, 191, 0.11)"
-        self.setStyleSheet(f"""
-            QWidget#topMenuBar, QWidget#menuBarCorner {{ background-color: {menu_surface}; }}
-            QWidget#topMenuBar {{ border: none; border-bottom: 1px solid {border}; }}
-            QPushButton#topNavButton, QToolButton#updatesNavButton {{
-                min-height: 32px; padding: 0 8px; margin: 0 1px; border: 1px solid transparent;
-                border-bottom: 2px solid transparent; border-radius: 7px;
-                color: {text}; background: transparent; font-size: 9pt; font-weight: 650;
-            }}
-            QPushButton#topNavButton:hover, QToolButton#updatesNavButton:hover {{
-                color: {text}; background: {hover}; border-color: {border};
-            }}
-            QPushButton#topNavButton:checked, QToolButton#updatesNavButton:checked {{
-                background: {accent}; color: #ffffff; border: 1px solid {accent};
-                border-bottom: 2px solid #9bd8ff; font-weight: 750;
-            }}
-            QPushButton#topNavButton:checked:hover, QToolButton#updatesNavButton:checked:hover {{
-                background: {accent}; color: #ffffff; border-color: {accent};
-            }}
-            /* Reserve a clear lane for the bottom-right dropdown chevron. */
-            QToolButton#updatesNavButton {{ padding-right: 22px; }}
-            QToolButton#updatesNavButton::menu-indicator {{
-                image: none;
-                width: 12px;
-                height: 12px;
-                subcontrol-origin: padding;
-                subcontrol-position: bottom right;
-            }}
-            QPushButton#topNavExitButton {{
-                min-height: 32px; padding: 0 9px; margin: 0 1px; border: 1px solid {border};
-                border-radius: 7px; color: {text}; background: transparent; font-size: 9pt; font-weight: 700;
-            }}
-            QPushButton#topNavExitButton:hover {{ color: #ffffff; background: #b83336; border-color: #b83336; }}
-            QWidget#menuBarCorner {{ border-bottom: 1px solid {border}; }}
-            QWidget#menuBarCorner QLabel {{ background: transparent; color: {text}; border: none; padding: 0 4px; }}
-            QPushButton#globalState {{ background: transparent; color: {text}; border: none; border-radius: 7px; padding: 0 4px; font-size: 10px; }}
-            QPushButton#globalState:hover {{ background: {hover}; }}
-            QWidget#menuBarCorner QPushButton {{ background: transparent; color: {text}; border: none; border-radius: 7px; }}
-            QWidget#menuBarCorner QPushButton:hover {{ background: {hover}; }}
-            QWidget#customTitleBar {{ background: {menu_surface}; border-bottom: 1px solid {border}; }}
-            QLabel#windowTitle {{ color: {text}; font-size: 13px; font-weight: 700; }}
-            QWidget#titleBarWindowControls {{ background: transparent; border: none; }}
-            QPushButton#titleBarButton, QPushButton#titleBarCloseButton {{
-                min-width: 46px; max-width: 46px; min-height: 40px; max-height: 40px;
-                background: transparent; border: none; border-radius: 0px;
-                padding: 0px; margin: 0px;
-            }}
-            QPushButton#titleBarButton:hover {{ background: {hover}; }}
-            QPushButton#titleBarButton:pressed {{ background: rgba(90, 105, 125, 0.24); }}
-            QPushButton#titleBarCloseButton:hover {{ background: #c42b1c; }}
-            QPushButton#titleBarCloseButton:pressed {{ background: #a61f16; }}
-            QPushButton#themeToggle, QPushButton#notificationButton {{ background: transparent; min-height: 28px; border: none; border-radius: 7px; padding: 0 7px; }}
-            QPushButton#themeToggle:hover, QPushButton#notificationButton:hover {{ background: {hover}; }}
-            QPushButton#notificationButton {{ font-weight: 700; }}
-            QStackedWidget#pageStack {{ border: none; outline: none; background: {surface}; padding: 0; margin: 0; }}
-            QMenu {{ background: {menu_surface}; color: {text}; border: 1px solid {border}; padding: 5px; }}
-            QMenu::item {{ padding: 7px 20px 7px 10px; border-radius: 5px; }}
-            QMenu::item:selected {{ background: {hover}; }}
-            QMenu#updatesMenu, QMenu#notificationsMenu {{
-                background: {"#171e29" if dark else "#ffffff"};
-                color: {text};
-                border: 1px solid {"#303b4c" if dark else "#dfe6ef"};
-                border-radius: 13px;
-                padding: 7px;
-            }}
-            QMenu#updatesMenu::item, QMenu#notificationsMenu::item {{
-                color: {text};
-                background: transparent;
-                padding: 9px 16px 9px 36px;
-                margin: 2px 4px;
-                min-height: 22px;
-                border-radius: 8px;
-            }}
-            QMenu#updatesMenu::item:selected, QMenu#notificationsMenu::item:selected {{
-                color: {text};
-                background: {"#29384d" if dark else "#edf3fb"};
-            }}
-            QMenu#updatesMenu::item:disabled, QMenu#notificationsMenu::item:disabled {{
-                color: {"#94a2b5" if dark else "#7b8798"};
-            }}
-            QMenu#updatesMenu::separator, QMenu#notificationsMenu::separator {{
-                height: 1px;
-                background: {"#303b4c" if dark else "#e7ecf2"};
-                margin: 5px 12px;
-            }}
-            QWidget#updatesMenuHeader, QWidget#notificationsMenuHeader,
-            QWidget#notificationDescriptionContainer {{
-                background: transparent;
-                border: none;
-            }}
-            /* Header copy should sit directly on the menu surface, never on its own tile. */
-            QLabel#updatesMenuEyebrow, QLabel#updatesMenuSubtitle,
-            QLabel#notificationsMenuTitle, QLabel#notificationsMenuSubtitle,
-            QLabel#notificationDescription {{
-                background: transparent;
-                border: none;
-            }}
-            QLabel#updatesMenuEyebrow {{
-                color: {"#94a2b5" if dark else "#7b8798"};
-                font-size: 8pt;
-                font-weight: 750;
-                letter-spacing: 1px;
-            }}
-            QLabel#updatesMenuSubtitle, QLabel#notificationsMenuSubtitle {{
-                color: {"#94a2b5" if dark else "#7b8798"};
-                font-size: 8pt;
-            }}
-            QLabel#notificationsMenuTitle {{
-                color: {text};
-                font-size: 10pt;
-                font-weight: 750;
-            }}
-            QLabel#notificationCountBadge {{
-                color: {accent};
-                background: {"#263c55" if dark else "#eaf2fc"};
-                border: 1px solid {"#385574" if dark else "#d8e7f8"};
-                border-radius: 9px;
-                min-width: 22px;
-                min-height: 19px;
-                padding: 1px 6px;
-                font-size: 8pt;
-                font-weight: 750;
-            }}
-            QToolButton#notificationClearButton {{
-                color: {accent};
-                background: transparent;
-                border: none;
-                border-radius: 6px;
-                padding: 5px 7px;
-                font-size: 8pt;
-                font-weight: 650;
-            }}
-            QToolButton#notificationClearButton:hover {{
-                background: {"#29384d" if dark else "#edf3fb"};
-            }}
-            QLabel#notificationDescription {{
-                color: {"#94a2b5" if dark else "#7b8798"};
-                background: transparent;
-                font-size: 8pt;
-                padding: 0;
-            }}
-        """)
-        icon_color = text
-        for index, (action, icon_name) in enumerate(zip(self.page_actions, self.page_icon_names)):
-            color = "#ffffff" if action.isChecked() else icon_color
-            action.setIcon(qta.icon(icon_name, color=color))
-            if index < len(self.page_nav_buttons):
-                self.page_nav_buttons[index].setIcon(qta.icon(icon_name, color=color))
-        self._sync_updates_nav_icon(mode)
-        self.bundles_update_action.setIcon(qta.icon("fa6s.boxes-stacked", color=icon_color))
-        self.tunnel_update_action.setIcon(qta.icon("fa6s.network-wired", color=icon_color))
-        self.exit_action.setIcon(qta.icon("fa6s.right-from-bracket", color=icon_color))
-        self.exit_nav_button.setNormalIconColor(icon_color)
-        self.toggle_btn.setIcon(qta.icon("fa6s.sun" if dark else "fa6s.moon", color=icon_color))
-        self.notification_btn.setIcon(qta.icon("fa6s.bell", color=icon_color))
-        self.notification_btn.setText(
-            str(len(self._notification_entries) if len(self._notification_entries) < 100 else "99+")
-        )
-        self.notification_btn.setFixedSize(44, 30)
-        self._rebuild_notifications_menu(mode)
-        if IS_WINDOWS and hasattr(self, "title_bar"):
-            self.title_bar.update_theme(icon_color)
-        if hasattr(self, "proxyWidget") and hasattr(self.proxyWidget, "_apply_home_theme"):
-            self.proxyWidget._apply_home_theme()
-
-    def _open_event_log(self):
-        self._show_home()
-        proxy = getattr(self, "proxyWidget", None)
-        if proxy is not None and (
-            getattr(proxy, "failed", False)
-            or getattr(getattr(proxy, "tor", None), "state", "") == "FAILED"
-        ):
-            if not getattr(proxy, "logs_open", False):
-                proxy.show_logs()
-
-    def _on_navigation_changed(self, row):
-        # Compatibility hook for integrations which select a page by index.
-        self._show_page(row)
+            self._page_loading_index = None
+            self._update_global_state()
+            self._schedule_deferred_page_load(220)
 
     def _show_page(self, index):
         if 0 <= index < self.stack.count():
