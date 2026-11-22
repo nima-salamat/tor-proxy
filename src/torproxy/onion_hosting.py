@@ -696,7 +696,6 @@ class OnionHostingManager:
                         self._service_errors[service["id"]] = str(exc)
                         LOGGER.warning("Could not auto-start Onion Service '%s': %s", service["id"], exc)
         finally:
-            self._service_lifecycle_lock.release()
             self._runtime_start_lock.release()
 
     def _stop_runtime_serialized(self, *, force: bool = False, shutdown: bool = False) -> None:
@@ -796,6 +795,7 @@ class OnionHostingManager:
                         f"could not be joined: {exc}"
                     ) from exc
         finally:
+            self._service_lifecycle_lock.release()
             self._runtime_start_lock.release()
 
     def stop_runtime(self, *, force: bool = False) -> None:
