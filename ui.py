@@ -897,6 +897,7 @@ class Window(QMainWindow):
             self._schedule_deferred_page_load(0)
             return
 
+        was_current = self.stack.currentWidget() is placeholder
         page = None
         try:
             page = self._build_deferred_page(index)
@@ -912,7 +913,7 @@ class Window(QMainWindow):
             self._page_placeholders.pop(index, None)
             self._page_states[index] = "ready"
             placeholder.deleteLater()
-            if self.stack.currentIndex() == index:
+            if was_current:
                 self.stack.setCurrentWidget(page)
             logger.debug(
                 "Deferred page %s finished loading.",
@@ -926,11 +927,15 @@ class Window(QMainWindow):
                 self._page_placeholders.pop(index, None)
                 self._page_states[index] = "ready"
                 placeholder.deleteLater()
+                if was_current:
+                    self.stack.setCurrentWidget(page)
             else:
                 if isinstance(page, QWidget):
                     page.deleteLater()
                 if self.stack.indexOf(placeholder) < 0:
                     self.stack.insertWidget(index, placeholder)
+                if was_current:
+                    self.stack.setCurrentWidget(placeholder)
                 if index == self.PAGE_SETTINGS:
                     self.settingWidget = None
                     self.block_host_window = None
