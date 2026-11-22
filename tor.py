@@ -1020,9 +1020,28 @@ class TorRunner(QObject):
                 circuit_metrics = (
                     vars(monitor.snapshot()) if monitor is not None else {}
                 )
+                manager = managers[index]
+                identity_getter = getattr(manager, "process_identity_snapshot", None)
+                try:
+                    identity = identity_getter() if callable(identity_getter) else {}
+                except Exception:
+                    identity = {}
+                process = getattr(manager, "process", None)
+                process_pid = identity.get("pid") if identity else None
+                if process_pid is None and process is not None:
+                    process_pid = getattr(process, "pid", None)
+                process_alive = bool(identity.get("alive"))
+                if not identity and process is not None:
+                    try:
+                        process_alive = process.poll() is None
+                    except Exception:
+                        process_alive = True
                 instances.append({
                     "index": index + 1,
                     "state": worker_state,
+                    "pid": process_pid,
+                    "process_alive": process_alive,
+                    "process_identity_verified": bool(identity.get("verified", False)),
                     "healthy": healthy,
                     "verified_tor": bool(state.get("verified_tor", False)),
                     "latency_ms": state.get("latency_ms"),

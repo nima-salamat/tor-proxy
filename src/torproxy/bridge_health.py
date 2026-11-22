@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
+import shutil
 import socket
 import threading
 import tempfile
@@ -11,6 +13,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from collections.abc import Callable, Iterable
 
+from .paths import user_directories
 from .tor_manager import TorManager, TorSettings
 
 LOGGER = logging.getLogger(__name__)
@@ -73,6 +76,62 @@ def _allocate_ephemeral_port(
     raise OSError("Could not reserve a unique temporary Tor probe port.")
 
 
+def _probe_state_root(settings: TorSettings) -> Path:
+    """Use a durable private state location for isolated bridge-check workers."""
+    base = Path(settings.data_directory or (user_directories().data / "tor"))
+    root = base.parent / "bridge-probes"
+    root.mkdir(parents=True, exist_ok=True)
+    if os.name != "nt":
+        root.chmod(0o700)
+    return root
+
+
+class _ProbeDirectory:
+    """Temporary probe directory removed only after Tor shutdown is confirmed."""
+
+    def __init__(self, root: Path):
+        self.root = root
+        self.path: Path | None = None
+
+    def __enter__(self) -> str:
+        self.path = Path(tempfile.mkdtemp(prefix="probe-", dir=self.root))
+        if os.name != "nt":
+            self.path.chmod(0o700)
+        return str(self.path)
+
+    def cleanup(self) -> None:
+        if self.path is not None:
+            shutil.rmtree(self.path)
+
+    def __exit__(self, *_args):
+        # Deliberately preserve this directory unless manager.stop() succeeded.
+        return False
+
+
+def _cleanup_stale_probe_directories(settings: TorSettings) -> None:
+    """Reconcile previous probe children before creating a new bridge-health wave."""
+    root = _probe_state_root(settings)
+    for directory in tuple(root.iterdir()):
+        if not directory.is_dir() or directory.is_symlink():
+            continue
+        try:
+            if (directory / "torrc").exists() or (directory / ".torproxy-process.json").exists():
+                probe_settings = replace(
+                    settings,
+                    data_directory=directory,
+                    log_path=directory / "tor-probe.log",
+                    dns_port=None,
+                )
+                TorManager(probe_settings).stop()
+            shutil.rmtree(directory)
+        except Exception:
+            LOGGER.warning(
+                "A previous isolated bridge-check process could not be reconciled; retaining %s.",
+                directory,
+                exc_info=True,
+            )
+
+
 def _probe_single_bridge(
     settings: TorSettings,
     record: str,
@@ -98,7 +157,8 @@ def _probe_single_bridge(
     watcher: threading.Thread | None = None
 
     try:
-        with tempfile.TemporaryDirectory(prefix="torproxy-bridge-probe-") as temp_directory:
+        probe_directory = _ProbeDirectory(_probe_state_root(settings))
+        with probe_directory as temp_directory:
             probe_settings = replace(
                 settings,
                 socks_port=socks_port,
@@ -273,7 +333,16 @@ def _probe_single_bridge(
                 try:
                     manager.stop()
                 except Exception:
-                    LOGGER.debug("Bridge-check process cleanup failed.", exc_info=True)
+                    # Keep the torrc and identity record if a child may still be alive.
+                    LOGGER.warning(
+                        "Bridge-check process cleanup failed; retaining its state directory.",
+                        exc_info=True,
+                    )
+                else:
+                    try:
+                        probe_directory.cleanup()
+                    except OSError:
+                        LOGGER.warning("Could not remove a reconciled bridge-check directory.", exc_info=True)
                 if watcher is not None and watcher.is_alive():
                     watcher.join(timeout=0.5)
     except Exception as exc:
@@ -299,6 +368,7 @@ def check_bridges(
     """
     parsed = TorManager._parse_bridges(settings.bridges)
     original = tuple(record for _kind, record in parsed)
+    _cleanup_stale_probe_directories(settings)
     unique_records = tuple(dict.fromkeys(original))
     if not unique_records:
         return BridgeHealthResult(original, (), (), ())

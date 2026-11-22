@@ -115,15 +115,22 @@ class TorServicePool:
 
     @classmethod
     def _reported_state(cls, manager: TorManager) -> str:
-        """Expose an exited Tor child immediately, before monitor reconciliation."""
+        """Expose exited and previous-session Tor children before they can be restarted."""
         state = cls._state_value(manager)
         process = getattr(manager, "process", None)
+        identity_getter = getattr(manager, "process_identity_snapshot", None)
+        if callable(identity_getter):
+            try:
+                identity = identity_getter()
+            except Exception:
+                identity = {"alive": False}
+            if bool(identity.get("alive")) and process is None:
+                return "orphaned"
         if state == "ready" and process is not None:
             try:
                 if process.poll() is not None:
                     return "failed"
             except Exception:
-                # An uninspectable child must never be advertised as healthy.
                 return "failed"
         return state
 
@@ -269,17 +276,31 @@ class TorServicePool:
             for entry in entries:
                 state = self._reported_state(entry.manager)
                 process_exited = state == "failed" and self._state_value(entry.manager) == "ready"
+                identity_getter = getattr(entry.manager, "process_identity_snapshot", None)
+                try:
+                    identity = identity_getter() if callable(identity_getter) else {}
+                except Exception:
+                    identity = {}
+                process = getattr(entry.manager, "process", None)
+                reported_pid = identity.get("pid") if identity else None
+                if reported_pid is None and process is not None:
+                    reported_pid = getattr(process, "pid", None)
+                orphaned = state == "orphaned"
                 result[entry.service_id] = {
                     "state": state,
                     "socks_port": entry.settings.socks_port,
                     "control_port": entry.settings.control_port,
                     "dns_port": entry.settings.dns_port,
                     "data_directory": str(entry.settings.data_directory),
-                    "pid": getattr(getattr(entry.manager, "process", None), "pid", None),
-                    "network_healthy": bool(entry.network_healthy and not process_exited),
-                    "network_health": "unhealthy" if process_exited else entry.network_health,
-                    "verified_tor": bool(entry.verified_tor and not process_exited),
-                    "latency_ms": None if process_exited else entry.health_latency_ms,
+                    "pid": reported_pid,
+                    "process_alive": bool(identity.get("alive", process is not None)),
+                    "process_identity_verified": bool(identity.get("verified", False)),
+                    "network_healthy": bool(entry.network_healthy and not process_exited and not orphaned),
+                    "network_health": (
+                        "orphaned" if orphaned else "unhealthy" if process_exited else entry.network_health
+                    ),
+                    "verified_tor": bool(entry.verified_tor and not process_exited and not orphaned),
+                    "latency_ms": None if process_exited or orphaned else entry.health_latency_ms,
                     "consecutive_health_failures": entry.consecutive_health_failures,
                     "last_health_check": entry.last_health_check,
                     "last_health_error": (

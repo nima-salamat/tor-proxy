@@ -1,6 +1,7 @@
 """Supervised Tor subprocess lifecycle with explicit loopback ControlPort authentication."""
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -159,6 +160,7 @@ class TorManager:
         dirs = user_directories()
         self.data_directory = Path(settings.data_directory or (dirs.data / "tor"))
         self.torrc_path = self.data_directory / "torrc"
+        self.process_state_path = self.data_directory / ".torproxy-process.json"
         self.log_path = Path(settings.log_path) if settings.log_path is not None else dirs.logs / "tor.log"
         self._data_directory_lock_path = self.data_directory / ".torproxy-data-directory.lock"
         self._data_directory_lock_handle = None
@@ -213,6 +215,207 @@ class TorManager:
                 _ACTIVE_DATA_DIRECTORIES.discard(canonical)
             raise
 
+    @staticmethod
+    def _normalized_process_path(value: str | Path) -> str:
+        return os.path.normcase(str(Path(value).expanduser().resolve(strict=False)))
+
+    @classmethod
+    def _command_uses_torrc(cls, command: list[str], torrc_path: str | Path) -> bool:
+        expected = cls._normalized_process_path(torrc_path)
+        for argument in command:
+            value = str(argument).strip('"')
+            try:
+                if cls._normalized_process_path(value) == expected:
+                    return True
+            except (OSError, RuntimeError, ValueError):
+                continue
+        return False
+
+    def _read_process_identity(self) -> dict | None:
+        try:
+            if not self.process_state_path.is_file() or self.process_state_path.stat().st_size > 16 * 1024:
+                return None
+            payload = json.loads(self.process_state_path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict) or payload.get("schema") != 1:
+                return None
+            pid = payload.get("pid")
+            created = payload.get("create_time")
+            if type(pid) is not int or pid <= 0 or type(created) not in (int, float):
+                return None
+            if not all(isinstance(payload.get(key), str) and payload[key] for key in ("executable", "torrc")):
+                return None
+            if self._normalized_process_path(payload["torrc"]) != self._normalized_process_path(self.torrc_path):
+                return None
+            return payload
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return None
+
+    def _recorded_tor_process(self):
+        """Return only the process whose PID, creation time, executable and torrc all match."""
+        record = self._read_process_identity()
+        if record is None:
+            return None
+        try:
+            process = psutil.Process(int(record["pid"]))
+            if not process.is_running() or process.status() == psutil.STATUS_ZOMBIE:
+                return None
+            if abs(float(process.create_time()) - float(record["create_time"])) > 0.25:
+                return None
+            executable = self._normalized_process_path(process.exe())
+            if executable != self._normalized_process_path(record["executable"]):
+                return None
+            if not self._command_uses_torrc(process.cmdline(), record["torrc"]):
+                return None
+            return process
+        except (psutil.Error, OSError, RuntimeError, TypeError, ValueError):
+            return None
+
+    def _persist_process_identity(self, pid: int) -> None:
+        """Atomically persist an independently verified Tor child identity for crash recovery."""
+        try:
+            process = psutil.Process(int(pid))
+            if not process.is_running() or process.status() == psutil.STATUS_ZOMBIE:
+                raise TorManagerError("The launched Tor process exited before its identity could be recorded.")
+            executable = self._normalized_process_path(process.exe())
+            expected_executable = self._normalized_process_path(self.settings.executable)
+            if executable != expected_executable:
+                raise TorManagerError(
+                    "The launched process executable does not match the selected Tor binary; ownership was not recorded."
+                )
+            if not self._command_uses_torrc(process.cmdline(), self.torrc_path):
+                raise TorManagerError(
+                    "The launched process is not using this Tor instance's dedicated torrc; ownership was not recorded."
+                )
+            created = float(process.create_time())
+        except TorManagerError:
+            raise
+        except (psutil.Error, OSError, RuntimeError, TypeError, ValueError) as exc:
+            raise TorManagerError(
+                f"Could not verify the launched Tor process identity ({type(exc).__name__})."
+            ) from exc
+
+        self.data_directory.mkdir(parents=True, exist_ok=True)
+        if os.name != "nt":
+            self.data_directory.chmod(0o700)
+        record = {
+            "schema": 1,
+            "pid": int(pid),
+            "create_time": created,
+            "executable": executable,
+            "torrc": self._normalized_process_path(self.torrc_path),
+            "data_directory": self._normalized_process_path(self.data_directory),
+            "scope_unit": self._scope_unit or "",
+        }
+        fd, temporary = tempfile.mkstemp(prefix=".torproxy-process-", suffix=".tmp", dir=self.data_directory)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+                json.dump(record, handle, sort_keys=True)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            if os.name != "nt":
+                os.chmod(temporary, 0o600)
+            os.replace(temporary, self.process_state_path)
+            if os.name != "nt":
+                self.process_state_path.chmod(0o600)
+        except OSError as exc:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+            raise TorManagerError(f"Could not persist Tor process ownership: {exc}") from exc
+
+    def process_identity_snapshot(self) -> dict[str, object]:
+        """Expose the verified Tor PID, distinguishing an orphan from an unverified PID."""
+        recorded = self._recorded_tor_process()
+        if recorded is not None:
+            return {
+                "pid": int(recorded.pid),
+                "alive": True,
+                "verified": True,
+                "create_time": float(recorded.create_time()),
+                "scope_unit": str((self._read_process_identity() or {}).get("scope_unit") or ""),
+            }
+        process = self.process
+        if process is not None:
+            try:
+                alive = process.poll() is None
+            except Exception:
+                alive = True
+            if alive:
+                return {
+                    "pid": int(self._tor_pid or process.pid),
+                    "alive": True,
+                    "verified": False,
+                    "create_time": None,
+                    "scope_unit": self._scope_unit or "",
+                }
+        return {
+            "pid": None,
+            "alive": False,
+            "verified": False,
+            "create_time": None,
+            "scope_unit": self._scope_unit or "",
+        }
+
+    def _clear_process_identity(self) -> None:
+        try:
+            self.process_state_path.unlink(missing_ok=True)
+        except OSError as exc:
+            raise TorManagerError(f"Could not remove the stopped Tor process identity record: {exc}") from exc
+
+    def _stop_recorded_process(self, *, force: bool = False) -> None:
+        process = self._recorded_tor_process()
+        if process is None:
+            self._clear_process_identity()
+            return
+        try:
+            if force:
+                process.kill()
+                process.wait(timeout=2)
+            else:
+                process.terminate()
+                try:
+                    process.wait(timeout=max(2, int(self.settings.shutdown_timeout_seconds)))
+                except psutil.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=2)
+        except psutil.NoSuchProcess:
+            pass
+        except psutil.TimeoutExpired as exc:
+            message = (
+                f"Verified Tor process {process.pid} did not exit after termination. "
+                "Its ownership record and DataDirectory lock are retained."
+            )
+            self.last_error = message
+            self.state = TorState.FAILED
+            raise TorManagerError(message) from exc
+        except psutil.AccessDenied as exc:
+            raise TorManagerError(
+                f"Permission was denied while stopping verified Tor process {process.pid}; ownership is retained."
+            ) from exc
+        remaining = self._recorded_tor_process()
+        if remaining is not None:
+            raise TorManagerError(
+                f"Verified Tor process {remaining.pid} is still running; its ownership record is retained."
+            )
+        self._clear_process_identity()
+
+    def _stop_orphaned_process(self) -> None:
+        """Acquire the instance lock before reconciling a Tor child left by a previous UI process."""
+        acquired_here = self._data_directory_lock_handle is None
+        if acquired_here:
+            self._acquire_data_directory_lock()
+        try:
+            self._stop_stale_managed_tor_processes()
+            if self._recorded_tor_process() is not None:
+                raise TorManagerError(
+                    "A verified Tor process is still active after orphan reconciliation; its state was retained."
+                )
+        finally:
+            if acquired_here:
+                self._release_data_directory_lock()
+
     def _stop_stale_managed_tor_processes(self) -> None:
         """Reap Tor children left behind by an exited TorProxy UI, but only for our exact torrc."""
         target_torrc = os.path.normcase(str(self.torrc_path.resolve()))
@@ -244,7 +447,12 @@ class TorManager:
             except (OSError, ValueError, TypeError):
                 LOGGER.debug("Could not normalize a process command line while checking TorProxy's torrc.", exc_info=True)
 
+        recorded = self._recorded_tor_process()
+        if recorded is not None and all(existing.pid != recorded.pid for existing in matching):
+            matching.append(recorded)
+        matching = list({process.pid: process for process in matching}.values())
         if not matching:
+            self._clear_process_identity()
             return
         process_ids = [process.pid for process in matching]
         LOGGER.warning(
@@ -281,6 +489,7 @@ class TorManager:
                     ", ".join(str(process.pid) for process in alive)
                 )
             )
+        self._clear_process_identity()
 
     def _release_data_directory_lock(self) -> None:
         handle, self._data_directory_lock_handle = self._data_directory_lock_handle, None
@@ -787,6 +996,7 @@ class TorManager:
         self._tor_pid = tor_pid
         self._tor_cgroup_id = cgroup_id
         self._tor_cgroup_level = cgroup_level
+        self._persist_process_identity(tor_pid)
         LOGGER.info("Tor network access restricted to cgroup id=%s level=%s.", cgroup_id, cgroup_level)
         return True
 
@@ -911,6 +1121,9 @@ class TorManager:
                 launch_command = [systemd_run, "--user", "--scope", "--unit", self._scope_unit, "--quiet", "--", *launch_command]
             with self._lock:
                 self.process = self._popen_factory(launch_command, **kwargs)
+                launched_process = self.process
+            if not self.settings.isolate_in_cgroup:
+                self._persist_process_identity(int(launched_process.pid))
             deadline = time.monotonic() + self.settings.startup_timeout_seconds
             last_detail = "Waiting for Tor ControlPort."
             handshake_warning_reported = False
@@ -1256,6 +1469,7 @@ class TorManager:
                 self.settings.cgroup_callback(None, None)
             except Exception:
                 LOGGER.exception("Could not remove the stale Tor cgroup firewall exception; the default-drop policy remains active.")
+        self._stop_recorded_process(force=force)
         self._tor_pid = None
         self._tor_cgroup_id = None
         self._tor_cgroup_level = None
@@ -1275,6 +1489,19 @@ class TorManager:
         if self._start_cancel_event is not None:
             self._start_cancel_event.set()
         self._emit(None, TorState.STOPPING, None, "Stopping the managed Tor process.")
+        if (
+            self.process is None
+            and self._data_directory_lock_handle is None
+            and (self.process_state_path.exists() or self.torrc_path.exists())
+        ):
+            try:
+                self._stop_orphaned_process()
+            except Exception as exc:
+                self.last_error = str(exc)
+                self._emit(None, TorState.FAILED, None, self.last_error)
+                raise
+            self._emit(None, TorState.STOPPED, None, "Previous Tor process reconciled; no managed child remains.")
+            return
         try:
             self._terminate_process()
         except Exception as exc:
@@ -1290,6 +1517,19 @@ class TorManager:
         if self._start_cancel_event is not None:
             self._start_cancel_event.set()
         self._emit(None, TorState.STOPPING, None, "Force-stopping the managed Tor process.")
+        if (
+            self.process is None
+            and self._data_directory_lock_handle is None
+            and (self.process_state_path.exists() or self.torrc_path.exists())
+        ):
+            try:
+                self._stop_orphaned_process()
+            except Exception as exc:
+                self.last_error = str(exc)
+                self._emit(None, TorState.FAILED, None, self.last_error)
+                raise
+            self._emit(None, TorState.STOPPED, None, "Previous Tor process reconciled; no managed child remains.")
+            return
         try:
             self._terminate_process(force=True)
         except Exception as exc:
