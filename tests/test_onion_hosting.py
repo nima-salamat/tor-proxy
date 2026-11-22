@@ -847,3 +847,25 @@ def test_runtime_snapshot_does_not_resurrect_manager_cleared_during_snapshot(hos
     assert cleared.is_set()
     assert snapshot["state"] == "ready"
     assert manager.manager is None
+
+
+
+def test_discovered_unverified_developer_process_is_not_described_as_safe_to_stop(hosting):
+    manager, _config, tor = hosting
+    tor.state = TorState.STOPPED
+    tor.process = None
+    tor.process_identity_snapshot = lambda: {
+        "pid": 4260,
+        "alive": True,
+        "verified": False,
+        "identity_unverifiable": True,
+    }
+    manager._manager = None
+    manager._manager_factory = lambda _settings: tor
+
+    snapshot = manager.runtime_snapshot()
+
+    assert snapshot["state"] == "process-identity-unverified"
+    assert snapshot["pid"] == 4260
+    assert "cannot be verified" in snapshot["message"]
+    assert "will not signal it" in snapshot["message"]

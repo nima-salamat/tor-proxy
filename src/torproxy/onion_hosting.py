@@ -475,7 +475,7 @@ class OnionHostingManager:
         }
 
     def _discover_orphaned_manager(self) -> TorManager | None:
-        """Reattach an inspection manager when a verified Developer Tor child survived the UI."""
+        """Reattach a manager for a live previous-session Tor PID, verified or not."""
         with self._lock:
             if self._manager is not None:
                 return self._manager
@@ -493,10 +493,17 @@ class OnionHostingManager:
         with self._lock:
             if self._manager is None:
                 self._manager = manager
-                self._last_status_message = (
-                    f"Developer Tor process {identity.get('pid')} survived the previous TorProxy session. "
-                    "Stop it to reconcile ownership before starting another runtime."
-                )
+                if bool(identity.get("verified")):
+                    self._last_status_message = (
+                        f"Verified Developer Tor PID {identity.get('pid')} survived the previous TorProxy session. "
+                        "Stop it to reconcile ownership before starting another runtime."
+                    )
+                else:
+                    self._last_status_message = (
+                        f"Developer Tor PID {identity.get('pid')} is still alive but its process identity "
+                        "cannot be verified. TorProxy will not signal it or start a replacement until "
+                        "the operating-system access/identity issue is resolved."
+                    )
                 return manager
             return self._manager
 
