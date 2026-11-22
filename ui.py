@@ -614,8 +614,8 @@ class Window(QMainWindow):
                     self._set_tray_system_proxy_mode(selected_mode)
             )
             self.tray_system_proxy_action_group.addAction(action)
-            # Keep all choices visible in one compact group; the exclusive
-            # indicator communicates the selected policy without a submenu.
+            # Keep every choice visible; the native check mark shows the
+            # selected policy while each option keeps its own semantic icon color.
             self.tray_menu.addAction(action)
             self.tray_system_proxy_mode_actions[mode] = action
 
@@ -1811,8 +1811,6 @@ class Window(QMainWindow):
         current_mode = CONFIG.get("system_proxy_mode", "unchanged")
         for mode, action in actions.items():
             action.setChecked(mode == current_mode)
-        if getattr(self, "tray_menu", None) is not None:
-            self._sync_tray_menu_theme()
 
     def _show_tray_context_menu(self):
         """Open the app menu just above its tray icon, inside the work area."""
@@ -2604,13 +2602,11 @@ class Window(QMainWindow):
             "clear": danger,
         }
         for proxy_mode, action in self.tray_system_proxy_mode_actions.items():
-            icon_name = (
-                "fa6s.circle-check"
-                if action.isChecked()
-                else proxy_icons[proxy_mode]
-            )
             action.setIcon(
-                qta.icon(icon_name, color=proxy_icon_colors[proxy_mode])
+                qta.icon(
+                    proxy_icons[proxy_mode],
+                    color=proxy_icon_colors[proxy_mode],
+                )
             )
         self.tray_exit_action.setIcon(
             qta.icon("fa6s.right-from-bracket", color=danger)
