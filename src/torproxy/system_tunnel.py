@@ -1490,54 +1490,81 @@ def _stop_failed_sing_box_launch(
     record: dict[str, Any] | None,
 ) -> None:
     """Stop a child whose PID record could not be persisted; fail closed if anything remains."""
+    stop_error: Exception | None = None
     try:
         if process.poll() is None:
             process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=3)
-    except subprocess.TimeoutExpired as exc:
-        if record is not None:
-            try:
-                _atomic_json(state_path, record, mode=0o600)
-            except OSError:
-                logger.exception("Could not preserve the emergency sing-box identity record.")
-        raise SystemTunnelError(
-            "sing-box process record persistence failed and the newly launched child could not be stopped; "
-            "its state was retained where possible."
-        ) from exc
     except OSError as exc:
-        if process.poll() is None and record is not None:
-            try:
-                _atomic_json(state_path, record, mode=0o600)
-            except OSError:
-                logger.exception("Could not preserve the emergency sing-box identity record.")
-        raise SystemTunnelError(
-            "sing-box process record persistence failed and the newly launched child could not be stopped safely."
-        ) from exc
+        stop_error = exc
 
     if process.poll() is None:
-        if record is not None:
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired as exc:
+            stop_error = exc
+        except OSError as exc:
+            stop_error = exc
+
+    if process.poll() is None:
+        try:
+            process.kill()
+        except OSError as exc:
+            stop_error = exc
+        try:
+            process.wait(timeout=3)
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            stop_error = exc
+
+    process_stopped = process.poll() is not None
+    interface_present = _interface_exists(interface_name)
+    if process_stopped and not interface_present:
+        state_path.unlink(missing_ok=True)
+        return
+
+    # Keep an identity record whenever it can still be reconstructed. This is
+    # particularly important if terminate/kill failed or the adapter remains.
+    if record is None:
+        try:
+            record = {
+                "pid": process.pid,
+                "create_time": psutil.Process(process.pid).create_time(),
+                "engine": "",
+                "config": "",
+                "interface": interface_name,
+                "sha256": "",
+            }
+        except (psutil.Error, OSError, ValueError, TypeError):
+            record = None
+    if record is not None:
+        try:
+            _atomic_json(state_path, record, mode=0o600)
+        except OSError:
+            logger.exception("Could not preserve the emergency sing-box identity record.")
             try:
-                _atomic_json(state_path, record, mode=0o600)
+                # Last-resort non-atomic record: the helper is elevated and
+                # holds the only Popen reference. A future stop still validates
+                # every available process identity field before signalling.
+                state_path.parent.mkdir(parents=True, exist_ok=True)
+                with state_path.open("w", encoding="utf-8") as handle:
+                    json.dump(record, handle, sort_keys=True)
+                    handle.write("\\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                if os.name != "nt":
+                    state_path.chmod(0o600)
             except OSError:
-                logger.exception("Could not preserve the emergency sing-box identity record.")
+                logger.exception("Could not write the emergency sing-box process record.")
+
+    if not process_stopped:
+        detail = f" Stop error: {type(stop_error).__name__}." if stop_error else ""
         raise SystemTunnelError(
             "sing-box process record persistence failed and the newly launched child is still alive."
+            + detail
         )
-    if _interface_exists(interface_name):
-        if record is not None:
-            try:
-                _atomic_json(state_path, record, mode=0o600)
-            except OSError:
-                logger.exception("Could not preserve the emergency sing-box identity record.")
-        raise SystemTunnelError(
-            f"sing-box stopped after its process record failed to persist, but {interface_name} is still present; "
-            "the tunnel state was retained."
-        )
-    state_path.unlink(missing_ok=True)
+    raise SystemTunnelError(
+        f"sing-box stopped after its process record failed to persist, but {interface_name} is still present; "
+        "the tunnel state was retained."
+    )
 
 
 def _persist_sing_box_process_identity(
