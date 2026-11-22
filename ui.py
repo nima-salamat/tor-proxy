@@ -1,7 +1,6 @@
 from collections import deque
 from contextlib import contextmanager
 import ctypes
-import json
 import math
 import time
 from ctypes import wintypes
@@ -580,24 +579,6 @@ class Window(QMainWindow):
         self.tray_menu.setMinimumWidth(286)
         self.tray_menu.setSeparatorsCollapsible(False)
 
-        # A small branded header makes this feel like an intentional app menu,
-        # rather than a default system popup with a few buttons inside it.
-        self.tray_menu_header = QWidget(self.tray_menu)
-        self.tray_menu_header.setObjectName("trayMenuHeader")
-        header_layout = QVBoxLayout(self.tray_menu_header)
-        header_layout.setContentsMargins(14, 8, 14, 6)
-        header_layout.setSpacing(1)
-        self.tray_menu_title = QLabel("TorProxy", self.tray_menu_header)
-        self.tray_menu_title.setObjectName("trayMenuTitle")
-        self.tray_menu_subtitle = QLabel("Quick controls", self.tray_menu_header)
-        self.tray_menu_subtitle.setObjectName("trayMenuSubtitle")
-        header_layout.addWidget(self.tray_menu_title)
-        header_layout.addWidget(self.tray_menu_subtitle)
-        self.tray_menu_header_action = QWidgetAction(self.tray_menu)
-        self.tray_menu_header_action.setDefaultWidget(self.tray_menu_header)
-        self.tray_menu.addAction(self.tray_menu_header_action)
-        self.tray_menu.addSeparator()
-
         self.tray_toggle_action = QAction("Show / Hide TorProxy", self)
         self.tray_toggle_action.triggered.connect(self._toggle_visibility)
         self.tray_menu.addAction(self.tray_toggle_action)
@@ -612,24 +593,6 @@ class Window(QMainWindow):
         self.tray_proxy_section_label = QLabel("SYSTEM PROXY", self.tray_proxy_section)
         self.tray_proxy_section_label.setObjectName("trayMenuSectionLabel")
         proxy_section_layout.addWidget(self.tray_proxy_section_label)
-        self.tray_proxy_status_label = QLabel("CHECKING", self.tray_proxy_section)
-        self.tray_proxy_status_label.setObjectName("trayProxyStatusLabel")
-        self.tray_proxy_status_label.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
-        self.tray_proxy_status_label.setMinimumWidth(112)
-        self.tray_proxy_status_label.setToolTip(
-            "Reading the actual system proxy configuration."
-        )
-        proxy_section_layout.addWidget(self.tray_proxy_status_label)
-        self._tray_proxy_status = {
-            "state": "unknown",
-            "owner": "unknown",
-            "platform": "",
-            "detail": "System proxy status has not been checked yet.",
-        }
-        self._tray_proxy_status_worker = None
-        self._tray_proxy_status_checked_at = 0.0
         self.tray_proxy_section_action = QWidgetAction(self.tray_menu)
         self.tray_proxy_section_action.setDefaultWidget(self.tray_proxy_section)
         self.tray_menu.addAction(self.tray_proxy_section_action)
@@ -671,14 +634,6 @@ class Window(QMainWindow):
         # may open it downward over the tray icon. Position our menu explicitly.
         self.tray_icon.activated.connect(self._on_tray_activated)
         self.tray_icon.show()
-
-        self._tray_proxy_status_timer = QTimer(self)
-        self._tray_proxy_status_timer.setInterval(5000)
-        self._tray_proxy_status_timer.timeout.connect(
-            self._refresh_tray_system_proxy_status_async
-        )
-        self._tray_proxy_status_timer.start()
-        QTimer.singleShot(0, self._refresh_tray_system_proxy_status_async)
 
         self.toggle_visibility_signal.connect(self._toggle_visibility)
         self.hotkey_error_signal.connect(self._on_hotkey_error)
@@ -1849,10 +1804,6 @@ class Window(QMainWindow):
             # The currentIndexChanged signal invokes the authoritative existing handler.
             combo.setCurrentIndex(index)
         self._sync_tray_system_proxy_actions()
-        QTimer.singleShot(
-            1200,
-            lambda: self._refresh_tray_system_proxy_status_async(force=True),
-        )
 
     def _sync_tray_system_proxy_actions(self, *_args):
         """Keep tray radio actions consistent with the saved Home policy."""
@@ -1861,99 +1812,12 @@ class Window(QMainWindow):
         for mode, action in actions.items():
             action.setChecked(mode == current_mode)
 
-    def _read_tray_system_proxy_status(self) -> str:
-        """Read the effective system proxy configuration away from the GUI thread."""
-        from set_proxy import get_system_proxy_status
-
-        proxy = getattr(self.proxyWidget, "proxy", None)
-        port = getattr(proxy, "port", None)
-        status = get_system_proxy_status("127.0.0.1", port)
-        return json.dumps(status, ensure_ascii=False)
-
-    def _refresh_tray_system_proxy_status_async(self, force=False) -> None:
-        """Refresh the tray status without blocking the menu or Qt event loop."""
-        if getattr(self, "_tray_proxy_status_worker", None) is not None:
-            return
-        now = time.monotonic()
-        last_checked = float(getattr(self, "_tray_proxy_status_checked_at", 0.0))
-        if not force and now - last_checked < 4.5:
-            return
-
-        self._tray_proxy_status_checked_at = now
-        worker = Worker(self._read_tray_system_proxy_status)
-        worker.signals.finished.connect(self._on_tray_system_proxy_status_ready)
-        worker.signals.error.connect(self._on_tray_system_proxy_status_failed)
-        self._tray_proxy_status_worker = worker
-        QThreadPool.globalInstance().start(worker)
-
-    def _on_tray_system_proxy_status_ready(self, result: str) -> None:
-        self._tray_proxy_status_worker = None
-        try:
-            status = json.loads(str(result))
-            if not isinstance(status, dict):
-                raise ValueError("The system proxy status response is not an object.")
-            if status.get("state") not in {"enabled", "disabled", "unknown"}:
-                raise ValueError("The system proxy status contains an invalid state.")
-            status.setdefault("owner", "unknown")
-            status.setdefault("platform", "")
-            status.setdefault("detail", "")
-            self._tray_proxy_status = status
-        except (TypeError, ValueError, json.JSONDecodeError) as exc:
-            self._on_tray_system_proxy_status_failed(str(exc))
-            return
-        self._apply_tray_system_proxy_status_display()
-
-    def _on_tray_system_proxy_status_failed(self, error: str) -> None:
-        self._tray_proxy_status_worker = None
-        self._tray_proxy_status = {
-            "state": "unknown",
-            "owner": "unknown",
-            "platform": "",
-            "detail": str(error or "Could not read the system proxy configuration."),
-        }
-        self._tray_proxy_status_checked_at = time.monotonic()
-        self._apply_tray_system_proxy_status_display()
-
-    def _apply_tray_system_proxy_status_display(self) -> None:
-        """Render the real OS state separately from TorProxy's selected policy."""
-        label = getattr(self, "tray_proxy_status_label", None)
-        if label is None:
-            return
-        status = getattr(self, "_tray_proxy_status", {}) or {}
-        state = status.get("state", "unknown")
-        owner = status.get("owner", "unknown")
-        dark = CONFIG.get("mode", "dark") == "dark"
-
-        if state == "enabled" and owner == "torproxy":
-            text = "ACTIVE · TORPROXY"
-            color = "#43b982" if dark else "#168653"
-        elif state == "enabled":
-            text = "ENABLED · EXTERNAL"
-            color = "#e2b35e" if dark else "#9b6812"
-        elif state == "disabled":
-            text = "DISABLED"
-            color = "#95a3b5" if dark else "#758397"
-        else:
-            text = "UNKNOWN"
-            color = "#e2b35e" if dark else "#9b6812"
-
-        label.setText(text)
-        detail = str(status.get("detail") or "System proxy state is unavailable.")
-        label.setToolTip(
-            detail + "\nThis reports the operating-system setting, not the selected TorProxy policy."
-        )
-        label.setAccessibleName("System proxy status: " + text)
-        label.setStyleSheet(
-            f"QLabel#trayProxyStatusLabel {{ color: {color}; font-size: 8pt; font-weight: 700; background: transparent; }}"
-        )
-
     def _show_tray_context_menu(self):
         """Open the app menu just above its tray icon, inside the work area."""
         if not hasattr(self, "tray_menu"):
             return
         hidden = self.isHidden() or self.isMinimized()
         self.tray_toggle_action.setText("Show TorProxy" if hidden else "Hide TorProxy")
-        self._refresh_tray_system_proxy_status_async(force=True)
         self._sync_tray_menu_theme()
         self.tray_menu.ensurePolished()
         size = self.tray_menu.sizeHint()
@@ -2715,37 +2579,22 @@ class Window(QMainWindow):
                 width: 14px;
                 height: 14px;
                 border: 1px solid {border};
-                border-radius: 7px;
+                border-radius: 4px;
                 background: transparent;
                 margin-left: 4px;
             }}
             QMenu#trayContextMenu::indicator:checked {{
                 background-color: {accent};
-                border: 4px solid {surface};
+                border: 1px solid {accent};
             }}
-            QWidget#trayMenuHeader, QWidget#trayMenuSection {{
+            QWidget#trayMenuSection {{
                 background: transparent;
                 border: none;
-            }}
-            QLabel#trayMenuTitle {{
-                color: {text};
-                font-size: 10pt;
-                font-weight: 700;
-            }}
-            QLabel#trayMenuSubtitle {{
-                color: {muted};
-                font-size: 8pt;
             }}
             QLabel#trayMenuSectionLabel {{
                 color: {muted};
                 font-size: 8pt;
                 font-weight: 700;
-            }}
-            QLabel#trayProxyStatusLabel {{
-                color: {muted};
-                font-size: 8pt;
-                font-weight: 700;
-                background: transparent;
             }}
         """)
 
@@ -2759,12 +2608,21 @@ class Window(QMainWindow):
             "unchanged": "fa6s.circle-minus",
             "clear": "fa6s.link-slash",
         }
+        proxy_icon_colors = {
+            "set": "#43b982" if dark else "#168653",
+            "unchanged": "#94a2b5" if dark else "#758397",
+            "clear": danger,
+        }
         for proxy_mode, action in self.tray_system_proxy_mode_actions.items():
-            action.setIcon(qta.icon(proxy_icons[proxy_mode], color=icon_color))
+            action.setIcon(
+                qta.icon(
+                    proxy_icons[proxy_mode],
+                    color=proxy_icon_colors[proxy_mode],
+                )
+            )
         self.tray_exit_action.setIcon(
             qta.icon("fa6s.right-from-bracket", color=danger)
         )
-        self._apply_tray_system_proxy_status_display()
 
     def _theme_reveal_origin(self):
         """Choose the pointer position as the reveal origin, with a safe fallback."""
