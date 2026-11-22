@@ -38,7 +38,7 @@ from PySide6.QtGui import (
 import qdarkstyle
 from qdarkstyle.dark.palette import DarkPalette
 from qdarkstyle.light.palette import LightPalette
-from PySide6.QtCore import QEvent, QThreadPool, QTimer, Qt, Signal, QSize, QPoint, QPointF, QRect
+from PySide6.QtCore import QEvent, QThreadPool, QTimer, Qt, Signal, QSize, QPoint, QPointF, QRect, QRectF
 import qtawesome as qta
 from ui_.window.theme_transition import CircularThemeReveal
 from ui_.window.theme import resolve_system_theme
@@ -448,6 +448,43 @@ class DeferredPagePlaceholder(QWidget):
         self.retry_button.show()
 
 
+class TrayPopupFrame(QFrame):
+    """Opaque rounded tray surface with only its outside corners transparent."""
+
+    def __init__(self, parent=None):
+        super().__init__(
+            parent,
+            Qt.WindowType.Popup
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.NoDropShadowWindowHint,
+        )
+        self._surface_color = QColor("#171e29")
+        self._border_color = QColor("#303b4c")
+        self.setObjectName("trayContextMenu")
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        self.setAutoFillBackground(False)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setLineWidth(0)
+
+    def set_surface_colors(self, surface: str, border: str) -> None:
+        self._surface_color = QColor(surface)
+        self._border_color = QColor(border)
+        self.update()
+
+    def paintEvent(self, event):
+        """Paint the solid menu surface explicitly instead of relying on QSS."""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(QPen(self._border_color, 1.0))
+        painter.setBrush(self._surface_color)
+        rounded_rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        path = QPainterPath()
+        path.addRoundedRect(rounded_rect, 14.0, 14.0)
+        painter.drawPath(path)
+
+
 class Window(QMainWindow):
     PAGE_HOME = 0
     PAGE_SETTINGS = 1
@@ -578,17 +615,7 @@ class Window(QMainWindow):
         # The tray UI is a single frameless popup surface, not a native QMenu.
         # This avoids combining the platform's rounded menu frame with our own
         # stylesheet border, which produced two mismatched outlines.
-        self.tray_menu = QFrame(
-            self,
-            Qt.WindowType.Popup
-            | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.NoDropShadowWindowHint,
-        )
-        self.tray_menu.setObjectName("trayContextMenu")
-        self.tray_menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.tray_menu.setAutoFillBackground(False)
-        self.tray_menu.setFrameShape(QFrame.Shape.NoFrame)
-        self.tray_menu.setLineWidth(0)
+        self.tray_menu = TrayPopupFrame(self)
         self.tray_menu.setMinimumWidth(286)
 
         self.tray_menu_layout = QVBoxLayout(self.tray_menu)
@@ -2630,11 +2657,14 @@ class Window(QMainWindow):
             divider = "#e7ecf2"
             danger = "#c94343"
 
+        # The root surface is painted by TrayPopupFrame; styling its background
+        # here would leave transparent pixels in the frameless native popup.
+        menu.set_surface_colors(surface, border)
         menu.setStyleSheet(f"""
             QFrame#trayContextMenu {{
-                background-color: {surface};
+                background: transparent;
                 color: {text};
-                border: 1px solid {border};
+                border: none;
                 border-radius: 14px;
                 padding: 0;
             }}
