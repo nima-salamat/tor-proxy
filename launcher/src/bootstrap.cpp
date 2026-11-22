@@ -1282,12 +1282,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
 }
 #else
 #include <cerrno>
-#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
-#include <thread>
+#include <time.h>
 #include <limits.h>
 #include <signal.h>
 #include <string>
@@ -1313,16 +1312,17 @@ bool isHelperLaunch(int argc, char *argv[]) {
 }
 
 bool reapChildWithin(pid_t child, int timeoutMs) {
-    const auto deadline = std::chrono::steady_clock::now() +
-                          std::chrono::milliseconds(timeoutMs);
+    const int attempts = timeoutMs > 0 ? (timeoutMs + 9) / 10 : 1;
     int childStatus = 0;
-    do {
+    for (int attempt = 0; attempt < attempts; ++attempt) {
         const pid_t result = waitpid(child, &childStatus, WNOHANG);
         if (result == child || (result < 0 && errno == ECHILD)) return true;
         if (result < 0 && errno != EINTR) return false;
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    } while (std::chrono::steady_clock::now() < deadline);
-    return false;
+        timespec pause{0, 10 * 1000 * 1000};
+        while (nanosleep(&pause, &pause) < 0 && errno == EINTR) {}
+    }
+    const pid_t result = waitpid(child, &childStatus, WNOHANG);
+    return result == child || (result < 0 && errno == ECHILD);
 }
 
 bool terminateAndReapChild(pid_t child) {
