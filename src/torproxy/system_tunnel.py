@@ -1646,6 +1646,18 @@ def _persist_sing_box_process_identity(
         ) from exc
 
 
+def _remove_sing_box_record_if_fully_stopped(
+    process: subprocess.Popen,
+    state_path: Path,
+    interface_name: str,
+) -> bool:
+    """Remove identity only after both process exit and TUN interface removal are verified."""
+    if process.poll() is None or _interface_exists(interface_name):
+        return False
+    state_path.unlink(missing_ok=True)
+    return True
+
+
 def _helper_start(args: Any) -> dict[str, Any]:
     engine = Path(args.engine).resolve()
     config_path = Path(args.config).resolve()
@@ -1957,8 +1969,9 @@ def _helper_start(args: Any) -> dict[str, Any]:
                 tail = log_path.read_text(encoding="utf-8", errors="replace")[-1800:]
             except OSError:
                 tail = ""
-            if not _interface_exists(args.interface):
-                state_path.unlink(missing_ok=True)
+            _remove_sing_box_record_if_fully_stopped(
+                process, state_path, args.interface
+            )
             raise SystemTunnelError(f"sing-box exited during TUN startup ({code}). {tail.strip()}")
         if _interface_exists(args.interface):
             if process.poll() is not None:
@@ -1968,11 +1981,15 @@ def _helper_start(args: Any) -> dict[str, Any]:
                 )
             time.sleep(0.2)
             if process.poll() is not None or _process_matches(record) is None:
-                if not _interface_exists(args.interface):
-                    state_path.unlink(missing_ok=True)
+                # An identity inspection error/mismatch is not proof that the
+                # child exited. Keep its PID record even if the adapter has
+                # disappeared; a later helper can re-check and safely reconcile.
+                _remove_sing_box_record_if_fully_stopped(
+                    process, state_path, args.interface
+                )
                 raise SystemTunnelError(
                     "sing-box did not remain healthy after creating its TUN interface; "
-                    "the process record was retained if the adapter still exists."
+                    "its process record is retained unless both exit and adapter removal are verified."
                 )
             return {"ok": True, "active": True, "pid": process.pid, "detail": "System TUN interface is active."}
         time.sleep(0.25)
@@ -1986,8 +2003,9 @@ def _helper_start(args: Any) -> dict[str, Any]:
             process.wait(timeout=3)
         except (OSError, subprocess.TimeoutExpired):
             pass
-    if process.poll() is not None and not _interface_exists(args.interface):
-        state_path.unlink(missing_ok=True)
+    _remove_sing_box_record_if_fully_stopped(
+        process, state_path, args.interface
+    )
     raise SystemTunnelError(
         f"sing-box did not create the {args.interface} interface in time. "
         "Its process record was retained if the child or adapter could not be confirmed stopped."

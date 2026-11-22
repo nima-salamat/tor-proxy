@@ -1455,3 +1455,55 @@ def test_system_tunnel_is_running_detects_untracked_adapter(tmp_path, monkeypatc
     monkeypatch.setattr(system_tunnel, "_interface_exists", lambda _name: True)
 
     assert manager.is_running() is True
+
+
+
+def test_sing_box_identity_record_is_retained_when_child_is_alive_but_adapter_is_absent(tmp_path, monkeypatch):
+    state_path = tmp_path / "state" / "sing-box-process.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps({
+            "pid": 44421,
+            "create_time": 123.0,
+            "engine": "/opt/torproxy/sing-box",
+            "config": "/opt/torproxy/sing-box.json",
+        }),
+        encoding="utf-8",
+    )
+
+    class LiveChild:
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(system_tunnel, "_interface_exists", lambda _name: False)
+
+    removed = system_tunnel._remove_sing_box_record_if_fully_stopped(
+        LiveChild(),
+        state_path,
+        system_tunnel.TUN_INTERFACE_LINUX,
+    )
+
+    assert removed is False
+    assert state_path.is_file()
+    assert json.loads(state_path.read_text(encoding="utf-8"))["pid"] == 44421
+
+
+def test_sing_box_identity_record_is_removed_only_after_process_and_adapter_stop(tmp_path, monkeypatch):
+    state_path = tmp_path / "state" / "sing-box-process.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text("{\"pid\":44422}", encoding="utf-8")
+
+    class ExitedChild:
+        def poll(self):
+            return 0
+
+    monkeypatch.setattr(system_tunnel, "_interface_exists", lambda _name: False)
+
+    removed = system_tunnel._remove_sing_box_record_if_fully_stopped(
+        ExitedChild(),
+        state_path,
+        system_tunnel.TUN_INTERFACE_LINUX,
+    )
+
+    assert removed is True
+    assert not state_path.exists()
