@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -76,10 +77,7 @@ def hosting(tmp_path, monkeypatch):
 
     monkeypatch.setattr(onion_module.socket, "create_connection", fake_connection)
     yield manager, config, fake_tor
-    # Keep the test process free of relay listeners even when a test stops
-    # immediately after verifying ADD_ONION behavior.
-    for relay in tuple(manager._traffic_relays.values()):
-        relay.close()
+    manager.close()
 
 
 def test_only_literal_loopback_targets_are_accepted():
@@ -648,3 +646,63 @@ def test_temporary_service_traffic_totals_are_removed_when_runtime_stops(hosting
     assert manager.traffic_snapshot(profile_id)["incoming_bytes"] == 0
     assert manager.traffic_events(profile_id) == []
     assert manager.traffic_snapshot()["outgoing_bytes"] == 0
+
+
+
+def test_service_start_and_runtime_shutdown_are_serialized(hosting, monkeypatch):
+    manager, _config, fake_tor = hosting
+    profile_id = manager.create_service(
+        display_name="Concurrent app",
+        local_host="127.0.0.1",
+        local_port=9110,
+        persistent=False,
+        auto_start=False,
+    )
+    entered_control = threading.Event()
+    release_control = threading.Event()
+    service_errors = []
+    shutdown_errors = []
+    original_control = fake_tor.send_control_command
+
+    def blocked_control(command):
+        if command.startswith("ADD_ONION"):
+            entered_control.set()
+            assert release_control.wait(timeout=3)
+        return original_control(command)
+
+    monkeypatch.setattr(fake_tor, "send_control_command", blocked_control)
+
+    def start_service():
+        try:
+            manager.start_service(profile_id)
+        except Exception as exc:
+            service_errors.append(exc)
+
+    def shutdown():
+        try:
+            manager.shutdown_runtime()
+        except Exception as exc:
+            shutdown_errors.append(exc)
+
+    starter = threading.Thread(target=start_service)
+    starter.start()
+    assert entered_control.wait(timeout=2)
+
+    stopper = threading.Thread(target=shutdown)
+    stopper.start()
+    time.sleep(0.1)
+    assert stopper.is_alive()
+    assert manager.manager is fake_tor
+
+    release_control.set()
+    starter.join(timeout=3)
+    stopper.join(timeout=3)
+
+    assert not starter.is_alive()
+    assert not stopper.is_alive()
+    assert not service_errors
+    assert not shutdown_errors
+    assert fake_tor.stop_called is True
+    assert manager.manager is None
+    assert manager._traffic_relays == {}
+    assert manager._traffic_store._writer_thread is None

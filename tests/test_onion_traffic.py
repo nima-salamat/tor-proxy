@@ -5,7 +5,24 @@ import sqlite3
 import threading
 import time
 
+import pytest
+
 from torproxy.onion_traffic import OnionServiceRelay, OnionTrafficStore, _HttpLineProbe
+
+
+@pytest.fixture(autouse=True)
+def close_traffic_stores(monkeypatch):
+    created = []
+    original_init = OnionTrafficStore.__init__
+
+    def tracked_init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        created.append(self)
+
+    monkeypatch.setattr(OnionTrafficStore, "__init__", tracked_init)
+    yield
+    for store in reversed(created):
+        store.close(timeout=3.0)
 
 
 def test_http_probe_keeps_path_but_discards_query_and_fragment():
@@ -269,3 +286,29 @@ def test_relay_keeps_forwarding_when_telemetry_writer_fails(tmp_path, monkeypatc
         time.sleep(0.01)
     assert store._write_queue.unfinished_tasks == 0
     assert store._writer_thread.is_alive()
+
+
+
+def test_traffic_store_close_drains_queue_and_reopens_one_writer(tmp_path):
+    store = OnionTrafficStore(tmp_path)
+    first = store._writer_thread
+    assert first is not None and first.is_alive()
+
+    assert store.record_connection_async(
+        "writer-lifecycle",
+        onion_port=80,
+        local_port=8080,
+        protocol="TCP",
+        incoming_bytes=10,
+    )
+    store.close(timeout=3.0)
+    assert first.is_alive() is False
+    assert store._write_queue.unfinished_tasks == 0
+    assert store.events("writer-lifecycle")[0]["incoming_bytes"] == 10
+
+    store.reopen()
+    second = store._writer_thread
+    assert second is not None and second.is_alive()
+    assert second is not first
+    store.close(timeout=3.0)
+    assert second.is_alive() is False

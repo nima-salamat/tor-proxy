@@ -619,3 +619,30 @@ def test_gateway_relay_records_upload_and_download_bytes():
             peer.close()
     assert not worker.is_alive()
     assert events == [(8, "upload"), (4, "download")]
+
+
+
+def test_gateway_refuses_restart_while_previous_accept_loop_is_still_exiting(monkeypatch):
+    gateway = SocksFailoverGateway(_free_port(), lambda: [])
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocked_accept_loop():
+        entered.set()
+        release.wait(timeout=3)
+
+    monkeypatch.setattr(gateway, "_accept_loop", blocked_accept_loop)
+    gateway.start()
+    assert entered.wait(timeout=2)
+
+    with pytest.raises(SocksGatewayError, match="still active"):
+        gateway.stop(timeout=0.05)
+    with pytest.raises(SocksGatewayError, match="still shutting down"):
+        gateway.start()
+
+    release.set()
+    thread = gateway._thread
+    assert thread is not None
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+    gateway.stop(timeout=1)

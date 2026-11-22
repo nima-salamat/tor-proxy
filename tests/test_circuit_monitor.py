@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 
 import pytest
@@ -129,3 +130,40 @@ def test_monitor_rejects_control_port_from_a_different_process():
         monitor.start()
 
     assert controller.closed is True
+
+
+
+def test_monitor_retains_live_thread_and_refuses_duplicate_start_during_shutdown(monkeypatch):
+    controllers = [FakeController(19353), FakeController(19353)]
+    monitor = TorEventMonitor(
+        19353,
+        expected_pid=1234,
+        controller_factory=lambda _port: controllers.pop(0),
+        event_types=("CIRC",),
+    )
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocked_consume(_record):
+        entered.set()
+        assert release.wait(timeout=3)
+
+    monkeypatch.setattr(monitor, "_consume", blocked_consume)
+    monitor.start()
+    # Emit directly through the authenticated event callback.
+    monitor._on_event(CircuitEvent("LAUNCHED", "1"))
+    assert entered.wait(timeout=2)
+
+    with pytest.raises(RuntimeError, match="still active"):
+        monitor.stop(timeout=0.05)
+    first_thread = monitor._thread
+    assert first_thread is not None and first_thread.is_alive()
+
+    with pytest.raises(RuntimeError, match="still shutting down"):
+        monitor.start()
+
+    release.set()
+    first_thread.join(timeout=2)
+    assert not first_thread.is_alive()
+    monitor.stop(timeout=1)
+    assert monitor._thread is None
