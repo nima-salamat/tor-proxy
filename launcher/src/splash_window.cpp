@@ -261,7 +261,7 @@ void SplashWindow::paintEvent(QPaintEvent *event) {
                      QStringLiteral("TORPROXY  /  DESKTOP"));
 
 #ifndef TORPROXY_VERSION
-#define TORPROXY_VERSION "1.5.0"
+#define TORPROXY_VERSION "1.6.0"
 #endif
     QFont versionFont(QStringLiteral("Arial"), 8, QFont::Medium);
     painter.setFont(versionFont);
