@@ -63,7 +63,7 @@ def test_linux_launcher_shutdown_never_waits_forever_for_child_reaping():
 
 def test_linux_bootstrap_bounds_child_cleanup_when_splash_exec_fails():
     source = (ROOT / "launcher" / "src" / "bootstrap.cpp").read_text(encoding="utf-8")
-    linux = source[source.rfind("#else\\n#include <cerrno>"):]
+    linux = source[source.index("bool reapChildWithin"):]
     assert "terminateAndReapChild(applicationPid)" in linux
     assert "waitpid(child, &childStatus, WNOHANG)" in linux
     assert "reapChildWithin(child, 500)" in linux
