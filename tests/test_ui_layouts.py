@@ -214,6 +214,7 @@ def test_settings_and_main_window_construct_without_duplicate_layout_warning(qt_
         window._show_setting()
         settings_placeholder = window._page_placeholders[ui.Window.PAGE_SETTINGS]
         assert window.stack.currentWidget() is settings_placeholder
+        assert not settings_placeholder.spinner.isHidden()
         assert window._page_states[ui.Window.PAGE_SETTINGS] in {"queued", "loading"}
         window._show_setting()
         assert window._page_placeholders[ui.Window.PAGE_SETTINGS] is settings_placeholder
@@ -327,6 +328,9 @@ def test_deferred_page_loading_is_scheduled_after_home_and_never_builds_qwidgets
 
     assert "QTimer.singleShot(650, self._start_deferred_page_preloading)" in source
     assert "self._page_build_timer.start(90)" in source
+    assert "class PageSpinner(QWidget)" in source
+    assert "self._timer.setInterval(85)" in source
+    assert "placeholder.set_loading()" in source
     assert "self._page_states[index] = \"failed\"" in source
     assert "placeholder.set_error(" in source
     assert "placeholder.retry_requested.connect(" in source
