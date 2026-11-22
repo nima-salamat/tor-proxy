@@ -377,27 +377,56 @@ class TorRunner(QObject):
             return
         with self._backend_lock:
             previous = self._backend_event_monitors.get(index)
-            if self._stopping.is_set():
-                install = False
-            else:
-                self._backend_event_monitors[index] = monitor
-                install = True
+            stopping = self._stopping.is_set()
+        if stopping:
+            monitor.stop()
+            return
         if previous is not None:
             try:
                 previous.stop()
             except Exception:
-                logger.debug("Could not stop the previous Tor event monitor.", exc_info=True)
+                # Keep the previous reference: never hide a live collector and
+                # never start a second listener against the same ControlPort.
+                logger.warning(
+                    "Could not stop the previous Tor event monitor for instance %s; "
+                    "the replacement monitor was not started.",
+                    index + 1,
+                    exc_info=True,
+                )
+                monitor.stop()
+                return
+            with self._backend_lock:
+                if self._backend_event_monitors.get(index) is previous:
+                    self._backend_event_monitors.pop(index, None)
+
+        with self._backend_lock:
+            install = not self._stopping.is_set()
+            if install:
+                self._backend_event_monitors[index] = monitor
+            else:
+                # Let the ordinary stop path own the join/reference if shutdown
+                # raced the monitor's controller authentication.
+                self._backend_event_monitors[index] = monitor
         if not install:
-            monitor.stop()
+            self._stop_backend_event_monitor(index)
 
     def _stop_backend_event_monitor(self, index: int) -> None:
         with self._backend_lock:
-            monitor = self._backend_event_monitors.pop(index, None)
-        if monitor is not None:
-            try:
-                monitor.stop()
-            except Exception:
-                logger.debug("Could not stop Tor event monitoring for instance %s.", index + 1, exc_info=True)
+            monitor = self._backend_event_monitors.get(index)
+        if monitor is None:
+            return
+        try:
+            monitor.stop()
+        except Exception:
+            logger.warning(
+                "Tor event monitor for instance %s is still active; its reference was retained.",
+                index + 1,
+                exc_info=True,
+            )
+            return
+        with self._backend_lock:
+            if self._backend_event_monitors.get(index) is monitor:
+                self._backend_event_monitors.pop(index, None)
 
     def update_path(self, base_path=None, *, verify=True):
         executable, root = _find_executable(base_path, verify_managed=verify)
@@ -2039,13 +2068,9 @@ class TorRunner(QObject):
             if not managers and self.manager is not None:
                 managers = [self.manager]
         with self._backend_lock:
-            event_monitors = tuple(self._backend_event_monitors.values())
-            self._backend_event_monitors.clear()
-        for monitor in event_monitors:
-            try:
-                monitor.stop()
-            except Exception:
-                logger.debug("Could not stop a primary Tor event monitor.", exc_info=True)
+            event_monitors = tuple(self._backend_event_monitors.items())
+        for index, monitor in event_monitors:
+            self._stop_backend_event_monitor(index)
 
         for manager in managers:
             try:
@@ -2082,11 +2107,21 @@ class TorRunner(QObject):
                 if start_lock is not None:
                     start_lock.release()
 
+        # Give collectors a second bounded join after Tor controllers and
+        # startup workers have been stopped. A failed join keeps its reference
+        # in _backend_event_monitors and makes the whole shutdown fail visibly.
+        with self._backend_lock:
+            remaining_monitors = tuple(self._backend_event_monitors.items())
+        for index, _monitor in remaining_monitors:
+            self._stop_backend_event_monitor(index)
+
         thread = self.thread
         if thread and thread is not threading.current_thread():
             thread.join(timeout=10)
         thread_alive = bool(thread and thread.is_alive())
         worker_alive = any(worker.is_alive() for worker in workers)
+        with self._backend_lock:
+            monitors_alive = bool(self._backend_event_monitors)
         process_alive = any(
             getattr(manager, "process", None) is not None
             and manager.process.poll() is None
@@ -2096,9 +2131,9 @@ class TorRunner(QObject):
             getattr(manager, "_data_directory_lock_handle", None) is not None
             for manager in managers
         )
-        if thread_alive or worker_alive or process_alive or locks_held:
+        if thread_alive or worker_alive or monitors_alive or process_alive or locks_held:
             detail = (
-                "Tor did not stop completely; its supervisor/process is still active. "
+                "Tor did not stop completely; its supervisor/process/event monitors are still active. "
                 "The service remains registered and its data-directory locks must not be reused."
             )
             if stop_errors:

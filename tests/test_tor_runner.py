@@ -957,3 +957,30 @@ def test_main_socks_gateway_reconfigures_without_restarting_tor_workers(monkeypa
         assert "restricted" in disabled_message
     finally:
         runner._gateway.stop()
+
+
+
+def test_stop_backend_event_monitor_keeps_reference_when_thread_has_not_stopped(monkeypatch, tmp_path):
+    runner, _config = _runner(monkeypatch, tmp_path, "\\n".join(BRIDGES))
+
+    class RetainedMonitor:
+        def __init__(self):
+            self.still_alive = True
+            self.calls = 0
+
+        def stop(self):
+            self.calls += 1
+            if self.still_alive:
+                raise RuntimeError("collector thread is still alive")
+
+    monitor = RetainedMonitor()
+    runner._backend_event_monitors[2] = monitor
+
+    runner._stop_backend_event_monitor(2)
+    assert runner._backend_event_monitors[2] is monitor
+    assert monitor.calls == 1
+
+    monitor.still_alive = False
+    runner._stop_backend_event_monitor(2)
+    assert 2 not in runner._backend_event_monitors
+    assert monitor.calls == 2
