@@ -2226,7 +2226,9 @@ def test_main_window_requests_small_dwm_corners_only_when_restored():
     assert "# DWMWCP_DONOTROUND = 1; DWMWCP_ROUNDSMALL = 3." in source
     assert "1 if self.isMaximized() or self.isFullScreen() else 3" in source
     assert "QTimer.singleShot(0, self._apply_native_window_corners)" in source
-    assert "setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground" not in source
+    corner_start = source.index("def _apply_native_window_corners(self):")
+    corner_end = source.index("def _screen_for_geometry", corner_start)
+    assert "WA_TranslucentBackground" not in source[corner_start:corner_end]
 
 
 
@@ -2248,6 +2250,8 @@ def test_tray_menu_uses_a_modern_theme_aware_floating_surface():
     theme_sync = source[theme_start:theme_end]
     assert "QMenu#trayContextMenu" in theme_sync
     assert "QMenu#trayContextMenu::item:selected" in theme_sync
+    assert "border-radius: 14px;" in theme_sync
+    assert "border-radius: 8px;" in theme_sync
     assert "QMenu#trayContextMenu::separator" in theme_sync
     assert "QMenu#trayContextMenu::indicator" not in theme_sync
     assert "proxy_icon_colors[proxy_mode]" in theme_sync
@@ -2299,9 +2303,11 @@ def test_tray_menu_uses_compact_vertical_spacing():
     repository = Path(__file__).resolve().parents[1]
     source = (repository / "ui.py").read_text(encoding="utf-8")
 
-    assert "header_layout.setContentsMargins(14, 8, 14, 6)" in source
-    assert "header_layout.setSpacing(1)" in source
+    assert "row_layout.setContentsMargins(2, 1, 2, 1)" in source
+    assert "row_layout.setSpacing(4)" in source
     assert "proxy_section_layout.setContentsMargins(14, 3, 12, 0)" in source
+    assert '"Hide window"' in source
+    assert 'QAction("Exit", self)' in source
 
     theme_start = source.index("def _sync_tray_menu_theme(self, mode=None):")
     theme_end = source.index("def _theme_reveal_origin", theme_start)
