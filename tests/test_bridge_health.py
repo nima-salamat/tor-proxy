@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 
 import pytest
 
@@ -431,3 +432,52 @@ def test_bridge_check_lock_serializes_probe_cleanup_between_threads(tmp_path):
     first_thread.join(timeout=3)
     second_thread.join(timeout=3)
     assert second_entered.is_set()
+
+
+
+def test_bridge_check_lock_has_a_bounded_wait(tmp_path):
+    lock_path = tmp_path / "bridge-probes" / ".bridge-health.lock"
+    first = bridge_health_module._BridgeCheckLock(lock_path)
+    first.__enter__()
+    try:
+        second = bridge_health_module._BridgeCheckLock(lock_path, timeout=0.1)
+        with pytest.raises(TimeoutError, match="still active"):
+            second.__enter__()
+    finally:
+        first.__exit__(None, None, None)
+
+    # A timed-out waiter must release its local mutex; later checks can enter.
+    with bridge_health_module._BridgeCheckLock(lock_path, timeout=0.5):
+        pass
+
+
+def test_bridge_check_can_be_cancelled_while_waiting_for_another_wave(tmp_path, monkeypatch):
+    settings = _settings(tmp_path)
+    root = tmp_path / "probe-state"
+    root.mkdir()
+    monkeypatch.setattr(bridge_health_module, "_probe_state_root", lambda _settings: root)
+    lock_path = root / ".bridge-health.lock"
+    cancel_event = threading.Event()
+    results = []
+    finished = threading.Event()
+
+    with bridge_health_module._BridgeCheckLock(lock_path):
+        def run_check():
+            results.append(check_bridges(
+                settings,
+                cancel_event=cancel_event,
+                probe=lambda *_args: pytest.fail("Cancelled waiter must not launch probes"),
+            ))
+            finished.set()
+
+        worker = threading.Thread(target=run_check)
+        worker.start()
+        time.sleep(0.1)
+        cancel_event.set()
+        assert finished.wait(timeout=1.0)
+        worker.join(timeout=1.0)
+
+    assert not worker.is_alive()
+    assert len(results) == 1
+    assert results[0].retained == BRIDGES
+    assert results[0].should_prune is False

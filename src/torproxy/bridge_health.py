@@ -1,6 +1,7 @@
 """Conservatively test user-supplied Tor bridges in isolated Tor instances."""
 from __future__ import annotations
 
+import errno
 import logging
 import os
 import re
@@ -110,43 +111,94 @@ class _ProbeDirectory:
         return False
 
 
-class _BridgeCheckLock:
-    """Cross-process mutex preventing cleanup from deleting another live probe wave."""
+class _BridgeCheckCancelled(RuntimeError):
+    """A bridge-health check was cancelled while waiting for another probe wave."""
 
-    def __init__(self, path: Path):
+
+class _BridgeCheckLock:
+    """Bounded cross-process mutex protecting the isolated bridge-probe directory."""
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        timeout: float = 60.0,
+        cancel_event: threading.Event | None = None,
+    ):
         self.path = path
         self.handle = None
+        self.timeout = max(0.1, float(timeout))
+        self.cancel_event = cancel_event
+        self._deadline = 0.0
+        self._thread_lock_acquired = False
+
+    def _wait_interval(self) -> float:
+        if self.cancel_event is not None and self.cancel_event.is_set():
+            raise _BridgeCheckCancelled("Bridge check cancelled while waiting for another check to finish.")
+        remaining = self._deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Another bridge-health check is still active.")
+        return min(0.05, remaining)
 
     def __enter__(self):
+        self._deadline = time.monotonic() + self.timeout
         # Windows byte-range locks may be shared by threads in the same process;
-        # this local mutex makes the same-process rule explicit on every OS.
-        _BRIDGE_CHECK_THREAD_LOCK.acquire()
+        # explicitly serialize local threads before taking the OS-level lock.
+        while not self._thread_lock_acquired:
+            wait = self._wait_interval()
+            self._thread_lock_acquired = _BRIDGE_CHECK_THREAD_LOCK.acquire(timeout=wait)
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.handle = self.path.open("a+b")
+            if self.path.is_symlink():
+                raise OSError("The bridge-health lock path must not be a symlink.")
+            flags = os.O_CREAT | os.O_RDWR
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            descriptor = os.open(str(self.path), flags, 0o600)
+            try:
+                if os.name != "nt":
+                    os.fchmod(descriptor, 0o600)
+                if os.fstat(descriptor).st_size == 0:
+                    os.write(descriptor, b"0")
+                    os.fsync(descriptor)
+                self.handle = os.fdopen(descriptor, "r+b", buffering=0)
+                descriptor = -1
+            finally:
+                if descriptor >= 0:
+                    os.close(descriptor)
+
             if os.name != "nt":
-                os.chmod(self.path, 0o600)
                 import fcntl
-                fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX)
+                while True:
+                    wait = self._wait_interval()
+                    try:
+                        fcntl.flock(
+                            self.handle.fileno(),
+                            fcntl.LOCK_EX | fcntl.LOCK_NB,
+                        )
+                        break
+                    except OSError as exc:
+                        if exc.errno not in {errno.EACCES, errno.EAGAIN}:
+                            raise
+                        time.sleep(wait)
             else:
                 import msvcrt
-                self.handle.seek(0, os.SEEK_END)
-                if self.handle.tell() == 0:
-                    self.handle.write(b"0")
-                    self.handle.flush()
                 while True:
+                    wait = self._wait_interval()
                     try:
                         self.handle.seek(0)
                         msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
                         break
                     except OSError:
-                        time.sleep(0.05)
+                        time.sleep(wait)
             return self
         except Exception:
             if self.handle is not None:
                 self.handle.close()
                 self.handle = None
-            _BRIDGE_CHECK_THREAD_LOCK.release()
+            if self._thread_lock_acquired:
+                _BRIDGE_CHECK_THREAD_LOCK.release()
+                self._thread_lock_acquired = False
             raise
 
     def __exit__(self, *_args):
@@ -164,7 +216,9 @@ class _BridgeCheckLock:
                     self.handle.close()
                     self.handle = None
         finally:
-            _BRIDGE_CHECK_THREAD_LOCK.release()
+            if self._thread_lock_acquired:
+                _BRIDGE_CHECK_THREAD_LOCK.release()
+                self._thread_lock_acquired = False
         return False
 
 
@@ -510,15 +564,30 @@ def check_bridges(
     on_result: ProbeCallback | None = None,
     probe: Callable[..., ProbeStatus] | None = None,
 ) -> BridgeHealthResult:
-    """Serialize bridge checks across threads/processes before reconciling probe children."""
+    """Serialize bridge checks before reconciling probe children; never wait indefinitely."""
+    original = tuple(record for _kind, record in TorManager._parse_bridges(settings.bridges))
+    if cancel_event is not None and cancel_event.is_set():
+        return BridgeHealthResult(original, (), (), original)
     lock_path = _probe_state_root(settings) / ".bridge-health.lock"
-    with _BridgeCheckLock(lock_path):
-        return _check_bridges_locked(
-            settings,
-            timeout_seconds=timeout_seconds,
-            max_workers=max_workers,
-            excluded_ports=excluded_ports,
+    lock_timeout = max(10.0, min(120.0, float(timeout_seconds) + 15.0))
+    try:
+        with _BridgeCheckLock(
+            lock_path,
+            timeout=lock_timeout,
             cancel_event=cancel_event,
-            on_result=on_result,
-            probe=probe,
-        )
+        ):
+            return _check_bridges_locked(
+                settings,
+                timeout_seconds=timeout_seconds,
+                max_workers=max_workers,
+                excluded_ports=excluded_ports,
+                cancel_event=cancel_event,
+                on_result=on_result,
+                probe=probe,
+            )
+    except _BridgeCheckCancelled:
+        return BridgeHealthResult(original, (), (), original)
+    except TimeoutError:
+        # No probe ran; retaining the complete list is the only safe result
+        # when another process still owns the probe workspace.
+        return BridgeHealthResult(original, (), (), original, ("another_bridge_check_active",))
