@@ -473,7 +473,7 @@ class TorManager:
             )
         self._clear_process_identity()
 
-    def _stop_orphaned_process(self) -> None:
+    def _stop_orphaned_process(self, *, force: bool = False) -> None:
         """Reconcile an earlier Tor child after claiming its persistent DataDirectory."""
         record = self._read_process_identity()
         if record is not None:
@@ -499,7 +499,7 @@ class TorManager:
                 )
             # This stops a persisted systemd scope, clears any associated
             # cgroup exception, and performs the common final identity cleanup.
-            self._terminate_process(force=False)
+            self._terminate_process(force=force)
             reconciled = True
         finally:
             # Release a lock retained by a previous failed attempt as well as
@@ -1595,49 +1595,57 @@ class TorManager:
                     pass
                 self._log_handle = None
 
-    def stop(self) -> None:
+    def _stop_serialized(self, *, force: bool) -> None:
+        """Cancel startup, wait for its owner to unwind, then reconcile the child once."""
         self._stop_requested.set()
         if self._start_cancel_event is not None:
             self._start_cancel_event.set()
-        self._emit(None, TorState.STOPPING, None, "Stopping the managed Tor process.")
-        if self.process is None and (self.process_state_path.exists() or self.torrc_path.exists()):
-            try:
-                self._stop_orphaned_process()
-            except Exception as exc:
-                self.last_error = str(exc)
-                self._emit(None, TorState.FAILED, None, self.last_error)
-                raise
-            self._emit(None, TorState.STOPPED, None, "Previous Tor process reconciled; no managed child remains.")
-            return
+
+        # start() owns this lock from before DataDirectory acquisition through
+        # its failure cleanup. Waiting here prevents Stop from releasing a
+        # directory lock while the startup thread is still writing torrc or
+        # creating a child. The timeout fails closed and retains ownership.
+        wait_seconds = max(
+            10.0,
+            float(self.settings.startup_timeout_seconds) + 10.0,
+            float(self.settings.shutdown_timeout_seconds) + 5.0,
+        )
+        if not self._start_lock.acquire(timeout=wait_seconds):
+            message = (
+                "Tor startup did not unwind after cancellation within the bounded shutdown window. "
+                "Its DataDirectory lock and process ownership were retained; retry Stop after inspecting the worker."
+            )
+            self.last_error = message
+            self.state = TorState.FAILED
+            self._emit(None, TorState.FAILED, None, message)
+            raise TorManagerError(message)
+
         try:
-            self._terminate_process()
+            detail = "Force-stopping the managed Tor process." if force else "Stopping the managed Tor process."
+            self._emit(None, TorState.STOPPING, None, detail)
+            if self.process is None and (self.process_state_path.exists() or self.torrc_path.exists()):
+                self._stop_orphaned_process(force=force)
+                self._emit(None, TorState.STOPPED, None, "Previous Tor process reconciled; no managed child remains.")
+                return
+
+            self._terminate_process(force=force)
+            self._release_data_directory_lock()
+            self._emit(
+                None,
+                TorState.STOPPED,
+                None,
+                "Tor process was force-stopped." if force else "Tor stopped.",
+            )
         except Exception as exc:
             self.last_error = str(exc)
             self._emit(None, TorState.FAILED, None, self.last_error)
             raise
-        self._release_data_directory_lock()
-        self._emit(None, TorState.STOPPED, None, "Tor stopped.")
+        finally:
+            self._start_lock.release()
+
+    def stop(self) -> None:
+        self._stop_serialized(force=False)
 
     def force_stop(self) -> None:
-        """Immediately kill this managed Tor process without its graceful wait window."""
-        self._stop_requested.set()
-        if self._start_cancel_event is not None:
-            self._start_cancel_event.set()
-        self._emit(None, TorState.STOPPING, None, "Force-stopping the managed Tor process.")
-        if self.process is None and (self.process_state_path.exists() or self.torrc_path.exists()):
-            try:
-                self._stop_orphaned_process()
-            except Exception as exc:
-                self.last_error = str(exc)
-                self._emit(None, TorState.FAILED, None, self.last_error)
-                raise
-            self._emit(None, TorState.STOPPED, None, "Previous Tor process reconciled; no managed child remains.")
-            return
-        try:
-            self._terminate_process(force=True)
-        except Exception as exc:
-            self.last_error = str(exc)
-            self._emit(None, TorState.FAILED, None, self.last_error)
-            raise
-        self._release_data_directory_lock()
-        self._emit(None, TorState.STOPPED, None, "Tor process was force-stopped.")
+        """Immediately kill the owned Tor process after any startup attempt unwinds."""
+        self._stop_serialized(force=True)
