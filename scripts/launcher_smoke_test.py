@@ -120,7 +120,7 @@ def main() -> int:
                 executable,
                 case_environment,
                 args.timeout,
-                ["--self-test", f"--expect-theme={expected_theme}"],
+                ["--self-test", f"--expect-theme={expected_theme}", f"--expect-language={expected_language}"],
                 name,
             ):
                 return 1
