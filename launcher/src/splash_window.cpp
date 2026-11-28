@@ -1,5 +1,7 @@
 #include "splash_window.h"
 
+#include <QHash>
+
 #include <QFont>
 #include <QFontMetrics>
 #include <QGuiApplication>
@@ -16,6 +18,28 @@
 #include <QToolButton>
 
 namespace {
+QString localized(const QString &source, const QString &language) {
+    if (language != QStringLiteral("fa")) {
+        return source;
+    }
+    static const QHash<QString, QString> translations = {
+        {QStringLiteral("Close"), QStringLiteral("بستن")},
+        {QStringLiteral("Try again"), QStringLiteral("تلاش دوباره")},
+        {QStringLiteral("Open logs"), QStringLiteral("باز کردن گزارش‌ها")},
+        {QStringLiteral("Couldn't start TorProxy"), QStringLiteral("تورپراکسی شروع نشد")},
+        {QStringLiteral("The desktop process stopped before it became ready."), QStringLiteral("فرایند برنامه پیش از آماده‌شدن متوقف شد.")},
+        {QStringLiteral("Private connections, simplified"), QStringLiteral("اتصال خصوصی، ساده‌تر")},
+        {QStringLiteral("Loading desktop components"), QStringLiteral("در حال بارگذاری اجزای دسکتاپ")},
+        {QStringLiteral("Loading Python and desktop components…"), QStringLiteral("در حال بارگذاری پایتون و اجزای دسکتاپ…")},
+        {QStringLiteral("Preparing the desktop experience"), QStringLiteral("در حال آماده‌سازی محیط برنامه")},
+        {QStringLiteral("Preparing TorProxy…"), QStringLiteral("در حال آماده‌سازی تورپراکسی…")},
+        {QStringLiteral("Preparing TorProxy settings…"), QStringLiteral("در حال آماده‌سازی تنظیمات تورپراکسی…")},
+        {QStringLiteral("Startup needs attention"), QStringLiteral("شروع برنامه به بررسی نیاز دارد")},
+        {QStringLiteral("Python is already starting…"), QStringLiteral("پایتون از قبل در حال شروع است…")},
+        {QStringLiteral("Starting TorProxy…"), QStringLiteral("در حال شروع تورپراکسی…")}
+    };
+    return translations.value(source, source);
+}
 constexpr int kWindowWidth = 560;
 constexpr int kWindowHeight = 360;
 
@@ -97,6 +121,26 @@ bool SplashWindow::logoLoaded() const noexcept {
     return !m_logo.isNull();
 }
 
+void SplashWindow::setLanguage(const QString &language) {
+    m_language = language == QStringLiteral("fa")
+        ? QStringLiteral("fa")
+        : QStringLiteral("en");
+    QFont font = this->font();
+    if (m_language == QStringLiteral("fa")) {
+        font.setFamilies({QStringLiteral("Noto Sans Arabic"),
+                          QStringLiteral("Segoe UI"),
+                          QStringLiteral("Arial")});
+    } else {
+        font.setFamilies({QStringLiteral("Arial"), QStringLiteral("Segoe UI")});
+    }
+    setFont(font);
+    m_closeButton->setToolTip(localized(QStringLiteral("Close"), m_language));
+    m_retryButton->setText(localized(QStringLiteral("Try again"), m_language));
+    m_openLogsButton->setText(localized(QStringLiteral("Open logs"), m_language));
+    m_errorCloseButton->setText(localized(QStringLiteral("Close"), m_language));
+    update();
+}
+
 void SplashWindow::setThemeMode(const QString &mode) {
     m_themeMode = mode == QStringLiteral("light")
         ? QStringLiteral("light")
@@ -157,7 +201,7 @@ void SplashWindow::beginLoading() {
     m_errorState = false;
     m_errorMessage.clear();
     m_logPath.clear();
-    m_status = QStringLiteral("Preparing the desktop experience");
+    m_status = localized(QStringLiteral("Preparing the desktop experience"), m_language);
     m_retryButton->hide();
     m_openLogsButton->hide();
     m_errorCloseButton->hide();
@@ -168,15 +212,15 @@ void SplashWindow::setStatus(const QString &status) {
     if (m_errorState) {
         return;
     }
-    m_status = status.trimmed().left(120);
+    m_status = localized(status.trimmed().left(120), m_language);
     update();
 }
 
 void SplashWindow::showStartupError(const QString &message, const QString &logPath) {
     m_errorState = true;
-    m_errorMessage = message.trimmed().left(1800);
+    m_errorMessage = localized(message.trimmed().left(1800), m_language);
     m_logPath = logPath;
-    m_status = QStringLiteral("Startup needs attention");
+    m_status = localized(QStringLiteral("Startup needs attention"), m_language);
     m_retryButton->show();
     m_openLogsButton->setEnabled(!m_logPath.isEmpty());
     m_openLogsButton->show();
@@ -284,7 +328,7 @@ void SplashWindow::paintEvent(QPaintEvent *event) {
     painter.setFont(titleFont);
     painter.setPen(dark ? QColor("#F0F6F8") : QColor("#1F3440"));
     const QString title = m_errorState
-        ? QStringLiteral("Couldn't start TorProxy")
+        ? localized(QStringLiteral("Couldn't start TorProxy"), m_language)
         : QStringLiteral("TorProxy");
     painter.drawText(QRectF(32, 146, width() - 64, 35), Qt::AlignHCenter | Qt::AlignVCenter, title);
 
@@ -293,8 +337,8 @@ void SplashWindow::paintEvent(QPaintEvent *event) {
     painter.setPen(dark ? QColor("#91A8B4") : QColor("#5C7480"));
     painter.drawText(QRectF(42, 181, width() - 84, 24), Qt::AlignHCenter | Qt::AlignVCenter,
                      m_errorState
-                         ? QStringLiteral("The desktop process stopped before it became ready.")
-                         : QStringLiteral("Private connections, simplified"));
+                         ? localized(QStringLiteral("The desktop process stopped before it became ready."), m_language)
+                         : localized(QStringLiteral("Private connections, simplified"), m_language));
 
     if (!m_errorState) {
         const QRectF spinnerRect(width() / 2.0 - 11.0, 213.0, 22.0, 22.0);
@@ -331,7 +375,7 @@ void SplashWindow::paintEvent(QPaintEvent *event) {
         painter.setPen(dark ? QColor("#627B88") : QColor("#718994"));
         painter.drawText(QRectF(40, 301, width() - 80, 20),
                          Qt::AlignHCenter | Qt::AlignVCenter,
-                         QStringLiteral("Loading desktop components"));
+                         localized(QStringLiteral("Loading desktop components"), m_language));
     } else {
         painter.setPen(QPen(QColor("#F06C72"), 2.6, Qt::SolidLine, Qt::RoundCap));
         const QPointF center(width() / 2.0, 223.0);
