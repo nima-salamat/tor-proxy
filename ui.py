@@ -1714,7 +1714,7 @@ class Window(QMainWindow):
                 QTimer.singleShot(0, self._refresh_layout_after_restore)
 
     def _apply_native_window_corners(self, border_color=None):
-        """Apply native rounded corners and a theme-aware 1px DWM border on Windows."""
+        """Apply native rounded corners and a theme-aware thin DWM border on Windows."""
         if not IS_WINDOWS or not self.isVisible():
             return
 
@@ -1735,10 +1735,11 @@ class Window(QMainWindow):
             set_window_attribute.restype = ctypes.c_long
 
             # DWMWA_WINDOW_CORNER_PREFERENCE = 33
-            # DWMWCP_DONOTROUND = 1; DWMWCP_ROUNDSMALL = 3.
-            # Keep the OS-managed radius; do not multiply it by Qt's DPR.
+            # DWMWCP_DONOTROUND = 1; DWMWCP_ROUND = 2; DWMWCP_ROUNDSMALL = 3.
+            # Use the normal rounded radius rather than the deliberately smaller
+            # variant; DWM owns the physical corner geometry on each DPI monitor.
             preference = ctypes.c_int(
-                1 if self.isMaximized() or self.isFullScreen() else 3
+                1 if self.isMaximized() or self.isFullScreen() else 2
             )
             result = set_window_attribute(
                 ctypes.c_void_p(hwnd),
