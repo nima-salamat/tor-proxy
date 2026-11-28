@@ -128,6 +128,19 @@ QString resolveSplashTheme(QApplication *application) {
     return systemThemeMode(application);
 }
 
+QString resolveSplashLanguage() {
+    QFile configFile(launcherConfigPath());
+    if (configFile.open(QIODevice::ReadOnly)) {
+        const QJsonDocument document = QJsonDocument::fromJson(configFile.readAll());
+        if (document.isObject() &&
+            document.object().value(QStringLiteral("language")).toString() ==
+                QStringLiteral("fa")) {
+            return QStringLiteral("fa");
+        }
+    }
+    return QStringLiteral("en");
+}
+
 QString tailOfFile(const QString &path, qsizetype maximumCharacters = 1100) {
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
@@ -623,6 +636,7 @@ int main(int argc, char *argv[]) {
     QApplication::setQuitOnLastWindowClosed(false);
 
     SplashWindow splash(applicationIconPath());
+    splash.setLanguage(resolveSplashLanguage());
     splash.setThemeMode(resolveSplashTheme(&application));
     application.setWindowIcon(QIcon(applicationIconPath()));
 
