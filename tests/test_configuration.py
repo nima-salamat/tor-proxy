@@ -367,3 +367,16 @@ def test_typed_configuration_requires_explicit_socks_remote_opt_in():
     assert migrated["socks_host"] == "0.0.0.0"
     with pytest.raises(ConfigurationError, match="socks_allow_remote"):
         TorProxyConfig(socks_allow_remote=1)
+
+def test_application_language_defaults_to_english_and_validates_supported_values():
+    assert DEFAULT_DATA["language"] == "en"
+
+    for language in ("en", "fa"):
+        data = dict(DEFAULT_DATA)
+        data["language"] = language
+        AppConfig._validate(data)
+
+    data = dict(DEFAULT_DATA)
+    data["language"] = "ar"
+    with pytest.raises(AppConfigError, match="language"):
+        AppConfig._validate(data)
