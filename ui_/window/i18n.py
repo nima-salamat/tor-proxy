@@ -9,7 +9,7 @@ from __future__ import annotations
 import weakref
 from typing import Any
 
-from PySide6.QtCore import QObject, QEvent, QTimer, Qt
+from PySide6.QtCore import QEvent, QObject, QTimer, Qt
 from PySide6.QtGui import QAction, QFont
 from PySide6.QtWidgets import (
     QAbstractButton,
@@ -23,11 +23,11 @@ from PySide6.QtWidgets import (
     QMenuBar,
     QPlainTextEdit,
     QProgressBar,
+    QSystemTrayIcon,
     QTabWidget,
     QTableWidget,
     QTextEdit,
     QToolBar,
-    QSystemTrayIcon,
     QTreeWidget,
     QWidget,
 )
