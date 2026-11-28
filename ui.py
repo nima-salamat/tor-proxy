@@ -2169,7 +2169,8 @@ class Window(QMainWindow):
         self.global_state = QPushButton("● Checking Tor state…", self)
         self.global_state.setObjectName("globalState")
         self.global_state.setFlat(True)
-        self.global_state.setMinimumWidth(74)
+        self.global_state.setMinimumWidth(84)
+        self.global_state.setProperty("torState", "initializing")
         self.global_state.setToolTip("Open the Home Event Log when Tor reports a failure.")
         self.global_state.clicked.connect(self._open_event_log)
         self.global_state.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -2401,7 +2402,34 @@ class Window(QMainWindow):
             QPushButton#topNavExitButton:hover {{ color: #ffffff; background: #b83336; border-color: #b83336; }}
             QWidget#menuBarCorner {{ border-bottom: 1px solid {border}; }}
             QWidget#menuBarCorner QLabel {{ background: transparent; color: {text}; border: none; padding: 0 4px; }}
-            QPushButton#globalState {{ background: transparent; color: {text}; border: none; border-radius: 7px; padding: 0 4px; font-size: 10px; }}
+            QPushButton#globalState {{
+                background: {"rgba(112, 126, 146, 0.13)" if dark else "#f0f3f7"};
+                color: {"#aab4c1" if dark else "#667386"};
+                border: 1px solid {"rgba(112, 126, 146, 0.25)" if dark else "#dce3eb"};
+                border-radius: 9px; padding: 3px 10px; min-height: 22px;
+                font-size: 9px; font-weight: 750;
+            }}
+            QPushButton#globalState[torState="ready"] {{
+                background: {"rgba(46, 174, 105, 0.15)" if dark else "#eaf7ef"};
+                color: {"#5bd69a" if dark else "#16834f"};
+                border-color: {"rgba(69, 201, 139, 0.38)" if dark else "#c5e8d1"};
+            }}
+            QPushButton#globalState[torState="bootstrapping"],
+            QPushButton#globalState[torState="starting"] {{
+                background: {"rgba(71, 163, 242, 0.15)" if dark else "#edf5fd"};
+                color: {"#78bcf4" if dark else "#1876bf"};
+                border-color: {"rgba(71, 163, 242, 0.36)" if dark else "#c9e0f7"};
+            }}
+            QPushButton#globalState[torState="stopping"] {{
+                background: {"rgba(226, 164, 64, 0.15)" if dark else "#fff6e8"};
+                color: {"#f0bd68" if dark else "#9a610b"};
+                border-color: {"rgba(226, 164, 64, 0.38)" if dark else "#f1d7ad"};
+            }}
+            QPushButton#globalState[torState="failed"] {{
+                background: {"rgba(210, 69, 76, 0.16)" if dark else "#fff0f0"};
+                color: {"#ff858a" if dark else "#b4232c"};
+                border-color: {"rgba(232, 103, 109, 0.4)" if dark else "#f0c4c6"};
+            }}
             QPushButton#globalState:hover {{ background: {hover}; }}
             QWidget#menuBarCorner QPushButton {{ background: transparent; color: {text}; border: none; border-radius: 7px; }}
             QWidget#menuBarCorner QPushButton:hover {{ background: {hover}; }}
@@ -2582,10 +2610,23 @@ class Window(QMainWindow):
                 finally:
                     self.page_nav_group.setExclusive(True)
             self._update_global_state()
+    def _set_global_state_display(self, status: str, state_key: str) -> None:
+        """Update the top-bar status chip and repolish it only when state changes."""
+        button = getattr(self, "global_state", None)
+        if button is None:
+            return
+        button.setText("●  {}".format(status))
+        if getattr(self, "_global_state_key", None) != state_key:
+            self._global_state_key = state_key
+            button.setProperty("torState", state_key)
+            button.style().unpolish(button)
+            button.style().polish(button)
+            button.update()
+
     def _update_global_state(self):
         proxy_widget = getattr(self, "proxyWidget", None)
         if proxy_widget is None:
-            self.global_state.setText("● Initializing")
+            self._set_global_state_display("Initializing", "initializing")
             return
         self._sample_traffic_session()
         refresh_tunnel = getattr(proxy_widget, "_update_tunnel_hint", None)
@@ -2595,24 +2636,22 @@ class Window(QMainWindow):
         if tor is not None and not getattr(tor, "path_set", False):
             # The notification bell carries actionable setup warnings; keep the
             # persistent top-bar status short and visually unobtrusive.
-            status = "Stopped"
+            status, state_key = "Stopped", "stopped"
         elif getattr(proxy_widget, "failed", False) or getattr(tor, "state", "") == "FAILED":
-            status = "Failed · open Event Log"
+            status, state_key = "Failed", "failed"
         elif getattr(tor, "state", "") == "STOPPING" or getattr(proxy_widget, "_stopping", False):
-            status = "Stopping"
+            status, state_key = "Stopping", "stopping"
         elif getattr(tor, "state", "") == "STARTING":
-            status = "Starting"
+            status, state_key = "Starting", "starting"
         elif getattr(tor, "state", "") in {"BOOTSTRAPPING", "CONNECTING"}:
-            status = "Bootstrapping"
+            status, state_key = "Bootstrapping", "bootstrapping"
         elif getattr(proxy_widget, "connected", False):
-            status = "Ready"
+            status, state_key = "Ready", "ready"
         elif getattr(proxy_widget, "running", False):
-            status = "Bootstrapping"
+            status, state_key = "Bootstrapping", "bootstrapping"
         else:
-            status = "Stopped"
-        if status == "Failed · open Event Log":
-            status = "Failed"
-        self.global_state.setText("●  {}".format(status))
+            status, state_key = "Stopped", "stopped"
+        self._set_global_state_display(status, state_key)
         self.global_state.setToolTip(
             getattr(tor, "last_error", None)
             or ("No Tor bundle is configured. Open Bundles or review the notification bell. "
