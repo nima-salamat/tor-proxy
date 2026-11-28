@@ -1697,6 +1697,10 @@ class Window(QMainWindow):
 
     def changeEvent(self, event):
         super().changeEvent(event)
+        if event.type() == QEvent.Type.ActivationChange:
+            # DWM can refresh non-client colors when activation changes.
+            # Reapply our current theme border so it remains consistent.
+            QTimer.singleShot(0, self._apply_native_window_corners)
         if event.type() == QEvent.Type.WindowStateChange:
             # Keep the custom maximize/restore glyph in sync when Windows
             # maximizes the window through Snap, Win+Arrow or the taskbar.
