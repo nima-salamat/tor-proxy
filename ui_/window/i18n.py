@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTextEdit,
     QToolBar,
+    QSystemTrayIcon,
     QTreeWidget,
     QWidget,
 )
@@ -639,6 +640,8 @@ _FA = {
     "0 profiles": "0 پروفایل",
     "0 services": "0 سرویس",
     "0 rules": "0 قاعده",
+    "Tor bootstrap completed": "راه‌اندازی Tor کامل شد",
+    "Global shortcut issue": "مشکل میانبر سراسری",
 }
 
 def _translate_dynamic(text: str, language: str) -> str:
@@ -860,6 +863,9 @@ class LanguageManager(QObject):
                 self._translate_property(obj, "text", "setText")
                 self._translate_property(obj, "toolTip", "setToolTip")
                 self._translate_property(obj, "statusTip", "setStatusTip")
+                return
+            if isinstance(obj, QSystemTrayIcon):
+                self._translate_property(obj, "toolTip", "setToolTip")
                 return
 
             if not isinstance(obj, QWidget):
