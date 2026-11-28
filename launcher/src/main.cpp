@@ -642,10 +642,12 @@ int main(int argc, char *argv[]) {
 
     if (application.arguments().contains(QStringLiteral("--self-test"))) {
         QString expectedTheme;
+        QString expectedLanguage;
         for (const QString &argument : application.arguments()) {
             if (argument.startsWith(QStringLiteral("--expect-theme="))) {
                 expectedTheme = argument.mid(QStringLiteral("--expect-theme=").size());
-                break;
+            } else if (argument.startsWith(QStringLiteral("--expect-language="))) {
+                expectedLanguage = argument.mid(QStringLiteral("--expect-language=").size());
             }
         }
         splash.centerOnPrimaryScreen();
@@ -655,7 +657,10 @@ int main(int argc, char *argv[]) {
             (expectedTheme == QStringLiteral("system")
                 ? splash.themeMode() == systemThemeMode(&application)
                 : splash.themeMode() == expectedTheme);
-        const bool ready = splash.isVisible() && splash.logoLoaded() && themeMatches;
+        const bool languageMatches = expectedLanguage.isEmpty() ||
+            splash.language() == expectedLanguage;
+        const bool ready = splash.isVisible() && splash.logoLoaded() &&
+            themeMatches && languageMatches;
         splash.close();
         return ready ? 0 : 2;
     }
