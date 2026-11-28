@@ -46,6 +46,7 @@ from ui_.window.dialogs import QMessageBox
 from ui_.worker.worker import Worker
 from ui_.window.qrcode_widget import QrCodeFloatingWindow
 from ui_.window.theme import resolve_system_theme
+from ui_.window.i18n import set_application_language
 from ui_.emojis import WRONG, CORRECT
 
 class _BridgeTextEdit(QTextEdit):
@@ -455,6 +456,54 @@ class SettingWindow(QWidget):
         mode_layout.addWidget(self.theme_mode_selector, 0, Qt.AlignmentFlag.AlignVCenter)
         self._sync_theme_preference_controls()
         self.first_page_layout.addWidget(theme_row)
+
+        language_row = QFrame(self)
+        language_row.setObjectName("settingsRowCard")
+        language_layout = QHBoxLayout(language_row)
+        language_layout.setContentsMargins(14, 10, 14, 10)
+        language_layout.setSpacing(12)
+
+        language_copy = QVBoxLayout()
+        language_copy.setSpacing(3)
+        language_title = QLabel("Language")
+        language_title.setObjectName("settingsFieldLabel")
+        language_description = self._description(
+            "Choose the language used by TorProxy. The layout direction remains unchanged."
+        )
+        language_copy.addWidget(language_title)
+        language_copy.addWidget(language_description)
+        language_layout.addLayout(language_copy, 1)
+
+        self.language_value_label = QLabel(
+            "Persian" if CONFIG.get("language", "en") == "fa" else "English"
+        )
+        self.language_value_label.setObjectName("themeModeValue")
+        language_layout.addWidget(self.language_value_label, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self.language_selector = QWidget(language_row)
+        self.language_selector.setObjectName("themeModeSelector")
+        language_selector_layout = QHBoxLayout(self.language_selector)
+        language_selector_layout.setContentsMargins(2, 2, 2, 2)
+        language_selector_layout.setSpacing(2)
+        self.language_group = QButtonGroup(self)
+        self.language_group.setExclusive(True)
+        self.language_buttons = {}
+        for language, label in (("en", "English"), ("fa", "Persian")):
+            button = QPushButton(label, self.language_selector)
+            button.setObjectName("themeModeOption")
+            button.setCheckable(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(
+                lambda _checked=False, selected=language: self.change_language(selected)
+            )
+            self.language_group.addButton(button)
+            self.language_buttons[language] = button
+            language_selector_layout.addWidget(button)
+        language_layout.addWidget(
+            self.language_selector, 0, Qt.AlignmentFlag.AlignVCenter
+        )
+        self._sync_language_controls()
+        self.first_page_layout.addWidget(language_row)
 
         exit_row = QFrame(self)
         exit_row.setObjectName("settingsRowCard")
@@ -1901,6 +1950,33 @@ class SettingWindow(QWidget):
             self.chk_auto_prune_bridges.setChecked(not enabled)
             self.chk_auto_prune_bridges.blockSignals(False)
             QMessageBox.warning(self, "Settings could not be saved", str(exc))
+
+    def _sync_language_controls(self):
+        language = CONFIG.get("language", "en")
+        for value, button in getattr(self, "language_buttons", {}).items():
+            button.setChecked(value == language)
+        if hasattr(self, "language_value_label"):
+            self.language_value_label.setText(
+                "Persian" if language == "fa" else "English"
+            )
+
+    def change_language(self, language, *_args):
+        """Apply English or Persian without changing the app's layout direction."""
+        language = str(language).strip().lower()
+        if language not in {"en", "fa"}:
+            return
+        if self._parent is not None and hasattr(self._parent, "_set_language"):
+            self._parent._set_language(language)
+            return
+        try:
+            CONFIG["language"] = language
+        except (ValueError, OSError, KeyError) as exc:
+            logger.exception("Could not save the language preference.")
+            QMessageBox.warning(self, "Language", str(exc))
+            self._sync_language_controls()
+            return
+        set_application_language(language)
+        self._sync_language_controls()
 
     def _theme_mode_status_text(self):
         preference = CONFIG.get("theme_preference", "system")
