@@ -191,6 +191,10 @@ QString SplashWindow::themeMode() const {
     return m_themeMode;
 }
 
+QString SplashWindow::language() const {
+    return m_language;
+}
+
 void SplashWindow::centerOnPrimaryScreen() {
     QScreen *screen = QGuiApplication::primaryScreen();
     if (screen) {
