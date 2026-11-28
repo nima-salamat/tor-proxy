@@ -1,4 +1,4 @@
-"""Smoke-test the native TorProxy launcher and its startup theme selection."""
+"""Smoke-test the TorProxy launcher and its saved theme/language selections."""
 
 from __future__ import annotations
 
@@ -66,13 +66,15 @@ def main() -> int:
         # cannot influence these checks. Opposite mode values verify that the
         # explicit preference, rather than the effective-mode cache, wins.
         cases = (
-            ("dark preference", {"theme_preference": "dark", "mode": "light"}, "dark"),
-            ("light preference", {"theme_preference": "light", "mode": "dark"}, "light"),
-            ("system preference", {"theme_preference": "system", "mode": "dark"}, "system"),
-            ("legacy mode fallback", {"mode": "light"}, "light"),
+            ("dark preference", {"theme_preference": "dark", "mode": "light"}, "dark", "en"),
+            ("light preference", {"theme_preference": "light", "mode": "dark"}, "light", "en"),
+            ("system preference", {"theme_preference": "system", "mode": "dark"}, "system", "en"),
+            ("legacy mode fallback", {"mode": "light"}, "light", "en"),
+            ("Persian language", {"language": "fa", "theme_preference": "system", "mode": "dark"}, "system", "fa"),
+            ("English language", {"language": "en", "theme_preference": "dark", "mode": "light"}, "dark", "en"),
         )
         with tempfile.TemporaryDirectory(prefix="torproxy-launcher-theme-") as temporary:
-            for name, configuration, expected_theme in cases:
+            for name, configuration, expected_theme, expected_language in cases:
                 app_data = Path(temporary) / name.replace(" ", "-")
                 config_directory = app_data / "TorProxy"
                 config_directory.mkdir(parents=True, exist_ok=True)
@@ -86,23 +88,25 @@ def main() -> int:
                     executable,
                     case_environment,
                     args.timeout,
-                    ["--self-test", f"--expect-theme={expected_theme}"],
+                    ["--self-test", f"--expect-theme={expected_theme}", f"--expect-language={expected_language}"],
                     name,
                 ):
                     return 1
         return 0
 
     # Linux uses the Qt splash implementation, which reads the XDG config
-    # directory. Keep the same preference/legacy cases as the native Windows
-    # launcher so both front ends are checked against the application setting.
+    # directory. Keep theme and language cases aligned with the native Windows
+    # launcher so both front ends are checked against the application settings.
     cases = (
-        ("dark preference", {"theme_preference": "dark", "mode": "light"}, "dark"),
-        ("light preference", {"theme_preference": "light", "mode": "dark"}, "light"),
-        ("system preference", {"theme_preference": "system", "mode": "dark"}, "system"),
-        ("legacy mode fallback", {"mode": "light"}, "light"),
+        ("dark preference", {"theme_preference": "dark", "mode": "light"}, "dark", "en"),
+        ("light preference", {"theme_preference": "light", "mode": "dark"}, "light", "en"),
+        ("system preference", {"theme_preference": "system", "mode": "dark"}, "system", "en"),
+        ("legacy mode fallback", {"mode": "light"}, "light", "en"),
+        ("Persian language", {"language": "fa", "theme_preference": "system", "mode": "dark"}, "system", "fa"),
+        ("English language", {"language": "en", "theme_preference": "dark", "mode": "light"}, "dark", "en"),
     )
     with tempfile.TemporaryDirectory(prefix="torproxy-launcher-theme-") as temporary:
-        for name, configuration, expected_theme in cases:
+        for name, configuration, expected_theme, expected_language in cases:
             config_root = Path(temporary) / name.replace(" ", "-")
             config_directory = config_root / "torproxy"
             config_directory.mkdir(parents=True, exist_ok=True)
