@@ -678,6 +678,20 @@ _FA = {
     "The TorProxy process exited before reporting READY (exit code %1).": "فرایند تورپراکسی پیش از اعلام آمادگی خارج شد (کد خروج %1).",
     "Starting the TorProxy desktop process…": "در حال شروع فرایند دسکتاپ تورپراکسی…",
     "This page could not be loaded": "بارگذاری این صفحه ممکن نبود.",
+    "Overview": "نمای کلی",
+    "Show window": "نمایش پنجره",
+    "Minimize": "کمینه‌سازی",
+    "Maximize": "بیشینه‌سازی",
+    "Restore window": "بازگردانی پنجره",
+    "Restore down": "بازگردانی اندازهٔ پنجره",
+    "Pin to tray": "فرستادن به سینی سیستم",
+    "Quit application": "خروج از برنامه",
+    "Application menu": "منوی برنامه",
+    "Window": "پنجره",
+    "Window controls": "کنترل‌های پنجره",
+    "Open settings": "بازکردن تنظیمات",
+    "Open Home": "بازکردن خانه",
+    "Onion hosting": "میزبانی Onion",
 }
 
 def _translate_dynamic(text: str, language: str) -> str:
