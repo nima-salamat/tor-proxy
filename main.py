@@ -142,6 +142,7 @@ def main() -> int:
     from ui import Window, _THEME_STYLESHEET_CACHE
     from ui_.window.dialogs import QMessageBox
     from ui_.window.theme import resolve_system_theme
+    from ui_.window.i18n import install_language_support
     from utils import resource_path
 
     imports_finished = time.perf_counter()
@@ -160,6 +161,10 @@ def main() -> int:
             QMessageBox.critical(None, "TorProxy configuration error", str(exc))
         return 2
     config_finished = time.perf_counter()
+
+    language_started = time.perf_counter()
+    install_language_support(app, CONFIG.get("language", "en"))
+    language_finished = time.perf_counter()
 
     # Resolve System before the first stylesheet is installed, so first-run
     # startup already matches the desktop appearance without a light/dark flash.
@@ -182,6 +187,10 @@ def main() -> int:
     LOGGER.info(
         "Startup phase: configuration load and validation %.1f ms.",
         (config_finished - config_started) * 1000.0,
+    )
+    LOGGER.info(
+        "Startup phase: language initialization %.1f ms.",
+        (language_finished - language_started) * 1000.0,
     )
     LOGGER.info(
         "Startup phase: theme resolution %.1f ms.",
