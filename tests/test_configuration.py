@@ -381,6 +381,8 @@ def test_application_language_defaults_to_english_and_validates_supported_values
     with pytest.raises(AppConfigError, match="language"):
         AppConfig._validate(data)
 
+
+
 def test_application_language_persists_across_configuration_reload(tmp_path):
     store = AppConfig()
     store.path = tmp_path / "config" / "config.json"
