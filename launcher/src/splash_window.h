@@ -20,6 +20,7 @@ public:
 
     bool logoLoaded() const noexcept;
     void setThemeMode(const QString &mode);
+    void setLanguage(const QString &language);
     QString themeMode() const;
     void centerOnPrimaryScreen();
     void beginLoading();
@@ -54,6 +55,7 @@ private:
     QString m_errorMessage;
     QString m_logPath;
     QString m_themeMode = QStringLiteral("dark");
+    QString m_language = QStringLiteral("en");
     int m_spinnerAngle = 0;
     int m_progressOffset = 0;
     bool m_errorState = false;
