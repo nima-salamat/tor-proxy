@@ -592,13 +592,54 @@ def _translate_dynamic(text: str, language: str) -> str:
         "profiles": "پروفایل",
         "service": "سرویس",
         "services": "سرویس",
+        "rule": "قاعده",
+        "rules": "قاعده",
     }
-    match = re.fullmatch(r"(\d+) (bridges?|profiles?|services?)", text)
+    match = re.fullmatch(r"(\d+) (bridges?|profiles?|services?|rules?)", text)
     if match:
         noun = count_patterns[match.group(2)]
         return f"{match.group(1)} {noun}"
-    return text
 
+    match = re.fullmatch(r"(\d+) installed bundle\(s\)", text)
+    if match:
+        return f"{match.group(1)} بستهٔ نصب‌شده"
+
+    match = re.fullmatch(r"(\d+) / (\d+) rules", text)
+    if match:
+        return f"{match.group(1)} / {match.group(2)} قاعده"
+
+    match = re.fullmatch(r"Default: (.+) · (.+)", text)
+    if match:
+        return f"پیش‌فرض: {match.group(1)} · {match.group(2)}"
+
+    if text.startswith("Could not load service activity: "):
+        return "بارگذاری فعالیت سرویس ممکن نبود: " + text.split(": ", 1)[1]
+    if text.startswith("Dashboard refresh failed: "):
+        return "تازه‌سازی داشبورد ناموفق بود: " + text.split(": ", 1)[1]
+    if text.startswith("Could not restore saved Tor profiles: "):
+        return "بازیابی پروفایل‌های ذخیره‌شدهٔ Tor ممکن نبود: " + text.split(": ", 1)[1]
+    if text.startswith("Failed to set proxy: "):
+        return "تنظیم پراکسی ناموفق بود: " + text.split(": ", 1)[1]
+    if text.startswith("Failed to clear proxy: "):
+        return "پاک‌کردن پراکسی ناموفق بود: " + text.split(": ", 1)[1]
+    if text.startswith("Start failed: "):
+        return "شروع ناموفق بود: " + text.split(": ", 1)[1]
+    if text.startswith("Could not save "):
+        return "ذخیرهٔ تنظیمات ممکن نبود: " + text[len("Could not save "):]
+    if text.startswith("Saved "):
+        return "ذخیره شد: " + text[6:]
+    if text.endswith(" copied to the clipboard"):
+        return text[:-len(" copied to the clipboard")] + " در حافظهٔ موقت کپی شد"
+    if text.endswith(" is queued"):
+        subject = text[:-10]
+        return f"{_FA.get(subject, subject)} در صف قرار دارد"
+    if text.endswith(" is already in the blocked-host list."):
+        host = text[:-len(" is already in the blocked-host list.")]
+        return f"میزبان {host} از قبل در فهرست میزبان‌های مسدودشده وجود دارد."
+    if text.endswith(" is already in the excluded-host list."):
+        host = text[:-len(" is already in the excluded-host list.")]
+        return f"میزبان {host} از قبل در فهرست میزبان‌های مستثناشده وجود دارد."
+    return text
 
 def translate_text(value: Any, language: str = "en") -> str:
     """Translate a complete UI string; preserve unknown and technical text."""
