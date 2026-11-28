@@ -597,13 +597,10 @@ def _translate_dynamic(text: str, language: str) -> str:
     }
     match = re.fullmatch(r"(\d+) (bridges?|profiles?|services?|rules?)", text)
     if match:
-        noun = count_patterns[match.group(2)]
-        return f"{match.group(1)} {noun}"
-
+        return f"{match.group(1)} {count_patterns[match.group(2)]}"
     match = re.fullmatch(r"(\d+) installed bundle\(s\)", text)
     if match:
         return f"{match.group(1)} بستهٔ نصب‌شده"
-
     match = re.fullmatch(r"(\d+) / (\d+) rules", text)
     if match:
         return f"{match.group(1)} / {match.group(2)} قاعده"
@@ -612,18 +609,18 @@ def _translate_dynamic(text: str, language: str) -> str:
     if match:
         return f"پیش‌فرض: {match.group(1)} · {match.group(2)}"
 
-    if text.startswith("Could not load service activity: "):
-        return "بارگذاری فعالیت سرویس ممکن نبود: " + text.split(": ", 1)[1]
-    if text.startswith("Dashboard refresh failed: "):
-        return "تازه‌سازی داشبورد ناموفق بود: " + text.split(": ", 1)[1]
-    if text.startswith("Could not restore saved Tor profiles: "):
-        return "بازیابی پروفایل‌های ذخیره‌شدهٔ Tor ممکن نبود: " + text.split(": ", 1)[1]
-    if text.startswith("Failed to set proxy: "):
-        return "تنظیم پراکسی ناموفق بود: " + text.split(": ", 1)[1]
-    if text.startswith("Failed to clear proxy: "):
-        return "پاک‌کردن پراکسی ناموفق بود: " + text.split(": ", 1)[1]
-    if text.startswith("Start failed: "):
-        return "شروع ناموفق بود: " + text.split(": ", 1)[1]
+    dynamic_prefixes = (
+        ("Could not load service activity: ", "بارگذاری فعالیت سرویس ممکن نبود: "),
+        ("Dashboard refresh failed: ", "تازه‌سازی داشبورد ناموفق بود: "),
+        ("Could not restore saved Tor profiles: ", "بازیابی پروفایل‌های ذخیره‌شدهٔ Tor ممکن نبود: "),
+        ("Failed to set proxy: ", "تنظیم پراکسی ناموفق بود: "),
+        ("Failed to clear proxy: ", "پاک‌کردن پراکسی ناموفق بود: "),
+        ("Start failed: ", "شروع ناموفق بود: "),
+        ("HTTP listener change failed · ", "تغییر شنوندهٔ HTTP ناموفق بود · "),
+    )
+    for source, translated in dynamic_prefixes:
+        if text.startswith(source):
+            return translated + text[len(source):]
     if text.startswith("Could not save "):
         return "ذخیرهٔ تنظیمات ممکن نبود: " + text[len("Could not save "):]
     if text.startswith("Saved "):
@@ -639,6 +636,8 @@ def _translate_dynamic(text: str, language: str) -> str:
     if text.endswith(" is already in the excluded-host list."):
         host = text[:-len(" is already in the excluded-host list.")]
         return f"میزبان {host} از قبل در فهرست میزبان‌های مستثناشده وجود دارد."
+    if text.startswith("System proxy active at "):
+        return "پراکسی سیستم فعال است: " + text[len("System proxy active at "):]
     return text
 
 def translate_text(value: Any, language: str = "en") -> str:
@@ -831,16 +830,42 @@ class LanguageManager(QObject):
 
     @staticmethod
     def _translate_item_text(item, column: int, language: str) -> None:
-        current = item.text(column)
-        source = item.data(column, Qt.ItemDataRole.UserRole + 733)
-        rendered = item.data(column, Qt.ItemDataRole.UserRole + 734)
+        # QTreeWidgetItem uses column-aware methods, while QTableWidgetItem
+        # exposes a single text/data column. Support both without wrapping or
+        # replacing the original item object (which could carry user metadata).
+        try:
+            current = item.text(column)
+            tree_item = True
+        except TypeError:
+            current = item.text()
+            tree_item = False
+
+        def read_role(role):
+            try:
+                return item.data(column, role)
+            except TypeError:
+                return item.data(role)
+
+        def write_role(role, value):
+            try:
+                item.setData(column, role, value)
+            except TypeError:
+                item.setData(role, value)
+
+        source_role = Qt.ItemDataRole.UserRole + 733
+        rendered_role = Qt.ItemDataRole.UserRole + 734
+        source = read_role(source_role)
+        rendered = read_role(rendered_role)
         if source is None or current != rendered:
             source = current
-            item.setData(column, Qt.ItemDataRole.UserRole + 733, source)
+            write_role(source_role, source)
         translated = translate_text(source, language)
         if current != translated:
-            item.setText(column, translated)
-        item.setData(column, Qt.ItemDataRole.UserRole + 734, translated)
+            if tree_item:
+                item.setText(column, translated)
+            else:
+                item.setText(translated)
+        write_role(rendered_role, translated)
 
     def _translate_table_items(self, table: QTableWidget) -> None:
         for column in range(table.columnCount()):
