@@ -22,6 +22,7 @@ public:
     void setThemeMode(const QString &mode);
     void setLanguage(const QString &language);
     QString themeMode() const;
+    QString language() const;
     void centerOnPrimaryScreen();
     void beginLoading();
     void setStatus(const QString &status);
