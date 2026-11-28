@@ -42,7 +42,7 @@ from PySide6.QtCore import QEvent, QThreadPool, QTimer, Qt, Signal, QSize, QPoin
 import qtawesome as qta
 from ui_.window.theme_transition import CircularThemeReveal
 from ui_.window.theme import resolve_system_theme
-from ui_.window.i18n import set_application_language
+from ui_.window.i18n import set_application_language, translate_text
 from utils import resource_path
 import logging
 from config import CONFIG, IS_WINDOWS
@@ -1855,8 +1855,12 @@ class Window(QMainWindow):
         except Exception:
             logger.debug("Could not append hotkey warning to Event Log.", exc_info=True)
         try:
+            language = CONFIG.get("language", "en")
             self.tray_icon.showMessage(
-                "Global shortcut", message, QSystemTrayIcon.MessageIcon.Warning, 4500
+                translate_text("Global shortcut", language),
+                translate_text(message, language),
+                QSystemTrayIcon.MessageIcon.Warning,
+                4500,
             )
         except Exception:
             logger.debug("Could not show global-hotkey tray notification.", exc_info=True)
@@ -2985,7 +2989,13 @@ class Window(QMainWindow):
         self._show_page(self.PAGE_SYSTEM_TUNNEL)
 
     def _notify(self, title, message):
-        self.tray_icon.showMessage(title, message, QSystemTrayIcon.Information, 2000)
+        language = CONFIG.get("language", "en")
+        self.tray_icon.showMessage(
+            translate_text(title, language),
+            translate_text(message, language),
+            QSystemTrayIcon.Information,
+            2000,
+        )
 
     def closeEvent(self, event):
         # Ordinary window closes only hide to the tray. Explicit Exit performs
