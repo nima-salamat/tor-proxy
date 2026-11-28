@@ -634,6 +634,12 @@ _FA = {
     "No profiles yet": "هنوز پروفایلی وجود ندارد",
     "No services yet": "هنوز سرویسی وجود ندارد",
     "No rules yet": "هنوز قاعده‌ای وجود ندارد",
+    "10–86400 seconds": "۱۰ تا ۸۶۴۰۰ ثانیه",
+    "host.com: host and subdomains; =host.com: exact host; *.host.com: subdomains only; *-api.host.com: wildcard within one DNS label.": "host.com: میزبان و زیردامنه‌ها؛ =host.com: فقط میزبان دقیق؛ *.host.com: فقط زیردامنه‌ها؛ *-api.host.com: الگو در یک بخش نام دامنه.",
+    "0 bridges": "0 پل",
+    "0 profiles": "0 پروفایل",
+    "0 services": "0 سرویس",
+    "0 rules": "0 قاعده",
 }
 
 def _translate_dynamic(text: str, language: str) -> str:
@@ -661,8 +667,8 @@ def _translate_dynamic(text: str, language: str) -> str:
         if len(parts) == 4 and parts[0].isdigit() and parts[1] == "/" and parts[2].isdigit() and parts[3] == "rules":
             return f"{parts[0]} / {parts[2]} قاعده"
 
-    if text.startswith("(") and text.endswith(" sec)"):
-        seconds = text[1:-5].strip()
+    if text.startswith("(") and text.rstrip().endswith(" sec)"):
+        seconds = text.rstrip()[1:-5].strip()
         if seconds.isdigit():
             return f"({seconds} ثانیه)"
 
@@ -711,6 +717,14 @@ def _translate_dynamic(text: str, language: str) -> str:
         return "پراکسی سیستم فعال است: " + text[len("System proxy active at "):]
     if text.startswith("v") and " · unavailable" in text:
         return text.replace(" · unavailable", " · در دسترس نیست")
+    if text.endswith(" · DEFAULT"):
+        return text[:-len(" · DEFAULT")] + " · پیش‌فرض"
+    if text.startswith("sing-box ") and "\\n" in text:
+        lines = text.splitlines()
+        if len(lines) >= 3:
+            lines[1] = lines[1].replace("Released ", "انتشار: ", 1)
+            lines[2] = lines[2].replace("TorProxy-pinned SHA-256", "SHA-256 تأییدشده توسط تورپراکسی")
+            return "\\n".join(lines)
     if "% · " in text:
         progress, message = text.split("% · ", 1)
         return f"{progress}٪ · {message}"
