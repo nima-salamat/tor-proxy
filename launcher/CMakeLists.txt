@@ -76,7 +76,7 @@ if(MSVC)
     # character set explicit so UTF-8 punctuation is never decoded as CP1252.
     target_compile_options(TorProxyLauncher PRIVATE /W4 /permissive- /utf-8)
     if(TARGET TorProxyLauncherUI)
-        target_compile_options(TorProxyLauncherUI PRIVATE /W4 /permissive-)
+        target_compile_options(TorProxyLauncherUI PRIVATE /W4 /permissive- /utf-8)
     endif()
     if(TARGET TorProxyWfpHelper)
         target_compile_options(TorProxyWfpHelper PRIVATE /W4 /permissive-)
