@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QTextEdit,
     QTreeWidget,
+    QTableWidget,
     QWidget,
 )
 from PySide6.QtGui import QAction
@@ -556,7 +557,7 @@ def _translate_dynamic(text: str, language: str) -> str:
         "service": "سرویس",
         "services": "سرویس",
     }
-    match = re.fullmatch(r"(\\d+) (bridges?|profiles?|services?)", text)
+    match = re.fullmatch(r"(\d+) (bridges?|profiles?|services?)", text)
     if match:
         noun = count_patterns[match.group(2)]
         return f"{match.group(1)} {noun}"
@@ -733,34 +734,60 @@ class LanguageManager(QObject):
                     if item is None:
                         continue
                     current = item.text()
-                    source = getattr(item, "_torproxy_i18n_source", None)
-                    rendered = getattr(item, "_torproxy_i18n_rendered", None)
+                    source = item.data(Qt.ItemDataRole.UserRole + 733)
+                    rendered = item.data(Qt.ItemDataRole.UserRole + 734)
                     if source is None or current != rendered:
                         source = current
-                        setattr(item, "_torproxy_i18n_source", source)
+                        item.setData(Qt.ItemDataRole.UserRole + 733, source)
                     translated = translate_text(source, self._language)
-                    item.setText(translated)
-                    setattr(item, "_torproxy_i18n_rendered", translated)
+                    if current != translated:
+                        item.setText(translated)
+                    item.setData(Qt.ItemDataRole.UserRole + 734, translated)
             if isinstance(obj, QTreeWidget):
                 self._translate_tree_items(obj)
+            if isinstance(obj, QTableWidget):
+                self._translate_table_items(obj)
         except RuntimeError:
             pass
         finally:
             self._translating = False
 
+    @staticmethod
+    def _translate_item_text(item, column: int, language: str) -> None:
+        current = item.text(column)
+        source = item.data(column, Qt.ItemDataRole.UserRole + 733)
+        rendered = item.data(column, Qt.ItemDataRole.UserRole + 734)
+        if source is None or current != rendered:
+            source = current
+            item.setData(column, Qt.ItemDataRole.UserRole + 733, source)
+        translated = translate_text(source, language)
+        if current != translated:
+            item.setText(column, translated)
+        item.setData(column, Qt.ItemDataRole.UserRole + 734, translated)
+
+    def _translate_table_items(self, table: QTableWidget) -> None:
+        for column in range(table.columnCount()):
+            header = table.horizontalHeaderItem(column)
+            if header is not None:
+                self._translate_item_text(header, 0, self._language)
+        for row in range(table.rowCount()):
+            vertical_header = table.verticalHeaderItem(row)
+            if vertical_header is not None:
+                self._translate_item_text(vertical_header, 0, self._language)
+            for column in range(table.columnCount()):
+                item = table.item(row, column)
+                if item is not None:
+                    self._translate_item_text(item, 0, self._language)
+
     def _translate_tree_items(self, tree: QTreeWidget) -> None:
+        header = tree.headerItem()
+        if header is not None:
+            for column in range(tree.columnCount()):
+                self._translate_item_text(header, column, self._language)
+
         def visit(item):
             for column in range(tree.columnCount()):
-                current = item.text(column)
-                source = item.data(column, Qt.ItemDataRole.UserRole + 733)
-                rendered = item.data(column, Qt.ItemDataRole.UserRole + 734)
-                if source is None or current != rendered:
-                    source = current
-                    item.setData(column, Qt.ItemDataRole.UserRole + 733, source)
-                translated = translate_text(source, self._language)
-                if current != translated:
-                    item.setText(column, translated)
-                item.setData(column, Qt.ItemDataRole.UserRole + 734, translated)
+                self._translate_item_text(item, column, self._language)
             for child_index in range(item.childCount()):
                 visit(item.child(child_index))
         for index in range(tree.topLevelItemCount()):
