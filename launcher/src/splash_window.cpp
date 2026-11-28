@@ -2,8 +2,6 @@
 
 #include <QHash>
 #include <QFont>
-
-#include <QFont>
 #include <QFontMetrics>
 #include <QGuiApplication>
 #include <QKeyEvent>
@@ -47,6 +45,21 @@ QString localized(const QString &source, const QString &language) {
         {QStringLiteral("The launcher could not verify ownership of the startup process."), QStringLiteral("لانچر نتوانست مالکیت فرایند شروع را تأیید کند.")},
         {QStringLiteral("The launcher lost supervision of the TorProxy startup process."), QStringLiteral("لانچر نظارت بر فرایند شروع تورپراکسی را از دست داد.")}
     };
+    if (source.startsWith(QStringLiteral("Could not create the private startup channel: "))) {
+        return QStringLiteral("ایجاد کانال خصوصی شروع برنامه ممکن نبود: ") +
+            source.mid(QStringLiteral("Could not create the private startup channel: ").size());
+    }
+    if (source.startsWith(QStringLiteral("Could not create the per-user startup log directory"))) {
+        return QStringLiteral("ایجاد پوشهٔ گزارش شروع برنامه برای کاربر ممکن نبود.");
+    }
+    if (source.startsWith(QStringLiteral("The main TorProxy executable is missing or is not executable: "))) {
+        return QStringLiteral("فایل اجرایی اصلی تورپراکسی پیدا نشد یا قابل اجرا نیست: ") +
+            source.mid(QStringLiteral("The main TorProxy executable is missing or is not executable: ").size());
+    }
+    if (source.startsWith(QStringLiteral("The operating system could not start TorProxy: "))) {
+        return QStringLiteral("سیستم‌عامل نتوانست تورپراکسی را شروع کند: ") +
+            source.mid(QStringLiteral("The operating system could not start TorProxy: ").size());
+    }
     return translations.value(source, source);
 }
 constexpr int kWindowWidth = 560;
