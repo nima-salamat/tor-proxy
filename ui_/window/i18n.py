@@ -723,7 +723,7 @@ def _translate_dynamic(text: str, language: str) -> str:
         if len(lines) >= 3:
             lines[1] = lines[1].replace("Released ", "انتشار: ", 1)
             lines[2] = lines[2].replace("TorProxy-pinned SHA-256", "SHA-256 تأییدشده توسط تورپراکسی")
-            return "\\n".join(lines)
+            return "\n".join(lines)
     if "% · " in text:
         progress, message = text.split("% · ", 1)
         return f"{progress}٪ · {message}"
