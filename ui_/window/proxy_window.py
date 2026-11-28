@@ -87,11 +87,22 @@ class ConnectionStatusPill(QWidget):
     def set_status_text(self, label: QLabel, text: str, max_width: int) -> None:
         """Size the capsule to its text, eliding only when Home is genuinely narrow."""
         full_text = str(text or "")
-        margins = self.layout().contentsMargins() if self.layout() is not None else None
+        layout = self.layout()
+        margins = layout.contentsMargins() if layout is not None else None
         horizontal_padding = (
             margins.left() + margins.right() if margins is not None else 40
         )
-        available_label_width = max(1, int(max_width) - horizontal_padding - 2)
+        status_icon = self.findChild(QLabel, "connectionStatusIcon")
+        icon_width = (
+            int(status_icon.width())
+            if status_icon is not None and not status_icon.isHidden()
+            else 0
+        )
+        icon_spacing = max(0, int(layout.spacing())) if icon_width and layout is not None else 0
+        status_content_extra = icon_width + icon_spacing
+        available_label_width = max(
+            1, int(max_width) - horizontal_padding - status_content_extra - 2
+        )
         metrics = QFontMetrics(label.font())
         display_text = metrics.elidedText(
             full_text, Qt.TextElideMode.ElideRight, available_label_width
@@ -103,7 +114,9 @@ class ConnectionStatusPill(QWidget):
             metrics.horizontalAdvance(display_text) + tracking + 2,
         )
         target_label_width = max(1, label_width)
-        target_frame_width = max(1, label_width + horizontal_padding + 2)
+        target_frame_width = max(
+            1, label_width + horizontal_padding + status_content_extra + 2
+        )
         geometry_changed = (
             label.width() != target_label_width
             or self.width() != target_frame_width
@@ -133,8 +146,14 @@ class ConnectionStatusPill(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
         if self._state == "connected":
-            background = QColor(46, 174, 105, 26)
-            border = QColor(46, 174, 105, 97)
+            # A clearer success treatment without turning the pill into a large
+            # notification banner. Use contrast-safe text/icon colors per theme.
+            if self._dark:
+                background = QColor(46, 174, 105, 42)
+                border = QColor(69, 201, 139, 185)
+            else:
+                background = QColor(22, 131, 79, 20)
+                border = QColor(22, 131, 79, 150)
         elif self._state == "connecting":
             background = QColor(71, 163, 242, 26)
             border = QColor(71, 163, 242, 97)
@@ -145,7 +164,7 @@ class ConnectionStatusPill(QWidget):
         rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         if rect.width() > 0 and rect.height() > 0:
             radius = min(rect.width(), rect.height()) / 2.0
-            painter.setPen(QPen(border, 1.0))
+            painter.setPen(QPen(border, 1.15))
             painter.setBrush(background)
             painter.drawRoundedRect(rect, radius, radius)
         painter.end()
@@ -301,7 +320,17 @@ class ProxyWindow(QWidget):
         )
         status_frame_layout = QHBoxLayout(self.connection_status_frame)
         status_frame_layout.setContentsMargins(20, 3, 20, 3)
-        status_frame_layout.setSpacing(0)
+        status_frame_layout.setSpacing(7)
+        status_frame_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.btn_status_icon = QLabel(self.connection_status_frame)
+        self.btn_status_icon.setObjectName("connectionStatusIcon")
+        self.btn_status_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.btn_status_icon.setFixedSize(QSize(16, 16))
+        self.btn_status_icon.setVisible(False)
+        status_frame_layout.addWidget(
+            self.btn_status_icon, 0, Qt.AlignmentFlag.AlignVCenter
+        )
 
         self.btn_status = QLabel("", self.connection_status_frame)
         self.btn_status.setObjectName("connectionStatusText")
@@ -1706,8 +1735,10 @@ class ProxyWindow(QWidget):
         border = "#3b4552" if dark else "#d7dee7"
         muted = "#aab4c1" if dark else "#667386"
         accent = "#47a3f2" if dark else "#1876bf"
+        connected = "#5bd69a" if dark else "#16834f"
         surface = "#202630" if dark else "#ffffff"
         self.connection_status_frame.set_theme_mode(CONFIG["mode"])
+        self._update_home_connection_status_icon()
         field = "transparent"
         hover = "#2b3643" if dark else "#eaf0f5"
         text = "#e8edf3" if dark else "#253041"
@@ -1721,13 +1752,17 @@ class ProxyWindow(QWidget):
             QPushButton#connectPulseButton:focus {{
                 background: transparent; border: none;
             }}
+            QLabel#connectionStatusIcon {{
+                background: transparent; border: none; padding: 0;
+            }}
             QLabel#connectionStatusText {{
                 color: {muted}; background: transparent; border: none;
                 padding: 0; font-size: 10px; font-weight: 750;
                 letter-spacing: 0.7px;
             }}
             QLabel#connectionStatusText[connectionState="connected"] {{
-                color: #45c98b;
+                color: {connected}; font-size: 11px; font-weight: 850;
+                letter-spacing: 0.85px;
             }}
             QLabel#connectionStatusText[connectionState="connecting"] {{
                 color: {accent};
@@ -2405,8 +2440,29 @@ class ProxyWindow(QWidget):
         self._home_status_full_text = str(text or "")
         self._refresh_home_status_geometry()
 
+    def _update_home_connection_status_icon(self) -> None:
+        """Show a compact, theme-aware check only for verified Tor connectivity."""
+        icon_label = getattr(self, "btn_status_icon", None)
+        if icon_label is None:
+            return
+
+        connected = (
+            getattr(self.connection_status_frame, "_state", "disconnected")
+            == "connected"
+        )
+        icon_label.setVisible(connected)
+        if connected:
+            dark = CONFIG.get("mode", "dark") == "dark"
+            color = "#5bd69a" if dark else "#16834f"
+            icon_label.setPixmap(
+                qta.icon("fa6s.circle-check", color=color).pixmap(QSize(16, 16))
+            )
+        else:
+            icon_label.clear()
+
     def set_btn_status_style(self, stmt):
         self.connection_status_frame.set_connection_state(stmt)
+        self._update_home_connection_status_icon()
         self.btn_status.setProperty("connectionState", stmt)
         self.btn_status.style().unpolish(self.btn_status)
         self.btn_status.style().polish(self.btn_status)
