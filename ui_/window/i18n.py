@@ -811,7 +811,8 @@ class LanguageManager(QObject):
             return
         source = _get_source(obj, getter, current)
         translated = translate_text(source, self._language)
-        self._write(obj, setter, translated)
+        if current != translated:
+            self._write(obj, setter, translated)
         setattr(obj, f"_torproxy_i18n_rendered_{getter}", translated)
 
     def _translate_sequence(self, obj: QObject, getter: str, setter: str, count: int) -> None:
@@ -904,7 +905,8 @@ class LanguageManager(QObject):
                     translated = translate_text(source, self._language)
                     if current != translated:
                         item.setText(translated)
-                    item.setData(Qt.ItemDataRole.UserRole + 734, translated)
+                    if item.data(Qt.ItemDataRole.UserRole + 734) != translated:
+                        item.setData(Qt.ItemDataRole.UserRole + 734, translated)
             if isinstance(obj, QTreeWidget):
                 self._translate_tree_items(obj)
             if isinstance(obj, QTableWidget):
