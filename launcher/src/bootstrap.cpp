@@ -42,6 +42,7 @@ struct State {
     std::wstring root, executable, logPath, statusPath, token;
     std::wstring status = L"Preparing the desktop experience";
     std::wstring error, lastPayload;
+    std::wstring language = L"en";
     ULONGLONG lastProgress = 0;
     unsigned int angle = 0, progress = 0, pollCount = 0;
     int width = kDesignWidth, height = kDesignHeight;
@@ -322,6 +323,37 @@ bool resolveConfiguredDarkTheme() {
     return windowsUsesDarkTheme();
 }
 
+std::wstring resolveConfiguredLanguage() {
+    std::wstring roamingDirectory;
+    DWORD required = GetEnvironmentVariableW(L"APPDATA", nullptr, 0);
+    if (required > 1 && required < 32768) {
+        roamingDirectory.resize(required);
+        const DWORD copied = GetEnvironmentVariableW(
+            L"APPDATA", roamingDirectory.data(), required
+        );
+        if (copied > 0 && copied < required) roamingDirectory.resize(copied);
+        else roamingDirectory.clear();
+    }
+    if (roamingDirectory.empty()) {
+        PWSTR knownFolder = nullptr;
+        if (SUCCEEDED(SHGetKnownFolderPath(
+                FOLDERID_RoamingAppData, KF_FLAG_DEFAULT, nullptr, &knownFolder)) &&
+            knownFolder) {
+            roamingDirectory = knownFolder;
+            CoTaskMemFree(knownFolder);
+        }
+    }
+    if (roamingDirectory.empty()) return L"en";
+
+    const std::wstring configPath = roamingDirectory + L"\\TorProxy\\config.json";
+    const std::wstring config = readFile(configPath, 1024u * 1024u);
+    std::wstring language;
+    if (readJsonStringProperty(config, L"language", language) && language == L"fa") {
+        return L"fa";
+    }
+    return L"en";
+}
+
 std::wstring logTail(const std::wstring &path) {
     HANDLE file = CreateFileW(path.c_str(), GENERIC_READ,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
@@ -483,9 +515,36 @@ void drawText(Gdiplus::Graphics &graphics, const std::wstring &text,
     format.SetLineAlignment(lineAlignment);
     format.SetTrimming(StringTrimmingEllipsisWord);
     if (!wrap) format.SetFormatFlags(StringFormatFlagsNoWrap);
+    int formatFlags = 0;
+    if (!wrap) formatFlags |= static_cast<int>(StringFormatFlagsNoWrap);
+    const bool containsArabic = std::any_of(text.begin(), text.end(), [](wchar_t character) {
+        return (character >= 0x0600 && character <= 0x06FF) ||
+               (character >= 0x0750 && character <= 0x077F) ||
+               (character >= 0x08A0 && character <= 0x08FF);
+    });
+    if (containsArabic) {
+        formatFlags |= static_cast<int>(StringFormatFlagsDirectionRightToLeft);
+    }
+    format.SetFormatFlags(formatFlags);
     graphics.DrawString(text.c_str(), static_cast<INT>(text.size()), &font,
                         rect, &format, &brush);
 }
+
+std::wstring launcherText(const State &s, const wchar_t *english, const wchar_t *persian) {
+    return s.language == L"fa" ? persian : english;
+}
+
+std::wstring launcherStatus(const State &s) {
+    if (s.language != L"fa") return s.status;
+    if (s.status == L"Preparing the desktop experience") return L"در حال آماده‌سازی محیط برنامه";
+    if (s.status == L"Loading Python and desktop components…") return L"در حال بارگذاری پایتون و اجزای دسکتاپ…";
+    if (s.status == L"Preparing TorProxy settings…") return L"در حال آماده‌سازی تنظیمات تورپراکسی…";
+    if (s.status == L"Python is already starting…") return L"پایتون از قبل در حال شروع است…";
+    if (s.status == L"Starting TorProxy…") return L"در حال شروع تورپراکسی…";
+    if (s.status == L"Startup needs attention") return L"شروع برنامه به بررسی نیاز دارد";
+    return s.status;
+}
+
 struct ThemePalette {
     Gdiplus::Color backgroundStart, backgroundEnd, glowCenter, glowEdge, outline;
     Gdiplus::Color accentStart, accentEnd, eyebrow, metadata;
@@ -621,7 +680,7 @@ void paintFrameUncached(State &s, HDC dc) {
     drawText(graphics, L"TORPROXY  /  DESKTOP",
              RectF(42.0f, 25.0f, 300.0f, 24.0f), 11.0f,
              colors.eyebrow, true, StringAlignmentNear);
-    drawText(graphics, L"WINDOWS",
+    drawText(graphics, launcherText(s, L"WINDOWS", L"ویندوز"),
              RectF(610.0f, 25.0f, 70.0f, 24.0f), 10.0f,
              colors.metadata, false, StringAlignmentFar);
 
@@ -647,7 +706,7 @@ void paintFrameUncached(State &s, HDC dc) {
     if (!s.failed) {
         drawText(graphics, L"TorProxy", RectF(60.0f, 190.0f, 640.0f, 55.0f),
                  35.0f, colors.title, true);
-        drawText(graphics, L"Private connections, simplified",
+        drawText(graphics, launcherText(s, L"Private connections, simplified", L"اتصال خصوصی، ساده‌تر"),
                  RectF(80.0f, 245.0f, 600.0f, 30.0f), 14.0f,
                  colors.subtitle);
 
@@ -658,7 +717,7 @@ void paintFrameUncached(State &s, HDC dc) {
         spinner.SetStartCap(LineCapRound); spinner.SetEndCap(LineCapRound);
         graphics.DrawArc(&spinner, RectF(367.0f, 309.0f, 26.0f, 26.0f),
                          static_cast<REAL>(s.angle), 255.0f);
-        drawText(graphics, s.status, RectF(58.0f, 345.0f, 644.0f, 30.0f),
+        drawText(graphics, launcherStatus(s), RectF(58.0f, 345.0f, 644.0f, 30.0f),
                  13.0f, colors.status, true);
 
         const RectF track(52.0f, 402.0f, 656.0f, 5.0f);
@@ -682,14 +741,14 @@ void paintFrameUncached(State &s, HDC dc) {
                                              colors.progressEnd, LinearGradientModeHorizontal);
             graphics.FillPath(&movingBrush, &movingPath);
         }
-        drawText(graphics, L"Loading Python and desktop components",
+        drawText(graphics, launcherText(s, L"Loading Python and desktop components", L"در حال بارگذاری پایتون و اجزای دسکتاپ"),
                  RectF(65.0f, 423.0f, 630.0f, 22.0f), 10.5f,
                  colors.footer);
     } else {
-        drawText(graphics, L"Startup needs attention",
+        drawText(graphics, launcherText(s, L"Startup needs attention", L"شروع برنامه به بررسی نیاز دارد"),
                  RectF(55.0f, 190.0f, 650.0f, 52.0f), 30.0f,
                  colors.errorTitle, true);
-        drawText(graphics, L"The desktop process stopped before it became ready.",
+        drawText(graphics, launcherText(s, L"The desktop process stopped before it became ready.", L"فرایند برنامه پیش از آماده‌شدن متوقف شد."),
                  RectF(68.0f, 242.0f, 624.0f, 30.0f), 13.0f,
                  colors.errorSubtitle);
         std::wstring detail = s.error;
@@ -699,11 +758,11 @@ void paintFrameUncached(State &s, HDC dc) {
                  StringAlignmentNear, StringAlignmentNear, true);
 
         drawButton(graphics, RectF(73.0f, 394.0f, 192.0f, 46.0f),
-                   L"Try again", true, s.hoverAction == 0, colors);
+                   launcherText(s, L"Try again", L"تلاش دوباره").c_str(), true, s.hoverAction == 0, colors);
         drawButton(graphics, RectF(281.0f, 394.0f, 192.0f, 46.0f),
-                   L"Open logs", false, s.hoverAction == 1, colors);
+                   launcherText(s, L"Open logs", L"باز کردن گزارش‌ها").c_str(), false, s.hoverAction == 1, colors);
         drawButton(graphics, RectF(489.0f, 394.0f, 192.0f, 46.0f),
-                   L"Close", false, s.hoverAction == 2, colors);
+                   launcherText(s, L"Close", L"بستن").c_str(), false, s.hoverAction == 2, colors);
     }
 
     Pen footerLine(s.darkTheme ? Color(30, 137, 174, 187) : Color(55, 92, 119, 132), 1.0f);
@@ -750,7 +809,7 @@ void paintStaticFrame(State &s, Gdiplus::Graphics &graphics) {
     drawText(graphics, L"TORPROXY  /  DESKTOP",
              RectF(42.0f, 25.0f, 300.0f, 24.0f), 11.0f,
              colors.eyebrow, true, StringAlignmentNear);
-    drawText(graphics, L"WINDOWS",
+    drawText(graphics, launcherText(s, L"WINDOWS", L"ویندوز"),
              RectF(610.0f, 25.0f, 70.0f, 24.0f), 10.0f,
              colors.metadata, false, StringAlignmentFar);
 
@@ -791,7 +850,7 @@ void paintDynamicFrame(State &s, Gdiplus::Graphics &graphics) {
     if (!s.failed) {
         drawText(graphics, L"TorProxy", RectF(60.0f, 190.0f, 640.0f, 55.0f),
                  35.0f, colors.title, true);
-        drawText(graphics, L"Private connections, simplified",
+        drawText(graphics, launcherText(s, L"Private connections, simplified", L"اتصال خصوصی، ساده‌تر"),
                  RectF(80.0f, 245.0f, 600.0f, 30.0f), 14.0f,
                  colors.subtitle);
 
@@ -804,7 +863,7 @@ void paintDynamicFrame(State &s, Gdiplus::Graphics &graphics) {
         spinner.SetEndCap(LineCapRound);
         graphics.DrawArc(&spinner, RectF(367.0f, 309.0f, 26.0f, 26.0f),
                          static_cast<REAL>(s.angle), 255.0f);
-        drawText(graphics, s.status, RectF(58.0f, 345.0f, 644.0f, 30.0f),
+        drawText(graphics, launcherStatus(s), RectF(58.0f, 345.0f, 644.0f, 30.0f),
                  13.0f, colors.status, true);
 
         const RectF track(52.0f, 402.0f, 656.0f, 5.0f);
@@ -829,14 +888,14 @@ void paintDynamicFrame(State &s, Gdiplus::Graphics &graphics) {
                                              colors.progressEnd, LinearGradientModeHorizontal);
             graphics.FillPath(&movingBrush, &movingPath);
         }
-        drawText(graphics, L"Loading Python and desktop components",
+        drawText(graphics, launcherText(s, L"Loading Python and desktop components", L"در حال بارگذاری پایتون و اجزای دسکتاپ"),
                  RectF(65.0f, 423.0f, 630.0f, 22.0f), 10.5f,
                  colors.footer);
     } else {
-        drawText(graphics, L"Startup needs attention",
+        drawText(graphics, launcherText(s, L"Startup needs attention", L"شروع برنامه به بررسی نیاز دارد"),
                  RectF(55.0f, 190.0f, 650.0f, 52.0f), 30.0f,
                  colors.errorTitle, true);
-        drawText(graphics, L"The desktop process stopped before it became ready.",
+        drawText(graphics, launcherText(s, L"The desktop process stopped before it became ready.", L"فرایند برنامه پیش از آماده‌شدن متوقف شد."),
                  RectF(68.0f, 242.0f, 624.0f, 30.0f), 13.0f,
                  colors.errorSubtitle);
         std::wstring detail = s.error;
@@ -848,11 +907,11 @@ void paintDynamicFrame(State &s, Gdiplus::Graphics &graphics) {
                  StringAlignmentNear, StringAlignmentNear, true);
 
         drawButton(graphics, RectF(73.0f, 394.0f, 192.0f, 46.0f),
-                   L"Try again", true, s.hoverAction == 0, colors);
+                   launcherText(s, L"Try again", L"تلاش دوباره").c_str(), true, s.hoverAction == 0, colors);
         drawButton(graphics, RectF(281.0f, 394.0f, 192.0f, 46.0f),
-                   L"Open logs", false, s.hoverAction == 1, colors);
+                   launcherText(s, L"Open logs", L"باز کردن گزارش‌ها").c_str(), false, s.hoverAction == 1, colors);
         drawButton(graphics, RectF(489.0f, 394.0f, 192.0f, 46.0f),
-                   L"Close", false, s.hoverAction == 2, colors);
+                   launcherText(s, L"Close", L"بستن").c_str(), false, s.hoverAction == 2, colors);
     }
 }
 
@@ -1219,6 +1278,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     }
     if (selfTest) {
         state.darkTheme = resolveConfiguredDarkTheme();
+        state.language = resolveConfiguredLanguage();
         if (!loadSplashLogo(state)) {
             Gdiplus::GdiplusShutdown(gdiplusToken);
             MessageBoxW(nullptr,
@@ -1269,6 +1329,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     // Start Python before optional image decoding and config parsing.
     startApp(state);
     state.darkTheme = resolveConfiguredDarkTheme();
+    state.language = resolveConfiguredLanguage();
     loadSplashLogo(state); // A decorative asset must not block the app from running.
     state.staticFrameDirty = true;
     InvalidateRect(state.window, nullptr, FALSE);
