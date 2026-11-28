@@ -2250,6 +2250,53 @@ def test_main_window_requests_small_dwm_corners_only_when_restored():
 
 
 
+def test_native_window_border_color_tracks_light_and_dark_themes():
+    from ui import _dwm_colorref
+
+    # COLORREF is 0x00BBGGRR, not Qt's 0xAARRGGBB ordering.
+    assert _dwm_colorref("#3b4552") == 0x52453B
+    assert _dwm_colorref("#d7dee7") == 0xE7DED7
+
+
+def test_native_resize_hit_width_remains_eight_logical_pixels_across_dpi_scales(qt_app):
+    from PySide6.QtCore import QPoint, QRect
+
+    from ui import (
+        _HTLEFT,
+        _native_point_to_logical,
+        _native_resize_hit_test,
+    )
+
+    logical_bounds = QRect(0, 0, 500, 300)
+    # The physical edge coordinate changes with monitor DPI, but hit testing
+    # sees the same Qt logical coordinate at each scale.
+    for scale in (1.0, 1.25, 1.5, 1.75, 2.0, 2.5):
+        edge_pixel = QPoint(round(4 * scale), round(150 * scale))
+        inside_pixel = QPoint(round(9 * scale), round(150 * scale))
+        assert _native_resize_hit_test(
+            _native_point_to_logical(edge_pixel, scale), logical_bounds
+        ) == _HTLEFT
+        assert _native_resize_hit_test(
+            _native_point_to_logical(inside_pixel, scale), logical_bounds
+        ) is None
+
+
+def test_dwm_border_is_reapplied_after_theme_and_monitor_dpi_changes():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui.py").read_text(encoding="utf-8")
+
+    assert "_DWMWA_BORDER_COLOR = 34" in source
+    assert "colorref = ctypes.c_uint(_dwm_colorref(border_color))" in source
+    assert "self._apply_native_window_corners(border)" in source
+    assert "QTimer.singleShot(0, self._apply_native_window_corners)" in source
+    corner_start = source.index("def _apply_native_window_corners(self, border_color=None):")
+    corner_end = source.index("def _screen_for_geometry", corner_start)
+    corner_method = source[corner_start:corner_end]
+    assert "_DWMWA_WINDOW_CORNER_PREFERENCE" in corner_method
+    assert "_DWMWA_BORDER_COLOR" in corner_method
+    assert "do not multiply it by Qt's DPR" in corner_method
+
+
 def test_tray_menu_uses_a_modern_theme_aware_floating_surface():
     repository = Path(__file__).resolve().parents[1]
     source = (repository / "ui.py").read_text(encoding="utf-8")
