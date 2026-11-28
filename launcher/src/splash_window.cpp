@@ -1,6 +1,7 @@
 #include "splash_window.h"
 
 #include <QHash>
+#include <QFont>
 
 #include <QFont>
 #include <QFontMetrics>
@@ -134,6 +135,7 @@ void SplashWindow::setLanguage(const QString &language) {
         font.setFamilies({QStringLiteral("Arial"), QStringLiteral("Segoe UI")});
     }
     setFont(font);
+    m_status = localized(m_status, m_language);
     m_closeButton->setToolTip(localized(QStringLiteral("Close"), m_language));
     m_retryButton->setText(localized(QStringLiteral("Try again"), m_language));
     m_openLogsButton->setText(localized(QStringLiteral("Open logs"), m_language));
