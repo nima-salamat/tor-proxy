@@ -4,13 +4,13 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QLabel
-
-from ui_.window.i18n import LanguageManager, translate_text
-
 
 def test_persian_translates_ui_labels_and_preserves_ltr_layout():
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication, QLabel
+
+    from ui_.window.i18n import LanguageManager
+
     app = QApplication.instance() or QApplication([])
     previous_direction = app.layoutDirection()
     previous_font = app.font()
@@ -33,6 +33,8 @@ def test_persian_translates_ui_labels_and_preserves_ltr_layout():
 
 
 def test_persian_translation_keeps_technical_values_and_translates_dynamic_counts():
+    from ui_.window.i18n import translate_text
+
     assert translate_text("0 bridges", "fa") == "0 پل"
     assert translate_text("3 profiles", "fa") == "3 پروفایل"
     assert translate_text("2 / 5 rules", "fa") == "2 / 5 قاعده"
