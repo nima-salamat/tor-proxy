@@ -639,8 +639,9 @@ _FA = {
 def _translate_dynamic(text: str, language: str) -> str:
     if language != "fa":
         return text
-    import re
 
+    # Fast paths for the few strings containing runtime values. Most UI labels
+    # are exact dictionary lookups and never enter these branches.
     count_patterns = {
         "bridge": "پل",
         "bridges": "پل",
@@ -651,21 +652,22 @@ def _translate_dynamic(text: str, language: str) -> str:
         "rule": "قاعده",
         "rules": "قاعده",
     }
-    match = re.fullmatch(r"(\d+) (bridges?|profiles?|services?|rules?)", text)
-    if match:
-        return f"{match.group(1)} {count_patterns[match.group(2)]}"
-    match = re.fullmatch(r"(\d+) installed bundle\(s\)", text)
-    if match:
-        return f"{match.group(1)} بستهٔ نصب‌شده"
-    match = re.fullmatch(r"(\d+) / (\d+) rules", text)
-    if match:
-        return f"{match.group(1)} / {match.group(2)} قاعده"
-    match = re.fullmatch(r"\((\d+) sec\)\s*", text)
-    if match:
-        return f"({match.group(1)} ثانیه)"
-    match = re.fullmatch(r"Default: (.+) · (.+)", text)
-    if match:
-        return f"پیش‌فرض: {match.group(1)} · {match.group(2)}"
+    if text and text[0].isdigit():
+        parts = text.split()
+        if len(parts) == 2 and parts[0].isdigit() and parts[1] in count_patterns:
+            return f"{parts[0]} {count_patterns[parts[1]]}"
+        if len(parts) == 3 and parts[0].isdigit() and parts[1:] == ["installed", "bundle(s)"]:
+            return f"{parts[0]} بستهٔ نصب‌شده"
+        if len(parts) == 4 and parts[0].isdigit() and parts[1] == "/" and parts[2].isdigit() and parts[3] == "rules":
+            return f"{parts[0]} / {parts[2]} قاعده"
+
+    if text.startswith("(") and text.endswith(" sec)"):
+        seconds = text[1:-5].strip()
+        if seconds.isdigit():
+            return f"({seconds} ثانیه)"
+
+    if text.startswith("Default: "):
+        return "پیش‌فرض: " + text[len("Default: "):]
 
     dynamic_prefixes = (
         ("Could not load service activity: ", "بارگذاری فعالیت سرویس ممکن نبود: "),
