@@ -2402,35 +2402,35 @@ class Window(QMainWindow):
             QPushButton#topNavExitButton:hover {{ color: #ffffff; background: #b83336; border-color: #b83336; }}
             QWidget#menuBarCorner {{ border-bottom: 1px solid {border}; }}
             QWidget#menuBarCorner QLabel {{ background: transparent; color: {text}; border: none; padding: 0 4px; }}
-            QPushButton#globalState {{
+            QWidget#menuBarCorner QPushButton#globalState {{
                 background: {"rgba(112, 126, 146, 0.13)" if dark else "#f0f3f7"};
                 color: {"#aab4c1" if dark else "#667386"};
                 border: 1px solid {"rgba(112, 126, 146, 0.25)" if dark else "#dce3eb"};
                 border-radius: 9px; padding: 3px 10px; min-height: 22px;
                 font-size: 9px; font-weight: 750;
             }}
-            QPushButton#globalState[torState="ready"] {{
+            QWidget#menuBarCorner QPushButton#globalState[torState="ready"] {{
                 background: {"rgba(46, 174, 105, 0.15)" if dark else "#eaf7ef"};
                 color: {"#5bd69a" if dark else "#16834f"};
                 border-color: {"rgba(69, 201, 139, 0.38)" if dark else "#c5e8d1"};
             }}
-            QPushButton#globalState[torState="bootstrapping"],
-            QPushButton#globalState[torState="starting"] {{
+            QWidget#menuBarCorner QPushButton#globalState[torState="bootstrapping"],
+            QWidget#menuBarCorner QPushButton#globalState[torState="starting"] {{
                 background: {"rgba(71, 163, 242, 0.15)" if dark else "#edf5fd"};
                 color: {"#78bcf4" if dark else "#1876bf"};
                 border-color: {"rgba(71, 163, 242, 0.36)" if dark else "#c9e0f7"};
             }}
-            QPushButton#globalState[torState="stopping"] {{
+            QWidget#menuBarCorner QPushButton#globalState[torState="stopping"] {{
                 background: {"rgba(226, 164, 64, 0.15)" if dark else "#fff6e8"};
                 color: {"#f0bd68" if dark else "#9a610b"};
                 border-color: {"rgba(226, 164, 64, 0.38)" if dark else "#f1d7ad"};
             }}
-            QPushButton#globalState[torState="failed"] {{
+            QWidget#menuBarCorner QPushButton#globalState[torState="failed"] {{
                 background: {"rgba(210, 69, 76, 0.16)" if dark else "#fff0f0"};
                 color: {"#ff858a" if dark else "#b4232c"};
                 border-color: {"rgba(232, 103, 109, 0.4)" if dark else "#f0c4c6"};
             }}
-            QPushButton#globalState:hover {{ background: {hover}; }}
+            QWidget#menuBarCorner QPushButton#globalState:hover {{ background: {hover}; }}
             QWidget#menuBarCorner QPushButton {{ background: transparent; color: {text}; border: none; border-radius: 7px; }}
             QWidget#menuBarCorner QPushButton:hover {{ background: {hover}; }}
             QWidget#customTitleBar {{ background: {menu_surface}; border-bottom: 1px solid {border}; }}
