@@ -20,10 +20,14 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QPlainTextEdit,
+    QProgressBar,
     QTabWidget,
     QTextEdit,
     QTreeWidget,
     QTableWidget,
+    QMenu,
+    QMenuBar,
+    QToolBar,
     QWidget,
 )
 from PySide6.QtGui import QAction
@@ -802,6 +806,16 @@ class LanguageManager(QObject):
 
             if isinstance(obj, QComboBox):
                 self._translate_sequence(obj, "itemText", "setItemText", obj.count())
+                self._watch_item_model(obj)
+            if isinstance(obj, (QListWidget, QTreeWidget, QTableWidget)):
+                self._watch_item_model(obj)
+            if isinstance(obj, QMenu):
+                self._translate_property(obj, "title", "setTitle")
+            if isinstance(obj, (QMenu, QMenuBar, QToolBar)):
+                for action in obj.actions():
+                    self._translate_object(action)
+            if isinstance(obj, QProgressBar):
+                self._translate_property(obj, "format", "setFormat")
             if isinstance(obj, QTabWidget):
                 self._translate_sequence(obj, "tabText", "setTabText", obj.count())
             if isinstance(obj, QListWidget):
@@ -858,14 +872,16 @@ class LanguageManager(QObject):
         rendered = read_role(rendered_role)
         if source is None or current != rendered:
             source = current
-            write_role(source_role, source)
+            if read_role(source_role) != source:
+                write_role(source_role, source)
         translated = translate_text(source, language)
         if current != translated:
             if tree_item:
                 item.setText(column, translated)
             else:
                 item.setText(translated)
-        write_role(rendered_role, translated)
+        if read_role(rendered_role) != translated:
+            write_role(rendered_role, translated)
 
     def _translate_table_items(self, table: QTableWidget) -> None:
         for column in range(table.columnCount()):
@@ -880,6 +896,48 @@ class LanguageManager(QObject):
                 item = table.item(row, column)
                 if item is not None:
                     self._translate_item_text(item, 0, self._language)
+
+    def _schedule_model_translation(self, target_ref) -> None:
+        target = target_ref()
+        if target is None or getattr(target, "_torproxy_i18n_pending", False):
+            return
+        setattr(target, "_torproxy_i18n_pending", True)
+
+        def translate_pending():
+            widget = target_ref()
+            if widget is None:
+                return
+            setattr(widget, "_torproxy_i18n_pending", False)
+            self.translate_tree(widget)
+
+        QTimer.singleShot(0, translate_pending)
+
+    def _watch_item_model(self, widget: QWidget) -> None:
+        if getattr(widget, "_torproxy_i18n_model_watched", False):
+            return
+        try:
+            model = widget.model()
+        except (AttributeError, RuntimeError):
+            return
+        target_ref = weakref.ref(widget)
+
+        def schedule_inserted(*_args):
+            self._schedule_model_translation(target_ref)
+
+        def schedule_changed(_top_left, _bottom_right, roles):
+            if roles and Qt.ItemDataRole.DisplayRole not in roles and Qt.ItemDataRole.EditRole not in roles:
+                return
+            self._schedule_model_translation(target_ref)
+
+        try:
+            model.rowsInserted.connect(schedule_inserted)
+            model.modelReset.connect(schedule_inserted)
+            model.dataChanged.connect(schedule_changed)
+            if hasattr(model, "headerDataChanged"):
+                model.headerDataChanged.connect(schedule_inserted)
+            setattr(widget, "_torproxy_i18n_model_watched", True)
+        except (AttributeError, RuntimeError, TypeError):
+            return
 
     def _translate_tree_items(self, tree: QTreeWidget) -> None:
         header = tree.headerItem()
@@ -940,7 +998,10 @@ class LanguageManager(QObject):
             # been shown (for example after an async Tor operation). Reconcile
             # only that widget immediately before it is painted; no polling
             # timer or repeated full-window traversal is required.
-            if isinstance(watched, (QLabel, QAbstractButton, QGroupBox, QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QTabWidget, QListWidget, QTreeWidget)):
+            if isinstance(watched, (
+                QLabel, QAbstractButton, QGroupBox, QLineEdit,
+                QTextEdit, QPlainTextEdit, QProgressBar,
+            )):
                 self._translate_object(watched)
         return False
 
