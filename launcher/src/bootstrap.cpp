@@ -758,11 +758,11 @@ void paintFrameUncached(State &s, HDC dc) {
                  StringAlignmentNear, StringAlignmentNear, true);
 
         drawButton(graphics, RectF(73.0f, 394.0f, 192.0f, 46.0f),
-                   launcherText(s, L"Try again", L"تلاش دوباره").c_str(), true, s.hoverAction == 0, colors);
+                   launcherText(s, L"Try again", L"تلاش دوباره"), true, s.hoverAction == 0, colors);
         drawButton(graphics, RectF(281.0f, 394.0f, 192.0f, 46.0f),
-                   launcherText(s, L"Open logs", L"باز کردن گزارش‌ها").c_str(), false, s.hoverAction == 1, colors);
+                   launcherText(s, L"Open logs", L"باز کردن گزارش‌ها"), false, s.hoverAction == 1, colors);
         drawButton(graphics, RectF(489.0f, 394.0f, 192.0f, 46.0f),
-                   launcherText(s, L"Close", L"بستن").c_str(), false, s.hoverAction == 2, colors);
+                   launcherText(s, L"Close", L"بستن"), false, s.hoverAction == 2, colors);
     }
 
     Pen footerLine(s.darkTheme ? Color(30, 137, 174, 187) : Color(55, 92, 119, 132), 1.0f);
@@ -907,11 +907,11 @@ void paintDynamicFrame(State &s, Gdiplus::Graphics &graphics) {
                  StringAlignmentNear, StringAlignmentNear, true);
 
         drawButton(graphics, RectF(73.0f, 394.0f, 192.0f, 46.0f),
-                   launcherText(s, L"Try again", L"تلاش دوباره").c_str(), true, s.hoverAction == 0, colors);
+                   launcherText(s, L"Try again", L"تلاش دوباره"), true, s.hoverAction == 0, colors);
         drawButton(graphics, RectF(281.0f, 394.0f, 192.0f, 46.0f),
-                   launcherText(s, L"Open logs", L"باز کردن گزارش‌ها").c_str(), false, s.hoverAction == 1, colors);
+                   launcherText(s, L"Open logs", L"باز کردن گزارش‌ها"), false, s.hoverAction == 1, colors);
         drawButton(graphics, RectF(489.0f, 394.0f, 192.0f, 46.0f),
-                   launcherText(s, L"Close", L"بستن").c_str(), false, s.hoverAction == 2, colors);
+                   launcherText(s, L"Close", L"بستن"), false, s.hoverAction == 2, colors);
     }
 }
 
