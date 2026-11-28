@@ -3646,6 +3646,11 @@ def test_home_page_uses_adaptive_compact_layout_without_scrollbars():
     assert 'QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed' in source
     assert 'self.btn_status.setWordWrap(False)' in source
     assert "status_frame_layout.setContentsMargins(20, 3, 20, 3)" in source
+    assert "status_frame_layout.setSpacing(7)" in source
+    assert 'self.btn_status_icon.setObjectName("connectionStatusIcon")' in source
+    assert 'qta.icon("fa6s.circle-check", color=color)' in source
+    assert 'QLabel#connectionStatusText[connectionState="connected"]' in source
+    assert 'font-size: 11px; font-weight: 850' in source
     assert "class ConnectionStatusPill(QWidget):" in source
     assert "def set_status_text(self, label: QLabel, text: str, max_width: int)" in source
     assert "metrics.elidedText(" in source
@@ -3706,6 +3711,35 @@ def test_connection_status_pill_resizes_for_dynamic_status_text(qt_app):
         assert pill.width() <= 140
         assert label.text() != long_status
         assert label.toolTip() == long_status
+    finally:
+        pill.close()
+        pill.deleteLater()
+        qt_app.processEvents()
+
+
+
+def test_connection_status_pill_reserves_space_for_success_check(qt_app):
+    from PySide6.QtWidgets import QHBoxLayout, QLabel
+    from ui_.window.proxy_window import ConnectionStatusPill
+
+    pill = ConnectionStatusPill()
+    layout = QHBoxLayout(pill)
+    layout.setContentsMargins(20, 3, 20, 3)
+    layout.setSpacing(7)
+    icon = QLabel(pill)
+    icon.setObjectName("connectionStatusIcon")
+    icon.setFixedSize(16, 16)
+    icon.setVisible(True)
+    label = QLabel(pill)
+    layout.addWidget(icon)
+    layout.addWidget(label)
+
+    try:
+        pill.set_status_text(label, "CONNECTED TO TOR", 400)
+        assert pill.width() == label.width() + 65
+        icon.setVisible(False)
+        pill.set_status_text(label, "NOT CONNECTED", 400)
+        assert pill.width() == label.width() + 42
     finally:
         pill.close()
         pill.deleteLater()
