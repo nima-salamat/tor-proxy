@@ -582,6 +582,58 @@ _FA = {
     "Client authorization unavailable": "مجوزدهی کاربر در دسترس نیست",
     "Network diagnostics unavailable.": "عیب‌یابی شبکه در دسترس نیست.",
     "Dashboard refresh failed: {error}": "تازه‌سازی داشبورد ناموفق بود: {error}",
+    "connected": "متصل",
+    "connecting": "در حال اتصال",
+    "disconnected": "قطع‌شده",
+    "ready": "آماده",
+    "failed": "ناموفق",
+    "active": "فعال",
+    "waiting": "در انتظار",
+    "inactive": "غیرفعال",
+    "username": "نام کاربری",
+    "password": "گذرواژه",
+    "SOCKS5 proxy": "پراکسی SOCKS5",
+    "HTTP CONNECT proxy": "پراکسی HTTP CONNECT",
+    "Stored separately from config.json": "جدا از config.json ذخیره می‌شود",
+    "Primary Tor pool": "مجموعهٔ Tor اصلی",
+    "Tor service": "سرویس Tor",
+    "Tor profile": "پروفایل Tor",
+    "System proxy active": "پراکسی سیستم فعال است",
+    "Tunnel state is unavailable": "وضعیت تونل در دسترس نیست",
+    "Connection state": "وضعیت اتصال",
+    "Proxy stopped": "پراکسی متوقف است",
+    "PROXY RUNNING": "پراکسی در حال اجرا",
+    "PROXY CONNECTING": "پراکسی در حال اتصال",
+    "Tor bootstrap": "راه‌اندازی اولیهٔ Tor",
+    "Bootstrap": "راه‌اندازی اولیه",
+    "No bridge addresses saved": "هیچ نشانی پلی ذخیره نشده است",
+    "System proxy unchanged": "پراکسی سیستم بدون تغییر باقی می‌ماند",
+    "System proxy cleared": "پراکسی سیستم پاک شد",
+    "Traffic history": "تاریخچهٔ ترافیک",
+    "Current throughput": "گذر‌دهی فعلی",
+    "Network diagnostics": "عیب‌یابی شبکه",
+    "Runtime status": "وضعیت محیط اجرا",
+    "Restart runtime": "راه‌اندازی مجدد محیط اجرا",
+    "Open event log": "بازکردن گزارش رویدادها",
+    "Event log": "گزارش رویدادها",
+    "Exit IP": "IP خروجی",
+    "Public IP": "IP عمومی",
+    "Connection details": "جزئیات اتصال",
+    "Local HTTP endpoint": "نقطهٔ پایانی HTTP محلی",
+    "Main Tor SOCKS endpoint": "نقطهٔ پایانی SOCKS مربوط به Tor اصلی",
+    "Open official source": "بازکردن منبع رسمی",
+    "View logs": "مشاهدهٔ گزارش‌ها",
+    "Show logs": "نمایش گزارش‌ها",
+    "Hide logs": "پنهان‌کردن گزارش‌ها",
+    "Apply changes": "اعمال تغییرات",
+    "Use selected version": "استفاده از نسخهٔ انتخاب‌شده",
+    "Selected version": "نسخهٔ انتخاب‌شده",
+    "Installed version": "نسخهٔ نصب‌شده",
+    "No compatible release found": "نسخهٔ سازگاری پیدا نشد",
+    "No bundles installed": "هیچ بسته‌ای نصب نشده است",
+    "No profiles yet": "هنوز پروفایلی وجود ندارد",
+    "No services yet": "هنوز سرویسی وجود ندارد",
+    "No rules yet": "هنوز قاعده‌ای وجود ندارد",
 }
 
 def _translate_dynamic(text: str, language: str) -> str:
@@ -608,7 +660,9 @@ def _translate_dynamic(text: str, language: str) -> str:
     match = re.fullmatch(r"(\d+) / (\d+) rules", text)
     if match:
         return f"{match.group(1)} / {match.group(2)} قاعده"
-
+    match = re.fullmatch(r"\((\d+) sec\)\s*", text)
+    if match:
+        return f"({match.group(1)} ثانیه)"
     match = re.fullmatch(r"Default: (.+) · (.+)", text)
     if match:
         return f"پیش‌فرض: {match.group(1)} · {match.group(2)}"
@@ -629,6 +683,8 @@ def _translate_dynamic(text: str, language: str) -> str:
         return "ذخیرهٔ تنظیمات ممکن نبود: " + text[len("Could not save "):]
     if text.startswith("Saved "):
         return "ذخیره شد: " + text[6:]
+    if text.startswith("Data: "):
+        return "داده‌ها: " + text[6:]
     if text.endswith(" copied to the clipboard"):
         return text[:-len(" copied to the clipboard")] + " در حافظهٔ موقت کپی شد"
     if text.endswith(" is queued"):
@@ -640,8 +696,22 @@ def _translate_dynamic(text: str, language: str) -> str:
     if text.endswith(" is already in the excluded-host list."):
         host = text[:-len(" is already in the excluded-host list.")]
         return f"میزبان {host} از قبل در فهرست میزبان‌های مستثناشده وجود دارد."
+    if text.startswith("A Tor service with ID '") and text.endswith("' already exists."):
+        service_id = text[len("A Tor service with ID '"):-len("' already exists.")]
+        return f"سرویسی با شناسهٔ '{service_id}' از قبل وجود دارد."
+    if text.startswith("Saved profile '") and text.endswith("'."):
+        profile = text[len("Saved profile '"):-2]
+        return f"پروفایل '{profile}' ذخیره شد."
+    if text.startswith("Removed profile '") and text.endswith(". Its DataDirectory and logs were preserved."):
+        profile = text[len("Removed profile '"):-len("'. Its DataDirectory and logs were preserved.")]
+        return f"پروفایل '{profile}' حذف شد. پوشهٔ داده و گزارش‌های آن حفظ شدند."
     if text.startswith("System proxy active at "):
         return "پراکسی سیستم فعال است: " + text[len("System proxy active at "):]
+    if text.startswith("v") and " · unavailable" in text:
+        return text.replace(" · unavailable", " · در دسترس نیست")
+    if "% · " in text:
+        progress, message = text.split("% · ", 1)
+        return f"{progress}٪ · {message}"
     return text
 
 def translate_text(value: Any, language: str = "en") -> str:
