@@ -1035,6 +1035,32 @@ class LanguageManager(QObject):
                 if item is not None:
                     self._translate_item_text(item, 0, self._language)
 
+    @staticmethod
+    def _top_level_widget(obj: QObject | None) -> QWidget | None:
+        current = obj
+        while current is not None:
+            if isinstance(current, QWidget):
+                while current.parentWidget() is not None:
+                    current = current.parentWidget()
+                return current
+            current = current.parent()
+        return None
+
+    def _schedule_tree_translation(self, root: QWidget | None) -> None:
+        if root is None or getattr(root, "_torproxy_i18n_tree_pending", False):
+            return
+        setattr(root, "_torproxy_i18n_tree_pending", True)
+        target_ref = weakref.ref(root)
+
+        def translate_pending():
+            target = target_ref()
+            if target is None:
+                return
+            setattr(target, "_torproxy_i18n_tree_pending", False)
+            self.translate_tree(target)
+
+        QTimer.singleShot(0, translate_pending)
+
     def _schedule_model_translation(self, target_ref) -> None:
         target = target_ref()
         if target is None or getattr(target, "_torproxy_i18n_pending", False):
@@ -1128,9 +1154,15 @@ class LanguageManager(QObject):
         if event_type == QEvent.Type.ChildAdded:
             child = event.child()
             if child is not None:
-                QTimer.singleShot(0, lambda target=child: self.translate_tree(target))
+                root = self._top_level_widget(watched)
+                if root is None and isinstance(child, QWidget):
+                    root = self._top_level_widget(child)
+                self._schedule_tree_translation(root)
         elif event_type in (QEvent.Type.Show, QEvent.Type.Polish):
-            self.translate_tree(watched)
+            if isinstance(watched, QMenu):
+                self.translate_tree(watched)
+            elif isinstance(watched, QWidget) and watched.isWindow():
+                self.translate_tree(watched)
         elif event_type == QEvent.Type.Paint and self._language == "fa":
             # A text-bearing widget may receive new status text after it has
             # been shown (for example after an async Tor operation). Reconcile
