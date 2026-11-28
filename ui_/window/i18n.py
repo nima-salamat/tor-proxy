@@ -10,7 +10,7 @@ import weakref
 from typing import Any
 
 from PySide6.QtCore import QObject, QEvent, QTimer, Qt
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QAction, QFont
 from PySide6.QtWidgets import (
     QAbstractButton,
     QApplication,
@@ -30,7 +30,6 @@ from PySide6.QtWidgets import (
     QTreeWidget,
     QWidget,
 )
-from PySide6.QtGui import QAction
 
 
 _FA = {
@@ -719,7 +718,7 @@ def _translate_dynamic(text: str, language: str) -> str:
         return text.replace(" · unavailable", " · در دسترس نیست")
     if text.endswith(" · DEFAULT"):
         return text[:-len(" · DEFAULT")] + " · پیش‌فرض"
-    if text.startswith("sing-box ") and "\\n" in text:
+    if text.startswith("sing-box ") and "\n" in text:
         lines = text.splitlines()
         if len(lines) >= 3:
             lines[1] = lines[1].replace("Released ", "انتشار: ", 1)
