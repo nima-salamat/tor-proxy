@@ -514,7 +514,6 @@ void drawText(Gdiplus::Graphics &graphics, const std::wstring &text,
     format.SetAlignment(alignment);
     format.SetLineAlignment(lineAlignment);
     format.SetTrimming(StringTrimmingEllipsisWord);
-    if (!wrap) format.SetFormatFlags(StringFormatFlagsNoWrap);
     int formatFlags = 0;
     if (!wrap) formatFlags |= static_cast<int>(StringFormatFlagsNoWrap);
     const bool containsArabic = std::any_of(text.begin(), text.end(), [](wchar_t character) {
@@ -542,6 +541,9 @@ std::wstring launcherStatus(const State &s) {
     if (s.status == L"Python is already starting…") return L"پایتون از قبل در حال شروع است…";
     if (s.status == L"Starting TorProxy…") return L"در حال شروع تورپراکسی…";
     if (s.status == L"Startup needs attention") return L"شروع برنامه به بررسی نیاز دارد";
+    if (s.status == L"TorProxy is ready") return L"تورپراکسی آماده است";
+    if (s.status == L"Starting the TorProxy desktop process…") return L"در حال شروع فرایند دسکتاپ تورپراکسی…";
+    if (s.status == L"Loading desktop components") return L"در حال بارگذاری اجزای دسکتاپ";
     return s.status;
 }
 
