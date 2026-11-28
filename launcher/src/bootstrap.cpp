@@ -1265,6 +1265,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
 
     bool selfTest = false;
     std::wstring expectedTheme;
+    std::wstring expectedLanguage;
     int argc = 0;
     LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     if (argv) {
@@ -1273,6 +1274,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
             if (argument == L"--self-test") selfTest = true;
             else if (argument.compare(0, 15, L"--expect-theme=") == 0)
                 expectedTheme = argument.substr(15);
+            else if (argument.compare(0, 18, L"--expect-language=") == 0)
+                expectedLanguage = argument.substr(18);
         }
         LocalFree(argv);
     }
@@ -1313,6 +1316,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
             (expectedTheme == L"light" && !state.darkTheme) ||
             (expectedTheme == L"system" &&
              state.darkTheme == windowsUsesDarkTheme());
+        const bool languageMatches = expectedLanguage.empty() ||
+            (expectedLanguage == L"fa" && state.language == L"fa") ||
+            (expectedLanguage == L"en" && state.language == L"en");
         const bool bufferedPaintReady = state.backBufferDc != nullptr &&
             state.backBufferBitmap != nullptr &&
             state.backBufferWidth == bounds.right - bounds.left &&
@@ -1322,7 +1328,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         state.staticFrame.reset();
         Gdiplus::GdiplusShutdown(gdiplusToken);
         return (frameless && sizeValid && iconLoaded && logoLoaded &&
-                bufferedPaintReady && themeMatches) ? 0 : 4;
+                bufferedPaintReady && themeMatches && languageMatches) ? 0 : 4;
     }
 
     // UpdateWindow() has already shown a complete lightweight splash frame.
