@@ -37,7 +37,15 @@ QString localized(const QString &source, const QString &language) {
         {QStringLiteral("Preparing TorProxy settings…"), QStringLiteral("در حال آماده‌سازی تنظیمات تورپراکسی…")},
         {QStringLiteral("Startup needs attention"), QStringLiteral("شروع برنامه به بررسی نیاز دارد")},
         {QStringLiteral("Python is already starting…"), QStringLiteral("پایتون از قبل در حال شروع است…")},
-        {QStringLiteral("Starting TorProxy…"), QStringLiteral("در حال شروع تورپراکسی…")}
+        {QStringLiteral("Starting TorProxy…"), QStringLiteral("در حال شروع تورپراکسی…")},
+        {QStringLiteral("Starting the TorProxy desktop process…"), QStringLiteral("در حال شروع فرایند دسکتاپ تورپراکسی…")},
+        {QStringLiteral("TorProxy is ready"), QStringLiteral("تورپراکسی آماده است")},
+        {QStringLiteral("The main TorProxy executable is missing or is not executable: %1"), QStringLiteral("فایل اجرایی اصلی تورپراکسی پیدا نشد یا قابل اجرا نیست: %1")},
+        {QStringLiteral("The operating system could not start TorProxy: %1"), QStringLiteral("سیستم‌عامل نتوانست تورپراکسی را شروع کند: %1")},
+        {QStringLiteral("The TorProxy process crashed before startup completed."), QStringLiteral("فرایند تورپراکسی پیش از تکمیل شروع، از کار افتاد.")},
+        {QStringLiteral("The TorProxy process exited before reporting READY (exit code %1)."), QStringLiteral("فرایند تورپراکسی پیش از اعلام آمادگی خارج شد (کد خروج %1).")},
+        {QStringLiteral("The launcher could not verify ownership of the startup process."), QStringLiteral("لانچر نتوانست مالکیت فرایند شروع را تأیید کند.")},
+        {QStringLiteral("The launcher lost supervision of the TorProxy startup process."), QStringLiteral("لانچر نظارت بر فرایند شروع تورپراکسی را از دست داد.")}
     };
     return translations.value(source, source);
 }
@@ -303,7 +311,9 @@ void SplashWindow::paintEvent(QPaintEvent *event) {
     painter.drawPixmap(0, 0, m_backgroundCache);
     const bool dark = m_themeMode == QStringLiteral("dark");
 
-    QFont eyebrow(QStringLiteral("Arial"), 8, QFont::DemiBold);
+    QFont eyebrow = font();
+    eyebrow.setPointSize(8);
+    eyebrow.setWeight(QFont::DemiBold);
     eyebrow.setLetterSpacing(QFont::AbsoluteSpacing, 2.0);
     painter.setFont(eyebrow);
     painter.setPen(dark ? QColor("#90A8B4") : QColor("#536F7B"));
@@ -313,7 +323,9 @@ void SplashWindow::paintEvent(QPaintEvent *event) {
 #ifndef TORPROXY_VERSION
 #define TORPROXY_VERSION "1.6.0"
 #endif
-    QFont versionFont(QStringLiteral("Arial"), 8, QFont::Medium);
+    QFont versionFont = font();
+    versionFont.setPointSize(8);
+    versionFont.setWeight(QFont::Medium);
     painter.setFont(versionFont);
     painter.setPen(dark ? QColor("#637C89") : QColor("#768C96"));
     painter.drawText(QRectF(width() - 108, 25, 62, 18), Qt::AlignRight | Qt::AlignVCenter,
@@ -330,7 +342,9 @@ void SplashWindow::paintEvent(QPaintEvent *event) {
         painter.drawEllipse(logoRect.adjusted(8, 8, -8, -8));
     }
 
-    QFont titleFont(QStringLiteral("Arial"), 22, QFont::DemiBold);
+    QFont titleFont = font();
+    titleFont.setPointSize(22);
+    titleFont.setWeight(QFont::DemiBold);
     painter.setFont(titleFont);
     painter.setPen(dark ? QColor("#F0F6F8") : QColor("#1F3440"));
     const QString title = m_errorState
@@ -338,7 +352,9 @@ void SplashWindow::paintEvent(QPaintEvent *event) {
         : QStringLiteral("TorProxy");
     painter.drawText(QRectF(32, 146, width() - 64, 35), Qt::AlignHCenter | Qt::AlignVCenter, title);
 
-    QFont subtitleFont(QStringLiteral("Arial"), 9, QFont::Normal);
+    QFont subtitleFont = font();
+    subtitleFont.setPointSize(9);
+    subtitleFont.setWeight(QFont::Normal);
     painter.setFont(subtitleFont);
     painter.setPen(dark ? QColor("#91A8B4") : QColor("#5C7480"));
     painter.drawText(QRectF(42, 181, width() - 84, 24), Qt::AlignHCenter | Qt::AlignVCenter,
@@ -353,7 +369,9 @@ void SplashWindow::paintEvent(QPaintEvent *event) {
         painter.setPen(QPen(dark ? QColor("#41D5BE") : QColor("#148F85"), 2.8, Qt::SolidLine, Qt::RoundCap));
         painter.drawArc(spinnerRect, m_spinnerAngle * 16, 245 * 16);
 
-        QFont statusFont(QStringLiteral("Arial"), 9, QFont::Medium);
+        QFont statusFont = font();
+        statusFont.setPointSize(9);
+        statusFont.setWeight(QFont::Medium);
         painter.setFont(statusFont);
         painter.setPen(dark ? QColor("#C4D4DA") : QColor("#425B67"));
         const QString visibleStatus = QFontMetrics(statusFont).elidedText(
@@ -376,7 +394,8 @@ void SplashWindow::paintEvent(QPaintEvent *event) {
         segmentPath.addRoundedRect(segment.intersected(track), 1.5, 1.5);
         painter.fillPath(segmentPath, dark ? QColor("#36BFAE") : QColor("#1F9B8D"));
 
-        QFont footerFont(QStringLiteral("Arial"), 8);
+        QFont footerFont = font();
+        footerFont.setPointSize(8);
         painter.setFont(footerFont);
         painter.setPen(dark ? QColor("#627B88") : QColor("#718994"));
         painter.drawText(QRectF(40, 301, width() - 80, 20),
@@ -390,7 +409,8 @@ void SplashWindow::paintEvent(QPaintEvent *event) {
                          QPointF(center.x(), center.y() + 1.0));
         painter.drawPoint(QPointF(center.x(), center.y() + 5.5));
 
-        QFont detailFont(QStringLiteral("Arial"), 8);
+        QFont detailFont = font();
+        detailFont.setPointSize(8);
         painter.setFont(detailFont);
         painter.setPen(dark ? QColor("#9EB2BB") : QColor("#576F7A"));
         const QRectF detailRect(38, 243, width() - 76, 40);
