@@ -42,6 +42,7 @@ DEFAULT_DATA: dict[str, Any] = {
     "webtunnel_use_default_tls": True,
     "mode": "dark",
     "theme_preference": "system",
+    "language": "en",
     "tor_port": None,
     "tor_port_checked": False,
     "proxy_port": None,
@@ -135,6 +136,8 @@ class Config:
             raise ConfigError("mode must be 'dark' or 'light'.")
         if data.get("theme_preference", "system") not in {"system", "dark", "light"}:
             raise ConfigError("theme_preference must be 'system', 'dark', or 'light'.")
+        if data.get("language", "en") not in {"en", "fa"}:
+            raise ConfigError("language must be 'en' or 'fa'.")
         if data.get("system_proxy_mode", "unchanged") not in {"set", "unchanged", "clear"}:
             raise ConfigError("system_proxy_mode must be 'set', 'unchanged', or 'clear'.")
 
