@@ -2233,6 +2233,25 @@ def test_proxy_state_refreshes_the_tunnel_page_and_home_status():
 
 
 
+
+def test_top_menu_tor_state_chip_uses_distinct_theme_aware_status_colors():
+    repository = Path(__file__).resolve().parents[1]
+    source = (repository / "ui.py").read_text(encoding="utf-8")
+
+    assert 'self.global_state.setProperty("torState", "initializing")' in source
+    assert 'QPushButton#globalState[torState="ready"]' in source
+    assert 'QPushButton#globalState[torState="bootstrapping"]' in source
+    assert 'QPushButton#globalState[torState="starting"]' in source
+    assert 'QPushButton#globalState[torState="stopping"]' in source
+    assert 'QPushButton#globalState[torState="failed"]' in source
+    assert 'def _set_global_state_display(self, status: str, state_key: str)' in source
+    assert 'button.setProperty("torState", state_key)' in source
+    assert 'status, state_key = "Ready", "ready"' in source
+    assert 'status, state_key = "Failed", "failed"' in source
+    assert '"#5bd69a" if dark else "#16834f"' in source
+    assert '"#ff858a" if dark else "#b4232c"' in source
+
+
 def test_main_window_requests_native_rounded_corners_and_theme_border():
     repository = Path(__file__).resolve().parents[1]
     source = (repository / "ui.py").read_text(encoding="utf-8")
