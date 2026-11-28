@@ -78,6 +78,8 @@ _SC_SIZE = 0xF000
 _SC_CLOSE = 0xF060
 _VK_SPACE = 0x20
 _WM_DPICHANGED = 0x02E0
+_DWMWA_WINDOW_CORNER_PREFERENCE = 33
+_DWMWA_BORDER_COLOR = 34
 _WM_NCMOUSEMOVE = 0x00A0
 _WM_NCMOUSEMOVE = 0x00A0
 _WM_NCLBUTTONDOWN = 0x00A1
@@ -112,6 +114,27 @@ class _MONITORINFO(ctypes.Structure):
         ("rcMonitor", wintypes.RECT),
         ("rcWork", wintypes.RECT),
         ("dwFlags", wintypes.DWORD),
+    )
+
+
+def _native_point_to_logical(point, dpi_scale=1.0):
+    """Convert physical screen pixels to Qt logical coordinates for one monitor."""
+    try:
+        ratio = max(0.1, float(dpi_scale))
+    except (TypeError, ValueError):
+        ratio = 1.0
+    return QPoint(round(point.x() / ratio), round(point.y() / ratio))
+
+
+def _dwm_colorref(hex_color):
+    """Convert a Qt/CSS hex color to the Win32 COLORREF byte order."""
+    color = QColor(hex_color)
+    if not color.isValid():
+        raise ValueError(f"Invalid DWM border color: {hex_color!r}")
+    return (
+        color.red()
+        | (color.green() << 8)
+        | (color.blue() << 16)
     )
 
 
@@ -1401,6 +1424,11 @@ class Window(QMainWindow):
                 dpi_x = int(native_message.wParam) & 0xFFFF
                 if dpi_x > 0:
                     self._native_dpi_scale = max(1.0, dpi_x / 96.0)
+                # Let Qt process the suggested resize first, then re-apply the
+                # DWM frame attributes on the destination monitor. DWM owns the
+                # corner geometry, so it remains native rather than being
+                # manually scaled with the window's device-pixel ratio.
+                QTimer.singleShot(0, self._apply_native_window_corners)
                 return super().nativeEvent(event_type, message)
 
             # The OS uses HTMAXBUTTON for the native Snap Layouts dwell. These
@@ -1588,9 +1616,8 @@ class Window(QMainWindow):
 
                 ratio = self._native_dpi_scale
 
-                point = QPoint(
-                    round(screen_point.x / ratio),
-                    round(screen_point.y / ratio),
+                point = _native_point_to_logical(
+                    QPoint(screen_point.x, screen_point.y), ratio
                 )
 
                 # Keep native resize handles available around the window perimeter.
@@ -1682,13 +1709,13 @@ class Window(QMainWindow):
             if not self.isMinimized():
                 QTimer.singleShot(0, self._refresh_layout_after_restore)
 
-    def _apply_native_window_corners(self):
-        """Request subtle native rounded corners for the restored Windows window."""
-        if not IS_WINDOWS:
+    def _apply_native_window_corners(self, border_color=None):
+        """Apply native rounded corners and a theme-aware 1px DWM border on Windows."""
+        if not IS_WINDOWS or not self.isVisible():
             return
 
-        # Windows 11 exposes this preference through DwmSetWindowAttribute.
-        # Older Windows builds reject the attribute; that is intentionally a no-op.
+        # Windows 11 exposes both attributes through DwmSetWindowAttribute.
+        # Older Windows builds reject unsupported attributes; that is a no-op.
         try:
             hwnd = int(self.winId())
             if not hwnd:
@@ -1705,12 +1732,13 @@ class Window(QMainWindow):
 
             # DWMWA_WINDOW_CORNER_PREFERENCE = 33
             # DWMWCP_DONOTROUND = 1; DWMWCP_ROUNDSMALL = 3.
+            # Keep the OS-managed radius; do not multiply it by Qt's DPR.
             preference = ctypes.c_int(
                 1 if self.isMaximized() or self.isFullScreen() else 3
             )
             result = set_window_attribute(
                 ctypes.c_void_p(hwnd),
-                33,
+                _DWMWA_WINDOW_CORNER_PREFERENCE,
                 ctypes.byref(preference),
                 ctypes.sizeof(preference),
             )
@@ -1719,8 +1747,26 @@ class Window(QMainWindow):
                     "Windows DWM rounded-corner preference is unavailable (HRESULT 0x%08X).",
                     result & 0xFFFFFFFF,
                 )
+
+            if border_color is None:
+                border_color = (
+                    "#3b4552" if CONFIG.get("mode", "dark") == "dark"
+                    else "#d7dee7"
+                )
+            colorref = ctypes.c_uint(_dwm_colorref(border_color))
+            border_result = set_window_attribute(
+                ctypes.c_void_p(hwnd),
+                _DWMWA_BORDER_COLOR,
+                ctypes.byref(colorref),
+                ctypes.sizeof(colorref),
+            )
+            if border_result != 0:
+                logger.debug(
+                    "Windows DWM border color is unavailable (HRESULT 0x%08X).",
+                    border_result & 0xFFFFFFFF,
+                )
         except (AttributeError, OSError, TypeError, ValueError):
-            logger.debug("Could not apply native rounded window corners.", exc_info=True)
+            logger.debug("Could not apply the native Windows window frame.", exc_info=True)
 
     def _screen_for_geometry(self, geometry):
         center = geometry.center()
@@ -2479,6 +2525,8 @@ class Window(QMainWindow):
             self.title_bar.update_theme(icon_color)
         if hasattr(self, "proxyWidget") and hasattr(self.proxyWidget, "_apply_home_theme"):
             self.proxyWidget._apply_home_theme()
+        if IS_WINDOWS and self.isVisible():
+            self._apply_native_window_corners(border)
 
     def _open_event_log(self):
         self._show_home()
