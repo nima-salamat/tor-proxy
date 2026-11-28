@@ -42,6 +42,7 @@ from PySide6.QtCore import QEvent, QThreadPool, QTimer, Qt, Signal, QSize, QPoin
 import qtawesome as qta
 from ui_.window.theme_transition import CircularThemeReveal
 from ui_.window.theme import resolve_system_theme
+from ui_.window.i18n import set_application_language
 from utils import resource_path
 import logging
 from config import CONFIG, IS_WINDOWS
@@ -2851,6 +2852,27 @@ class Window(QMainWindow):
             local_styles_ms,
             overlay_ms,
         )
+
+    def _set_language(self, language):
+        """Persist the UI language and refresh visible controls immediately."""
+        if language not in {"en", "fa"}:
+            return
+        try:
+            CONFIG["language"] = language
+        except (ValueError, OSError, KeyError):
+            logger.exception("Could not persist the selected language.")
+            QMessageBox.warning(
+                self, "Language", "Could not save the language preference."
+            )
+            settings = getattr(self, "settingWidget", None)
+            if settings is not None and hasattr(settings, "_sync_language_controls"):
+                settings._sync_language_controls()
+            return
+
+        set_application_language(language)
+        settings = getattr(self, "settingWidget", None)
+        if settings is not None and hasattr(settings, "_sync_language_controls"):
+            settings._sync_language_controls()
 
     def _set_theme_preference(self, preference):
         """Apply and persist one of the three supported theme preferences."""
