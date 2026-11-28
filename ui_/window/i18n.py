@@ -219,7 +219,6 @@ _FA = {
     "Could not prepare TorProxy's per-user startup paths.": "آماده‌سازی مسیرهای شروع برنامه برای کاربر انجام نشد.",
     "Could not locate the TorProxy launcher.": "لانچر تورپراکسی پیدا نشد.",
     "The launcher has retained its process reference.": "لانچر همچنان مرجع فرایند را نگه داشته است.",
-    "TorProxy": "تورپراکسی",
     "This section will prepare automatically after Home is ready.": "این بخش پس از آماده‌شدن صفحهٔ خانه به‌صورت خودکار آماده می‌شود.",
     "Hide window": "پنهان‌کردن پنجره",
     "SYSTEM PROXY": "پراکسی سیستم",
@@ -642,6 +641,43 @@ _FA = {
     "0 rules": "0 قاعده",
     "Tor bootstrap completed": "راه‌اندازی Tor کامل شد",
     "Global shortcut issue": "مشکل میانبر سراسری",
+    "all": "همه",
+    "running": "در حال اجرا",
+    "stopped": "متوقف",
+    "error": "خطا",
+    "paused": "متوقف‌شده",
+    "empty": "خالی",
+    "other": "سایر",
+    "local": "محلی",
+    "remote": "راه‌دور",
+    "automatic": "خودکار",
+    "manual": "دستی",
+    "direct": "مستقیم",
+    "custom": "سفارشی",
+    "public": "عمومی",
+    "private": "خصوصی",
+    "temporary": "موقت",
+    "persistent": "پایدار",
+    "none": "هیچ‌کدام",
+    "main": "اصلی",
+    "system": "سیستم",
+    "unknown": "نامشخص",
+    "yes": "بله",
+    "no": "خیر",
+    "On": "روشن",
+    "Off": "خاموش",
+    "Could not create the private startup channel: %1": "ایجاد کانال خصوصی شروع برنامه ممکن نبود: %1",
+    "Could not create the per-user startup log directory.": "ایجاد پوشهٔ گزارش شروع برنامه برای کاربر ممکن نبود.",
+    "The operating system could not start TorProxy: %1": "سیستم‌عامل نتوانست تورپراکسی را شروع کند: %1",
+    "TorProxy reported a startup failure.": "تورپراکسی خطایی هنگام شروع گزارش کرد.",
+    "The launcher could not verify ownership of the startup process.": "لانچر نتوانست مالکیت فرایند شروع را تأیید کند.",
+    "The launcher lost supervision of the TorProxy startup process.": "لانچر نظارت بر فرایند شروع تورپراکسی را از دست داد.",
+    "TorProxy is ready": "تورپراکسی آماده است",
+    "The TorProxy process crashed before startup completed.": "فرایند تورپراکسی پیش از تکمیل شروع، از کار افتاد.",
+    "The main TorProxy executable is missing or is not executable: %1": "فایل اجرایی اصلی تورپراکسی پیدا نشد یا قابل اجرا نیست: %1",
+    "The TorProxy process exited before reporting READY (exit code %1).": "فرایند تورپراکسی پیش از اعلام آمادگی خارج شد (کد خروج %1).",
+    "Starting the TorProxy desktop process…": "در حال شروع فرایند دسکتاپ تورپراکسی…",
+    "This page could not be loaded": "بارگذاری این صفحه ممکن نبود.",
 }
 
 def _translate_dynamic(text: str, language: str) -> str:
@@ -675,7 +711,11 @@ def _translate_dynamic(text: str, language: str) -> str:
             return f"({seconds} ثانیه)"
 
     if text.startswith("Default: "):
-        return "پیش‌فرض: " + text[len("Default: "):]
+        value = text[len("Default: "):]
+        if " · " in value:
+            first, second = value.split(" · ", 1)
+            return f"پیش‌فرض: {translate_text(first, language)} · {translate_text(second, language)}"
+        return "پیش‌فرض: " + translate_text(value, language)
 
     dynamic_prefixes = (
         ("Could not load service activity: ", "بارگذاری فعالیت سرویس ممکن نبود: "),
@@ -715,6 +755,9 @@ def _translate_dynamic(text: str, language: str) -> str:
     if text.startswith("Removed profile '") and text.endswith(". Its DataDirectory and logs were preserved."):
         profile = text[len("Removed profile '"):-len("'. Its DataDirectory and logs were preserved.")]
         return f"پروفایل '{profile}' حذف شد. پوشهٔ داده و گزارش‌های آن حفظ شدند."
+    if text.endswith(" could not be loaded"):
+        page = text[:-len(" could not be loaded")]
+        return f"بارگذاری {translate_text(page, language)} ممکن نبود"
     if text.startswith("System proxy active at "):
         return "پراکسی سیستم فعال است: " + text[len("System proxy active at "):]
     if text.startswith("v") and " · unavailable" in text:
@@ -729,7 +772,7 @@ def _translate_dynamic(text: str, language: str) -> str:
             return "\n".join(lines)
     if "% · " in text:
         progress, message = text.split("% · ", 1)
-        return f"{progress}٪ · {message}"
+        return f"{progress}٪ · {translate_text(message, language)}"
     return text
 
 def translate_text(value: Any, language: str = "en") -> str:
