@@ -19,15 +19,15 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QMenu,
+    QMenuBar,
     QPlainTextEdit,
     QProgressBar,
     QTabWidget,
-    QTextEdit,
-    QTreeWidget,
     QTableWidget,
-    QMenu,
-    QMenuBar,
+    QTextEdit,
     QToolBar,
+    QTreeWidget,
     QWidget,
 )
 from PySide6.QtGui import QAction
@@ -813,7 +813,9 @@ class LanguageManager(QObject):
                 self._translate_property(obj, "title", "setTitle")
             if isinstance(obj, (QMenu, QMenuBar, QToolBar)):
                 for action in obj.actions():
-                    self._translate_object(action)
+                    self._translate_property(action, "text", "setText")
+                    self._translate_property(action, "toolTip", "setToolTip")
+                    self._translate_property(action, "statusTip", "setStatusTip")
             if isinstance(obj, QProgressBar):
                 self._translate_property(obj, "format", "setFormat")
             if isinstance(obj, QTabWidget):
